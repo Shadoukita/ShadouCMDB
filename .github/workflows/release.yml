@@ -273,7 +273,9 @@ jobs:
 
   docker:
     name: Docker image (linux/amd64 + linux/arm64)
-    needs: [meta, linux]
+    # Waits for windows too: this job pushes to GHCR (incl. latest), so it must
+    # not run unless every binary passed, just like the GitHub Release.
+    needs: [meta, linux, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
