@@ -1,20 +1,23 @@
-import { QueryClient, VueQueryPlugin } from "@tanstack/vue-query";
+import { VueQueryPlugin } from "@tanstack/vue-query";
 import { createPinia } from "pinia";
 import { createApp } from "vue";
-import { ApiError } from "./api/client";
+import { onSessionEnded } from "./api/client";
+import { queryClient } from "./api/queryClient";
 import App from "./App.vue";
 import { router } from "./router";
+import { useSessionStore } from "./stores/session";
 import "./styles/app.css";
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 15_000,
-      refetchOnWindowFocus: false,
-      // Retry only transient failures; a 4xx will not fix itself.
-      retry: (count, error) => count < 2 && (!(error instanceof ApiError) || error.status === 0 || error.status >= 500),
-    },
-  },
+const app = createApp(App).use(createPinia()).use(router).use(VueQueryPlugin, { queryClient });
+
+// Any 401 on a signed-in request means the session ended (idle/absolute timeout,
+// signed out elsewhere, account disabled): go to sign-in, then come back here.
+onSessionEnded(() => {
+  const session = useSessionStore();
+  if (session.status !== "signedIn") return;
+  session.markExpired();
+  const here = router.currentRoute.value;
+  router.replace({ path: "/login", query: here.meta.public ? {} : { redirect: here.fullPath } });
 });
 
-createApp(App).use(createPinia()).use(router).use(VueQueryPlugin, { queryClient }).mount("#app");
+app.mount("#app");

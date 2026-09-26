@@ -7,7 +7,8 @@
 }
 html,
 body,
-#root {
+#root,
+#app {
   height: 100%;
 }
 body {
@@ -265,6 +266,8 @@ code,
 }
 input[type="text"],
 input[type="search"],
+input[type="password"],
+input[type="email"],
 input[type="number"],
 input[type="date"],
 input[type="datetime-local"],
@@ -701,4 +704,156 @@ dialog.confirm .footer {
   padding: var(--sp-3) var(--sp-5);
   border-top: 1px solid var(--c-border);
   background: var(--c-surface-alt);
+}
+
+/* ---------- Signed-out screens (sign-in, first-run setup) ---------- */
+.bare {
+  min-height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10vh var(--sp-5) var(--sp-6);
+}
+.bare-card {
+  width: min(360px, 100%);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  padding: var(--sp-5) var(--sp-6) var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.bare-card.wide {
+  width: min(640px, 100%);
+}
+.bare-card .alert {
+  margin-bottom: 0;
+}
+.bare-card .hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+.bare-card p {
+  margin: 0;
+}
+.bare-brand {
+  font-weight: 700;
+  color: var(--c-text-muted);
+  letter-spacing: 0.2px;
+}
+.btn.block {
+  justify-content: center;
+  width: 100%;
+}
+
+/* ---------- Header user menu ---------- */
+.user-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.user-menu .who {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 600;
+}
+.user-menu-error {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: 360px;
+  z-index: 30;
+}
+
+/* ---------- Administration ---------- */
+.admin {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: var(--sp-5);
+  align-items: start;
+}
+.admin-nav {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  padding: var(--sp-2) 0;
+  position: sticky;
+  top: 0;
+}
+.admin-nav h2 {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--c-text-muted);
+  padding: var(--sp-3) var(--sp-4) var(--sp-2);
+}
+.admin-nav a {
+  display: block;
+  padding: 5px var(--sp-4);
+  color: var(--c-text);
+}
+.admin-nav a:hover {
+  background: var(--c-row-hover);
+  text-decoration: none;
+}
+.admin-nav a.active {
+  background: var(--c-row-hover);
+  box-shadow: inset 3px 0 0 var(--c-primary);
+  font-weight: 600;
+}
+.admin-body {
+  min-width: 0;
+}
+.check-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--sp-2) var(--sp-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.check-list label {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+  font-weight: 400;
+  cursor: pointer;
+}
+.check-list input {
+  margin-top: 2px;
+}
+.check-list .hint {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+table.matrix td.check,
+table.matrix th.check {
+  width: 72px;
+  text-align: center;
+}
+table.matrix input[type="checkbox"] {
+  margin: 0;
+  vertical-align: middle;
+}
+table.matrix tr.wildcard td {
+  background: var(--c-surface-alt);
+  font-weight: 600;
+}
+table.data tr.disabled td {
+  color: var(--c-text-muted);
+}
+table.matrix tbody th {
+  position: static;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 400;
+}
+table.matrix tr.wildcard th {
+  font-weight: 600;
 }

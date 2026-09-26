@@ -13,18 +13,50 @@ export const api = createClient<paths>({
   credentials: "include",
 });
 
-/** The session's CSRF token, set by the API at sign-in in a cookie the UI can read. */
-function csrfToken(): string | undefined {
-  const match = document.cookie.match(/(?:^|;\s*)shadoucmdb_csrf=([^;]+)/);
-  return match?.[1];
+/** The CSRF token from the last sign-in or /auth/me (needed when the API is on another origin and its cookie is unreadable). */
+let sessionCsrfToken: string | undefined;
+
+/** Bumped at every sign-in and sign-out, so a late answer to a request from the previous session is not mistaken for this one's. */
+let sessionEpoch = 0;
+const requestEpoch = new WeakMap<Request, number>();
+
+export function setCsrfToken(token: string | undefined) {
+  sessionCsrfToken = token;
+  sessionEpoch++;
 }
 
-// Every state-changing request echoes the CSRF token; the API rejects it otherwise.
+/** The session's CSRF token: the readable cookie the API sets at sign-in, else the one from the session. */
+function csrfToken(): string | undefined {
+  const match = document.cookie.match(/(?:^|;\s*)shadoucmdb_csrf=([^;]+)/);
+  return match?.[1] ?? sessionCsrfToken;
+}
+
+/** Paths whose 401 is an answer (wrong password, not signed in yet), not an expired session. */
+const AUTH_PATHS = ["/api/v1/auth/login", "/api/v1/auth/me", "/api/v1/auth/password", "/api/v1/setup"];
+let unauthenticatedHandler: (() => void) | undefined;
+
+/** Called when any other request answers 401: the session ended (expired, signed out elsewhere, account disabled). */
+export function onSessionEnded(handler: () => void) {
+  unauthenticatedHandler = handler;
+}
+
 api.use({
+  // Every state-changing request echoes the CSRF token; the API rejects it otherwise.
   onRequest({ request }) {
     const token = csrfToken();
     if (token && !["GET", "HEAD"].includes(request.method)) request.headers.set("X-CSRF-Token", token);
+    requestEpoch.set(request, sessionEpoch);
     return request;
+  },
+  onResponse({ request, response }) {
+    if (
+      response.status === 401 &&
+      requestEpoch.get(request) === sessionEpoch &&
+      !AUTH_PATHS.some((p) => new URL(request.url).pathname.endsWith(p))
+    ) {
+      unauthenticatedHandler?.();
+    }
+    return response;
   },
 });
 
