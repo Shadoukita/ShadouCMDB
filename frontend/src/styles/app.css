@@ -123,7 +123,7 @@ code,
 .shell-nav a.active {
   background: var(--c-sidebar-active);
   color: #fff;
-  box-shadow: inset 3px 0 0 var(--c-primary);
+  box-shadow: inset 3px 0 0 var(--c-accent);
 }
 .shell-main {
   grid-row: 2;
@@ -378,7 +378,7 @@ fieldset.group legend {
   margin-bottom: var(--sp-4);
 }
 .alert-error {
-  border-color: #efb4ad;
+  border-color: var(--c-danger-border);
   border-left-color: var(--c-danger);
   background: var(--c-danger-bg);
 }
@@ -546,7 +546,7 @@ dl.props dt,
 dl.props dd {
   margin: 0;
   padding: 4px 0;
-  border-bottom: 1px solid #edf0f3;
+  border-bottom: 1px solid var(--c-divider);
   min-height: 26px;
 }
 dl.props dt {
@@ -812,7 +812,7 @@ dialog.confirm .footer {
 }
 .admin-nav a.active {
   background: var(--c-row-hover);
-  box-shadow: inset 3px 0 0 var(--c-primary);
+  box-shadow: inset 3px 0 0 var(--c-accent);
   font-weight: 600;
 }
 .admin-body {
@@ -940,7 +940,7 @@ table.data tr.selected td {
   background: var(--c-row-hover);
 }
 table.data tr.selected td:first-child {
-  box-shadow: inset 3px 0 0 var(--c-primary);
+  box-shadow: inset 3px 0 0 var(--c-accent);
 }
 table.data .cell-note {
   font-size: var(--fs-xs);
@@ -1014,10 +1014,43 @@ nav.tabs a[aria-current="page"] {
 }
 .panel.callout {
   border-color: var(--c-primary);
-  box-shadow: inset 3px 0 0 var(--c-primary);
+  box-shadow: inset 3px 0 0 var(--c-accent);
 }
 .rule-verb {
   align-self: center;
   padding-top: 16px;
   font-style: italic;
+}
+
+/* ---------- Branding ---------- */
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+.brand-mark .brand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brand-logo {
+  max-height: 28px;
+  max-width: 120px;
+  object-fit: contain;
+}
+.bare-brand .brand-logo {
+  max-height: 40px;
+  max-width: 200px;
+}
+.theme-select {
+  width: auto;
+}
+.cell-clip {
+  display: inline-block;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }

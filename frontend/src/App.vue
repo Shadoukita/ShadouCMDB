@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { watchEffect } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
-import ClassNav from "./components/ClassNav.vue";
+import BrandMark from "./components/BrandMark.vue";
 import ErrorAlert from "./components/ErrorAlert.vue";
 import GlobalSearch from "./components/GlobalSearch.vue";
 import LoadingState from "./components/LoadingState.vue";
-import NavLink from "./components/NavLink.vue";
+import MainNav from "./components/MainNav.vue";
 import UserMenu from "./components/UserMenu.vue";
-import { visibleSections } from "./pages/admin/sections";
+import { applyBranding, useBrandingStore } from "./stores/branding";
 import { useSessionStore } from "./stores/session";
 
 const route = useRoute();
 const session = useSessionStore();
-const hasAdmin = computed(() => visibleSections(session.can).length > 0);
+const branding = useBrandingStore();
+// Theme, brand colours and favicon follow the saved branding (or the editor's live preview).
+watchEffect(() => applyBranding(branding.effective, branding.theme));
 
 function retry() {
   window.location.reload();
@@ -22,14 +24,14 @@ function retry() {
 <template>
   <div v-if="session.bootError" class="bare">
     <div class="bare-card wide">
-      <h1>ShadouCMDB</h1>
+      <h1>{{ branding.effective.appName }}</h1>
       <ErrorAlert :error="session.bootError" :on-retry="retry" />
     </div>
   </div>
   <RouterView v-else-if="route.meta.public" />
   <div v-else-if="session.status === 'signedIn'" class="shell">
     <div class="shell-brand">
-      <RouterLink to="/">ShadouCMDB</RouterLink>
+      <RouterLink to="/" :aria-label="`${branding.effective.appName} home`"><BrandMark /></RouterLink>
     </div>
     <header class="shell-header">
       <GlobalSearch />
@@ -39,13 +41,7 @@ function retry() {
       </div>
     </header>
     <nav class="shell-nav" aria-label="Main">
-      <NavLink to="/" :active="(r) => r.path === '/'">Dashboard</NavLink>
-      <NavLink to="/cis" :active="(r) => r.path === '/cis' && !r.query.classId">All configuration items</NavLink>
-      <ClassNav />
-      <template v-if="hasAdmin">
-        <h2>System</h2>
-        <NavLink to="/admin" :active="(r) => r.path.startsWith('/admin')">Administration</NavLink>
-      </template>
+      <MainNav />
     </nav>
     <main id="main" class="shell-main">
       <RouterView />

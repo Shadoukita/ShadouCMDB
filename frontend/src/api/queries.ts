@@ -257,6 +257,8 @@ export type LookupKind = "statuses" | "environments" | "locations" | "owners";
 
 export interface LookupOption {
   id: string;
+  /** Stable key (statuses, environments, locations); UI settings refer to lookups by key. */
+  key?: string;
   name: string;
   isActive: boolean;
   depth?: number;
@@ -272,11 +274,11 @@ export function useLookup(kind: LookupKind) {
       switch (kind) {
         case "statuses": {
           const r = await unwrap(api.GET("/api/v1/statuses", { params: { query: { ...common, sort: "sortOrder" } }, signal }));
-          return r.data.map((s) => ({ id: s.id, name: s.name, isActive: s.isActive }));
+          return r.data.map((s) => ({ id: s.id, key: s.key, name: s.name, isActive: s.isActive }));
         }
         case "environments": {
           const r = await unwrap(api.GET("/api/v1/environments", { params: { query: { ...common, sort: "sortOrder" } }, signal }));
-          return r.data.map((s) => ({ id: s.id, name: s.name, isActive: s.isActive }));
+          return r.data.map((s) => ({ id: s.id, key: s.key, name: s.name, isActive: s.isActive }));
         }
         case "owners": {
           const r = await unwrap(api.GET("/api/v1/owners", { params: { query: { limit: MAX_PAGE, sort: "name" } }, signal }));
@@ -286,6 +288,7 @@ export function useLookup(kind: LookupKind) {
           const r = await unwrap(api.GET("/api/v1/locations", { params: { query: { limit: MAX_PAGE, sort: "name" } }, signal }));
           return flattenTree(r.data, bySortOrder).map(({ item, depth }) => ({
             id: item.id,
+            key: item.key,
             name: item.name,
             isActive: item.isActive,
             depth,
