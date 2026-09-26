@@ -27,6 +27,13 @@ const EnvSchema = z
     DATABASE_SSL_CA_FILE: z.string().min(1).optional(),
     DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(200).default(10),
     DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(0).default(30_000),
+    DATABASE_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(100).default(5_000),
+
+    // Comma-separated browser origins allowed to call the API cross-origin; empty = same-origin only.
+    CORS_ORIGINS: z
+      .string()
+      .optional()
+      .transform((s) => (s ? s.split(',').map((o) => o.trim()).filter(Boolean) : [])),
   })
   .superRefine((env, ctx) => {
     if (env.DATABASE_URL) return;
@@ -69,6 +76,8 @@ export function buildPoolConfig(env: Env): PoolConfig {
     ssl,
     max: env.DATABASE_POOL_MAX,
     statement_timeout: env.DATABASE_STATEMENT_TIMEOUT_MS || undefined,
+    // Fail fast instead of hanging requests (and /readyz) when the database is unreachable.
+    connectionTimeoutMillis: env.DATABASE_CONNECT_TIMEOUT_MS,
     application_name: 'shadoucmdb',
   };
 
