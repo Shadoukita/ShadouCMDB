@@ -21,6 +21,8 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
   verify                    Schema acceptance checks in a rolled-back transaction
   create-admin --username U [--display-name N] [--email E] [--password-stdin]
                             Create a user holding the built-in Administrator profile
+  prune-audit --older-than 180d [--scope auth|changes] [--execute]
+                            Delete audit_log rows past the retention window; a dry run without --execute
   openapi [--out F|--check F]  Print the OpenAPI document, write it, or fail if F is stale
   service install|uninstall|run   Windows Service management (Windows only)
 ```
@@ -32,6 +34,9 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
 - Logs are one JSON object per line. Every request is logged with its
   `request_id`, which comes from `X-Request-Id` or is generated, and is echoed in
   the response.
+- `migrate` connects with `MIGRATION_DATABASE_URL` when it is set, `prune-audit` only with
+  `MAINTENANCE_DATABASE_URL`; everything else uses `DATABASE_URL` / `PG*`. See
+  [Database roles](#database-roles).
 - `serve` does **not** migrate on start. Run `migrate` as an explicit step when
   you install or upgrade.
 - `SIGTERM` or Ctrl+C (Linux), or a service Stop (Windows), triggers a graceful
@@ -143,6 +148,88 @@ alone, since it is the one that still delivers. A collector on another origin ne
 `connect-src`: reports are not subject to the page's policy. Whitespace, `;`, `,`, `"`, a scheme
 other than `http`/`https` and `user:password@` are rejected at startup, because the value becomes
 part of the policy.
+
+## Database roles
+
+The bootstrap script [`sql/bootstrap/00_create_role_and_database.sql`](../sql/bootstrap/00_create_role_and_database.sql)
+creates three roles. None is a superuser.
+
+| Role | Used by | Variable | May |
+| --- | --- | --- | --- |
+| `shadoucmdb_owner` | `shadoucmdb migrate` | `MIGRATION_DATABASE_URL` | Own the database and schema; run migrations. |
+| `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log`; no `EXECUTE` on the purge. |
+| `shadoucmdb_maintenance` | `shadoucmdb prune-audit` | `MAINTENANCE_DATABASE_URL` | Execute `prune_audit_log()`, nothing else. |
+
+The owner can change anything, including the audit log's trigger, so keep its connection
+string out of the running server's environment. For example, pass it only to the command
+that needs it (variables already set win over the env file):
+
+```sh
+MIGRATION_DATABASE_URL='postgres://shadoucmdb_owner:…@db.example.internal/shadoucmdb' \
+  shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+```
+
+Running `migrate` as `shadoucmdb_app` on a three-role install fails with a hint to set
+`MIGRATION_DATABASE_URL`.
+
+### Upgrading a single-role install
+
+Installs created before SHAA-45 have one role, `shadoucmdb_app`, which owns everything. That
+still runs, but the API's database user can then disable the append-only trigger and run the
+purge itself. To split it, once:
+
+1. Install the new binary and run `shadoucmdb migrate` as before (as `shadoucmdb_app`).
+2. Stop the server. As a PostgreSQL admin, connected to the ShadouCMDB database, run:
+
+   ```sh
+   psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
+        -v owner_password='<strong password>' -v maintenance_password='<strong password>' \
+        -f sql/bootstrap/10_split_roles.sql
+   ```
+
+   It creates `shadoucmdb_owner` and `shadoucmdb_maintenance`, hands the database and every
+   object `shadoucmdb_app` owns in it to `shadoucmdb_owner`, and grants `shadoucmdb_app` the
+   API's rights. It is safe to re-run, and does not touch other databases on the server.
+3. Set `MIGRATION_DATABASE_URL` and `MAINTENANCE_DATABASE_URL`, keep `DATABASE_URL` on
+   `shadoucmdb_app`, start the server and run `shadoucmdb verify`.
+
+## Audit log retention
+
+Authentication events in `audit_log` hold client IP addresses and user agents, which are
+personal data. The retention policy is **180 days** for them; CI change history is kept
+indefinitely; `audit.purge` records are kept forever. The full policy, the list of
+personal-data fields and why per-person erasure is not offered are in
+[data-model.md](data-model.md#retention-and-personal-data).
+
+Nothing is deleted automatically. The operator runs:
+
+```sh
+# Report what would go (the default is a dry run):
+shadoucmdb prune-audit --older-than 180d
+# Delete it:
+shadoucmdb prune-audit --older-than 180d --execute
+```
+
+```
+Deleted audit_log rows in scope "auth" older than 180 days:
+  login.failure    2
+Deleted 0 sessions that expired more than 30 days ago
+Recorded as an audit.purge entry in audit_log.
+```
+
+- `--older-than` takes days (`180d` or `180`); anything under 30 days is refused, by the
+  command and by the database function.
+- `--scope auth` (default): `login.success`, `login.failure`, `login.locked`, `logout` and
+  `session.revoke` rows, plus `sessions` rows that expired more than 30 days ago.
+  `--scope changes`: `create`, `update`, `delete` and `restore` rows, only if you decide to
+  cut change history too.
+- The command needs `MAINTENANCE_DATABASE_URL` and refuses to run without it. Each executed
+  run adds an `audit.purge` row (visible in the audit log with `action=audit.purge`) naming
+  the database user, client address, OS user, window and the number of rows deleted.
+- The first run on a large table can take a while; the command does not apply
+  `DATABASE_STATEMENT_TIMEOUT_MS`. Under a sustained sign-in attack the table can gain about
+  43,000 `login.failure` rows a day, so run it regularly, e.g. a daily systemd timer or cron
+  job with `--execute`.
 
 ## Release downloads
 

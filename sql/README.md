@@ -7,7 +7,7 @@ binary embeds the migrations from this folder at build time.
 | Path | What |
 | --- | --- |
 | [`migrations/`](migrations/) | Versioned schema migrations `<NNNN>_<name>.sql`, applied in order by `shadoucmdb migrate` and tracked in `_sqlx_migrations`. |
-| [`bootstrap/`](bootstrap/) | One-time admin scripts run **before** the first migration (role and database creation). Not tracked by the migration runner. |
+| [`bootstrap/`](bootstrap/) | One-time admin scripts: `00_…` creates the three roles and the database before the first migration; `10_split_roles.sql` upgrades an install made with the older single-role script. Not tracked by the migration runner. |
 | [`diagrams/`](diagrams/) | Schema diagrams. Start with [`diagrams/erd.md`](diagrams/erd.md). |
 
 The table-by-table reference, integrity rules and soft-delete decisions are in
@@ -16,11 +16,12 @@ The table-by-table reference, integrity rules and soft-delete decisions are in
 ## Setting up a new database
 
 ```sh
-# 1. As a PostgreSQL admin, create the app role and database
-psql "<admin connection string>" -v app_password='<strong password>' \
-     -f sql/bootstrap/00_create_role_and_database.sql
+# 1. As a PostgreSQL admin, create the roles (owner, app, maintenance) and the database
+psql "<admin connection string>" -v owner_password='<pw 1>' -v app_password='<pw 2>' \
+     -v maintenance_password='<pw 3>' -f sql/bootstrap/00_create_role_and_database.sql
 
-# 2. Point the backend at it (DATABASE_URL or PG* variables)
+# 2. Point the backend at it: DATABASE_URL (or PG*) as shadoucmdb_app,
+#    MIGRATION_DATABASE_URL as shadoucmdb_owner, MAINTENANCE_DATABASE_URL as shadoucmdb_maintenance
 cp .env.example .env
 
 # 3. Apply migrations and check the system rows (add --template it_infrastructure for a starter data model)
@@ -41,6 +42,9 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
 - If a compile-time checked query in `backend/src/data/` is affected, refresh `backend/.sqlx`
   (see [`docs/api.md`](../docs/api.md#layers-and-extension-seams)).
 - Commit the migration, the code change and any ERD update in the same pull request.
+- Migrations run as `shadoucmdb_owner`. Tables they create get `SELECT, INSERT, UPDATE, DELETE` for
+  `shadoucmdb_app` automatically (default privileges set by `0005`). A table the API must not
+  change, like `audit_log`, revokes those rights explicitly in its migration.
 
 ## Databases migrated by the retired Node runner
 

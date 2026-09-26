@@ -57,7 +57,7 @@ ui_assets (logo, favicon)
 | `ui_settings` | The one current UI settings document (`settings` jsonb, validated by the API against `UiSettingsDocument`), its `version`, and who saved it. Classes, attributes and lookups are referenced by key inside the document, not by FK, so it survives export/import; the API reports references that do not resolve. | exactly one row (`singleton` check + unique); `settings` is an object; `version` must exist in `ui_settings_versions` (deferred FK) |
 | `ui_settings_versions` | Every saved version of the document with actor, time and an optional comment. | PK `version`; **UPDATE/DELETE rejected** (trigger); comment at most 500 characters |
 | `ui_assets` | Logo and favicon bytes with `content_type` and `sha256` (ETag). Stored in the database so no shared file storage is needed and backups include them. | unique `kind` (`logo`, `favicon`); content type allowlist; size 1 byte to 512 KiB (logo) / 128 KiB (favicon); `sha256` format |
-| `audit_log` | actor (`actor_type`, `actor_id`, `actor_name`), `action`, `entity_type`, `entity_id`, `occurred_at`, `old_value`, `new_value` (jsonb), `request_id`. | action/actor checks; old/new presence per action; **UPDATE/DELETE rejected** (trigger) |
+| `audit_log` | actor (`actor_type`, `actor_id`, `actor_name`), `action`, `entity_type`, `entity_id`, `occurred_at`, `old_value`, `new_value` (jsonb), `request_id`. | action/actor checks; old/new presence per action; **UPDATE/DELETE/TRUNCATE rejected** (trigger; the purge function is the only exception) |
 
 All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which is a
 `bigint` identity column for cheap append ordering. `created_at`/`updated_at` are
@@ -106,12 +106,12 @@ The template contains:
 | `ci_attribute_values` | **Hard delete** | A value is part of the CI's current state. Clearing a field deletes the row, and the old value is kept in `audit_log`. Rows cascade if a CI is ever purged. |
 | `ci_classes`, `ci_attribute_definitions`, `relationship_types`, `statuses`, `environments`, `locations`, `owners`, `lookup_lists`, `lookup_list_values` | **Retire, don't delete** (`is_active = false`) | These are referenced by history. FKs are `ON DELETE RESTRICT`, so a referenced row cannot be hard-deleted (the API checks first and answers `409 IN_USE` with the counts, see `GET …/{id}/usage`); inactive rows keep resolving for old CIs and are hidden from pickers. Inactive classes cannot receive new CIs, inactive attributes and lookup values cannot receive new values, and inactive relationship types cannot receive new edges. An unused lookup list is deleted together with its values. |
 | `relationship_type_rules` | **Hard delete** | Pure configuration. Removing a rule blocks new edges and leaves existing edges alone. |
-| `audit_log` | **Never deleted** | Append-only by trigger. Retention/archival is an operator decision for a later milestone. |
+| `audit_log` | **Append-only; pruned by age only** | UPDATE, DELETE and TRUNCATE are rejected by trigger and not granted to the API role. The only deletion path is the operator's `shadoucmdb prune-audit`, see [Retention and personal data](#retention-and-personal-data). |
 | `users` | **Disable** (`is_active = false`), hard delete allowed | Disabling is the normal way to remove access and ends the user's sessions. A hard delete is allowed because nothing references a user by foreign key: `audit_log` keeps `actor_id` and `actor_name` as text, so history still names them. |
 | `permission_profiles` and their permission rows, `user_permission_profiles` | **Hard delete** | Pure configuration; every change is in `audit_log` (a profile's before/after includes its permissions, a user's includes their profiles). Deleting a profile removes it from its holders. |
 | `ui_settings`, `ui_settings_versions` | **Replaced, never deleted** | Saving creates a new version; history is append-only, so any earlier layout can be looked at and restored. |
 | `ui_assets` | **Hard delete** | An image is current state only; the audit log keeps its metadata (type, size, hash). |
-| `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login. Every session the API ends (not expiry) leaves a `logout` or `session.revoke` row in `audit_log`. |
+| `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login, and `prune-audit` removes any left 30 days after their expiry. Every session the API ends (not expiry) leaves a `logout` or `session.revoke` row in `audit_log`. |
 
 ## Auditing
 
@@ -146,6 +146,48 @@ server nothing, and recording them would let an anonymous client grow `audit_log
 Passwords, session tokens, token hashes and CSRF tokens are never written. The IP address is
 evidence, not an access control: see [deployment](deployment.md#https-and-session-cookies)
 for the proxy it assumes. Nothing alerts on these rows yet.
+
+## Retention and personal data
+
+**Personal data.** An IP address or user agent tied to a user is personal data (GDPR Art. 4(1)).
+These fields hold it:
+
+| Where | Fields |
+| --- | --- |
+| `audit_log`, `entity_type = 'sessions'` (`login.*`, `logout`, `session.revoke`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.userAgent`, `new_value.session.ipAddress`, `new_value.session.userAgent`, and the user named in `actor_*`, `new_value.username` / `attemptedUsername` |
+| `sessions` | `ip_address`, `user_agent` |
+| `users` | `username`, `display_name`, `email` |
+| `audit_log`, `entity_type = 'users'` and every row's `actor_name` | the same user details, as history |
+
+**Retention policy** (decided in SHAA-54):
+
+| Data | Kept | How it goes |
+| --- | --- | --- |
+| Authentication events in `audit_log` | **180 days** | `shadoucmdb prune-audit --older-than 180d --execute`, run by the operator (scope `auth`, the default) |
+| CI and configuration change history in `audit_log` (`create`, `update`, `delete`, `restore`) | **Indefinitely** | Only if an operator explicitly runs `prune-audit --scope changes` |
+| `sessions` rows | Until **30 days after expiry**; revoked sessions are deleted at once | Deleted at sign-in once expired; `prune-audit` (scope `auth`) removes any older than 30 days past expiry |
+| `audit.purge` rows | **Forever** | Never deleted, not even by the purge |
+
+Nothing is deleted automatically: no timer, no setting. The operator schedules the command
+(cron, a systemd timer, Task Scheduler) if they want it regular; see
+[deployment](deployment.md#audit-log-retention).
+
+**How the purge stays safe.** `prune_audit_log()` is a `SECURITY DEFINER` function owned by
+the schema owner. Only `shadoucmdb_maintenance` may execute it; the API role cannot, and has
+no UPDATE, DELETE or TRUNCATE on `audit_log`. The function deletes by age only (no other
+filter), refuses a window under **30 days**, so recent evidence of an attack cannot be
+removed through it, and writes an `audit.purge` row in the same transaction: `scope`,
+`olderThan`, `cutoff`, `deleted` (rows per action), `sessionsDeleted`, `databaseUser` and
+`clientAddress` (from the connection) and `operator` (the OS user the command reports). The
+append-only trigger lets a DELETE through only while the function runs as the table owner,
+and never for an `audit.purge` row. The schema owner remains able to change anything, which
+is why its credentials belong to migrations only, not to the running server.
+
+**Erasure for one person (GDPR Art. 17) is not supported.** It conflicts with an append-only
+audit trail: deleting or rewriting one user's rows is exactly what the trail exists to
+prevent. Until that is decided separately, a person's authentication records leave with the
+180-day window, and their change history (`actor_name`, user snapshots) stays. Deleting a
+user removes their account and sessions, not their history.
 
 ## Indexes for UI queries
 
