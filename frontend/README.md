@@ -94,7 +94,7 @@ by clicking, delete with the "relationships that will break" confirmation, creat
 use it without a frontend change, and check the empty, not-found and API-unreachable states. Any page error or Vue
 warning fails the test.
 
-The tests expect the demo inventory (`npm run db:seed -w backend -- --demo`) and create their own uniquely named records.
+The tests expect the demo inventory (`shadoucmdb seed --demo`) and create their own uniquely named records.
 
 ```sh
 npx playwright install chromium                                           # once
