@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { ApiError } from "../../api/client";
 import {
+  useCiClasses,
   useClassAttributes,
   useCreateCi,
   useLookup,
@@ -15,9 +16,11 @@ import AttributeInput from "../../components/AttributeInput.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import LookupSelect from "../../components/LookupSelect.vue";
+import { useAppSettings } from "../../lib/appSettings";
 import { groupAttributes } from "../../lib/attributes";
 import { vAutofocus } from "../../lib/directives";
 import { hintFor, toApiValue, toFormValue, type FormValue } from "../../lib/attributeValues";
+import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, FORM_BUILTINS, layoutFor, resolveLayout } from "../../lib/uiSettings";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import FormErrorBanner from "./FormErrorBanner.vue";
@@ -27,6 +30,10 @@ import FormField from "./FormField.vue";
  * The CI form. Core fields are the same for every CI; the class attributes are
  * rendered from GET /ci-classes/{id}/attributes, so a new class needs no frontend change.
  * The parent keys this component by class (create) or id+version (edit).
+ *
+ * A class layout (Administration › Customization › Detail and form layout) arranges
+ * the fields in panels, hides fields and makes fields read-only. Required fields
+ * stay editable on a new CI whatever the layout says, or it could never be saved.
  */
 const props = defineProps<{ mode: "create" | "edit"; classId: string; className: string; ci?: Ci }>();
 
@@ -67,7 +74,57 @@ const error = ref<unknown>(null);
 const missing = ref<Record<string, string>>({});
 
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || (props.ci && props.ci.attributes[d.key] != null)));
-const groups = computed(() => groupAttributes(defs.value));
+
+const settings = useAppSettings();
+const classes = useCiClasses();
+const layout = computed(() => layoutFor(settings.doc.value, classes.data.value?.find((c) => c.id === props.classId)?.key));
+const requiredField = (f: string) =>
+  f === "name" || f === "status" || !!defs.value.find((d) => `${ATTRIBUTE_PREFIX}${d.key}` === f && d.isRequired && d.isActive);
+const keepEditable = (f: string) => props.mode === "create" && requiredField(f);
+const readOnly = computed(() => new Set((layout.value?.readOnlyFields ?? []).filter((f) => !keepEditable(f))));
+
+interface FormSection {
+  key: string;
+  label: string;
+  subtitle?: string;
+  collapsed?: boolean;
+  /** The section that reports loading/errors of the class's attribute definitions. */
+  attributes?: boolean;
+  groups: { legend: string | null; fields: string[] }[];
+}
+const sections = computed<FormSection[]>(() => {
+  const l = layout.value;
+  const panels = l ? resolveLayout({ ...l, hiddenFields: (l.hiddenFields ?? []).filter((f) => !keepEditable(f)) }, defs.value, FORM_BUILTINS) : null;
+  if (panels) {
+    return panels.map((p, i) => ({ key: p.key, label: p.label, collapsed: p.collapsed, attributes: i === 0, groups: [{ legend: null, fields: p.fields }] }));
+  }
+  return [
+    { key: "general", label: "General", subtitle: "Fields every CI has", groups: [{ legend: null, fields: FORM_BUILTINS }] },
+    {
+      key: "attributes",
+      label: `${props.className} attributes`,
+      subtitle: "Defined by the class and its parents",
+      attributes: true,
+      groups: groupAttributes(defs.value).map(([g, items]) => ({ legend: g, fields: items.map((d) => `${ATTRIBUTE_PREFIX}${d.key}`) })),
+    },
+  ];
+});
+const FIELD_IDS: Record<string, string> = {
+  name: "f-name",
+  status: "f-status",
+  environment: "f-environment",
+  owner: "f-owner",
+  location: "f-location",
+  hostname: "f-hostname",
+  ipAddress: "f-ip",
+  serialNumber: "f-serial",
+  notes: "f-notes",
+};
+const defFor = (f: string) => defs.value.find((d) => d.key === attributeKey(f));
+const coreError = (f: string) => fieldErrors.value[BUILTIN.get(f)?.form ?? f];
+function coreHint(f: string): string | undefined {
+  return [f === "ipAddress" ? "IPv4 or IPv6" : "", readOnly.value.has(f) ? "read-only" : ""].filter(Boolean).join(" · ") || undefined;
+}
 
 // Seed attribute values once the definitions arrive. A new CI starts from each attribute's default value.
 watch(
@@ -98,7 +155,11 @@ async function onSubmit() {
   const req: Record<string, string> = {};
   if (!core.value.name.trim()) req.name = "Required";
   if (!core.value.statusId) req.statusId = "Required";
-  for (const d of defs.value) if (d.isRequired && d.isActive && (values.value[d.key] ?? "") === "") req[`attributes.${d.key}`] = "Required";
+  const shown = new Set(sections.value.flatMap((sec) => sec.groups.flatMap((g) => g.fields)));
+  for (const d of defs.value) {
+    const f = `${ATTRIBUTE_PREFIX}${d.key}`;
+    if (d.isRequired && d.isActive && shown.has(f) && (values.value[d.key] ?? "") === "") req[f] = "Required";
+  }
   missing.value = req;
   if (Object.keys(req).length > 0) {
     document.getElementById(fieldIdFor(Object.keys(req)[0]))?.focus();
@@ -140,7 +201,8 @@ async function onSubmit() {
 }
 
 function attrHint(d: (typeof defs.value)[number]): string | undefined {
-  return [hintFor(d), d.inherited ? `from ${d.definedOn.name}` : "", d.isActive ? "" : "retired attribute"].filter(Boolean).join(" · ") || undefined;
+  const ro = readOnly.value.has(`${ATTRIBUTE_PREFIX}${d.key}`) ? "read-only" : "";
+  return [hintFor(d), d.inherited ? `from ${d.definedOn.name}` : "", d.isActive ? "" : "retired attribute", ro].filter(Boolean).join(" · ") || undefined;
 }
 
 const CORE_IDS: Record<string, string> = { name: "f-name", statusId: "f-status" };
@@ -182,90 +244,77 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
       </template>
       <template v-else>Ask an administrator to add statuses under Administration › Lookups.</template>
     </div>
-    <section class="panel">
-      <div class="panel-header">
-        <h2>General</h2>
-        <span class="muted">Fields every CI has</span>
-      </div>
+    <details v-for="sec in sections" :key="sec.key" class="panel layout-panel" :open="!sec.collapsed">
+      <summary class="panel-header">
+        <h2>{{ sec.label }}</h2>
+        <span v-if="sec.subtitle" class="muted">{{ sec.subtitle }}</span>
+      </summary>
       <div class="panel-body">
-        <div class="form-grid">
-          <FormField id="f-name" v-slot="p" label="Name" required :error="fieldErrors.name">
-            <input :id="p.id" v-model="core.name" v-autofocus type="text" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
-          </FormField>
-          <FormField id="f-status" v-slot="p" label="Status" required :error="fieldErrors.statusId">
-            <LookupSelect v-model="core.statusId" kind="statuses" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="Choose a status…" required />
-          </FormField>
-          <FormField id="f-environment" v-slot="p" label="Environment" :error="fieldErrors.environmentId">
-            <LookupSelect v-model="core.environmentId" kind="environments" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="— none —" />
-          </FormField>
-          <FormField id="f-owner" v-slot="p" label="Owner" :error="fieldErrors.ownerId">
-            <LookupSelect v-model="core.ownerId" kind="owners" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="— none —" />
-          </FormField>
-          <FormField id="f-location" v-slot="p" label="Location" :error="fieldErrors.locationId">
-            <LookupSelect v-model="core.locationId" kind="locations" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="— none —" />
-          </FormField>
-          <FormField id="f-hostname" v-slot="p" label="Hostname" :error="fieldErrors.hostname">
-            <input :id="p.id" v-model="core.hostname" type="text" class="mono" spellcheck="false" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
-          </FormField>
-          <FormField id="f-ip" v-slot="p" label="IP address" :error="fieldErrors.ipAddress" hint="IPv4 or IPv6">
-            <input :id="p.id" v-model="core.ipAddress" type="text" class="mono" spellcheck="false" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
-          </FormField>
-          <FormField id="f-serial" v-slot="p" label="Serial number" :error="fieldErrors.serialNumber">
-            <input :id="p.id" v-model="core.serialNumber" type="text" class="mono" spellcheck="false" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
-          </FormField>
-          <FormField id="f-notes" v-slot="p" label="Notes" :error="fieldErrors.notes" wide>
-            <textarea :id="p.id" v-model="core.notes" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
-          </FormField>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>{{ className }} attributes</h2>
-        <span class="muted">Defined by the class and its parents</span>
-      </div>
-      <div class="panel-body">
-        <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
-        <ErrorAlert
-          v-if="attrs.isError.value"
-          :error="attrs.error.value"
-          title="Could not load this class's attributes"
-          :on-retry="() => attrs.refetch()"
-        />
-        <p v-if="attrs.data.value && defs.length === 0" class="muted">This class defines no extra attributes.</p>
-        <fieldset v-for="[group, items] in groups" :key="group" class="group">
-          <legend>{{ group }}</legend>
+        <template v-if="sec.attributes">
+          <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
+          <ErrorAlert
+            v-if="attrs.isError.value"
+            :error="attrs.error.value"
+            title="Could not load this class's attributes"
+            :on-retry="() => attrs.refetch()"
+          />
+          <p v-if="sec.key === 'attributes' && attrs.data.value && defs.length === 0" class="muted">This class defines no extra attributes.</p>
+        </template>
+        <component :is="g.legend === null ? 'div' : 'fieldset'" v-for="g in sec.groups" :key="g.legend ?? ''" :class="{ group: g.legend !== null }">
+          <legend v-if="g.legend !== null">{{ g.legend }}</legend>
           <div class="form-grid">
-            <FormField
-              v-for="d in items"
-              :id="`attr-${d.key}`"
-              :key="d.id"
-              v-slot="p"
-              :label="d.label"
-              :required="d.isRequired"
-              :error="fieldErrors[`attributes.${d.key}`]"
-              :hint="attrHint(d)"
-            >
-              <AttributeInput
-                v-model="values[d.key]"
-                :def="d"
-                :id="p.id"
-                :invalid="p.invalid"
-                :described-by="p.describedBy"
-                :reference-name="refNames[d.key]"
-                @reference-name="(name) => (refNames[d.key] = name)"
-              />
-            </FormField>
+            <template v-for="f in g.fields" :key="f">
+              <FormField v-if="BUILTIN.has(f)" :id="FIELD_IDS[f]" v-slot="p" :label="BUILTIN.get(f)!.label" :required="f === 'name' || f === 'status'" :error="coreError(f)" :hint="coreHint(f)" :wide="f === 'notes'">
+                <fieldset class="ro-wrap" :disabled="readOnly.has(f)">
+                  <input v-if="f === 'name'" :id="p.id" v-model="core.name" v-autofocus type="text" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
+                  <LookupSelect v-else-if="f === 'status'" v-model="core.statusId" kind="statuses" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="Choose a status…" required />
+                  <LookupSelect v-else-if="f === 'environment'" v-model="core.environmentId" kind="environments" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="— none —" />
+                  <LookupSelect v-else-if="f === 'owner'" v-model="core.ownerId" kind="owners" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="— none —" />
+                  <LookupSelect v-else-if="f === 'location'" v-model="core.locationId" kind="locations" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="— none —" />
+                  <textarea v-else-if="f === 'notes'" :id="p.id" v-model="core.notes" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
+                  <input
+                    v-else-if="f === 'hostname' || f === 'ipAddress' || f === 'serialNumber'"
+                    :id="p.id"
+                    v-model="core[f]"
+                    type="text"
+                    class="mono"
+                    spellcheck="false"
+                    :aria-invalid="p.invalid || undefined"
+                    :aria-describedby="p.describedBy"
+                  />
+                </fieldset>
+              </FormField>
+              <FormField
+                v-else-if="defFor(f)"
+                :id="`attr-${defFor(f)!.key}`"
+                v-slot="p"
+                :label="defFor(f)!.label"
+                :required="defFor(f)!.isRequired"
+                :error="fieldErrors[f]"
+                :hint="attrHint(defFor(f)!)"
+              >
+                <fieldset class="ro-wrap" :disabled="readOnly.has(f)">
+                  <AttributeInput
+                    v-model="values[defFor(f)!.key]"
+                    :def="defFor(f)!"
+                    :id="p.id"
+                    :invalid="p.invalid"
+                    :described-by="p.describedBy"
+                    :reference-name="refNames[defFor(f)!.key]"
+                    @reference-name="(name) => (refNames[defFor(f)!.key] = name)"
+                  />
+                </fieldset>
+              </FormField>
+            </template>
           </div>
-        </fieldset>
+        </component>
       </div>
-      <div class="form-footer">
-        <button type="submit" class="btn btn-primary" :disabled="pending || attrs.isLoading.value || attrs.isError.value">
-          {{ pending ? "Saving…" : mode === "create" ? `Create ${className}` : "Save changes" }}
-        </button>
-        <RouterLink class="btn" :to="ci ? `/cis/${ci.id}` : '/cis'">Cancel</RouterLink>
-      </div>
-    </section>
+    </details>
+    <div class="panel form-footer">
+      <button type="submit" class="btn btn-primary" :disabled="pending || attrs.isLoading.value || attrs.isError.value">
+        {{ pending ? "Saving…" : mode === "create" ? `Create ${className}` : "Save changes" }}
+      </button>
+      <RouterLink class="btn" :to="ci ? `/cis/${ci.id}` : '/cis'">Cancel</RouterLink>
+    </div>
   </form>
 </template>

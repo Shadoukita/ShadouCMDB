@@ -1,42 +1,35 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter, type LocationQueryRaw } from "vue-router";
-import { useCiClasses, useCiList, type CiListQuery } from "../api/queries";
+import { useCiClasses, useCiList, useClassAttributes, useLookup, type CiListQuery } from "../api/queries";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
+import CiCell from "../components/CiCell.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import LookupSelect from "../components/LookupSelect.vue";
 import PaginationBar from "../components/PaginationBar.vue";
-import StatusBadge from "../components/StatusBadge.vue";
+import { useAppSettings } from "../lib/appSettings";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
-import { formatRelative } from "../lib/format";
+import { isInAppNavigation } from "../lib/navigation";
 import { flattenTree } from "../lib/tree";
+import { attributeKey, BUILTIN, DEFAULT_COLUMNS, fieldLabel, hasFilters, listViewFor, sortParam } from "../lib/uiSettings";
 import { useSessionStore } from "../stores/session";
 
 /**
  * CI inventory. Every filter, the sort and the page live in the URL
  * (/cis?classId=…&statusId=…&q=…&sort=-updatedAt&offset=50), so a view survives
  * reload and can be bookmarked or shared. Filtering and paging happen in the API.
+ *
+ * A class's list view (Administration › Customization › List views) sets its
+ * columns, default sort and page size, and default filters that are written
+ * into the URL when the operator navigates to the class list without any.
  */
 type SortField = NonNullable<CiListQuery["sort"]>;
 
 const FILTER_KEYS = ["q", "classId", "statusId", "environmentId", "ownerId", "locationId", "deleted"] as const;
 const DEFAULT_LIMIT = 50;
-
-const COLUMNS: { key: string; label: string; sort?: string }[] = [
-  { key: "name", label: "Name", sort: "name" },
-  { key: "class", label: "Class", sort: "className" },
-  { key: "status", label: "Status", sort: "statusName" },
-  { key: "environment", label: "Environment" },
-  { key: "owner", label: "Owner" },
-  { key: "location", label: "Location" },
-  { key: "hostname", label: "Hostname", sort: "hostname" },
-  { key: "ip", label: "IP address", sort: "ipAddress" },
-  { key: "serial", label: "Serial", sort: "serialNumber" },
-  { key: "updated", label: "Updated", sort: "updatedAt" },
-];
 
 const route = useRoute();
 const router = useRouter();
@@ -44,9 +37,15 @@ const get = (k: string) => {
   const v = route.query[k];
   return typeof v === "string" ? v : "";
 };
-const limit = computed(() => clampInt(get("limit"), DEFAULT_LIMIT, 1, 200));
+const classes = useCiClasses();
+const currentClass = computed(() => classes.data.value?.find((c) => c.id === get("classId")));
+const settings = useAppSettings();
+const view = computed(() => listViewFor(settings.doc.value, currentClass.value?.key));
+const defaultLimit = computed(() => view.value?.pageSize ?? DEFAULT_LIMIT);
+
+const limit = computed(() => clampInt(get("limit"), defaultLimit.value, 1, 200));
 const offset = computed(() => clampInt(get("offset"), 0, 0, Number.MAX_SAFE_INTEGER));
-const sort = computed(() => get("sort") || "name");
+const sort = computed(() => get("sort") || sortParam(view.value?.defaultSort) || "name");
 const deleted = computed(() => (get("deleted") === "include" ? "include" : get("deleted") === "only" ? "only" : undefined));
 
 const query = computed<CiListQuery>(() => ({
@@ -62,9 +61,55 @@ const query = computed<CiListQuery>(() => ({
   offset: offset.value,
 }));
 const list = useCiList(query);
-const classes = useCiClasses();
 const classTree = computed(() => flattenTree(classes.data.value ?? []));
-const currentClass = computed(() => classes.data.value?.find((c) => c.id === query.value.classId));
+
+const columns = computed(() => (view.value?.columns?.length ? view.value.columns : DEFAULT_COLUMNS));
+const attrColumns = computed(() => columns.value.some((c) => attributeKey(c) !== null));
+const attrs = useClassAttributes(() => (attrColumns.value ? currentClass.value?.id : undefined));
+const attrDefs = computed(() => attrs.data.value ?? []);
+const columnLabel = (field: string) => fieldLabel(field, attrDefs.value);
+const columnSort = (field: string) => BUILTIN.get(field)?.sort;
+
+// Default filters: navigating to a class list (menu, links) with nothing but the class in the URL
+// writes the view's filters into it, so they show in the toolbar and the operator can change them.
+// A reload or Back shows the URL as it is, so a cleared filter stays cleared.
+const statusLookup = useLookup("statuses");
+const envLookup = useLookup("environments");
+const locationLookup = useLookup("locations");
+const defaultsFor = ref<string | null>(null);
+watch(
+  () => get("classId"),
+  (id) => {
+    defaultsFor.value = id && isInAppNavigation() && Object.keys(route.query).every((k) => k === "classId") ? id : null;
+  },
+  { immediate: true },
+);
+watch(
+  () => [defaultsFor.value, currentClass.value, settings.query.isFetched.value, view.value, statusLookup.data.value, envLookup.data.value, locationLookup.data.value] as const,
+  ([classId]) => {
+    if (!classId || classId !== get("classId") || !currentClass.value || !settings.query.isFetched.value) return;
+    const f = view.value?.defaultFilters;
+    if (!hasFilters(f)) {
+      defaultsFor.value = null;
+      return;
+    }
+    const ids = (keys: string[] | undefined, data: { id: string; key?: string }[] | undefined) =>
+      keys?.length ? data && keys.map((k) => data.find((o) => o.key === k)?.id).filter(Boolean).join(",") : "";
+    const statusId = ids(f!.statusKeys, statusLookup.data.value);
+    const environmentId = ids(f!.environmentKeys, envLookup.data.value);
+    const locationId = ids(f!.locationKeys, locationLookup.data.value);
+    if (statusId === undefined || environmentId === undefined || locationId === undefined) return; // lookups still loading
+    defaultsFor.value = null;
+    const next: LocationQueryRaw = { classId };
+    if (f!.q) next.q = f!.q;
+    if (statusId) next.statusId = statusId;
+    if (environmentId) next.environmentId = environmentId;
+    if (locationId) next.locationId = locationId;
+    router.replace({ path: "/cis", query: next });
+  },
+  { immediate: true },
+);
+
 useDocumentTitle(() => currentClass.value?.name ?? "Inventory");
 
 function update(patch: Record<string, string | undefined>, resetPage = true) {
@@ -119,7 +164,7 @@ function clearFilters() {
 
 function onPage(p: { limit: number; offset: number }) {
   update(
-    { limit: p.limit === DEFAULT_LIMIT ? undefined : String(p.limit), offset: p.offset ? String(p.offset) : undefined },
+    { limit: p.limit === defaultLimit.value ? undefined : String(p.limit), offset: p.offset ? String(p.offset) : undefined },
     false,
   );
 }
@@ -246,29 +291,17 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
         <table :class="['data', { loading: list.isPlaceholderData.value }]">
           <thead>
             <tr>
-              <th v-for="c in COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? ariaSort(c.sort) : undefined">
-                <button v-if="c.sort" type="button" class="sort" @click="toggleSort(c.sort)">
-                  {{ c.label }} {{ sortIndicator(c.sort) }}
+              <th v-for="c in columns" :key="c" scope="col" :aria-sort="columnSort(c) ? ariaSort(columnSort(c)!) : undefined">
+                <button v-if="columnSort(c)" type="button" class="sort" @click="toggleSort(columnSort(c)!)">
+                  {{ columnLabel(c) }} {{ sortIndicator(columnSort(c)!) }}
                 </button>
-                <template v-else>{{ c.label }}</template>
+                <template v-else>{{ columnLabel(c) }}</template>
               </th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="ci in rows" :key="ci.id" :class="{ deleted: ci.deletedAt }">
-              <td><RouterLink :to="`/cis/${ci.id}`">{{ ci.name }}</RouterLink></td>
-              <td>{{ ci.class.name }}</td>
-              <td>
-                <span v-if="ci.deletedAt" class="badge danger">Deleted</span>
-                <StatusBadge v-else :status="ci.status" />
-              </td>
-              <td><template v-if="ci.environment">{{ ci.environment.name }}</template><span v-else class="muted">—</span></td>
-              <td><template v-if="ci.owner">{{ ci.owner.name }}</template><span v-else class="muted">—</span></td>
-              <td><template v-if="ci.location">{{ ci.location.name }}</template><span v-else class="muted">—</span></td>
-              <td class="mono">{{ ci.hostname ?? "" }}</td>
-              <td class="mono">{{ ci.ipAddress ?? "" }}</td>
-              <td class="mono">{{ ci.serialNumber ?? "" }}</td>
-              <td :title="ci.updatedAt">{{ formatRelative(ci.updatedAt) }}</td>
+              <td v-for="c in columns" :key="c"><CiCell :ci="ci" :field="c" :defs="attrDefs" /></td>
             </tr>
           </tbody>
         </table>

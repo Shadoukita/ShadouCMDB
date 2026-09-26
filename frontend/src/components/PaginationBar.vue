@@ -6,6 +6,8 @@ const SIZES = [25, 50, 100, 200];
 const props = defineProps<{ total: number; limit: number; offset: number }>();
 const emit = defineEmits<{ change: [next: { limit: number; offset: number }] }>();
 
+/** A class's list view may set another page size (10-200); offer it too. */
+const sizes = computed(() => (SIZES.includes(props.limit) ? SIZES : [...SIZES, props.limit].sort((a, b) => a - b)));
 const from = computed(() => (props.total === 0 ? 0 : props.offset + 1));
 const to = computed(() => Math.min(props.offset + props.limit, props.total));
 const page = computed(() => Math.floor(props.offset / props.limit) + 1);
@@ -20,7 +22,7 @@ const go = (offset: number, limit = props.limit) => emit("change", { limit, offs
       <label>
         Rows
         <select :value="limit" @change="go(0, Number(($event.target as HTMLSelectElement).value))">
-          <option v-for="s in SIZES" :key="s" :value="s">{{ s }}</option>
+          <option v-for="s in sizes" :key="s" :value="s">{{ s }}</option>
         </select>
       </label>
       <button type="button" class="btn btn-sm" :disabled="offset === 0" @click="go(0)">« First</button>

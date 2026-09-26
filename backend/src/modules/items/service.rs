@@ -330,11 +330,13 @@ pub async fn list(
     pool: &PgPool,
     ctx: &RequestContext,
     q: &ListItemsQuery,
-) -> Result<Page<ConfigurationItemSummary>, AppError> {
+) -> Result<Page<ConfigurationItem>, AppError> {
     let f =
         ItemFilters { q: q.q.clone(), visible_class_ids: ctx.class_scope(ClassOp::View), ..filters(pool, q).await? };
     let (rows, total) = data::list(pool, &f, &q.sort.field, q.sort.desc, q.limit, q.offset).await?;
-    Ok(Page { data: rows.into_iter().map(summary_dto).collect(), page: q.page_meta(total) })
+    let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let values = data::attribute_values(&mut *pool.acquire().await?, &ids).await?;
+    Ok(Page { data: with_attributes(rows, &values), page: q.page_meta(total) })
 }
 
 pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Result<SearchResults, AppError> {
@@ -393,24 +395,37 @@ pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Res
     Ok(SearchResults { data, page: q.page_meta(total) })
 }
 
-async fn detail(conn: &mut PgConnection, id: Uuid) -> Result<Option<ConfigurationItem>, AppError> {
-    let Some(row) = data::summary(conn, id).await? else { return Ok(None) };
-    let values = data::attribute_values(conn, &[id]).await?;
-    let mut attributes = Map::new();
-    let mut attribute_references = Map::new();
-    for v in &values {
-        let Some(json) = value_to_json(v) else { continue };
-        attributes.insert(v.key.clone(), json);
+/// Summary rows plus their attribute values (one batched read for the page).
+fn with_attributes(rows: Vec<SummaryRow>, values: &[StoredValueRow]) -> Vec<ConfigurationItem> {
+    let mut items: Vec<ConfigurationItem> = rows
+        .into_iter()
+        .map(|row| ConfigurationItem {
+            summary: summary_dto(row),
+            attributes: Map::new(),
+            attribute_references: Map::new(),
+        })
+        .collect();
+    let index: HashMap<Uuid, usize> = items.iter().enumerate().map(|(i, item)| (item.summary.id, i)).collect();
+    for v in values {
+        let (Some(&i), Some(json)) = (index.get(&v.ci_id), value_to_json(v)) else { continue };
+        let item = &mut items[i];
+        item.attributes.insert(v.key.clone(), json);
         if let Some(ref_id) = v.value_ref_ci_id {
             let reference = AttributeReference {
                 id: ref_id,
                 name: v.ref_name.clone().unwrap_or_default(),
                 deleted: v.ref_deleted.unwrap_or(false),
             };
-            attribute_references.insert(v.key.clone(), crud::json(&reference));
+            item.attribute_references.insert(v.key.clone(), crud::json(&reference));
         }
     }
-    Ok(Some(ConfigurationItem { summary: summary_dto(row), attributes, attribute_references }))
+    items
+}
+
+async fn detail(conn: &mut PgConnection, id: Uuid) -> Result<Option<ConfigurationItem>, AppError> {
+    let Some(row) = data::summary(conn, id).await? else { return Ok(None) };
+    let values = data::attribute_values(conn, &[id]).await?;
+    Ok(with_attributes(vec![row], &values).pop())
 }
 
 async fn must_detail(conn: &mut PgConnection, id: Uuid) -> Result<ConfigurationItem, AppError> {

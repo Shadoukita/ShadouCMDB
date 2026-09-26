@@ -39,6 +39,10 @@
   --c-warn-border: #e8c46b;
   --c-ok: #1a7f37;
   --c-focus: #2f6fdd;
+  /* Sidebar highlights (active item marker, brand strip). Administration › Customization › Branding can override it. */
+  --c-accent: #4c8dff;
+  --c-divider: #edf0f3;
+  --c-danger-border: #efb4ad;
   --c-row-hover: #eef3fb;
   --c-sidebar: #1e2733;
   --c-sidebar-text: #c9d1dc;
@@ -56,4 +60,45 @@
   --badge-danger-fg: #7a1a12;
 
   --shadow-pop: 0 6px 20px rgba(15, 23, 42, 0.18);
+  color-scheme: light;
+}
+
+/* Dark theme: set on <html data-theme="dark"> from the user's choice or the administrator's default. */
+:root[data-theme="dark"] {
+  --c-bg: #11151b;
+  --c-surface: #1a2029;
+  --c-surface-alt: #202733;
+  --c-border: #333d4b;
+  --c-border-strong: #4a5667;
+  --c-text: #e3e8ef;
+  --c-text-muted: #9aa5b4;
+  --c-link: #7fb0ff;
+  --c-primary: #3b7be0;
+  --c-primary-hover: #5790ea;
+  --c-danger: #e5534b;
+  --c-danger-hover: #f06e66;
+  --c-danger-bg: #3a1d1c;
+  --c-danger-border: #7a2e29;
+  --c-warn-bg: #352b12;
+  --c-warn-border: #8a6d1f;
+  --c-ok: #4cc26b;
+  --c-focus: #7fb0ff;
+  --c-row-hover: #243042;
+  --c-divider: #29313d;
+  --c-sidebar: #0c1016;
+  --c-sidebar-active: #1d2735;
+
+  --badge-neutral-bg: #2b3340;
+  --badge-neutral-fg: #d3dae4;
+  --badge-ok-bg: #173824;
+  --badge-ok-fg: #9be3b1;
+  --badge-warn-bg: #3b2f10;
+  --badge-warn-fg: #f1d18a;
+  --badge-off-bg: #262d38;
+  --badge-off-fg: #a3adba;
+  --badge-danger-bg: #401d1b;
+  --badge-danger-fg: #ffb4ad;
+
+  --shadow-pop: 0 6px 20px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
 }

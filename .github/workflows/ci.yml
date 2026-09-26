@@ -113,18 +113,37 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3001/readyz && break; sleep 1; done
           curl -sf http://127.0.0.1:3001/api/v1/setup | grep -q '"setupRequired":true'
 
+      # Two bare installs (system rows only, no user) for e2e/fresh-install.spec.ts: the starter template and an
+      # own class are built on the first, and its configuration export is imported into the second.
+      - name: migrate, seed and serve two bare instances for the export/import round trip
+        run: |
+          B=backend/target/release/shadoucmdb
+          for i in 2 3; do
+            db=shadoucmdb_bare$i
+            psql -d postgres -c "CREATE DATABASE $db"
+            PGDATABASE=$db $B migrate
+            PGDATABASE=$db $B seed
+            PGDATABASE=$db API_PORT=300$i $B serve > serve-bare$i.log 2>&1 &
+          done
+          for i in 2 3; do
+            for n in $(seq 1 30); do curl -sf http://127.0.0.1:300$i/readyz && break; sleep 1; done
+            curl -sf http://127.0.0.1:300$i/api/v1/setup | grep -q '"setupRequired":true'
+          done
+
       - name: npx playwright test
         working-directory: frontend
         env:
           E2E_BASE_URL: http://127.0.0.1:3000
           E2E_FRESH_BASE_URL: http://127.0.0.1:3001
+          E2E_BARE_BASE_URL: http://127.0.0.1:3002
+          E2E_IMPORT_BASE_URL: http://127.0.0.1:3003
         run: npx playwright test
 
       - name: No error-level server log lines
         run: |
-          errors=$(cat serve.log serve-fresh.log | grep -c '"level":"ERROR"' || true)
+          errors=$(cat serve.log serve-fresh.log serve-bare2.log serve-bare3.log | grep -c '"level":"ERROR"' || true)
           echo "error-level log lines: $errors"
-          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log serve-fresh.log; exit 1; fi
+          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log serve-fresh.log serve-bare2.log serve-bare3.log; exit 1; fi
 
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -135,5 +154,7 @@ jobs:
             frontend/test-results
             serve.log
             serve-fresh.log
+            serve-bare2.log
+            serve-bare3.log
           if-no-files-found: ignore
           retention-days: 14

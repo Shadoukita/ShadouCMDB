@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../api/client";
+import BrandMark from "../../components/BrandMark.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import { useDocumentTitle } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
@@ -47,7 +48,7 @@ async function submit() {
 <template>
   <main class="bare">
     <form class="bare-card" aria-labelledby="login-title" @submit.prevent="submit">
-      <div class="bare-brand">ShadouCMDB</div>
+      <div class="bare-brand"><BrandMark /></div>
       <h1 id="login-title">Sign in</h1>
       <div v-if="session.expired" class="alert alert-warn" role="status">
         Your session has ended. Sign in again to continue where you left off.

@@ -46,7 +46,7 @@ export async function apiGet<T>(request: APIRequestContext, path: string): Promi
   return (await res.json()) as T;
 }
 
-export async function apiSend<T>(request: APIRequestContext, method: "POST" | "PATCH", path: string, data: unknown): Promise<T> {
+export async function apiSend<T>(request: APIRequestContext, method: "POST" | "PUT" | "PATCH", path: string, data: unknown): Promise<T> {
   const csrf = (await request.storageState()).cookies.find((c) => c.name === "shadoucmdb_csrf")?.value ?? "";
   const res = await request.fetch(`/api/v1${path}`, { method, data, headers: { "X-CSRF-Token": csrf } });
   expect(res.ok(), `${method} ${path} → ${res.status()} ${await res.text()}`).toBeTruthy();

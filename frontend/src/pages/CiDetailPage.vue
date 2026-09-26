@@ -2,21 +2,24 @@
 import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { ApiError } from "../api/client";
-import { useCi } from "../api/queries";
+import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import StatusBadge from "../components/StatusBadge.vue";
+import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { formatDateTime } from "../lib/format";
 import { useTrail, type TrailStep } from "../lib/trail";
+import { DETAIL_BUILTINS, layoutFor, resolveLayout } from "../lib/uiSettings";
 import { useFlashStore } from "../stores/flash";
 import { useSessionStore } from "../stores/session";
 import AttributesPanel from "./detail/AttributesPanel.vue";
 import CorePanel from "./detail/CorePanel.vue";
 import DeleteCiButton from "./detail/DeleteCiButton.vue";
 import HistoryPanel from "./detail/HistoryPanel.vue";
+import LayoutPanels from "./detail/LayoutPanels.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
 
@@ -47,6 +50,15 @@ const notFound = computed(() => {
   return e instanceof ApiError && (e.code === "NOT_FOUND" || (e.code === "VALIDATION_ERROR" && e.details.some((d) => d.in === "params")));
 });
 const c = computed(() => ci.data.value);
+
+// The class's layout from Customization, if it has one; otherwise the built-in General + attributes panels.
+const settings = useAppSettings();
+const classes = useCiClasses();
+const classKey = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId)?.key);
+const layout = computed(() => layoutFor(settings.doc.value, classKey.value));
+const attrs = useClassAttributes(() => (layout.value ? c.value?.classId : undefined));
+const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || c.value?.attributes[d.key] != null));
+const panels = computed(() => (attrs.data.value ? resolveLayout(layout.value, defs.value, DETAIL_BUILTINS) : null));
 const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.name } : undefined));
 const crumbs = computed<Crumb[]>(() => {
   if (!c.value) return [];
@@ -109,7 +121,9 @@ const crumbs = computed<Crumb[]>(() => {
 
     <div :id="`panel-${tab}`" role="tabpanel" :aria-labelledby="`tab-${tab}`">
       <template v-if="tab === 'overview'">
-        <div class="grid-2">
+        <LayoutPanels v-if="panels" :ci="c" :panels="panels" :defs="defs" :self="self" :trail="trail" />
+        <LoadingState v-else-if="layout && attrs.isLoading.value" label="Loading attribute definitions…" />
+        <div v-else class="grid-2">
           <CorePanel :ci="c" />
           <AttributesPanel :ci="c" :self="self" :trail="trail" />
         </div>

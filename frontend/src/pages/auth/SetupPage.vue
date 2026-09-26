@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { ApiError } from "../../api/client";
+import BrandMark from "../../components/BrandMark.vue";
 import { useDocumentTitle } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
 import { useSessionStore } from "../../stores/session";
@@ -59,7 +60,7 @@ async function submit() {
 <template>
   <main class="bare">
     <form class="bare-card wide" aria-labelledby="setup-title" novalidate @submit.prevent="submit">
-      <div class="bare-brand">ShadouCMDB</div>
+      <div class="bare-brand"><BrandMark /></div>
       <h1 id="setup-title">Welcome — create the first administrator</h1>
       <p class="muted">
         No user exists yet. The account you create here holds the built-in <strong>Administrator</strong> profile: it can

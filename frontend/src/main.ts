@@ -5,6 +5,7 @@ import { onSessionEnded } from "./api/client";
 import { queryClient } from "./api/queryClient";
 import App from "./App.vue";
 import { router } from "./router";
+import { useBrandingStore } from "./stores/branding";
 import { useSessionStore } from "./stores/session";
 import "./styles/app.css";
 
@@ -19,5 +20,8 @@ onSessionEnded(() => {
   const here = router.currentRoute.value;
   router.replace({ path: "/login", query: here.meta.public ? {} : { redirect: here.fullPath } });
 });
+
+// Branding is public (the sign-in page is branded too); App applies it as it arrives.
+void useBrandingStore().load();
 
 app.mount("#app");

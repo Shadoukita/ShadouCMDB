@@ -1,0 +1,128 @@
+// TanStack Query composables for UI settings (Administration › Customization)
+// and configuration export/import. Same rules as queries.ts: every request goes
+// through the typed client, and mutations invalidate exactly what they change.
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
+import { toValue, type MaybeRefOrGetter } from "vue";
+import { api, unwrap, type JsonBody, type Schemas } from "./client";
+
+export type UiSettings = Schemas["UiSettings"];
+export type UiBranding = Schemas["UiBranding"];
+export type UiNavEntry = Schemas["UiNavEntry"];
+export type UiNavClassItem = Schemas["UiNavClassItem"];
+export type UiListView = Schemas["UiListView"];
+export type UiClassLayout = Schemas["UiClassLayout"];
+export type UiLayoutPanel = Schemas["UiLayoutPanel"];
+export type UiListSort = NonNullable<UiListView["defaultSort"]>;
+export type UiListFilters = NonNullable<UiListView["defaultFilters"]>;
+export type UiPage = NonNullable<UiNavEntry["page"]>;
+// The generator types the saved search's inline `filters` as `{…} & Record<string, never>`, which no
+// object literal satisfies; these restate the widget and document with the plain UiListFilters shape.
+type RawWidget = Schemas["UiWidget"];
+export type UiSavedSearch = Omit<NonNullable<RawWidget["search"]>, "filters"> & { filters?: UiListFilters };
+export type UiWidget = Omit<RawWidget, "search"> & { search?: UiSavedSearch };
+export type UiSettingsDocument = Omit<Schemas["UiSettingsDocument"], "dashboard"> & { dashboard: { widgets?: UiWidget[] | null } };
+export type UiWidgetType = UiWidget["type"];
+export type UiWidgetSize = NonNullable<UiWidget["size"]>;
+export type UiTheme = NonNullable<UiBranding["defaultTheme"]>;
+export type PublicBranding = Schemas["PublicBranding"];
+export type UiAsset = Schemas["UiAsset"];
+export type UiSettingsIssue = Schemas["Issue"];
+export type UiSettingsVersionSummary = Schemas["UiSettingsVersionSummary"];
+export type AssetKind = UiAsset["kind"];
+export type ImageType = Schemas["AssetData"]["contentType"];
+export type ConfigFile = Schemas["ConfigFile"];
+export type ImportResult = Schemas["ImportResult"];
+export type ImportMode = ImportResult["mode"];
+
+export const uiKeys = {
+  all: ["ui-settings"] as const,
+  settings: ["ui-settings", "current"] as const,
+  branding: ["ui-settings", "branding"] as const,
+  versions: (limit: number, offset: number) => ["ui-settings", "versions", limit, offset] as const,
+  version: (n: number) => ["ui-settings", "version", n] as const,
+};
+
+/** The effective settings every signed-in screen applies. */
+export function useUiSettings(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery(() => ({
+    queryKey: uiKeys.settings,
+    enabled: toValue(enabled),
+    queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/ui-settings", { signal })),
+    staleTime: 60_000,
+  }));
+}
+
+/** Branding without a session (login page, favicon, title). */
+export const fetchPublicBranding = () => unwrap(api.GET("/api/v1/ui-settings/branding"));
+
+/** A saved version as stored (with references the effective settings leave out). */
+export function useUiSettingsVersion(version: MaybeRefOrGetter<number | undefined>) {
+  return useQuery(() => {
+    const n = toValue(version) ?? 0;
+    return {
+      queryKey: uiKeys.version(n),
+      enabled: n > 0,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/ui-settings/versions/{version}", { params: { path: { version: n } }, signal })),
+      staleTime: Infinity, // a saved version never changes
+    };
+  });
+}
+
+export function useUiSettingsVersions(page: MaybeRefOrGetter<{ limit: number; offset: number }>) {
+  return useQuery(() => {
+    const { limit, offset } = toValue(page);
+    return {
+      queryKey: uiKeys.versions(limit, offset),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/ui-settings/versions", { params: { query: { limit, offset } }, signal })),
+      placeholderData: keepPreviousData,
+    };
+  });
+}
+
+function useUiMutation<V, R>(fn: (vars: V) => Promise<R>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => qc.invalidateQueries({ queryKey: uiKeys.all }),
+  });
+}
+
+export const useSaveUiSettings = () =>
+  useUiMutation((body: { version: number; settings: UiSettingsDocument; comment?: string | null }) =>
+    unwrap(api.PUT("/api/v1/ui-settings", { body: body as JsonBody<"/api/v1/ui-settings", "put"> })),
+  );
+
+export const useRestoreUiSettings = () =>
+  useUiMutation(({ restore, version, comment }: { restore: number; version: number; comment?: string | null }) =>
+    unwrap(api.POST("/api/v1/ui-settings/versions/{version}/restore", { params: { path: { version: restore } }, body: { version, comment } })),
+  );
+
+export const useUploadAsset = () =>
+  useUiMutation(({ kind, contentType, data }: { kind: AssetKind; contentType: ImageType; data: string }) =>
+    unwrap(api.PUT("/api/v1/ui-settings/assets/{kind}", { params: { path: { kind } }, body: { contentType, data } })),
+  );
+
+export const useDeleteAsset = () =>
+  useUiMutation((kind: AssetKind) => unwrap(api.DELETE("/api/v1/ui-settings/assets/{kind}", { params: { path: { kind } } })));
+
+// ---------- Configuration export/import ----------
+
+export const configApi = {
+  export: () => unwrap(api.GET("/api/v1/admin/config/export")),
+  /** `file` is whatever the operator uploaded; the API validates it and reports every problem with a path. */
+  import: (file: unknown, mode: ImportMode) =>
+    unwrap(api.POST("/api/v1/admin/config/import", { params: { query: { mode } }, body: file as ConfigFile })),
+};
+
+export function useImportConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ file, mode }: { file: unknown; mode: ImportMode }) => configApi.import(file, mode),
+    // An applied import can touch anything the UI caches (classes, lookups, profiles, settings).
+    onSuccess: (result) => {
+      if (result.applied) qc.invalidateQueries();
+    },
+  });
+}
