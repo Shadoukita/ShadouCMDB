@@ -355,7 +355,7 @@ pub enum LocationType {
 }
 
 impl LocationType {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             LocationType::Region => "region",
             LocationType::Site => "site",
@@ -392,7 +392,7 @@ pub struct Location {
     pub address: Option<String>,
 }
 
-fn address_schema() -> utoipa::openapi::schema::Schema {
+pub(crate) fn address_schema() -> utoipa::openapi::schema::Schema {
     schemas::nullable_string_schema(1000)
 }
 
@@ -609,7 +609,7 @@ pub fn email_schema() -> utoipa::openapi::schema::Schema {
         .into()
 }
 
-fn external_ref_schema() -> utoipa::openapi::schema::Schema {
+pub(crate) fn external_ref_schema() -> utoipa::openapi::schema::Schema {
     schemas::nullable_trimmed_schema(500)
 }
 

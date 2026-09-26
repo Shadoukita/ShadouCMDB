@@ -1027,6 +1027,138 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ui-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The UI settings every user sees
+         * @description Any signed-in user may read them; the web UI applies them for everyone. `settings` is the effective document: entries that refer to classes, attributes, statuses, environments or locations that do not exist are left out and listed in `issues` (they stay in the stored document, see the versions).
+         */
+        get: operations["getUiSettings"];
+        /**
+         * Replace the UI settings (saved as a new version)
+         * @description Requires `customization.manage`. Replaces the whole document. Send the `version` you loaded: if the settings were saved in between, the request fails with 409 VERSION_CONFLICT. The document is validated against its schema and the cross-field rules (400 with per-field details); references to classes or attributes that do not exist are accepted and reported in `issues`. Saving an unchanged document does not create a version. Each saved version is kept and audited.
+         */
+        put: operations["updateUiSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ui-settings/branding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * App name, colours, theme, logo and favicon for the login page
+         * @description Public: no session needed.
+         */
+        get: operations["getPublicBranding"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ui-settings/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saved versions of the UI settings, newest first
+         * @description Requires `customization.manage`.
+         */
+        get: operations["listUiSettingsVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ui-settings/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One saved version, with its document as stored
+         * @description Requires `customization.manage`.
+         */
+        get: operations["getUiSettingsVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ui-settings/versions/{version}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make an earlier version current again (saved as a new version)
+         * @description Requires `customization.manage`.
+         */
+        post: operations["restoreUiSettingsVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ui-settings/assets/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The logo or favicon image
+         * @description Public (the login page shows it). Answers with the image bytes, an ETag and `Cache-Control: no-cache`; send `If-None-Match` to get 304 Not Modified. Served with a sandboxing Content-Security-Policy.
+         */
+        get: operations["getUiAsset"];
+        /**
+         * Upload or replace the logo or favicon
+         * @description Requires `customization.manage`. JSON body with the content type and the base64 file. Logo: PNG, JPEG, WebP or SVG up to 512 KiB. Favicon: PNG, ICO or SVG up to 128 KiB. The content must match the declared type; SVGs with scripts, event handlers or embedded HTML are refused.
+         */
+        put: operations["uploadUiAsset"];
+        post?: never;
+        /**
+         * Remove the logo or favicon (the UI falls back to the built-in one)
+         * @description Requires `customization.manage`.
+         */
+        delete: operations["deleteUiAsset"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit-log": {
         parameters: {
             query?: never;
@@ -1191,10 +1323,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/config/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the whole configuration as one JSON file
+         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookups (statuses, environments, locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`.
+         */
+        get: operations["exportConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/config/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import a configuration file (dry run or apply)
+         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. Profiles cannot grant more than the importing user holds (403). Every applied change is audited.
+         */
+        post: operations["importConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description An image, base64-encoded */
+        AssetData: {
+            /**
+             * @description Logo: image/png, image/jpeg, image/webp or image/svg+xml (max 512 KiB). Favicon: image/png, image/x-icon or image/svg+xml (max 128 KiB).
+             * @enum {string}
+             */
+            contentType: "image/png" | "image/jpeg" | "image/webp" | "image/svg+xml" | "image/x-icon";
+            data: string;
+        };
         AttributeDefinition: {
             /** Format: uuid */
             id: string;
@@ -1320,6 +1501,36 @@ export interface components {
             edit: boolean;
             delete: boolean;
         };
+        /** @description A whole configuration: data model, lookups, permission profiles and UI settings (no users, passwords or CIs) */
+        ConfigFile: {
+            /**
+             * @description Always "shadoucmdb.config"
+             * @enum {string}
+             */
+            format: "shadoucmdb.config";
+            /**
+             * Format: int32
+             * @description File format version; this server reads version 1
+             */
+            formatVersion: number;
+            exportedAt?: string | null;
+            appVersion?: string | null;
+            dataModel?: components["schemas"]["DataModelSection"] | null;
+            lookups?: components["schemas"]["LookupSection"] | null;
+            permissionProfiles?: {
+                name: string;
+                description?: string | null;
+                globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+                classPermissions?: {
+                    class?: string | null;
+                    view?: boolean;
+                    create?: boolean;
+                    edit?: boolean;
+                    delete?: boolean;
+                }[];
+            }[];
+            uiSettings?: components["schemas"]["UiSettingsSection"] | null;
+        };
         ConfigurationItem: {
             /** Format: uuid */
             id: string;
@@ -1412,6 +1623,75 @@ export interface components {
              * @description Set when the CI was deleted (soft delete); history keeps resolving
              */
             deletedAt: string | null;
+        };
+        /** @description Classes (parents before children is not required), attributes, relationship types and rules */
+        DataModelSection: {
+            classes?: {
+                /** @description Stable machine key, lower_snake_case */
+                key: string;
+                name: string;
+                description?: string | null;
+                parent?: string | null;
+                isAbstract?: boolean;
+                icon?: string | null;
+                color?: string | null;
+                sortOrder?: number;
+                isActive?: boolean;
+            }[];
+            attributes?: {
+                /** @description Stable machine key, lower_snake_case */
+                class: string;
+                /** @description Stable machine key, lower_snake_case */
+                key: string;
+                label: string;
+                description?: string | null;
+                /** @enum {string} */
+                dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
+                isRequired?: boolean;
+                enumValues?: string[] | null;
+                referenceClass?: string | null;
+                lookupList?: string | null;
+                validation?: {
+                    /** @description number/integer: minimum */
+                    min?: number;
+                    /** @description number/integer: maximum */
+                    max?: number;
+                    /**
+                     * Format: int64
+                     * @description text: maximum length
+                     */
+                    maxLength?: number;
+                    /** @description text: regular expression the value must match */
+                    pattern?: string;
+                    /** @description Display unit, e.g. "GB" */
+                    unit?: string;
+                } | null;
+                groupName?: string | null;
+                helpText?: string | null;
+                /** @description Value in the same shape the CI API takes for this attribute (a lookup value id for "lookup"). Not allowed for "reference" attributes. */
+                defaultValue?: string | number | boolean | null;
+                sortOrder?: number;
+                isActive?: boolean;
+            }[];
+            relationshipTypes?: {
+                /** @description Stable machine key, lower_snake_case */
+                key: string;
+                name: string;
+                description?: string | null;
+                forwardLabel: string;
+                reverseLabel: string;
+                isDirectional?: boolean;
+                sortOrder?: number;
+                isActive?: boolean;
+            }[];
+            relationshipRules?: {
+                /** @description Stable machine key, lower_snake_case */
+                relationshipType: string;
+                /** @description Stable machine key, lower_snake_case */
+                sourceClass: string;
+                /** @description Stable machine key, lower_snake_case */
+                targetClass: string;
+            }[];
         };
         EffectiveAttribute: {
             /** Format: uuid */
@@ -1514,6 +1794,12 @@ export interface components {
                 requestId: string;
             };
         };
+        /** @description One changed field: API names, values as in the file format (keys, not ids) */
+        FieldChange: {
+            field: string;
+            from: unknown;
+            to: unknown;
+        };
         GraphEdge: {
             /**
              * Format: uuid
@@ -1534,6 +1820,42 @@ export interface components {
             /** Format: uuid */
             targetCiId: string;
             notes: string | null;
+        };
+        ImportChange: {
+            /** @description e.g. classes, attributes, lookupListValues, permissionProfiles, uiSettings */
+            section: string;
+            /** @description The row's key in the file (class.key for attributes, list.value for list values, kind:name for owners) */
+            key: string;
+            /** @enum {string} */
+            action: "create" | "update" | "delete";
+            /** @description Changed fields (updates only) */
+            fields: components["schemas"]["FieldChange"][];
+        };
+        ImportResult: {
+            /** @enum {string} */
+            mode: "dry_run" | "apply";
+            /** @description True only for mode=apply (a dry run never changes anything) */
+            applied: boolean;
+            /** @description Per section, in import order */
+            summary: components["schemas"]["SectionSummary"][];
+            /** @description Every create, update and delete (unchanged rows are only counted) */
+            changes: components["schemas"]["ImportChange"][];
+            warnings: components["schemas"]["ImportWarning"][];
+            /** @description References in the imported UI settings that do not resolve after the import (see GET /api/v1/ui-settings) */
+            uiSettingsIssues: components["schemas"]["Issue"][];
+        };
+        ImportWarning: {
+            /** @description Path in the file */
+            path: string;
+            message: string;
+        };
+        /** @description A reference the effective settings ignore, or a setting worth a second look */
+        Issue: {
+            /** @description Path in the stored document, e.g. "listViews.2.columns.3" */
+            path: string;
+            /** @enum {string} */
+            code: "unknown_class" | "unknown_attribute" | "unknown_status" | "unknown_environment" | "unknown_location" | "required_field_not_editable";
+            message: string;
         };
         Liveness: {
             /** @enum {string} */
@@ -1613,6 +1935,62 @@ export interface components {
             key: string;
             name: string;
         };
+        LookupSection: {
+            statuses?: {
+                /** @description Stable machine key, lower_snake_case */
+                key: string;
+                name: string;
+                description?: string | null;
+                isOperational?: boolean;
+                sortOrder?: number;
+                isActive?: boolean;
+            }[];
+            environments?: {
+                /** @description Stable machine key, lower_snake_case */
+                key: string;
+                name: string;
+                description?: string | null;
+                sortOrder?: number;
+                isActive?: boolean;
+            }[];
+            locations?: {
+                /** @description Stable machine key, lower_snake_case */
+                key: string;
+                name: string;
+                description?: string | null;
+                parent?: string | null;
+                /** @enum {string} */
+                locationType: "region" | "site" | "building" | "floor" | "room" | "rack" | "cloud_region" | "other";
+                address?: string | null;
+                sortOrder?: number;
+                isActive?: boolean;
+            }[];
+            owners?: {
+                /** @enum {string} */
+                kind: "person" | "team";
+                name: string;
+                email?: string | null;
+                externalRef?: string | null;
+                isActive?: boolean;
+            }[];
+            lists?: {
+                /** @description Stable machine key, lower_snake_case */
+                key: string;
+                name: string;
+                description?: string | null;
+                sortOrder?: number;
+                isActive?: boolean;
+                values?: {
+                    /** @description Stable machine key, lower_snake_case */
+                    key: string;
+                    name: string;
+                    description?: string | null;
+                    color?: string | null;
+                    sortOrder?: number;
+                    isActive?: boolean;
+                }[];
+            }[];
+        };
         Owner: {
             /** Format: uuid */
             id: string;
@@ -1679,6 +2057,19 @@ export interface components {
             id: string;
             name: string;
             isBuiltin: boolean;
+        };
+        /** @description Branding for the login page (no sign-in needed) */
+        PublicBranding: {
+            appName: string;
+            primaryColor: string | null;
+            accentColor: string | null;
+            /**
+             * @description Theme for users who have not picked one
+             * @enum {string}
+             */
+            defaultTheme: "light" | "dark" | "system";
+            logo: components["schemas"]["UiAsset"] | null;
+            favicon: components["schemas"]["UiAsset"] | null;
         };
         Readiness: {
             /** @enum {string} */
@@ -1853,6 +2244,23 @@ export interface components {
             }[];
             page: components["schemas"]["PageMeta"];
         };
+        /** @description Counts for one section of the file */
+        SectionSummary: {
+            section: string;
+            /** Format: int64 */
+            created: number;
+            /** Format: int64 */
+            updated: number;
+            /** Format: int64 */
+            deleted: number;
+            /** Format: int64 */
+            unchanged: number;
+            /**
+             * Format: int64
+             * @description Rows of this kind that exist here but are not in the file (kept as they are)
+             */
+            notInFile: number;
+        };
         /** @description The signed-in user, their permissions and the CSRF token to send back. */
         Session: {
             user: components["schemas"]["User"];
@@ -1976,6 +2384,281 @@ export interface components {
             } & Record<string, never>;
             /** @description Rows not installed because they would clash with the current data model */
             skipped: string[];
+        };
+        /** @description An uploaded image */
+        UiAsset: {
+            /** @enum {string} */
+            kind: "logo" | "favicon";
+            contentType: string;
+            /**
+             * Format: int32
+             * @description Bytes
+             */
+            size: number;
+            /** @description Hex SHA-256 of the file (also its ETag) */
+            sha256: string;
+            /** @description Where to load it from; the `v` parameter changes with the content, so it can be cached */
+            url: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description Logo and favicon (null when not uploaded) */
+        UiAssets: {
+            logo: components["schemas"]["UiAsset"] | null;
+            favicon: components["schemas"]["UiAsset"] | null;
+        };
+        /** @description App name, colours and the default theme. Logo and favicon are uploaded separately (`/api/v1/ui-settings/assets/{kind}`). */
+        UiBranding: {
+            /** @description Shown in the header, the login page and the browser title; null means "ShadouCMDB" */
+            appName?: string | null;
+            /** @description Hex colour, e.g. "#1f6feb"; null keeps the built-in theme colour */
+            primaryColor?: string | null;
+            /** @description Hex colour, e.g. "#1f6feb"; null keeps the built-in theme colour */
+            accentColor?: string | null;
+            /**
+             * @description Theme for users who have not picked one; system follows the operating system
+             * @default system
+             * @enum {string}
+             */
+            defaultTheme: "light" | "dark" | "system";
+        };
+        /**
+         * @description Detail page and form layout of one class. Fields not placed in a panel
+         *     follow in a trailing panel, grouped by attribute group as before.
+         */
+        UiClassLayout: {
+            /** @description Stable machine key, lower_snake_case */
+            classKey: string;
+            panels?: components["schemas"]["UiLayoutPanel"][];
+            /** @description Fields not shown on the detail page or the form (name cannot be hidden) */
+            hiddenFields?: string[];
+            /** @description Fields shown but not editable on the form (name cannot be read-only) */
+            readOnlyFields?: string[];
+        };
+        /** @description Dashboard widgets in display order; null keeps the built-in dashboard */
+        UiDashboard: {
+            /** @default null */
+            widgets: components["schemas"]["UiWidget"][] | null;
+        };
+        /** @description A panel (card) on the detail page and the form */
+        UiLayoutPanel: {
+            /** @description Stable machine key, lower_snake_case */
+            key: string;
+            label: string;
+            /** @description Fields in display order (built-in fields or attributes.<key>) */
+            fields?: string[];
+            /** @description Start collapsed on the detail page */
+            collapsed?: boolean;
+        };
+        /** @description Inventory filters, by key */
+        UiListFilters: {
+            /**
+             * @description Search text
+             * @default null
+             */
+            q: string | null;
+            /** @description Status keys */
+            statusKeys?: string[];
+            /** @description Environment keys */
+            environmentKeys?: string[];
+            /** @description Location keys */
+            locationKeys?: string[];
+        };
+        /** @description Sort for an inventory list; `field` is one of the inventory sort fields */
+        UiListSort: {
+            field: string;
+            /** @enum {string} */
+            direction?: "asc" | "desc";
+        };
+        /** @description The inventory list of one class */
+        UiListView: {
+            /** @description Stable machine key, lower_snake_case */
+            classKey: string;
+            /** @description Columns in display order: built-in fields (name, class, status, environment, owner, location, hostname, ipAddress, serialNumber, notes, createdAt, updatedAt) or attributes.<key> */
+            columns?: string[];
+            defaultSort?: components["schemas"]["UiListSort"] | null;
+            defaultFilters?: components["schemas"]["UiListFilters"];
+            /**
+             * Format: int64
+             * @description Rows per page (default 50)
+             */
+            pageSize?: number | null;
+        };
+        /** @description A class inside a navigation section */
+        UiNavClassItem: {
+            /** @description Stable machine key, lower_snake_case */
+            classKey: string;
+            /** @description Display label; null keeps the default */
+            label?: string | null;
+            hidden?: boolean;
+        };
+        /**
+         * @description One menu entry. `type` decides which other fields apply: page -> `page`;
+         *     class -> `classKey`; section -> `key`, `label` and `items`.
+         */
+        UiNavEntry: {
+            /** @enum {string} */
+            type: "page" | "class" | "section";
+            /**
+             * @description Built-in pages of the web UI
+             * @enum {string}
+             */
+            page?: "dashboard" | "inventory" | "search" | "audit_log" | "administration";
+            classKey?: string;
+            /** @description Section key (unique among sections) */
+            key?: string;
+            /** @description Display label; null keeps the default */
+            label?: string | null;
+            hidden?: boolean;
+            /** @description section: its classes in display order */
+            items?: components["schemas"]["UiNavClassItem"][];
+        };
+        /**
+         * @description Menu order, labels, hidden entries and class sections. Pages and classes
+         *     that are not listed appear after the listed ones, in their default order.
+         */
+        UiNavigation: {
+            /** @default [] */
+            entries: components["schemas"]["UiNavEntry"][];
+        };
+        /** @description A stored inventory search */
+        UiSavedSearch: {
+            /** @description CI class keys */
+            classKeys?: string[];
+            /**
+             * @description Include CIs of subclasses of `classKeys`
+             * @default false
+             */
+            includeSubclasses: boolean;
+            filters?: {
+                /**
+                 * @description Search text
+                 * @default null
+                 */
+                q: string | null;
+                /** @description Status keys */
+                statusKeys?: string[];
+                /** @description Environment keys */
+                environmentKeys?: string[];
+                /** @description Location keys */
+                locationKeys?: string[];
+            } & Record<string, never>;
+            /** @default null */
+            sort: {
+                field: string;
+                /** @enum {string} */
+                direction?: "asc" | "desc";
+            } | null;
+        };
+        /** @description The current UI settings as the web UI applies them */
+        UiSettings: {
+            /**
+             * Format: int32
+             * @description Send it back in PUT; it changes with every save
+             */
+            version: number;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Username of whoever saved this version */
+            updatedBy: string | null;
+            /** @description The effective settings: references to classes, attributes and lookups that do not exist are left out (see `issues`) */
+            settings: components["schemas"]["UiSettingsDocument"];
+            /** @description What the effective settings ignore or flag, with paths into the stored document */
+            issues: components["schemas"]["Issue"][];
+            assets: components["schemas"]["UiAssets"];
+        };
+        /** @description Every UI setting. All sections are optional; `{}` is the default UI. */
+        UiSettingsDocument: {
+            /**
+             * @default {
+             *       "appName": null,
+             *       "primaryColor": null,
+             *       "accentColor": null,
+             *       "defaultTheme": "system"
+             *     }
+             */
+            branding: components["schemas"]["UiBranding"];
+            /**
+             * @default {
+             *       "entries": []
+             *     }
+             */
+            navigation: components["schemas"]["UiNavigation"];
+            /**
+             * @default {
+             *       "widgets": null
+             *     }
+             */
+            dashboard: components["schemas"]["UiDashboard"];
+            /**
+             * @description At most one per class
+             * @default []
+             */
+            listViews: components["schemas"]["UiListView"][];
+            /**
+             * @description At most one per class
+             * @default []
+             */
+            layouts: components["schemas"]["UiClassLayout"][];
+        };
+        /**
+         * @description The UI settings document with the logo and favicon. Importing it replaces
+         *     the current settings (as a new version) and the images: a null logo or
+         *     favicon removes the current one.
+         */
+        UiSettingsSection: {
+            settings: components["schemas"]["UiSettingsDocument"];
+            logo?: components["schemas"]["AssetData"] | null;
+            favicon?: components["schemas"]["AssetData"] | null;
+        };
+        /** @description A saved version with its document as stored */
+        UiSettingsVersion: {
+            /** Format: int32 */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** @enum {string} */
+            actorType: "system" | "user" | "api_client" | "import";
+            actorName: string | null;
+            comment: string | null;
+            isCurrent: boolean;
+            settings: components["schemas"]["UiSettingsDocument"];
+        };
+        UiSettingsVersionList: {
+            data: components["schemas"]["UiSettingsVersionSummary"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description A saved version (without the document) */
+        UiSettingsVersionSummary: {
+            /** Format: int32 */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** @enum {string} */
+            actorType: "system" | "user" | "api_client" | "import";
+            actorName: string | null;
+            comment: string | null;
+            /** @description The version in use now */
+            isCurrent: boolean;
+        };
+        UiWidget: {
+            /** @description Stable machine key, lower_snake_case */
+            id: string;
+            /** @enum {string} */
+            type: "count_by_class" | "count_by_status" | "count_by_environment" | "recent_changes" | "saved_search";
+            /** @description Display label; null keeps the default */
+            title?: string | null;
+            /** @enum {string} */
+            size?: "small" | "medium" | "large";
+            /**
+             * Format: int64
+             * @description recent_changes and saved_search: rows shown (default 10)
+             */
+            limit?: number;
+            /** @description CI class keys */
+            classKeys?: string[];
+            /** @description saved_search: the search (required for that type) */
+            search?: components["schemas"]["UiSavedSearch"];
         };
         /** @description How many records of one kind refer to the row. */
         UsageCount: {
@@ -8633,6 +9316,664 @@ export interface operations {
             };
         };
     };
+    getUiSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UiSettings"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateUiSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT
+                     */
+                    version: number;
+                    settings: components["schemas"]["UiSettingsDocument"];
+                    comment?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UiSettings"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getPublicBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicBranding"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listUiSettingsVersions: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UiSettingsVersionList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getUiSettingsVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UiSettingsVersion"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    restoreUiSettingsVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The current version you loaded (optimistic concurrency, as for PUT)
+                     */
+                    version: number;
+                    comment?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UiSettings"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getUiAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: "logo" | "favicon";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/*": string;
+                };
+            };
+            /** @description Not modified (If-None-Match matched the ETag); no body */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    uploadUiAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: "logo" | "favicon";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Logo: image/png, image/jpeg, image/webp or image/svg+xml (max 512 KiB). Favicon: image/png, image/x-icon or image/svg+xml (max 128 KiB).
+                     * @enum {string}
+                     */
+                    contentType: "image/png" | "image/jpeg" | "image/webp" | "image/svg+xml" | "image/x-icon";
+                    /** @description The file, base64 (standard alphabet, padding optional) */
+                    data: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UiAsset"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteUiAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: "logo" | "favicon";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listAuditLog: {
         parameters: {
             query?: {
@@ -8642,7 +9983,7 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets";
                 /** @description History of these entities */
                 entityId?: string;
                 action?: "create" | "update" | "delete" | "restore";
@@ -9767,6 +11108,189 @@ export interface operations {
             };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    exportConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigFile"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    importConfig: {
+        parameters: {
+            query: {
+                /** @description dry_run reports what would change without changing anything; apply makes the changes */
+                mode: "dry_run" | "apply";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Always "shadoucmdb.config"
+                     * @enum {string}
+                     */
+                    format: "shadoucmdb.config";
+                    /**
+                     * Format: int32
+                     * @description File format version; this server reads version 1
+                     */
+                    formatVersion: number;
+                    exportedAt?: string | null;
+                    appVersion?: string | null;
+                    dataModel?: components["schemas"]["DataModelSection"] | null;
+                    lookups?: components["schemas"]["LookupSection"] | null;
+                    permissionProfiles?: {
+                        name: string;
+                        description?: string | null;
+                        globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+                        classPermissions?: {
+                            class?: string | null;
+                            view?: boolean;
+                            create?: boolean;
+                            edit?: boolean;
+                            delete?: boolean;
+                        }[];
+                    }[];
+                    uiSettings?: components["schemas"]["UiSettingsSection"] | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportResult"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

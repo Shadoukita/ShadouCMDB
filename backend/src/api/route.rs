@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
-use axum::extract::{RawPathParams, RawQuery, State};
+use axum::extract::{DefaultBodyLimit, RawPathParams, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodFilter, MethodRouter, on};
@@ -276,6 +276,8 @@ pub struct ResponseDoc {
     pub name: String,
     pub schema: RefOr<Schema>,
     pub nested: Vec<(String, RefOr<Schema>)>,
+    /// Content type of the success body. Non-JSON bodies are documented inline, not as components.
+    pub media_type: &'static str,
 }
 
 pub trait Output: Send + 'static {
@@ -298,7 +300,7 @@ impl Output for NoContent {
 fn doc_of<T: ToSchema>() -> ResponseDoc {
     let mut nested = Vec::new();
     T::schemas(&mut nested);
-    ResponseDoc { name: T::name().into_owned(), schema: T::schema(), nested }
+    ResponseDoc { name: T::name().into_owned(), schema: T::schema(), nested, media_type: "application/json" }
 }
 
 /// A JSON body with the route's success status.
@@ -322,6 +324,71 @@ impl<T: ToSchema + Serialize + Send + 'static> Output for WithStatus<T> {
     }
     fn respond(self, _: StatusCode) -> Response {
         (self.0, axum::Json(self.1)).into_response()
+    }
+}
+
+/// Raw bytes with their own content type (uploaded images). Documented as `image/*`.
+pub struct Binary {
+    pub content_type: HeaderValue,
+    pub body: Vec<u8>,
+}
+
+impl Output for Binary {
+    fn doc() -> Option<ResponseDoc> {
+        let schema = utoipa::openapi::schema::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::schema::Type::String)
+            .content_media_type("application/octet-stream")
+            .into();
+        Some(ResponseDoc { name: String::new(), schema: RefOr::T(schema), nested: Vec::new(), media_type: "image/*" })
+    }
+    fn respond(self, status: StatusCode) -> Response {
+        (status, [(header::CONTENT_TYPE, self.content_type)], self.body).into_response()
+    }
+}
+
+/// Another output plus response headers (ETag, Cache-Control, Content-Disposition).
+pub struct WithHeaders<R>(pub R, pub Vec<(header::HeaderName, HeaderValue)>);
+
+impl<R: Output> Output for WithHeaders<R> {
+    fn doc() -> Option<ResponseDoc> {
+        R::doc()
+    }
+    fn respond(self, status: StatusCode) -> Response {
+        let mut res = self.0.respond(status);
+        for (name, value) in self.1 {
+            res.headers_mut().insert(name, value);
+        }
+        res
+    }
+}
+
+/// A bare status with no body (304 Not Modified).
+pub struct StatusOnly(pub StatusCode);
+
+/// Either of two outputs; documented as the first.
+pub enum Either<A, B> {
+    Left(A),
+    Right(B),
+}
+
+impl<A: Output, B: Output> Output for Either<A, B> {
+    fn doc() -> Option<ResponseDoc> {
+        A::doc()
+    }
+    fn respond(self, status: StatusCode) -> Response {
+        match self {
+            Either::Left(a) => a.respond(status),
+            Either::Right(b) => b.respond(status),
+        }
+    }
+}
+
+impl Output for StatusOnly {
+    fn doc() -> Option<ResponseDoc> {
+        None
+    }
+    fn respond(self, _: StatusCode) -> Response {
+        self.0.into_response()
     }
 }
 
@@ -378,6 +445,7 @@ pub struct RouteBuilder {
     access: Access,
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
+    body_limit: Option<usize>,
 }
 
 pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<String>) -> RouteBuilder {
@@ -392,6 +460,7 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         access: Access::Authenticated,
         errors: Vec::new(),
         also_returns: Vec::new(),
+        body_limit: None,
     }
 }
 
@@ -436,6 +505,11 @@ impl RouteBuilder {
                 self.errors.push(*e);
             }
         }
+        self
+    }
+    /// Accept bodies up to this many bytes instead of the server-wide 1 MiB (config import).
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = Some(bytes);
         self
     }
     pub fn also_returns(mut self, status: StatusCode, description: impl Into<String>) -> Self {
@@ -491,7 +565,10 @@ impl RouteBuilder {
             query_params: Q::params(),
             body: B::schema(),
             response,
-            handler: on(filter, handler),
+            handler: match self.body_limit {
+                Some(bytes) => on(filter, handler).layer(DefaultBodyLimit::max(bytes)),
+                None => on(filter, handler),
+            },
         }
     }
 }
