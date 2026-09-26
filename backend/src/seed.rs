@@ -346,6 +346,7 @@ pub async fn run(cfg: &DatabaseConfig, template_keys: &[String], demo: bool) -> 
     let pool = crate::db::connect(cfg).await?;
     let result = async {
         seed_system_rows(&pool).await?;
+        println!("System rows: ok");
         let mut keys: Vec<String> = template_keys.to_vec();
         if demo && !keys.iter().any(|k| k == "it_infrastructure") {
             keys.push("it_infrastructure".into());
@@ -380,7 +381,6 @@ pub async fn run(cfg: &DatabaseConfig, template_keys: &[String], demo: bool) -> 
         )
         .fetch_all(&pool)
         .await?;
-        println!("System rows: ok");
         println!("Data model:");
         for (table, n) in &counts {
             println!("  {table}: {n}");
