@@ -46,6 +46,7 @@ jobs:
           workspaces: backend
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
       - run: cargo build --release --locked
 
       - name: migrate, migrate (no-op), seed --demo, verify
@@ -104,6 +105,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
+      - run: cargo test --locked
+        working-directory: backend
       - run: cargo build --release --locked
         working-directory: backend
 
