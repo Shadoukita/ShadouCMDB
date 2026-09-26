@@ -1,0 +1,148 @@
+<script setup lang="ts">
+import { computed, ref } from "vue";
+import { useRouter } from "vue-router";
+import { useDeleteUser, useSetUserPassword, useUpdateUser, type User } from "../../api/admin";
+import { ApiError } from "../../api/client";
+import ConfirmDialog from "../../components/ConfirmDialog.vue";
+import ErrorAlert from "../../components/ErrorAlert.vue";
+import FormField from "../form/FormField.vue";
+
+/** Disable/enable, reset password and delete. Each says what happens to the user's sessions. */
+const props = defineProps<{ user: User; isSelf: boolean }>();
+const router = useRouter();
+const update = useUpdateUser();
+const setPassword = useSetUserPassword();
+const del = useDeleteUser();
+
+const confirming = ref<"toggle" | "delete" | null>(null);
+const toggleError = ref<unknown>(null);
+
+async function confirmToggle() {
+  try {
+    await update.mutateAsync({ id: props.user.id, body: { isActive: !props.user.isActive } });
+    confirming.value = null;
+  } catch (e) {
+    toggleError.value = e;
+  }
+}
+
+function openToggle() {
+  toggleError.value = null;
+  confirming.value = "toggle";
+}
+
+function openDelete() {
+  del.reset();
+  confirming.value = "delete";
+}
+
+function confirmDelete() {
+  del.mutate(props.user.id, { onSuccess: () => router.replace("/admin/users") });
+}
+
+// Reset password
+const pw = ref("");
+const pw2 = ref("");
+const pwLocal = ref<Record<string, string>>({});
+const pwDone = ref(false);
+const pwFieldErrors = computed(() => ({
+  ...(setPassword.error.value instanceof ApiError ? setPassword.error.value.fieldErrors() : {}),
+  ...pwLocal.value,
+}));
+
+function resetPassword() {
+  pwDone.value = false;
+  setPassword.reset();
+  const errs: Record<string, string> = {};
+  if (pw.value.length < 12) errs.password = "Too short";
+  if (pw.value !== pw2.value) errs.confirm = "The passwords do not match";
+  pwLocal.value = errs;
+  if (Object.keys(errs).length > 0) return;
+  setPassword.mutate(
+    { id: props.user.id, password: pw.value },
+    {
+      onSuccess: () => {
+        pw.value = "";
+        pw2.value = "";
+        pwDone.value = true;
+      },
+    },
+  );
+}
+</script>
+
+<template>
+  <section class="panel" aria-labelledby="pw-title">
+    <div class="panel-header"><h2 id="pw-title">Reset password</h2></div>
+    <form class="panel-body stack" novalidate @submit.prevent="resetPassword">
+      <p class="muted" style="margin: 0">
+        Sets a new password for {{ user.username }} and signs them out everywhere.
+        <strong v-if="isSelf">This is you: you will be signed out and sign in again with the new password.</strong>
+      </p>
+      <div v-if="pwDone" class="alert" role="status">Password changed. {{ user.username }}'s sessions were ended.</div>
+      <ErrorAlert v-if="setPassword.isError.value && !pwFieldErrors.password" :error="setPassword.error.value" title="Password not changed" />
+      <div class="form-grid">
+        <FormField id="reset-password" label="New password" required :error="pwFieldErrors.password" hint="At least 12 characters">
+          <template #default="{ id, invalid, describedBy }">
+            <input :id="id" v-model="pw" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
+          </template>
+        </FormField>
+        <FormField id="reset-confirm" label="Repeat new password" required :error="pwFieldErrors.confirm">
+          <template #default="{ id, invalid, describedBy }">
+            <input :id="id" v-model="pw2" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
+          </template>
+        </FormField>
+      </div>
+      <div><button type="submit" class="btn" :disabled="setPassword.isPending.value">Set new password</button></div>
+    </form>
+  </section>
+
+  <section class="panel" aria-labelledby="danger-title">
+    <div class="panel-header"><h2 id="danger-title">Access</h2></div>
+    <div class="panel-body stack">
+      <p v-if="isSelf" class="muted" style="margin: 0">
+        This is your own account. Another user manager has to disable or delete it, so you cannot lock yourself out.
+      </p>
+      <div class="actions">
+        <button v-if="user.isActive" type="button" class="btn" :disabled="isSelf" @click="openToggle">Disable account</button>
+        <button v-else type="button" class="btn" @click="openToggle">Enable account</button>
+        <button type="button" class="btn btn-danger" :disabled="isSelf" @click="openDelete">Delete user</button>
+      </div>
+      <p class="muted" style="margin: 0">Prefer disabling: a disabled user keeps their name on past changes and can be enabled again.</p>
+    </div>
+  </section>
+
+  <ConfirmDialog
+    :open="confirming === 'toggle'"
+    :title="user.isActive ? `Disable ${user.username}?` : `Enable ${user.username}?`"
+    :confirm-label="user.isActive ? 'Disable account' : 'Enable account'"
+    :busy="update.isPending.value"
+    @cancel="confirming = null"
+    @confirm="confirmToggle"
+  >
+    <ErrorAlert v-if="toggleError" :error="toggleError" :title="user.isActive ? 'Not disabled' : 'Not enabled'" />
+    <p v-if="user.isActive">
+      <strong>{{ user.displayName }}</strong> ({{ user.username }}) will be signed out everywhere and cannot sign in until
+      the account is enabled again. Their profiles and history are kept.
+    </p>
+    <p v-else><strong>{{ user.displayName }}</strong> ({{ user.username }}) will be able to sign in again with their current password.</p>
+  </ConfirmDialog>
+
+  <ConfirmDialog
+    :open="confirming === 'delete'"
+    :title="`Delete user ${user.username}?`"
+    confirm-label="Delete user"
+    :busy="del.isPending.value"
+    @cancel="confirming = null"
+    @confirm="confirmDelete"
+  >
+    <ErrorAlert v-if="del.isError.value" :error="del.error.value" title="Delete failed" />
+    <p>
+      <strong>{{ user.displayName }}</strong> ({{ user.username }}) will be removed and signed out everywhere. This cannot be
+      undone. The audit log keeps their name on the changes they made.
+    </p>
+    <p v-if="user.profiles.length > 0">
+      They hold: <strong>{{ user.profiles.map((p) => p.name).join(", ") }}</strong>. The profiles themselves are not deleted.
+    </p>
+  </ConfirmDialog>
+</template>

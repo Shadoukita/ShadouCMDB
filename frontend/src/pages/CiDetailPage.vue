@@ -12,6 +12,7 @@ import { useDocumentTitle } from "../lib/composables";
 import { formatDateTime } from "../lib/format";
 import { useTrail, type TrailStep } from "../lib/trail";
 import { useFlashStore } from "../stores/flash";
+import { useSessionStore } from "../stores/session";
 import AttributesPanel from "./detail/AttributesPanel.vue";
 import CorePanel from "./detail/CorePanel.vue";
 import DeleteCiButton from "./detail/DeleteCiButton.vue";
@@ -20,7 +21,7 @@ import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
 
 type Tab = "overview" | "graph" | "history";
-const TABS: [Tab, string][] = [
+const ALL_TABS: [Tab, string][] = [
   ["overview", "Overview"],
   ["graph", "Relationship map"],
   ["history", "History"],
@@ -32,6 +33,9 @@ const trail = useTrail();
 const ci = useCi(id);
 const tab = ref<Tab>("overview");
 const flash = useFlashStore();
+const session = useSessionStore();
+// The history is the audit log, which needs audit.view.
+const TABS = computed(() => ALL_TABS.filter(([key]) => key !== "history" || session.can("audit.view")));
 const flashText = computed(() => flash.forCi(id.value));
 useDocumentTitle(() => ci.data.value?.name);
 // Walking to another CI reuses this component; start each record on its overview.
@@ -78,8 +82,8 @@ const crumbs = computed<Crumb[]>(() => {
         <span v-if="c.environment" class="badge">{{ c.environment.name }}</span>
       </div>
       <div v-if="!c.deletedAt" class="actions">
-        <RouterLink class="btn" :to="`/cis/${c.id}/edit`">Edit</RouterLink>
-        <DeleteCiButton :ci="c" />
+        <RouterLink v-if="session.canOnClass(c.classId, 'edit')" class="btn" :to="`/cis/${c.id}/edit`">Edit</RouterLink>
+        <DeleteCiButton v-if="session.canOnClass(c.classId, 'delete')" :ci="c" />
       </div>
     </div>
     <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>

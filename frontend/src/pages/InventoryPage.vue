@@ -11,6 +11,7 @@ import PaginationBar from "../components/PaginationBar.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
 import { formatRelative } from "../lib/format";
+import { useSessionStore } from "../stores/session";
 
 /**
  * CI inventory. Every filter, the sort and the page live in the URL
@@ -92,6 +93,12 @@ const rows = computed(() => list.data.value?.data ?? []);
 const newTo = computed(() =>
   query.value.classId && !currentClass.value?.isAbstract ? `/cis/new?classId=${query.value.classId}` : "/cis/new",
 );
+const session = useSessionStore();
+const canCreate = computed(() =>
+  query.value.classId && currentClass.value && !currentClass.value.isAbstract
+    ? session.canOnClass(query.value.classId, "create")
+    : session.canOnAnyClass("create"),
+);
 const newLabel = computed(() => (currentClass.value && !currentClass.value.isAbstract ? currentClass.value.name : "CI"));
 const crumbs = computed(() =>
   currentClass.value ? [{ label: "Inventory", to: "/cis" }, { label: currentClass.value.name }] : [{ label: "Inventory" }],
@@ -140,7 +147,7 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
       <span v-if="list.data.value" class="muted">{{ total.toLocaleString() }} total</span>
       <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" aria-label="Refreshing" />
     </div>
-    <div class="actions">
+    <div v-if="canCreate" class="actions">
       <RouterLink class="btn btn-primary" :to="newTo">+ New {{ newLabel }}</RouterLink>
     </div>
   </div>
@@ -219,7 +226,7 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
     <EmptyState v-if="list.data.value && total === 0 && activeFilters.length === 0" title="The inventory is empty">
       Configuration items are the servers, VMs, applications, databases, network devices and locations you track. Create
       one, then relate it to others from its detail page.
-      <template #actions>
+      <template v-if="canCreate" #actions>
         <RouterLink class="btn btn-primary" to="/cis/new">+ Create your first configuration item</RouterLink>
       </template>
     </EmptyState>

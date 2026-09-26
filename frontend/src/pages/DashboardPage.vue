@@ -10,6 +10,7 @@ import LoadingState from "../components/LoadingState.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { useDocumentTitle } from "../lib/composables";
 import { formatRelative } from "../lib/format";
+import { useSessionStore } from "../stores/session";
 import CountTable, { type CountRow } from "./dashboard/CountTable.vue";
 
 /**
@@ -17,6 +18,7 @@ import CountTable, { type CountRow } from "./dashboard/CountTable.vue";
  * reading page.total), so they stay correct at any inventory size.
  */
 useDocumentTitle("Dashboard");
+const session = useSessionStore();
 const total = useQuery(ciCountQuery({}));
 const recent = useCiList({ sort: "-updatedAt", limit: 12 });
 
@@ -29,8 +31,7 @@ const classRows = computed<CountRow[]>(() =>
     label: c.name,
     count: classCounts.value[i]?.data,
     to: `/cis?classId=${c.id}`,
-    newTo: `/cis/new?classId=${c.id}`,
-    newLabel: `New ${c.name}`,
+    ...(c.isActive && session.canOnClass(c.id, "create") ? { newTo: `/cis/new?classId=${c.id}`, newLabel: `New ${c.name}` } : {}),
   })),
 );
 
@@ -53,7 +54,7 @@ const statusRows = computed<CountRow[]>(() =>
       <div class="title"><h1>Dashboard</h1></div>
       <div class="actions">
         <RouterLink class="btn" to="/cis">Open inventory</RouterLink>
-        <RouterLink class="btn btn-primary" to="/cis/new">+ New CI</RouterLink>
+        <RouterLink v-if="session.canOnAnyClass('create')" class="btn btn-primary" to="/cis/new">+ New CI</RouterLink>
       </div>
     </div>
 
@@ -62,7 +63,7 @@ const statusRows = computed<CountRow[]>(() =>
       <EmptyState title="Welcome to ShadouCMDB — the inventory is empty">
         Start with the things everything else depends on: a location, then the servers in it, then the applications and
         databases that run on them. Relate them from each CI's detail page.
-        <template #actions>
+        <template v-if="session.canOnAnyClass('create')" #actions>
           <RouterLink class="btn btn-primary" to="/cis/new">+ Create your first configuration item</RouterLink>
         </template>
       </EmptyState>

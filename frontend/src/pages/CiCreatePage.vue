@@ -6,6 +6,7 @@ import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import { useDocumentTitle } from "../lib/composables";
 import { vAutofocus } from "../lib/directives";
+import { useSessionStore } from "../stores/session";
 import CiForm from "./form/CiForm.vue";
 
 const route = useRoute();
@@ -15,7 +16,11 @@ const classes = useCiClasses();
 const cls = computed(() => classes.data.value?.find((c) => c.id === classId.value));
 useDocumentTitle(() => (cls.value ? `New ${cls.value.name}` : "New CI"));
 
-const concrete = computed(() => (classes.data.value ?? []).filter((c) => c.isActive && !c.isAbstract));
+const session = useSessionStore();
+const concrete = computed(() =>
+  (classes.data.value ?? []).filter((c) => c.isActive && !c.isAbstract && session.canOnClass(c.id, "create")),
+);
+const denied = computed(() => !!cls.value && !session.canOnClass(cls.value.id, "create"));
 const crumbs = computed<Crumb[]>(() => [
   { label: "Inventory", to: "/cis" },
   ...(cls.value ? [{ label: cls.value.name, to: `/cis?classId=${cls.value.id}` }] : []),
@@ -48,6 +53,13 @@ function pickClass(e: Event) {
       </div>
     </div>
   </section>
-  <CiForm v-if="classId && cls" :key="classId" mode="create" :class-id="classId" :class-name="cls.name" />
+  <div v-if="denied" class="alert alert-error" role="alert">
+    None of your permission profiles allows creating {{ cls?.name }} configuration items. Choose another class.
+  </div>
+  <div v-else-if="classes.data.value && concrete.length === 0" class="alert alert-warn" role="alert">
+    None of your permission profiles allows creating configuration items. Ask an administrator for a profile with the
+    create right.
+  </div>
+  <CiForm v-if="classId && cls && !denied" :key="classId" mode="create" :class-id="classId" :class-name="cls.name" />
   <ErrorAlert v-if="classId && classes.data.value && !cls" :error="unknownClass" />
 </template>
