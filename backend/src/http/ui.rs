@@ -33,7 +33,6 @@ fn file_response(path: &str, file: rust_embed::EmbeddedFile) -> Response {
         headers.insert(header::CONTENT_TYPE, v);
     }
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
-    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     *res.status_mut() = StatusCode::OK;
     res
 }

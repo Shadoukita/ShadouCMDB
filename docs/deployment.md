@@ -78,9 +78,31 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
 
 - The proxy must pass `X-Forwarded-Proto: https` (or `Forwarded: proto=https`). The server
   then marks the cookies `Secure`, so a browser never sends them over plain HTTP. If the proxy
-  cannot send that header, set `COOKIE_SECURE=always`.
+  cannot send that header, set `COOKIE_SECURE=always`. With the default `COOKIE_SECURE=auto`,
+  the first session cookie issued without `Secure` logs a one-time warning naming this fix;
+  `COOKIE_SECURE=never` is taken as deliberate and is not warned about.
 - Serve the UI and the API from the same origin (the embedded UI does this). A UI on another
-  origin needs that origin in `CORS_ORIGINS`; those origins may send the session cookie.
+  origin needs that origin in `CORS_ORIGINS`, spelled exactly as the browser sends it
+  (`https://cmdb.example.com`: no path, no trailing slash); those origins may send the session
+  cookie. `*` and anything that is not an origin stop the server at startup.
+
+The server sets these security headers itself, on every response it sends (the web UI, the
+API and Swagger UI at `/docs`). Do not add them again at the proxy: two
+`Content-Security-Policy` headers are both enforced, and duplicate values of the others are
+confusing at best. Headers the server does not set (for example `Permissions-Policy`) are
+the proxy's to add.
+
+| Header | Value | Sent on |
+| --- | --- | --- |
+| `X-Content-Type-Options` | `nosniff` | every response |
+| `Referrer-Policy` | `no-referrer` | every response |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | only requests that arrived over HTTPS (`X-Forwarded-Proto: https` or `Forwarded: proto=https`); never over plain HTTP, so a lab or LAN install is not locked onto a scheme it cannot serve |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'` | HTML documents only (the web UI and `/docs`), not JSON |
+
+`includeSubDomains` tells browsers to use HTTPS for every subdomain of the host name the
+server is reached by, for a year. If that name has subdomains that cannot serve HTTPS, have the
+proxy strip or override the header. Because of `frame-ancestors 'none'` the UI cannot be
+embedded in a frame on any site, including your own.
 - `SESSION_IDLE_TIMEOUT_MINUTES` (default 12 h) and `SESSION_MAX_AGE_HOURS` (default 7 days)
   bound how long a session lives. Sessions are stored in PostgreSQL, so they survive restarts
   and work across several instances. The login backoff counters are per process.

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Request};
-use axum::http::{HeaderName, HeaderValue, Method};
+use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
@@ -24,10 +24,11 @@ use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::api;
 use crate::auth::AuthState;
-use crate::auth::session::CSRF_HEADER;
+use crate::auth::session::{CSRF_HEADER, request_is_https};
 use crate::config::{AuthConfig, Config};
 use crate::db;
 use error::AppError;
@@ -66,6 +67,47 @@ fn panic_response(_: Box<dyn Any + Send + 'static>) -> Response {
     AppError::internal().into_response()
 }
 
+/// Policy for HTML documents: the embedded web UI and Swagger UI at /docs.
+/// Both load only same-origin files (the UI: `/config.js` and `/assets/*`;
+/// Swagger UI: its vendored bundle and `swagger-initializer.js`) and have no
+/// inline `<script>` or `<style>`, so neither `'unsafe-inline'` nor a nonce is
+/// needed. `img-src data:` covers the UI's favicon and Swagger UI's icons.
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+    connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'";
+
+const HSTS: &str = "max-age=31536000; includeSubDomains";
+
+/// Headers that depend on the request or on the response type:
+/// - `Strict-Transport-Security` only when the request reached us (or the
+///   proxy in front of us) over HTTPS; on plain HTTP it would strand lab and
+///   LAN deployments on a scheme they cannot serve.
+/// - `Content-Security-Policy` only on HTML documents, never on JSON.
+async fn security_headers(req: Request, next: axum::middleware::Next) -> Response {
+    let https = request_is_https(req.headers());
+    let mut res = next.run(req).await;
+    let headers = res.headers_mut();
+    if https {
+        headers.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static(HSTS));
+    }
+    let is_html = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.trim_start().to_ascii_lowercase().starts_with("text/html"));
+    if is_html {
+        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
+    }
+    res
+}
+
+/// Security headers for every response. The UI is served same-origin with the
+/// API by this router, so this is the only place they can be set; a reverse
+/// proxy in front should not add its own copies (see docs/deployment.md).
+fn with_security_headers(app: Router) -> Router {
+    app.layer(axum::middleware::from_fn(security_headers))
+        .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
+        .layer(SetResponseHeaderLayer::overriding(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer")))
+}
+
 pub fn router(state: AppState, cfg: &Config) -> Router {
     let mut app = api::router()
         .fallback(fallback)
@@ -91,8 +133,9 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
         );
     }
 
-    // Outermost, so every response (including 404s, panics and CORS preflights) carries the id.
-    app.layer(axum::middleware::from_fn(request_id::middleware))
+    // Outermost, so every response (including 404s, panics and CORS preflights)
+    // carries the id and the security headers.
+    with_security_headers(app).layer(axum::middleware::from_fn(request_id::middleware))
 }
 
 /// Runs the server until `shutdown` resolves, then drains in-flight requests
@@ -143,4 +186,99 @@ pub async fn shutdown_signal() {
         _ = terminate => {},
     }
     tracing::info!("shutdown signal received");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::response::Html;
+    use std::time::Duration;
+    use tower::ServiceExt;
+
+    use crate::config::CookieSecure;
+
+    async fn get(app: Router, path: &str, extra: &[(&'static str, &'static str)]) -> Response {
+        let mut req = Request::builder().uri(path);
+        for (k, v) in extra {
+            req = req.header(*k, *v);
+        }
+        app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap()
+    }
+
+    fn header(res: &Response, name: header::HeaderName) -> Option<&str> {
+        res.headers().get(name).map(|v| v.to_str().unwrap())
+    }
+
+    /// The real router, with a pool that is never connected: the paths used here do not touch the database.
+    fn app() -> Router {
+        let pool = PgPool::connect_lazy("postgres://nobody@127.0.0.1:1/none").unwrap();
+        let auth = AuthConfig {
+            session_idle: Duration::from_secs(60),
+            session_max_age: Duration::from_secs(3600),
+            cookie_secure: CookieSecure::Auto,
+        };
+        let cfg = Config {
+            api_host: "127.0.0.1".into(),
+            api_port: 3000,
+            cors_origins: Vec::new(),
+            database: crate::config::DatabaseConfig {
+                url: Some("postgres://nobody@127.0.0.1:1/none".into()),
+                host: None,
+                port: 5432,
+                database: None,
+                user: None,
+                password: None,
+                ssl: crate::config::SslMode::Disable,
+                ssl_ca_file: None,
+                pool_max: 1,
+                statement_timeout: Duration::ZERO,
+                connect_timeout: Duration::from_secs(1),
+            },
+            auth: auth.clone(),
+        };
+        router(AppState::new(pool, auth), &cfg)
+    }
+
+    #[tokio::test]
+    async fn json_responses_get_the_baseline_headers_and_no_csp() {
+        let res = get(app(), "/api/v1/no-such-route", &[]).await;
+        assert_eq!(res.status(), 404);
+        assert!(header(&res, header::CONTENT_TYPE).unwrap().starts_with("application/json"));
+        assert_eq!(header(&res, header::X_CONTENT_TYPE_OPTIONS), Some("nosniff"));
+        assert_eq!(header(&res, header::REFERRER_POLICY), Some("no-referrer"));
+        assert_eq!(header(&res, header::CONTENT_SECURITY_POLICY), None);
+        assert_eq!(header(&res, header::STRICT_TRANSPORT_SECURITY), None, "no HSTS over plain HTTP");
+    }
+
+    #[tokio::test]
+    async fn hsts_only_when_the_request_arrived_over_https() {
+        let res = get(app(), "/api/v1/no-such-route", &[("x-forwarded-proto", "https")]).await;
+        assert_eq!(header(&res, header::STRICT_TRANSPORT_SECURITY), Some(HSTS));
+        let res = get(app(), "/api/v1/no-such-route", &[("forwarded", "for=10.0.0.1;proto=https")]).await;
+        assert_eq!(header(&res, header::STRICT_TRANSPORT_SECURITY), Some(HSTS));
+        let res = get(app(), "/api/v1/no-such-route", &[("x-forwarded-proto", "http")]).await;
+        assert_eq!(header(&res, header::STRICT_TRANSPORT_SECURITY), None);
+    }
+
+    #[tokio::test]
+    async fn ui_documents_get_the_strict_csp() {
+        // The embedded UI only exists in builds with frontend/dist, so stand in for `ui::serve` here.
+        let ui = with_security_headers(Router::new().fallback(|| async { Html("<!doctype html><div id=app></div>") }));
+        let res = get(ui, "/inventory", &[("x-forwarded-proto", "https")]).await;
+        assert_eq!(header(&res, header::CONTENT_SECURITY_POLICY), Some(CSP));
+        assert!(!CSP.contains("unsafe"));
+        assert_eq!(header(&res, header::X_CONTENT_TYPE_OPTIONS), Some("nosniff"));
+        assert_eq!(header(&res, header::REFERRER_POLICY), Some("no-referrer"));
+        assert_eq!(header(&res, header::STRICT_TRANSPORT_SECURITY), Some(HSTS));
+    }
+
+    #[tokio::test]
+    async fn swagger_ui_gets_the_same_csp() {
+        let res = get(app(), "/docs/", &[]).await;
+        assert_eq!(res.status(), 200);
+        assert!(header(&res, header::CONTENT_TYPE).unwrap().starts_with("text/html"));
+        assert_eq!(header(&res, header::CONTENT_SECURITY_POLICY), Some(CSP));
+        assert_eq!(header(&res, header::STRICT_TRANSPORT_SECURITY), None);
+    }
 }
