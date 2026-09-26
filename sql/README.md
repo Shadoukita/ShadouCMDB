@@ -6,7 +6,7 @@ binary embeds the migrations from this folder at build time.
 
 | Path | What |
 | --- | --- |
-| [`migrations/`](migrations/) | Versioned schema migrations `<NNNN>_<name>.sql`, applied in order by `shadoucmdb migrate` and tracked in `_sqlx_migrations`. `meta/_journal.json` only exists for the Node API's migration count and is removed with it (SHAA-9). |
+| [`migrations/`](migrations/) | Versioned schema migrations `<NNNN>_<name>.sql`, applied in order by `shadoucmdb migrate` and tracked in `_sqlx_migrations`. |
 | [`bootstrap/`](bootstrap/) | One-time admin scripts run **before** the first migration (role and database creation). Not tracked by the migration runner. |
 | [`diagrams/`](diagrams/) | Schema diagrams. Start with [`diagrams/erd.md`](diagrams/erd.md). |
 
@@ -38,12 +38,11 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
 - Write migrations by hand as `migrations/<NNNN>_<snake_case_name>.sql`, where `NNNN` is the next number.
   The file name is the version (`0003_…` is version 3). Each file runs in its own transaction; start
   the file with `-- no-transaction` only for statements such as `CREATE INDEX CONCURRENTLY`.
-  (The Drizzle snapshots were removed, so `drizzle-kit generate` no longer applies.)
-- Until the Node API is retired (SHAA-9), also mirror the change in `backend/src/db/schema/` and append
-  an entry to `migrations/meta/_journal.json` (`idx`, `tag` = file name without `.sql`, `when`).
-- Commit the migration, the schema mirror and any ERD update in the same pull request.
+- If a compile-time checked query in `backend/src/data/` is affected, refresh `backend/.sqlx`
+  (see [`docs/api.md`](../docs/api.md#layers-and-extension-seams)).
+- Commit the migration, the code change and any ERD update in the same pull request.
 
-## Databases migrated by the old Node runner
+## Databases migrated by the retired Node runner
 
 Before `shadoucmdb`, migrations were tracked in `drizzle.__drizzle_migrations`. Run
 `shadoucmdb migrate --adopt-drizzle` once on such a database: it checks the recorded SHA-256

@@ -5,25 +5,19 @@ health checks, embedded web UI and the admin commands (migrations, seed data,
 schema checks). The binary ships for **Linux x64**, **Linux ARM64** and
 **Windows Server x64**, plus a multi-arch **Docker image**.
 
-> **Transition note.** The `/api/v1` endpoints are still served by the Node API
-> in `backend/src` until they are ported (SHAA-9). Today the Rust binary provides
-> configuration, the database pool, migrations, `seed`, `verify`, `/healthz`,
-> `/readyz`, the embedded UI and the service integrations. Both read the same
-> `.env` and can point at the same database.
-
 PostgreSQL is always **external**. Configure it through `DATABASE_URL` or the
-`PG*` variables. Every variable is documented in [`.env.example`](../.env.example);
-the Node API reads the same set with the same meaning.
+`PG*` variables. Every variable is documented in [`.env.example`](../.env.example).
 
 ## Commands
 
 ```
 shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
 
-  serve                     Run the HTTP server (API, /healthz, /readyz, web UI)
+  serve                     Run the HTTP server (/api/v1, /openapi.json, /docs, /healthz, /readyz, web UI)
   migrate [--adopt-drizzle] Apply pending migrations; re-running is a no-op
   seed [--demo]             Load reference data (idempotent); --demo adds a sample inventory
   verify                    Schema acceptance checks in a rolled-back transaction
+  openapi [--out F|--check F]  Print the OpenAPI document, write it, or fail if F is stale
   service install|uninstall|run   Windows Service management (Windows only)
 ```
 
@@ -183,11 +177,13 @@ orchestrator. For a database on the Docker host, use
 `PGHOST=host.docker.internal` (add `--add-host=host.docker.internal:host-gateway`
 on Linux), not `localhost`.
 
-`docker-compose.yml` still runs the Node API until the port is complete (SHAA-9).
+`docker-compose.yml` builds this image and wraps `migrate`, `seed` and `serve`
+for local use; see the [README](../README.md#with-docker).
 
 ## Moving a dev database off the Node/Drizzle migration runner
 
-Databases migrated with `npm run db:migrate` record their history in
+The Node API and its Drizzle migration runner were removed in SHAA-9. Databases
+it migrated (with `npm run db:migrate`) record their history in
 `drizzle.__drizzle_migrations`, not `_sqlx_migrations`. On such a database,
 `shadoucmdb migrate` stops with an explanation. Choose one of these:
 
@@ -200,8 +196,8 @@ Databases migrated with `npm run db:migrate` record their history in
   This checks that every Drizzle row is the SHA-256 of the corresponding
   embedded migration file, marks those migrations as applied in
   `_sqlx_migrations` without re-running them, and then applies anything newer.
-  The `drizzle` schema is left in place; drop it later with
-  `DROP SCHEMA drizzle CASCADE;` once nothing uses the Node runner.
+  The `drizzle` schema is left in place; drop it afterwards with
+  `DROP SCHEMA drizzle CASCADE;`.
 
 - **Or reset it.** No production database exists yet, so recreating a dev
   database is fine:
@@ -210,9 +206,6 @@ Databases migrated with `npm run db:migrate` record their history in
   dropdb …; createdb …
   shadoucmdb migrate && shadoucmdb seed --demo
   ```
-
-The Node API (`npm run db:migrate`, `/readyz`) recognises databases managed by
-`shadoucmdb migrate`, so both backends can share one database during the port.
 
 ## Resource footprint
 
