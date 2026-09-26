@@ -715,6 +715,46 @@ async function permissions(x: Json) {
   check(trail.data.every((e: Json) => !JSON.stringify(e).includes('argon2')), 'password hashes never reach the audit log');
   await get(`/api/v1/audit-log?entityType=permission_profiles&entityId=${readers.id}`);
 
+  console.log('\n# Audit of authentication');
+  // Through a proxy that sets X-Forwarded-For: its first hop is the client IP.
+  const viaProxy = { 'x-forwarded-for': '203.0.113.38, 10.0.0.1' };
+  const loginVia = (username: string, pw: string, expect: number) =>
+    as(null, () => call('POST', '/api/v1/auth/login', { username, password: pw }, expect, viaProxy));
+  await loginVia(reader.username, 'wrong password', 401);
+  const audited = identityFrom(reader.username, await loginVia(reader.username, `${password}-3`, 200));
+  await as(audited, () => call('POST', '/api/v1/auth/logout', undefined, 204, viaProxy));
+  const revokedByReset = identityFrom(reader.username, await loginVia(reader.username, `${password}-3`, 200));
+  await put(`/api/v1/admin/users/${reader.id}/password`, { password: `${password}-4` });
+  const events: Json[] = (await get('/api/v1/audit-log?entityType=sessions&limit=200')).json.data;
+  await get('/api/v1/audit-log?entityType=sessions&action=login.failure&limit=5');
+  const about = (e: Json, name: string) => [e.newValue?.username, e.newValue?.attemptedUsername].includes(name);
+  const ofReader = events.filter((e) => about(e, reader.username));
+  const success = ofReader.find((e) => e.action === 'login.success');
+  check(success && success.actorType === 'user' && success.actorId === reader.id && success.newValue.userId === reader.id &&
+    success.newValue.ipAddress === '203.0.113.38' && typeof success.newValue.userAgent === 'string' && success.oldValue === null &&
+    typeof success.requestId === 'string', 'login.success: the user as actor, client IP from X-Forwarded-For, user agent, request id');
+  const failure = ofReader.find((e) => e.action === 'login.failure');
+  const ghostFailure = events.find((e) => e.action === 'login.failure' && about(e, ghost));
+  const keys = (e: Json) => Object.keys(e?.newValue ?? {}).sort().join(',');
+  check(failure && failure.actorId === null && failure.newValue.attemptedUsername === reader.username && failure.newValue.ipAddress === '203.0.113.38',
+    'login.failure: no actor id, the attempted username and the client IP');
+  check(ghostFailure && keys(failure) === 'attemptedUsername,ipAddress,userAgent' && keys(ghostFailure) === keys(failure),
+    'login.failure looks the same for existing and unknown usernames (no enumeration oracle)');
+  const locked = events.find((e) => e.action === 'login.locked' && about(e, ghost));
+  check(locked && locked.actorId === null && locked.newValue.lockedForSeconds >= 1, 'login.locked: the lock and its duration');
+  check(ofReader.some((e) => e.action === 'logout' && e.actorId === reader.id && e.newValue.ipAddress === '203.0.113.38' &&
+    e.newValue.session?.ipAddress === '203.0.113.38'), 'logout: the user as actor, with the session\'s IP');
+  const revoked = (reason: string) => ofReader.filter((e) => e.action === 'session.revoke' && e.newValue.reason === reason);
+  check(revoked('user_disabled').some((e) => e.actorId === adminMe.user.id && e.newValue.userId === reader.id), 'disabling a user writes session.revoke (actor: the administrator)');
+  check(revoked('password_reset').some((e) => e.actorId === adminMe.user.id && e.newValue.session?.ipAddress === '203.0.113.38'), 'an admin password reset writes session.revoke');
+  // Nothing secret: passwords, hashes, session tokens (or their SHA-256), CSRF tokens.
+  const { createHash } = await import('node:crypto');
+  const secrets = [audited, revokedByReset, me!].flatMap((s) => {
+    const token = s.cookie.split('=')[1] ?? '';
+    return [token, createHash('sha256').update(token).digest('hex'), s.csrf];
+  }).concat([password, `${password}-2`, `${password}-3`, `${password}-4`, 'wrong password', 'argon2']);
+  check(events.every((e) => secrets.every((s) => s && !JSON.stringify(e).includes(s))), 'no password, hash, session token or CSRF token in the authentication audit rows');
+
   // Clean up what only this run uses.
   await del(`/api/v1/admin/users/${reader.id}`);
   await del(`/api/v1/admin/users/${nobody.id}`);

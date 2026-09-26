@@ -23,6 +23,7 @@ use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath
 use crate::api::schemas::{
     self, Page, Paged, QueryBool, Sort, USERNAME_PATTERN, UuidList, like_pattern, name_schema, trimmed, ts, ts_opt,
 };
+use crate::auth::events::{self, RevokeReason};
 use crate::auth::password;
 use crate::auth::permissions::GlobalPermission;
 use crate::data::auth::{self as data, UserRow};
@@ -389,7 +390,8 @@ pub async fn update(pool: &PgPool, ctx: &RequestContext, id: Uuid, b: &UserUpdat
         crud::update_row::<UserRow>(&mut tx, TABLE, data::USER_COLUMNS, id, columns).await?;
     }
     if before.is_active && b.is_active == Some(false) {
-        data::delete_user_sessions(&mut tx, id, None).await?;
+        let ended = data::delete_user_sessions(&mut tx, id, None).await?;
+        events::revoked(&mut tx, ctx, &ended, RevokeReason::UserDisabled).await?;
     }
     let dto = load(&mut tx, id).await?;
     let entry = AuditEntry {
@@ -412,7 +414,10 @@ pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_pas
     let before = lock(&mut tx, id).await?;
     must_cover_user(&mut tx, ctx, id).await?;
     data::set_password(&mut tx, id, &hash).await?;
-    data::delete_user_sessions(&mut tx, id, ctx.principal().map(|p| p.session_id)).await?;
+    let own = ctx.principal().filter(|p| p.user_id == id);
+    let ended = data::delete_user_sessions(&mut tx, id, own.map(|p| p.session_id)).await?;
+    let reason = if own.is_some() { RevokeReason::PasswordChanged } else { RevokeReason::PasswordReset };
+    events::revoked(&mut tx, ctx, &ended, reason).await?;
     let dto = load(&mut tx, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
@@ -431,6 +436,9 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     let mut tx = pool.begin().await?;
     let before = lock(&mut tx, id).await?;
     must_cover_user(&mut tx, ctx, id).await?;
+    // Ended explicitly (not by the foreign key's cascade) so each gets an audit row.
+    let ended = data::delete_user_sessions(&mut tx, id, None).await?;
+    events::revoked(&mut tx, ctx, &ended, RevokeReason::UserDeleted).await?;
     data::delete_user(&mut tx, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Delete,

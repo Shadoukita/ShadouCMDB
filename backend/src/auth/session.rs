@@ -10,6 +10,8 @@
 //! Both are `Secure` when the request reached the proxy over HTTPS (see
 //! [`CookieSecure`]).
 
+use std::net::{IpAddr, SocketAddr};
+
 use axum::http::{HeaderMap, HeaderValue, header};
 use password_hash::rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
@@ -68,6 +70,46 @@ pub fn request_is_https(headers: &HeaderMap) -> bool {
             })
         });
     forwarded_proto || forwarded
+}
+
+/// The client's IP address, for the audit trail: the first hop of
+/// `X-Forwarded-For`, else the first `Forwarded: for=`, else the TCP peer.
+///
+/// Trusted-proxy assumption, as for [`request_is_https`]: the reverse proxy in
+/// front of the API overwrites (not appends to) these headers. Without such a
+/// proxy a client can put any address there, so the value is evidence for an
+/// investigator, never an input to an access decision.
+pub fn client_ip(headers: &HeaderMap, peer: Option<IpAddr>) -> Option<IpAddr> {
+    let x_forwarded_for = || {
+        let first = headers.get("x-forwarded-for")?.to_str().ok()?.split(',').next()?;
+        parse_node(first)
+    };
+    let forwarded = || {
+        let first = headers.get(header::FORWARDED)?.to_str().ok()?.split(',').next()?;
+        first.split(';').find_map(|kv| {
+            let (k, v) = kv.trim().split_once('=')?;
+            if k.trim().eq_ignore_ascii_case("for") { parse_node(v) } else { None }
+        })
+    };
+    x_forwarded_for().or_else(forwarded).or(peer)
+}
+
+/// `1.2.3.4`, `1.2.3.4:5678`, `2001:db8::1`, `"[2001:db8::1]:4711"`; None for
+/// `unknown`, obfuscated identifiers and garbage.
+fn parse_node(s: &str) -> Option<IpAddr> {
+    let s = s.trim().trim_matches('"');
+    if let Ok(ip) = s.parse() {
+        return Some(ip);
+    }
+    if let Some(rest) = s.strip_prefix('[') {
+        return rest.split_once(']')?.0.parse().ok();
+    }
+    s.parse::<SocketAddr>().ok().map(|a| a.ip())
+}
+
+/// The User-Agent header, truncated.
+pub fn user_agent(headers: &HeaderMap) -> Option<String> {
+    headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).map(|s| s.chars().take(400).collect())
 }
 
 /// Whether cookies set on this response get `Secure`. Issuing a *new* session
@@ -148,6 +190,28 @@ mod tests {
         assert!(request_is_https(&headers(&[("forwarded", "for=1.2.3.4;proto=https;by=x")])));
         assert!(!request_is_https(&headers(&[("x-forwarded-proto", "http")])));
         assert!(!request_is_https(&HeaderMap::new()));
+    }
+
+    #[test]
+    fn client_ip_prefers_forwarded_headers_then_the_peer() {
+        let peer: Option<IpAddr> = Some("10.0.0.9".parse().unwrap());
+        let ip = |pairs: &[(&'static str, &'static str)]| client_ip(&headers(pairs), peer).map(|a| a.to_string());
+        assert_eq!(ip(&[("x-forwarded-for", "203.0.113.7, 10.0.0.1")]).as_deref(), Some("203.0.113.7"));
+        assert_eq!(ip(&[("x-forwarded-for", "203.0.113.7:5123")]).as_deref(), Some("203.0.113.7"));
+        assert_eq!(ip(&[("x-forwarded-for", "2001:db8::1")]).as_deref(), Some("2001:db8::1"));
+        assert_eq!(
+            ip(&[("forwarded", "For=\"[2001:db8::2]:4711\";proto=https, for=1.1.1.1")]).as_deref(),
+            Some("2001:db8::2")
+        );
+        assert_eq!(ip(&[("forwarded", "proto=https;for=198.51.100.4")]).as_deref(), Some("198.51.100.4"));
+        // X-Forwarded-For wins over Forwarded; unusable values fall through.
+        assert_eq!(
+            ip(&[("x-forwarded-for", "198.51.100.1"), ("forwarded", "for=198.51.100.2")]).as_deref(),
+            Some("198.51.100.1")
+        );
+        assert_eq!(ip(&[("x-forwarded-for", "garbage"), ("forwarded", "for=unknown")]).as_deref(), Some("10.0.0.9"));
+        assert_eq!(ip(&[]).as_deref(), Some("10.0.0.9"));
+        assert_eq!(client_ip(&HeaderMap::new(), None), None);
     }
 
     #[test]
