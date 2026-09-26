@@ -200,6 +200,8 @@ jobs:
       PGPASSWORD: root
       PGDATABASE: postgres
     steps:
+      - name: QA scratch - simulate Windows failure (SHAA-24)
+        run: exit 1
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
