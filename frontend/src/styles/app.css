@@ -1054,3 +1054,33 @@ nav.tabs a[aria-current="page"] {
   white-space: nowrap;
   vertical-align: bottom;
 }
+
+/* ---------- Layout panels (Customization › Detail and form layout) ---------- */
+.layout-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: var(--sp-4);
+  align-items: start;
+}
+details.layout-panel > summary {
+  cursor: pointer;
+  list-style: none;
+}
+details.layout-panel > summary::-webkit-details-marker {
+  display: none;
+}
+details.layout-panel > summary h2::before {
+  content: "▾";
+  display: inline-block;
+  width: 1.1em;
+  color: var(--c-text-muted);
+}
+details.layout-panel:not([open]) > summary h2::before {
+  content: "▸";
+}
+details.layout-panel:not([open]) > summary {
+  border-bottom: 0;
+}
+fieldset.ro-wrap {
+  display: contents;
+}
