@@ -91,9 +91,13 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
 
 The server sets these security headers itself, on every response it sends (the web UI, the
 API and Swagger UI at `/docs`). Do not add them again at the proxy: two
-`Content-Security-Policy` headers are both enforced, and duplicate values of the others are
-confusing at best. Headers the server does not set (for example `Permissions-Policy`) are
-the proxy's to add.
+`Content-Security-Policy` headers are two independently enforced policies, and duplicate values
+of the others are confusing at best. In particular, a proxy cannot bolt violation reporting
+onto our policy: a second header containing only `report-uri`/`report-to` is a separate policy
+that blocks nothing and so reports nothing, while violations of ours still go nowhere. The
+proxy's only alternative is to strip our header and serve a complete policy of its own, which
+drifts from ours with every release. Use `CSP_REPORT_URI` instead (below). Headers the server
+does not set (for example `Permissions-Policy`) are the proxy's to add.
 
 | Header | Value | Sent on |
 | --- | --- | --- |
@@ -109,6 +113,19 @@ embedded in a frame on any site, including your own. `connect-src 'self'` means 
 UI can only call the API on its own origin. If you point the UI at another origin
 (`VITE_API_BASE_URL` at build time, or `apiBaseUrl` in `config.js`), serve that UI from your
 own web server and set its CSP there.
+
+`CSP_REPORT_URI` (default unset: no reporting) makes browsers report CSP violations, so a policy
+break in production shows up somewhere other than a browser console nobody watches. Point it at
+an absolute `http`/`https` URL or at a path on this server (`/csp-reports`) where your own
+collector listens; reports go only there, the ShadouCMDB project never receives them. Setting it
+appends `; report-uri <uri>` to the policy. When the request arrived over HTTPS and the URI is
+`https:` or a path, it also appends `; report-to csp` and sends `Reporting-Endpoints: csp="<uri>"`.
+Chromium and Firefox ignore `report-uri` whenever `report-to` is present, and drop Reporting API
+endpoints that are not HTTPS, so on plain HTTP or with an `http:` collector `report-uri` is sent
+alone, since it is the one that still delivers. A collector on another origin needs no change to
+`connect-src`: reports are not subject to the page's policy. Whitespace, `;`, `,`, `"`, a scheme
+other than `http`/`https` and `user:password@` are rejected at startup, because the value becomes
+part of the policy.
 
 ## Release downloads
 

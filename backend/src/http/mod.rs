@@ -79,12 +79,52 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-
 
 const HSTS: &str = "max-age=31536000; includeSubDomains";
 
+/// The `Content-Security-Policy` and `Reporting-Endpoints` values, built
+/// once at startup from `CSP_REPORT_URI`; requests only clone them.
+///
+/// A cross-origin report URI needs no `connect-src` entry: violation reports
+/// are sent by the browser, not fetched by the page, and the page's CSP does
+/// not apply to them. Do not widen `connect-src` for a report collector.
+///
+/// Browsers that implement `report-to` (current Chromium and Firefox) ignore
+/// `report-uri` whenever `report-to` is present, and their Reporting API drops
+/// endpoints that are not HTTPS. On a plain-HTTP install both directives would
+/// therefore report nothing, so `report-to` is added only where it can deliver:
+/// the request arrived over HTTPS and the endpoint is `https:` or a path on
+/// this server. Everywhere else the policy carries `report-uri` alone.
+#[derive(Clone)]
+pub(crate) struct Csp {
+    /// `report-uri` only (or no reporting at all when unset).
+    plain: HeaderValue,
+    /// `report-uri` + `report-to csp`, and the matching `Reporting-Endpoints`.
+    reporting_api: Option<(HeaderValue, HeaderValue)>,
+}
+
+impl Csp {
+    pub(crate) fn new(report_uri: Option<&str>) -> Self {
+        let Some(uri) = report_uri else {
+            return Csp { plain: HeaderValue::from_static(CSP), reporting_api: None };
+        };
+        // `config::parse_csp_report_uri` admits visible ASCII only, without `;`, `,`, `"` or `\`.
+        let value = |s: String| HeaderValue::from_str(&s).expect("CSP_REPORT_URI is validated at startup");
+        let plain = value(format!("{CSP}; report-uri {uri}"));
+        let reporting_api = (uri.starts_with('/') || uri.starts_with("https:"))
+            .then(|| (value(format!("{CSP}; report-uri {uri}; report-to csp")), value(format!("csp=\"{uri}\""))));
+        Csp { plain, reporting_api }
+    }
+}
+
 /// Headers that depend on the request or on the response type:
 /// - `Strict-Transport-Security` only when the request reached us (or the
 ///   proxy in front of us) over HTTPS; on plain HTTP it would strand lab and
 ///   LAN deployments on a scheme they cannot serve.
-/// - `Content-Security-Policy` only on HTML documents, never on JSON.
-async fn security_headers(req: Request, next: axum::middleware::Next) -> Response {
+/// - `Content-Security-Policy` (and `Reporting-Endpoints`) only on HTML
+///   documents, never on JSON.
+async fn security_headers(
+    axum::extract::State(csp): axum::extract::State<Arc<Csp>>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
     let https = request_is_https(req.headers());
     let mut res = next.run(req).await;
     let headers = res.headers_mut();
@@ -96,7 +136,15 @@ async fn security_headers(req: Request, next: axum::middleware::Next) -> Respons
         .and_then(|v| v.to_str().ok())
         .is_some_and(|ct| ct.trim_start().to_ascii_lowercase().starts_with("text/html"));
     if is_html {
-        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
+        match &csp.reporting_api {
+            Some((policy, endpoints)) if https => {
+                headers.insert(header::CONTENT_SECURITY_POLICY, policy.clone());
+                headers.insert(HeaderName::from_static("reporting-endpoints"), endpoints.clone());
+            }
+            _ => {
+                headers.insert(header::CONTENT_SECURITY_POLICY, csp.plain.clone());
+            }
+        }
     }
     res
 }
@@ -104,8 +152,8 @@ async fn security_headers(req: Request, next: axum::middleware::Next) -> Respons
 /// Security headers for every response. The UI is served same-origin with the
 /// API by this router, so this is the only place they can be set; a reverse
 /// proxy in front should not add its own copies (see docs/deployment.md).
-fn with_security_headers(app: Router) -> Router {
-    app.layer(axum::middleware::from_fn(security_headers))
+fn with_security_headers(app: Router, csp: Csp) -> Router {
+    app.layer(axum::middleware::from_fn_with_state(Arc::new(csp), security_headers))
         .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
         .layer(SetResponseHeaderLayer::overriding(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer")))
 }
@@ -137,7 +185,8 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
 
     // Outermost, so every response (including 404s, panics and CORS preflights)
     // carries the id and the security headers.
-    with_security_headers(app).layer(axum::middleware::from_fn(request_id::middleware))
+    with_security_headers(app, Csp::new(cfg.csp_report_uri.as_deref()))
+        .layer(axum::middleware::from_fn(request_id::middleware))
 }
 
 /// Runs the server until `shutdown` resolves, then drains in-flight requests
@@ -214,6 +263,10 @@ mod tests {
 
     /// The real router, with a pool that is never connected: the paths used here do not touch the database.
     fn app() -> Router {
+        app_reporting_to(None)
+    }
+
+    fn app_reporting_to(csp_report_uri: Option<&str>) -> Router {
         let pool = PgPool::connect_lazy("postgres://nobody@127.0.0.1:1/none").unwrap();
         let auth = AuthConfig {
             session_idle: Duration::from_secs(60),
@@ -224,6 +277,7 @@ mod tests {
             api_host: "127.0.0.1".into(),
             api_port: 3000,
             cors_origins: Vec::new(),
+            csp_report_uri: csp_report_uri.map(str::to_owned),
             database: crate::config::DatabaseConfig {
                 url: Some("postgres://nobody@127.0.0.1:1/none".into()),
                 host: None,
@@ -266,13 +320,69 @@ mod tests {
     #[tokio::test]
     async fn ui_documents_get_the_strict_csp() {
         // The embedded UI only exists in builds with frontend/dist, so stand in for `ui::serve` here.
-        let ui = with_security_headers(Router::new().fallback(|| async { Html("<!doctype html><div id=app></div>") }));
+        let ui = with_security_headers(ui_document(), Csp::new(None));
         let res = get(ui, "/inventory", &[("x-forwarded-proto", "https")]).await;
         assert_eq!(header(&res, header::CONTENT_SECURITY_POLICY), Some(CSP));
         assert!(!CSP.contains("unsafe"));
         assert_eq!(header(&res, header::X_CONTENT_TYPE_OPTIONS), Some("nosniff"));
         assert_eq!(header(&res, header::REFERRER_POLICY), Some("no-referrer"));
         assert_eq!(header(&res, header::STRICT_TRANSPORT_SECURITY), Some(HSTS));
+        // Reporting is opt-in: without CSP_REPORT_URI the policy is exactly CSP and reports go nowhere.
+        assert_eq!(header(&res, REPORTING_ENDPOINTS), None);
+    }
+
+    const REPORTING_ENDPOINTS: header::HeaderName = header::HeaderName::from_static("reporting-endpoints");
+
+    fn ui_document() -> Router {
+        Router::new().fallback(|| async { Html("<!doctype html><div id=app></div>") })
+    }
+
+    fn assert_base_policy_intact(csp: &str) {
+        assert!(csp.starts_with(&format!("{CSP}; ")), "{csp}");
+        assert!(!csp.contains("unsafe"), "{csp}");
+    }
+
+    #[tokio::test]
+    async fn csp_report_uri_adds_both_reporting_mechanisms_over_https() {
+        for uri in ["/csp-reports", "https://reports.example.com/csp"] {
+            let ui = with_security_headers(ui_document(), Csp::new(Some(uri)));
+            let res = get(ui, "/inventory", &[("x-forwarded-proto", "https")]).await;
+            let csp = header(&res, header::CONTENT_SECURITY_POLICY).unwrap();
+            assert_base_policy_intact(csp);
+            assert!(csp.ends_with(&format!("; report-uri {uri}; report-to csp")), "{csp}");
+            assert_eq!(header(&res, REPORTING_ENDPOINTS), Some(format!("csp=\"{uri}\"").as_str()));
+        }
+    }
+
+    #[tokio::test]
+    async fn csp_report_uri_alone_where_the_reporting_api_would_drop_reports() {
+        // Plain-HTTP page, or an http: collector: browsers with report-to would then ignore report-uri
+        // and deliver nothing, so only report-uri is sent.
+        for (uri, extra) in [
+            ("/csp-reports", &[][..]),
+            ("https://reports.example.com/csp", &[][..]),
+            ("http://10.0.0.5:8080/csp", &[("x-forwarded-proto", "https")][..]),
+        ] {
+            let ui = with_security_headers(ui_document(), Csp::new(Some(uri)));
+            let res = get(ui, "/inventory", extra).await;
+            let csp = header(&res, header::CONTENT_SECURITY_POLICY).unwrap();
+            assert_base_policy_intact(csp);
+            assert!(csp.ends_with(&format!("; report-uri {uri}")), "{csp}");
+            assert!(!csp.contains("report-to"), "{csp}");
+            assert_eq!(header(&res, REPORTING_ENDPOINTS), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn csp_report_uri_leaves_json_responses_alone() {
+        for proto in ["http", "https"] {
+            let res =
+                get(app_reporting_to(Some("/csp-reports")), "/api/v1/no-such-route", &[("x-forwarded-proto", proto)])
+                    .await;
+            assert!(header(&res, header::CONTENT_TYPE).unwrap().starts_with("application/json"));
+            assert_eq!(header(&res, header::CONTENT_SECURITY_POLICY), None);
+            assert_eq!(header(&res, REPORTING_ENDPOINTS), None);
+        }
     }
 
     #[tokio::test]
