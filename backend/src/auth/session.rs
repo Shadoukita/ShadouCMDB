@@ -70,7 +70,10 @@ pub fn request_is_https(headers: &HeaderMap) -> bool {
     forwarded_proto || forwarded
 }
 
-pub fn secure_cookies(cfg: &AuthConfig, headers: &HeaderMap) -> bool {
+/// Whether cookies set on this response get `Secure`. Issuing a *new* session
+/// cookie must go through `AuthState::session_cookie_secure`, which warns under
+/// `auto`; this raw form is for clearing cookies.
+pub(crate) fn secure_cookies(cfg: &AuthConfig, headers: &HeaderMap) -> bool {
     match cfg.cookie_secure {
         CookieSecure::Always => true,
         CookieSecure::Never => false,

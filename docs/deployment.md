@@ -85,6 +85,9 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
   origin needs that origin in `CORS_ORIGINS`, spelled exactly as the browser sends it
   (`https://cmdb.example.com`: no path, no trailing slash); those origins may send the session
   cookie. `*` and anything that is not an origin stop the server at startup.
+- `SESSION_IDLE_TIMEOUT_MINUTES` (default 12 h) and `SESSION_MAX_AGE_HOURS` (default 7 days)
+  bound how long a session lives. Sessions are stored in PostgreSQL, so they survive restarts
+  and work across several instances. The login backoff counters are per process.
 
 The server sets these security headers itself, on every response it sends (the web UI, the
 API and Swagger UI at `/docs`). Do not add them again at the proxy: two
@@ -102,10 +105,10 @@ the proxy's to add.
 `includeSubDomains` tells browsers to use HTTPS for every subdomain of the host name the
 server is reached by, for a year. If that name has subdomains that cannot serve HTTPS, have the
 proxy strip or override the header. Because of `frame-ancestors 'none'` the UI cannot be
-embedded in a frame on any site, including your own.
-- `SESSION_IDLE_TIMEOUT_MINUTES` (default 12 h) and `SESSION_MAX_AGE_HOURS` (default 7 days)
-  bound how long a session lives. Sessions are stored in PostgreSQL, so they survive restarts
-  and work across several instances. The login backoff counters are per process.
+embedded in a frame on any site, including your own. `connect-src 'self'` means the embedded
+UI can only call the API on its own origin. If you point the UI at another origin
+(`VITE_API_BASE_URL` at build time, or `apiBaseUrl` in `config.js`), serve that UI from your
+own web server and set its CSP there.
 
 ## Release downloads
 
