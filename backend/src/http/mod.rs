@@ -267,17 +267,21 @@ mod tests {
     }
 
     fn app_reporting_to(csp_report_uri: Option<&str>) -> Router {
+        app_with(|cfg| cfg.csp_report_uri = csp_report_uri.map(str::to_owned))
+    }
+
+    fn app_with(configure: impl FnOnce(&mut Config)) -> Router {
         let pool = PgPool::connect_lazy("postgres://nobody@127.0.0.1:1/none").unwrap();
         let auth = AuthConfig {
             session_idle: Duration::from_secs(60),
             session_max_age: Duration::from_secs(3600),
             cookie_secure: CookieSecure::Auto,
         };
-        let cfg = Config {
+        let mut cfg = Config {
             api_host: "127.0.0.1".into(),
             api_port: 3000,
             cors_origins: Vec::new(),
-            csp_report_uri: csp_report_uri.map(str::to_owned),
+            csp_report_uri: None,
             database: crate::config::DatabaseConfig {
                 url: Some("postgres://nobody@127.0.0.1:1/none".into()),
                 host: None,
@@ -293,7 +297,81 @@ mod tests {
             },
             auth: auth.clone(),
         };
+        configure(&mut cfg);
         router(AppState::new(pool, auth), &cfg)
+    }
+
+    /// Every `Vary` entry, across however many `Vary` field lines there are.
+    fn vary(res: &Response) -> Vec<String> {
+        res.headers()
+            .get_all(header::VARY)
+            .iter()
+            .flat_map(|v| v.to_str().unwrap().split(','))
+            .map(|v| v.trim().to_ascii_lowercase())
+            .collect()
+    }
+
+    fn varies_on(res: &Response, name: &str) -> bool {
+        vary(res).iter().any(|v| v == name)
+    }
+
+    fn assert_not_stored(res: &Response) {
+        assert_eq!(header(res, header::CACHE_CONTROL), Some("no-store"));
+        assert!(varies_on(res, "cookie"), "{:?}", vary(res));
+    }
+
+    #[tokio::test]
+    async fn api_responses_are_not_stored_by_shared_caches() {
+        // Carries the user, their permissions and the CSRF token. The pool is dead, so this is an
+        // error rather than a 200; the headers are path-based and do not depend on the status.
+        assert_not_stored(&get(app(), "/api/v1/auth/me", &[]).await);
+        // The bare prefix gets the JSON envelope from `fallback`, so it gets the same headers.
+        assert_not_stored(&get(app(), "/api", &[]).await);
+    }
+
+    #[tokio::test]
+    async fn api_error_responses_are_not_stored() {
+        let res = get(app(), "/api/v1/nope", &[]).await;
+        assert_eq!(res.status(), 404);
+        assert_not_stored(&res);
+    }
+
+    #[tokio::test]
+    async fn cors_vary_survives() {
+        let app = app_with(|cfg| cfg.cors_origins = vec!["https://ui.example.com".into()]);
+        let res = get(app, "/api/v1/nope", &[("origin", "https://ui.example.com")]).await;
+        assert_eq!(header(&res, header::ACCESS_CONTROL_ALLOW_ORIGIN), Some("https://ui.example.com"));
+        assert_not_stored(&res);
+        assert!(varies_on(&res, "origin"), "CORS Vary dropped: {:?}", vary(&res));
+    }
+
+    /// Stands in for `ui::file_response`, which only exists in builds with frontend/dist.
+    fn ui_file(cache: &'static str) -> Router {
+        Router::new().fallback(move || async move { ([(header::CACHE_CONTROL, cache)], "ui file") })
+    }
+
+    #[tokio::test]
+    async fn immutable_ui_assets_keep_their_long_cache() {
+        let immutable = "public, max-age=31536000, immutable";
+        let res = get(with_security_headers(ui_file(immutable), Csp::new(None)), "/assets/index-abc123.js", &[]).await;
+        assert_eq!(header(&res, header::CACHE_CONTROL), Some(immutable));
+        assert!(!varies_on(&res, "cookie"), "{:?}", vary(&res));
+    }
+
+    #[tokio::test]
+    async fn spa_index_still_revalidates() {
+        let res = get(with_security_headers(ui_file("no-cache"), Csp::new(None)), "/", &[]).await;
+        assert_eq!(header(&res, header::CACHE_CONTROL), Some("no-cache"));
+        assert!(!varies_on(&res, "cookie"), "{:?}", vary(&res));
+    }
+
+    #[tokio::test]
+    async fn public_endpoints_are_left_alone() {
+        for path in ["/healthz", "/openapi.json"] {
+            let res = get(app(), path, &[]).await;
+            assert_eq!(header(&res, header::CACHE_CONTROL), None, "{path}");
+            assert!(vary(&res).is_empty(), "{path}: {:?}", vary(&res));
+        }
     }
 
     #[tokio::test]
