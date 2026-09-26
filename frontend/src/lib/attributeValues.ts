@@ -7,7 +7,10 @@ import type { EffectiveAttribute } from "../api/queries";
  */
 export type FormValue = string;
 
-export function toFormValue(def: EffectiveAttribute, value: unknown): FormValue {
+/** The parts of an attribute definition that decide its input and value format (a definition, or a draft of one). */
+export type AttributeShape = Pick<EffectiveAttribute, "dataType" | "enumValues" | "validation" | "referenceClassId" | "lookupListId">;
+
+export function toFormValue(def: Pick<AttributeShape, "dataType">, value: unknown): FormValue {
   if (value === null || value === undefined) return "";
   if (def.dataType === "boolean") return value === true ? "true" : value === false ? "false" : "";
   if (def.dataType === "datetime" && typeof value === "string") return isoToLocalInput(value);
@@ -15,7 +18,7 @@ export function toFormValue(def: EffectiveAttribute, value: unknown): FormValue 
 }
 
 /** Returns the JSON value for the API; null clears. Non-numeric text is sent as-is so the API reports it. */
-export function toApiValue(def: EffectiveAttribute, value: FormValue): unknown {
+export function toApiValue(def: Pick<AttributeShape, "dataType">, value: FormValue): unknown {
   if (value === "" || value === undefined) return null;
   switch (def.dataType) {
     case "boolean":
@@ -49,7 +52,8 @@ export interface Validation {
 export function hintFor(def: EffectiveAttribute): string | undefined {
   const v = (def.validation ?? {}) as Validation;
   const parts: string[] = [];
-  if (def.description) parts.push(def.description);
+  // helpText is written for the operator filling in the form; description is the fallback.
+  if (def.helpText || def.description) parts.push((def.helpText || def.description)!);
   if (def.dataType === "ip") parts.push("IPv4 or IPv6 address");
   if (def.dataType === "cidr") parts.push("Network in CIDR notation, e.g. 10.0.0.0/24");
   if (v.min !== undefined && v.max !== undefined) parts.push(`${v.min} – ${v.max}`);

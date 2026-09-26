@@ -3,7 +3,7 @@
 // through the typed client, and mutations invalidate exactly what they change.
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
 import { toValue, type MaybeRefOrGetter } from "vue";
-import { api, unwrap, type Schemas } from "./client";
+import { api, unwrap, type JsonBody as Body, type Schemas } from "./client";
 import { MAX_PAGE } from "./queries";
 import type { paths } from "./schema";
 
@@ -13,10 +13,6 @@ export type PermissionProfile = Schemas["PermissionProfile"];
 export type ClassPermission = Schemas["ClassPermission"];
 export type EffectivePermissions = Schemas["EffectivePermissions"];
 export type GlobalPermission = EffectivePermissions["global"][number];
-
-type Body<P extends keyof paths, M extends "post" | "patch" | "put"> = NonNullable<
-  (paths[P][M] & { requestBody?: { content: { "application/json": unknown } } })["requestBody"]
->["content"]["application/json"];
 
 export type SetupBody = Body<"/api/v1/setup", "post">;
 export type LoginBody = Body<"/api/v1/auth/login", "post">;

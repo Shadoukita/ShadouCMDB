@@ -4,7 +4,7 @@ import { RouterView, useRoute } from "vue-router";
 import EmptyState from "../../components/EmptyState.vue";
 import NavLink from "../../components/NavLink.vue";
 import { useSessionStore } from "../../stores/session";
-import { visibleSections } from "./sections";
+import { groupedSections, visibleSections } from "./sections";
 
 /**
  * The Administration area: its own sub-navigation, showing only the sections the
@@ -14,6 +14,7 @@ import { visibleSections } from "./sections";
 const route = useRoute();
 const session = useSessionStore();
 const sections = computed(() => visibleSections(session.can));
+const groups = computed(() => groupedSections(session.can));
 const required = computed(() => route.meta.permissions ?? []);
 const allowed = computed(() => required.value.length === 0 || required.value.some(session.can));
 </script>
@@ -24,10 +25,12 @@ const allowed = computed(() => required.value.length === 0 || required.value.som
   </EmptyState>
   <div v-else class="admin">
     <nav class="admin-nav" aria-label="Administration">
-      <h2>Administration</h2>
-      <NavLink v-for="s in sections" :key="s.key" :to="s.to" :active="(r) => r.path === s.to || r.path.startsWith(`${s.to}/`)">
-        {{ s.label }}
-      </NavLink>
+      <template v-for="g in groups" :key="g.group">
+        <h2>{{ g.group }}</h2>
+        <NavLink v-for="s in g.sections" :key="s.key" :to="s.to" :active="(r) => r.path === s.to || r.path.startsWith(`${s.to}/`)">
+          {{ s.label }}
+        </NavLink>
+      </template>
     </nav>
     <div class="admin-body">
       <RouterView v-if="allowed" />
