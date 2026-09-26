@@ -648,6 +648,8 @@ async function permissions(x: Json) {
   const loginVia = (username: string, pw: string, expect: number) =>
     as(null, () => call('POST', '/api/v1/auth/login', { username, password: pw }, expect, viaProxy));
   await loginVia(reader.username, 'wrong password', 401);
+  const stranger = `smoke-stranger-${RUN}`;
+  await loginVia(stranger, 'wrong password', 401); // same headers as the reader's failure, but no such user
   const audited = identityFrom(reader.username, await loginVia(reader.username, `${password}-3`, 200));
   await as(audited, () => call('POST', '/api/v1/auth/logout', undefined, 204, viaProxy));
   const revokedByReset = identityFrom(reader.username, await loginVia(reader.username, `${password}-3`, 200));
@@ -662,14 +664,18 @@ async function permissions(x: Json) {
     typeof success.requestId === 'string', 'login.success: the user as actor, client IP from X-Forwarded-For, user agent, request id');
   const failure = ofReader.find((e) => e.action === 'login.failure');
   const ghostFailure = events.find((e) => e.action === 'login.failure' && about(e, ghost));
-  // peerIpAddress depends on the request's headers (the ghost's came without a proxy), not on the account.
-  const keys = (e: Json) => Object.keys(e?.newValue ?? {}).filter((k) => k !== 'peerIpAddress').sort().join(',');
+  const strangerFailure = events.find((e) => e.action === 'login.failure' && about(e, stranger));
+  const keys = (e: Json) => Object.keys(e?.newValue ?? {}).sort().join(',');
+  const { attemptedUsername: _a, ...readerRest } = failure?.newValue ?? {};
+  const { attemptedUsername: _b, ...strangerRest } = strangerFailure?.newValue ?? {};
   check(failure && failure.actorId === null && failure.newValue.attemptedUsername === reader.username && failure.newValue.ipAddress === '203.0.113.38',
     'login.failure: no actor id, the attempted username and the client IP');
   check([success, failure].every((e) => typeof e?.newValue.peerIpAddress === 'string' && e.newValue.peerIpAddress !== '203.0.113.38') &&
     ghostFailure && ghostFailure.newValue.peerIpAddress === undefined,
     'the TCP peer is kept as peerIpAddress when X-Forwarded-For names another address, and only then');
-  check(ghostFailure && keys(failure) === 'attemptedUsername,ipAddress,userAgent' && keys(ghostFailure) === keys(failure),
+  // Same request headers, existing vs unknown name: every field but the name itself must match, peerIpAddress included.
+  check(strangerFailure && keys(failure) === 'attemptedUsername,ipAddress,peerIpAddress,userAgent' && keys(strangerFailure) === keys(failure) &&
+    JSON.stringify(readerRest) === JSON.stringify(strangerRest),
     'login.failure looks the same for existing and unknown usernames (no enumeration oracle)');
   const locked = events.find((e) => e.action === 'login.locked' && about(e, ghost));
   check(locked && locked.actorId === null && locked.newValue.lockedForSeconds >= 1, 'login.locked: the lock and its duration');
