@@ -128,6 +128,11 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             409,
             "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
         ),
+        ErrorCode::InvalidName | ErrorCode::SchemaChangeRefused => (
+            422,
+            "Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the \
+             change would lose or break stored data); details name the field and the reason",
+        ),
         ErrorCode::RateLimited => {
             (429, "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header")
         }

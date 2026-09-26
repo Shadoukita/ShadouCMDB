@@ -11,17 +11,24 @@ use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use super::schema_changes::{PurgeRequest, PurgeResult, check_purge};
 use super::simple_resource::{self as simple, BoxFuture, ListQuery, Resource, Usage, Writable, bool_filter, non_empty};
-use crate::api::route::{Check, IdPath, In, Json, NoBody, Query, Route, route};
+use crate::api::context::RequestContext;
+use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoQuery, Query, Route, route};
 use crate::api::schemas::{
     self, IdOrNone, QueryBool, Sort, UuidList, description_schema, key_schema, name_schema, nullable_uuid_schema,
-    sort_order_schema, trimmed, ts,
+    sort_order_schema, technical_name_schema, trimmed, ts,
 };
 use crate::api::validate;
+use crate::auth::permissions::GlobalPermission;
 use crate::data::classes as data;
-use crate::data::crud::{ColumnSet, Where};
+use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Where};
+use crate::data::items as items_data;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::paged;
+use crate::schema::model::Model;
+use crate::schema::naming::{self, Ident, NameKind};
+use crate::schema::{self as engine, Purge, SchemaChange, Scope};
 
 fn custom(field: &str, message: impl Into<String>) -> FieldError {
     FieldError { location: FieldLocation::Body, field: field.into(), message: message.into(), code: "custom".into() }
@@ -35,8 +42,15 @@ fn custom(field: &str, message: impl Into<String>) -> FieldError {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CiClass {
     pub id: Uuid,
+    /// Technical name: the type's table in its area's schema. Immutable.
     pub key: String,
     pub name: String,
+    /// The area (menu tab and PostgreSQL schema) the type belongs to. Immutable.
+    pub area_id: Uuid,
+    /// The type's table, e.g. "bestand.netzwerk"
+    pub table_name: String,
+    /// Read-only reporting view: registry columns plus every field, e.g. "bestand.v_netzwerk"
+    pub view_name: String,
     #[schema(required = true)]
     pub description: Option<String>,
     /// Parent class; attributes and relationship rules are inherited from it
@@ -66,11 +80,15 @@ pub(crate) fn icon_schema() -> Schema {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CiClassCreate {
-    #[schema(schema_with = key_schema)]
-    key: String,
+    /// Leave out to derive it from the name ("Virtuelle Maschinen" -> "virtuelle_maschinen")
+    #[schema(schema_with = technical_name_schema)]
+    #[serde(default)]
+    key: Option<String>,
     #[schema(schema_with = name_schema)]
     #[serde(deserialize_with = "trimmed")]
     name: String,
+    /// The area the type's table is created in
+    area_id: Uuid,
     #[schema(schema_with = description_schema)]
     #[serde(default)]
     description: Option<String>,
@@ -91,7 +109,13 @@ pub struct CiClassCreate {
     is_active: Option<bool>,
 }
 
-// `key` is immutable: imports, integrations and reports refer to it.
+impl CiClassCreate {
+    pub fn technical_name(&self) -> String {
+        self.key.clone().unwrap_or_else(|| naming::derive(&self.name, NameKind::Type))
+    }
+}
+
+// `key` and `areaId` are immutable: the table name is what imports, integrations and reports refer to.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CiClassUpdate {
@@ -121,8 +145,9 @@ pub struct CiClassUpdate {
 impl Writable for CiClassCreate {
     fn columns(&self) -> ColumnSet {
         let mut c = ColumnSet::default();
-        c.opt("key", Some(self.key.clone()))
+        c.opt("key", Some(self.technical_name()))
             .opt("name", Some(self.name.clone()))
+            .opt("area_id", Some(self.area_id))
             .opt("description", self.description.clone().map(Some))
             .opt("parent_id", self.parent_id.map(Some))
             .opt("is_abstract", self.is_abstract)
@@ -185,6 +210,8 @@ pub struct CiClassList {
     parent_id: Option<IdOrNone>,
     /// This class and every class below it
     descendant_of: Option<Uuid>,
+    #[param(schema_with = schemas::uuid_list_schema)]
+    area_id: Option<UuidList>,
 }
 paged!(CiClassList);
 
@@ -208,6 +235,9 @@ impl ListQuery for CiClassList {
         if let Some(id) = self.descendant_of {
             w.and().push("ci_class_is_a(id, ").push_bind(id).push(")");
         }
+        if let Some(ids) = &self.area_id {
+            w.and().push("area_id = ANY(").push_bind(ids.0.clone()).push(")");
+        }
     }
 }
 
@@ -224,9 +254,14 @@ impl Resource for CiClasses {
     const TAG: &'static str = "CI classes";
     const SINGULAR: &'static str = "ciClass";
     const PLURAL: &'static str = "ciClasses";
-    const COLUMNS: &'static str = "id, key, name, description, parent_id, is_abstract, icon, color, sort_order, is_active, created_at, updated_at";
+    const COLUMNS: &'static str = "id, key, name, area_id,
+        (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.' || key AS table_name,
+        (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.v_' || key AS view_name,
+        description, parent_id, is_abstract, icon, color, sort_order, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
-    const DELETE_DESCRIPTION: &'static str = "Hard delete, allowed only for a class nothing refers to: no CIs (deleted ones included), subclasses, attribute definitions, reference attributes or relationship rules. Otherwise 409 IN_USE lists them; archive the class with `PATCH {\"isActive\": false}` instead, which keeps its CIs and blocks new ones.";
+    const ARCHIVE_ON_DELETE: bool = true;
+    const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
+    const DELETE_DESCRIPTION: &'static str = "Archives the type (`isActive=false`): its table, CIs and values stay and stay readable, no new CIs can be created, and the UI hides it. `PATCH {\"isActive\": true}` restores it. To drop the table and delete its CIs, purge the type (`POST /api/v1/ci-classes/{id}/purge`).";
     const USAGE: &'static [Usage] = &[
         Usage {
             kind: "configurationItems",
@@ -276,36 +311,186 @@ impl Resource for CiClasses {
         row.id
     }
 
+    fn validate(columns: &ColumnSet, create: bool) -> Result<(), AppError> {
+        match engine::key_column(columns) {
+            Some(key) if create => engine::validate_name(key, NameKind::Type, "key"),
+            _ => Ok(()),
+        }
+    }
+
+    fn before_write(conn: &mut PgConnection) -> BoxFuture<'_, Result<(), AppError>> {
+        Box::pin(async move { Ok(engine::lock(conn).await?) })
+    }
+
     fn after_write<'a>(
         conn: &'a mut PgConnection,
+        ctx: &'a RequestContext,
         row: &'a CiClass,
         previous: Option<&'a CiClass>,
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
-            let Some(previous) = previous else { return Ok(()) };
-            if row.is_abstract && !previous.is_abstract && data::class_has_items(conn, row.id).await? {
-                return Err(AppError::field(
-                    "isAbstract",
-                    "Class still holds CIs; an abstract class cannot",
-                    "class_has_items",
-                ));
-            }
-            if row.parent_id != previous.parent_id {
-                let orphaned = data::orphaned_attribute_values(conn, row.id).await?;
-                if !orphaned.is_empty() {
+            if let Some(previous) = previous {
+                if row.is_abstract && !previous.is_abstract && data::class_has_items(conn, row.id).await? {
                     return Err(AppError::field(
-                        "parentId",
-                        format!(
-                            "CIs of this class hold values for attributes that the new parent does not provide: {}",
-                            orphaned.join(", ")
-                        ),
-                        "attributes_outside_lineage",
+                        "isAbstract",
+                        "Class still holds CIs; an abstract class cannot",
+                        "class_has_items",
                     ));
                 }
+                if row.parent_id != previous.parent_id {
+                    move_to_new_parent(conn, row, previous).await?;
+                }
             }
+            let verb = match previous {
+                None => "Create",
+                Some(p) if p.is_active && !row.is_active => "Archive",
+                Some(p) if !p.is_active && row.is_active => "Restore",
+                Some(_) => "Update",
+            };
+            let summary = format!("{verb} type {}", row.table_name);
+            engine::apply(conn, ctx, &summary, Scope::Classes(vec![row.id]), Purge::default()).await?;
             Ok(())
         })
     }
+}
+
+/// A type got a new parent: its CIs (and those of its subtypes) need rows in
+/// the tables of the new ancestors and lose them in the tables of ancestors
+/// they no longer have, which is refused while those rows hold values.
+async fn move_to_new_parent(conn: &mut PgConnection, row: &CiClass, previous: &CiClass) -> Result<(), AppError> {
+    let model = Model::load(conn).await?;
+    let new_lineage: Vec<Uuid> = model.lineage(row.id).iter().map(|c| c.id).collect();
+    let mut old_lineage: Vec<Uuid> =
+        previous.parent_id.map(|p| model.lineage(p).iter().map(|c| c.id).collect()).unwrap_or_default();
+    old_lineage.push(row.id);
+    let subtree = model.subtree(row.id);
+    let items = items_data::ids_of_classes(conn, &subtree).await?;
+    if items.is_empty() {
+        return Ok(());
+    }
+    for gone in old_lineage.iter().filter(|c| !new_lineage.contains(c)) {
+        let Some(table) = model.table(*gone) else { continue };
+        let fields: Vec<&str> = model.own_fields(*gone).map(|f| f.key.as_str()).collect();
+        let used = items_data::fields_with_values(conn, &table, &fields, &items).await?;
+        if !used.is_empty() {
+            return Err(engine::refused(
+                "parentId",
+                "attributes_outside_lineage",
+                format!(
+                    "CIs of this type hold values for fields that the new parent does not provide: {}. Clear them first.",
+                    used.join(", ")
+                ),
+            ));
+        }
+        items_data::delete_type_rows(conn, &table, &items).await?;
+    }
+    for added in new_lineage.iter().filter(|c| !old_lineage.contains(c)) {
+        let Some(table) = model.table(*added) else { continue };
+        if let Err(err) = items_data::insert_type_rows(conn, &table, &items).await {
+            let required: Vec<&str> =
+                model.own_fields(*added).filter(|f| f.not_null()).map(|f| f.key.as_str()).collect();
+            return Err(match err {
+                sqlx::Error::Database(e) if e.code().as_deref() == Some("23502") => engine::refused(
+                    "parentId",
+                    "values_missing",
+                    format!("The new parent has required fields these CIs have no value for: {}", required.join(", ")),
+                ),
+                other => other.into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Deletes an archived type: its CIs (with their relationships), fields,
+/// relationship rules and table. Irreversible; the audit log keeps the history.
+pub async fn purge_class_in(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    confirm: &str,
+) -> Result<Option<SchemaChange>, AppError> {
+    engine::lock(conn).await?;
+    let row: CiClass = crud::select_by_id(conn, CiClasses::TABLE, CiClasses::COLUMNS, id, true)
+        .await?
+        .ok_or_else(|| AppError::missing(CiClasses::LABEL, id))?;
+    check_purge("type", &row.key, row.is_active, confirm)?;
+    let model = Model::load(conn).await?;
+    let table = model.table(id).ok_or_else(AppError::internal)?;
+    let blockers: Vec<(i64, &str)> = vec![
+        (
+            sqlx::query_scalar("SELECT count(*) FROM cmdb.ci_classes WHERE parent_id = $1")
+                .bind(id)
+                .fetch_one(&mut *conn)
+                .await?,
+            "subtypes (purge them first)",
+        ),
+        (
+            sqlx::query_scalar(
+                "SELECT count(*) FROM cmdb.ci_attribute_definitions WHERE reference_class_id = $1 AND class_id <> $1",
+            )
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await?,
+            "reference fields of other types pointing at it (purge or change them first)",
+        ),
+    ];
+    let blocking: Vec<String> =
+        blockers.iter().filter(|(n, _)| *n > 0).map(|(n, what)| format!("{n} {what}")).collect();
+    if !blocking.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::InUse,
+            format!("Type \"{}\" cannot be purged: {}", row.key, blocking.join(", ")),
+        ));
+    }
+    let items = items_data::ids_of_classes(conn, &[id]).await?;
+    let edges: u64 =
+        sqlx::query("DELETE FROM cmdb.ci_relationships WHERE source_ci_id = ANY($1) OR target_ci_id = ANY($1)")
+            .bind(&items)
+            .execute(&mut *conn)
+            .await?
+            .rows_affected();
+    // Type rows first, so that references between these CIs are gone before
+    // their registry rows are deleted (the foreign keys check at statement end).
+    for c in model.lineage(id) {
+        if let Some(t) = model.table(c.id) {
+            items_data::delete_type_rows(conn, &t, &items).await?;
+        }
+    }
+    if let Err(err) =
+        sqlx::query("DELETE FROM cmdb.configuration_items WHERE id = ANY($1)").bind(&items).execute(&mut *conn).await
+    {
+        return Err(match err {
+            sqlx::Error::Database(e) if e.code().as_deref() == Some("23503") => AppError::new(
+                ErrorCode::InUse,
+                format!(
+                    "CIs of other types still reference CIs of \"{}\" in reference fields; clear those values first ({})",
+                    row.key,
+                    e.message()
+                ),
+            ),
+            other => other.into(),
+        });
+    }
+    sqlx::query("DELETE FROM cmdb.relationship_type_rules WHERE source_class_id = $1 OR target_class_id = $1")
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM cmdb.ci_attribute_definitions WHERE class_id = $1").bind(id).execute(&mut *conn).await?;
+    crud::delete_row(conn, CiClasses::TABLE, id).await?;
+    let summary = format!("Purge type {} ({} CIs, {edges} relationships deleted)", row.table_name, items.len());
+    let purge = Purge { tables: vec![table], ..Purge::default() };
+    let parent_scope = row.parent_id.map(|p| vec![p]).unwrap_or_default();
+    let change = engine::apply(conn, ctx, &summary, Scope::Classes(parent_scope), purge).await?;
+    let entry = AuditEntry {
+        action: AuditAction::Delete,
+        entity_type: CiClasses::TABLE,
+        entity_id: id,
+        old_value: Some(crud::json(&row)),
+        new_value: None,
+    };
+    crud::write_audit(conn, ctx, vec![entry]).await?;
+    Ok(change)
 }
 
 // ===========================================================================
@@ -592,8 +777,10 @@ fn trimmed_list<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<Vec<Str
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AttributeDefinitionCreate {
     class_id: Uuid,
-    #[schema(schema_with = key_schema)]
-    key: String,
+    /// Leave out to derive it from the label ("Größe" -> "groesse"); the column name in the type's table
+    #[schema(schema_with = technical_name_schema)]
+    #[serde(default)]
+    key: Option<String>,
     #[schema(inline)]
     data_type: AttributeDataType,
     #[schema(schema_with = nullable_uuid_schema)]
@@ -631,10 +818,24 @@ pub struct AttributeDefinitionCreate {
     is_active: Option<bool>,
 }
 
-// `classId`, `key`, `dataType`, `referenceClassId` and `lookupListId` are immutable: stored values depend on them.
+impl AttributeDefinitionCreate {
+    pub fn technical_name(&self) -> String {
+        self.key.clone().unwrap_or_else(|| naming::derive(&self.label, NameKind::Field))
+    }
+}
+
+// `classId` and `key` are immutable (the column's table and name), and so are
+// `referenceClassId` and `lookupListId`: stored values depend on them.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AttributeDefinitionUpdate {
+    // Changes the column type. The conversion is dry-run over every stored
+    // value first and refused (422 SCHEMA_CHANGE_REFUSED) if any would not
+    // convert. Only between text, number, integer, boolean, enum, date,
+    // datetime, ip and cidr; enumValues is cleared when leaving enum. (A doc
+    // comment here would turn the inline enum into an allOf with an object.)
+    #[schema(inline, nullable = false)]
+    data_type: Option<AttributeDataType>,
     #[schema(schema_with = name_schema)]
     #[serde(default, deserialize_with = "schemas::trimmed_opt")]
     label: Option<String>,
@@ -676,7 +877,7 @@ impl Writable for AttributeDefinitionCreate {
     fn columns(&self) -> ColumnSet {
         let mut c = ColumnSet::default();
         c.opt("class_id", Some(self.class_id))
-            .opt("key", Some(self.key.clone()))
+            .opt("key", Some(self.technical_name()))
             .opt("data_type", Some(self.data_type.as_str().to_owned()))
             .opt("reference_class_id", self.reference_class_id.map(Some))
             .opt("lookup_list_id", self.lookup_list_id.map(Some))
@@ -732,10 +933,16 @@ impl Check for AttributeDefinitionCreate {
 impl Writable for AttributeDefinitionUpdate {
     fn columns(&self) -> ColumnSet {
         let mut c = ColumnSet::default();
-        c.opt("label", self.label.clone())
+        // Leaving enum drops the list unless the body sets it (the definition's check requires that).
+        let enum_values = match (self.data_type, &self.enum_values) {
+            (Some(t), None) if t != AttributeDataType::Enum => Some(None),
+            _ => self.enum_values.clone().map(|v| v.map(|l| json_list(&l))),
+        };
+        c.opt("data_type", self.data_type.map(|t| t.as_str().to_owned()))
+            .opt("enum_values", enum_values)
+            .opt("label", self.label.clone())
             .opt("description", self.description.clone())
             .opt("is_required", self.is_required)
-            .opt("enum_values", self.enum_values.clone().map(|v| v.map(|l| json_list(&l))))
             .opt("validation", self.validation.as_ref().map(|v| v.as_ref().map(json_rules)))
             .opt("group_name", self.group_name.clone())
             .opt("help_text", self.help_text.clone())
@@ -747,7 +954,12 @@ impl Writable for AttributeDefinitionUpdate {
 }
 impl Check for AttributeDefinitionUpdate {
     fn check(&self) -> Vec<FieldError> {
-        non_empty(&self.columns())
+        let mut errors = non_empty(&self.columns());
+        if matches!(self.data_type, Some(AttributeDataType::Reference | AttributeDataType::Lookup)) {
+            errors
+                .push(custom("dataType", "A field cannot become a reference or lookup field; add a new field instead"));
+        }
+        errors
     }
 }
 
@@ -823,64 +1035,113 @@ impl Resource for AttributeDefinitions {
     const PLURAL: &'static str = "attributeDefinitions";
     const COLUMNS: &'static str = "id, class_id, key, label, description, data_type, is_required, enum_values, reference_class_id, lookup_list_id, validation, group_name, help_text, default_value, sort_order, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "label", "description", "group_name"];
-    const DELETE_DESCRIPTION: &'static str = "Hard delete, allowed only while no CI stores a value for the attribute (409 IN_USE with the count otherwise). Retire it with `PATCH {\"isActive\": false}` instead: stored values stay readable and no new ones are accepted.";
+    const UPDATE_DESCRIPTION: &'static str = "`dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert. Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. Preview any change with `POST /api/v1/schema-changes/preview`.";
+    const ARCHIVE_ON_DELETE: bool = true;
+    const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
+    const DELETE_DESCRIPTION: &'static str = "Archives the field (`isActive=false`): its column and stored values stay readable, no new values are accepted, and forms hide it. `PATCH {\"isActive\": true}` restores it. To drop the column and its values, purge the field (`POST /api/v1/attribute-definitions/{id}/purge`).";
     const USAGE: &'static [Usage] = &[Usage {
         kind: "attributeValues",
         label: "values stored on configuration items",
-        sql: "SELECT count(*) FROM ci_attribute_values WHERE attribute_id = $1",
-        blocking: true,
+        sql: "SELECT cmdb.attribute_value_count($1)",
+        blocking: false,
     }];
 
     fn id(row: &AttributeDefinition) -> Uuid {
         row.id
     }
 
+    fn validate(columns: &ColumnSet, create: bool) -> Result<(), AppError> {
+        match engine::key_column(columns) {
+            Some(key) if create => engine::validate_name(key, NameKind::Field, "key"),
+            _ => Ok(()),
+        }
+    }
+
+    fn before_write(conn: &mut PgConnection) -> BoxFuture<'_, Result<(), AppError>> {
+        Box::pin(async move { Ok(engine::lock(conn).await?) })
+    }
+
     fn after_write<'a>(
         conn: &'a mut PgConnection,
+        ctx: &'a RequestContext,
         row: &'a AttributeDefinition,
         previous: Option<&'a AttributeDefinition>,
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
             if let Some(clash) = data::attribute_key_clash(conn, row.class_id, &row.key, row.id).await? {
-                return Err(AppError::conflict(format!(
-                    "Attribute \"{}\" is already defined on class \"{clash}\" in the same lineage",
-                    row.key
-                ))
-                .with_details(vec![FieldError {
-                    location: FieldLocation::Body,
-                    field: "key".into(),
-                    message: "Already defined on an ancestor or descendant class".into(),
-                    code: "unique".into(),
-                }]));
+                return Err(engine::invalid_name(
+                    "key",
+                    "name_taken",
+                    format!(
+                        "Field \"{}\" is already defined on type \"{clash}\" in the same lineage (a CI of this type \
+                         would carry both)",
+                        row.key
+                    ),
+                ));
+            }
+            if let Some(p) = previous
+                && p.data_type != row.data_type
+                && matches!(p.data_type, AttributeDataType::Reference | AttributeDataType::Lookup)
+            {
+                return Err(engine::refused(
+                    "dataType",
+                    "type_change_unsupported",
+                    "Reference and lookup fields cannot change type; add a new field instead".into(),
+                ));
             }
             if previous.is_some() {
-                check_changed_definition(conn, row).await?;
+                check_changed_definition(row)?;
             }
             check_default_value(conn, row).await?;
-            let newly_required =
-                row.is_required && row.is_active && previous.is_none_or(|p| !(p.is_required && p.is_active));
-            if newly_required {
-                let missing = data::items_missing_value(conn, row.class_id, row.id).await?;
-                if missing > 0 {
-                    return Err(AppError::conflict(format!(
-                        "Existing CIs without a value for \"{}\": {missing}. Fill it in on those CIs first, or keep the attribute optional.",
-                        row.key
-                    ))
-                    .with_details(vec![FieldError {
-                        location: FieldLocation::Body,
-                        field: "isRequired".into(),
-                        message: format!("CIs without a value: {missing}"),
-                        code: "values_missing".into(),
-                    }]));
-                }
-            }
+            let table: String =
+                sqlx::query_scalar("SELECT cmdb.type_table($1)").bind(row.class_id).fetch_one(&mut *conn).await?;
+            let verb = match previous {
+                None => "Add field",
+                Some(p) if p.is_active && !row.is_active => "Archive field",
+                Some(p) if !p.is_active && row.is_active => "Restore field",
+                Some(_) => "Update field",
+            };
+            let summary = format!("{verb} {table}.{}", row.key);
+            engine::apply(conn, ctx, &summary, Scope::Classes(vec![row.class_id]), Purge::default()).await?;
             Ok(())
         })
     }
 }
 
-/// Validation rules and enum values of an edited definition still fit the stored values.
-async fn check_changed_definition(conn: &mut PgConnection, row: &AttributeDefinition) -> Result<(), AppError> {
+/// Drops the column of an archived field and deletes its definition.
+pub async fn purge_attribute_in(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    confirm: &str,
+) -> Result<Option<SchemaChange>, AppError> {
+    engine::lock(conn).await?;
+    let row: AttributeDefinition =
+        crud::select_by_id(conn, AttributeDefinitions::TABLE, AttributeDefinitions::COLUMNS, id, true)
+            .await?
+            .ok_or_else(|| AppError::missing(AttributeDefinitions::LABEL, id))?;
+    check_purge("field", &row.key, row.is_active, confirm)?;
+    let model = Model::load(conn).await?;
+    let table = model.table(row.class_id).ok_or_else(AppError::internal)?;
+    crud::delete_row(conn, AttributeDefinitions::TABLE, id).await?;
+    let summary = format!("Purge field {}.{}", table.display(), row.key);
+    let purge = Purge { columns: vec![(table, Ident::trusted(&row.key))], ..Purge::default() };
+    let change = engine::apply(conn, ctx, &summary, Scope::Classes(vec![row.class_id]), purge).await?;
+    let entry = AuditEntry {
+        action: AuditAction::Delete,
+        entity_type: AttributeDefinitions::TABLE,
+        entity_id: id,
+        old_value: Some(crud::json(&row)),
+        new_value: None,
+    };
+    crud::write_audit(conn, ctx, vec![entry]).await?;
+    Ok(change)
+}
+
+/// Validation rules of an edited definition fit its (possibly new) data type.
+/// Enum values still stored are checked by the DDL engine when it replaces the
+/// column's CHECK constraint.
+fn check_changed_definition(row: &AttributeDefinition) -> Result<(), AppError> {
     let rules: ValidationRules = row
         .validation
         .as_ref()
@@ -893,18 +1154,6 @@ async fn check_changed_definition(conn: &mut PgConnection, row: &AttributeDefini
             i.code = "invalid".into();
         }
         return Err(AppError::validation(issues));
-    }
-    if row.data_type == AttributeDataType::Enum
-        && let Some(allowed) = &row.enum_values
-    {
-        let stale = data::enum_values_in_use(conn, row.id, &allowed.0).await?;
-        if !stale.is_empty() {
-            return Err(AppError::field(
-                "enumValues",
-                format!("Values still stored on CIs cannot be removed: {}", stale.join(", ")),
-                "enum_value_in_use",
-            ));
-        }
     }
     Ok(())
 }
@@ -1329,9 +1578,45 @@ pub fn routes() -> Vec<Route> {
             Ok(Json(effective_attributes(&api.pool, id, include).await?))
         });
 
+    let purge_class = route(Method::POST, "/api/v1/ci-classes/{id}/purge", "purgeCiClass")
+        .tag("CI classes")
+        .summary("Purge an archived type: drop its table and delete its CIs")
+        .description(
+            "Irreversible. The type must be archived (DELETE) and `confirm` must repeat its technical name. Deletes \
+             its CIs (deleted ones included) with their relationships, its fields and relationship rules, and drops \
+             its table and reporting view. Refused (409 IN_USE) while it has subtypes or other types have reference \
+             fields pointing at it. Returns the schema change that ran.",
+        )
+        .requires(GlobalPermission::DatamodelManage)
+        .errors(&[ErrorCode::NotFound, ErrorCode::InUse, ErrorCode::Conflict])
+        .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<PurgeRequest>>| async move {
+            let mut tx = api.pool.begin().await?;
+            let change = purge_class_in(&mut tx, &api.ctx, id, &b.confirm).await?;
+            tx.commit().await?;
+            Ok(Json(PurgeResult { schema_change: change }))
+        });
+    let purge_attribute = route(Method::POST, "/api/v1/attribute-definitions/{id}/purge", "purgeAttributeDefinition")
+        .tag("Attribute definitions")
+        .summary("Purge an archived field: drop its column and values")
+        .description(
+            "Irreversible. The field must be archived (DELETE) and `confirm` must repeat its technical name. Drops the \
+             column (and every stored value) from the type's table and rebuilds the reporting views. Returns the \
+             schema change that ran.",
+        )
+        .requires(GlobalPermission::DatamodelManage)
+        .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+        .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<PurgeRequest>>| async move {
+            let mut tx = api.pool.begin().await?;
+            let change = purge_attribute_in(&mut tx, &api.ctx, id, &b.confirm).await?;
+            tx.commit().await?;
+            Ok(Json(PurgeResult { schema_change: change }))
+        });
+
     let mut r = simple::routes::<CiClasses>();
     r.push(effective);
+    r.push(purge_class);
     r.extend(simple::routes::<AttributeDefinitions>());
+    r.push(purge_attribute);
     r.extend(simple::routes::<RelationshipTypes>());
     r.extend(simple::routes::<RelationshipRules>());
     r

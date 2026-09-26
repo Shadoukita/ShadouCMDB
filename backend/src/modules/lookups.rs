@@ -1075,7 +1075,7 @@ impl Resource for LookupListValues {
         Usage {
             kind: "attributeValues",
             label: "attribute values on configuration items",
-            sql: "SELECT count(*) FROM ci_attribute_values WHERE value_lookup_id = $1",
+            sql: "SELECT cmdb.lookup_value_count($1)",
             blocking: true,
         },
         Usage {

@@ -1,14 +1,21 @@
-//! SQL for configuration items: inventory list, detail, global search,
-//! attribute values and relationship-graph expansion.
+//! SQL for configuration items: inventory list, detail, global search, field
+//! values in the per-type tables and relationship-graph expansion.
+
+use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use ipnetwork::IpNetwork;
+use serde_json::Value;
+use sqlx::types::Json;
 use sqlx::{AssertSqlSafe, PgConnection, PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use super::crud::{self, Where};
 use crate::api::schemas::{Deleted, OwnerKind, escape_like, like_pattern};
 use crate::api::validate;
+use crate::modules::classes::AttributeDataType;
+use crate::schema::model::{Field, Model, TableName, pg_type};
+use crate::schema::naming::Ident;
 
 // ---------------------------------------------------------------------------
 // Summary rows (CI + embedded class / status / environment / owner / location)
@@ -94,6 +101,8 @@ pub struct ItemFilters {
     pub deleted: Option<Deleted>,
     /// Classes the caller may view; `None` means every class.
     pub visible_class_ids: Option<Vec<Uuid>>,
+    /// Type tables searched by `q` (see [`search_tables`]).
+    pub search_tables: Vec<SearchTable>,
 }
 
 /// Words of a query turned into a prefix tsquery ("web prod" -> 'web:* & prod:*').
@@ -104,8 +113,8 @@ pub fn query_words(q: &str) -> Vec<String> {
 /// The search predicate shared by the inventory list and global search: name,
 /// hostname and serial (substring, trigram-indexed), notes (word prefix, via the
 /// tsvector), IP address (prefix, or containment when q is an IP/CIDR) and
-/// attribute values (text/enum substring, IP/CIDR prefix).
-fn push_search(w: &mut Where<'_>, q: &str) {
+/// field values in the type tables (text/enum substring, IP/CIDR prefix).
+fn push_search(w: &mut Where<'_>, q: &str, tables: &[SearchTable]) {
     let pattern = like_pattern(q);
     let prefix = format!("{}%", escape_like(q));
     let qb = w.and();
@@ -113,13 +122,26 @@ fn push_search(w: &mut Where<'_>, q: &str) {
     qb.push(" OR ci.hostname ILIKE ").push_bind(pattern.clone());
     qb.push(" OR ci.serial_number ILIKE ").push_bind(pattern.clone());
     qb.push(" OR host(ci.ip_address) LIKE ").push_bind(prefix.clone());
-    qb.push(" OR EXISTS (SELECT 1 FROM ci_attribute_values v WHERE v.ci_id = ci.id AND (v.value_text ILIKE ")
-        .push_bind(pattern)
-        .push(" OR host(v.value_ip) LIKE ")
-        .push_bind(prefix.clone())
-        .push(" OR v.value_cidr::text LIKE ")
-        .push_bind(prefix)
-        .push("))");
+    // Field values: one branch per type table with searchable columns.
+    if !tables.is_empty() {
+        qb.push(" OR ci.id IN (");
+        for (i, t) in tables.iter().enumerate() {
+            if i > 0 {
+                qb.push(" UNION ALL ");
+            }
+            qb.push(format!("SELECT id FROM {} WHERE false", t.table.sql()));
+            for c in &t.text {
+                qb.push(format!(" OR {c} ILIKE ")).push_bind(pattern.clone());
+            }
+            for c in &t.ip {
+                qb.push(format!(" OR host({c}) LIKE ")).push_bind(prefix.clone());
+            }
+            for c in &t.cidr {
+                qb.push(format!(" OR {c}::text LIKE ")).push_bind(prefix.clone());
+            }
+        }
+        qb.push(")");
+    }
     let words = query_words(q);
     if !words.is_empty() {
         let tsq: Vec<String> = words.iter().take(8).map(|w| format!("{w}:*")).collect();
@@ -136,7 +158,7 @@ fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
         w.and_sql(&p);
     }
     if let Some(q) = &f.q {
-        push_search(w, q);
+        push_search(w, q, &f.search_tables);
     }
     for (column, ids) in [
         ("ci.class_id", &f.class_ids),
@@ -381,51 +403,132 @@ pub async fn soft_delete_edges_of(conn: &mut PgConnection, ci_id: Uuid) -> sqlx:
 }
 
 // ---------------------------------------------------------------------------
-// Attribute values
+// Field values in the type tables (class table inheritance: a CI has one row
+// in the table of its class and of every ancestor class)
 // ---------------------------------------------------------------------------
 
+/// A stored field value of one CI, in the API's JSON shape.
 #[derive(Debug, Clone)]
-pub struct StoredValueRow {
+pub struct ItemValue {
     pub ci_id: Uuid,
-    pub attribute_id: Uuid,
     pub key: String,
     pub label: String,
-    pub value_text: Option<String>,
-    pub value_number: Option<f64>,
-    pub value_boolean: Option<bool>,
-    pub value_date: Option<String>,
-    pub value_datetime: Option<DateTime<Utc>>,
-    pub value_ip: Option<String>,
-    pub value_cidr: Option<String>,
-    pub value_ref_ci_id: Option<Uuid>,
-    pub value_lookup_id: Option<Uuid>,
-    pub ref_name: Option<String>,
-    pub ref_deleted: Option<bool>,
+    pub data_type: AttributeDataType,
+    pub sort_order: i32,
+    pub value: Value,
 }
 
-pub async fn attribute_values(conn: &mut PgConnection, ci_ids: &[Uuid]) -> sqlx::Result<Vec<StoredValueRow>> {
+impl ItemValue {
+    /// Text, enum, IP and CIDR values as searchable text.
+    pub fn search_text(&self) -> Option<&str> {
+        match self.data_type {
+            AttributeDataType::Text | AttributeDataType::Enum | AttributeDataType::Ip | AttributeDataType::Cidr => {
+                self.value.as_str()
+            }
+            _ => None,
+        }
+    }
+
+    pub fn reference(&self) -> Option<Uuid> {
+        (self.data_type == AttributeDataType::Reference)
+            .then(|| self.value.as_str().and_then(|v| Uuid::parse_str(v).ok()))
+            .flatten()
+    }
+}
+
+fn number_json(n: f64) -> Value {
+    if n.fract() == 0.0 && n.abs() < 9.0e15 {
+        Value::from(n as i64)
+    } else {
+        serde_json::Number::from_f64(n).map(Value::Number).unwrap_or(Value::Null)
+    }
+}
+
+/// A column value as to_jsonb() gives it, in the shape the API uses.
+fn api_value(t: AttributeDataType, v: &Value) -> Value {
+    match (t, v) {
+        (AttributeDataType::Number | AttributeDataType::Integer, Value::Number(n)) => {
+            n.as_f64().map(number_json).unwrap_or(Value::Null)
+        }
+        (AttributeDataType::Datetime, Value::String(s)) => DateTime::parse_from_rfc3339(s)
+            .map(|d| Value::String(crate::api::schemas::iso(&d.with_timezone(&Utc))))
+            .unwrap_or_else(|_| v.clone()),
+        _ => v.clone(),
+    }
+}
+
+/// Every CI id of these classes, deleted ones included.
+pub async fn ids_of_classes(conn: &mut PgConnection, class_ids: &[Uuid]) -> sqlx::Result<Vec<Uuid>> {
+    sqlx::query_scalar("SELECT id FROM cmdb.configuration_items WHERE class_id = ANY($1)")
+        .bind(class_ids)
+        .fetch_all(conn)
+        .await
+}
+
+/// Stored values of the given CIs (any mix of classes), ordered like the form.
+pub async fn values(conn: &mut PgConnection, model: &Model, ci_ids: &[Uuid]) -> sqlx::Result<Vec<ItemValue>> {
     if ci_ids.is_empty() {
         return Ok(Vec::new());
     }
-    sqlx::query_as!(
-        StoredValueRow,
-        r#"SELECT v.ci_id, v.attribute_id, d.key, d.label,
-                  v.value_text, v.value_number::float8 AS value_number, v.value_boolean,
-                  v.value_date::text AS value_date, v.value_datetime,
-                  host(v.value_ip) AS value_ip, v.value_cidr::text AS value_cidr, v.value_ref_ci_id, v.value_lookup_id,
-                  r.name AS "ref_name?", (r.deleted_at IS NOT NULL) AS ref_deleted
-           FROM ci_attribute_values v
-           JOIN ci_attribute_definitions d ON d.id = v.attribute_id
-           LEFT JOIN configuration_items r ON r.id = v.value_ref_ci_id
-           WHERE v.ci_id = ANY($1)
-           ORDER BY d.sort_order, d.key"#,
-        ci_ids
-    )
-    .fetch_all(conn)
-    .await
+    let classes: Vec<(Uuid, Uuid)> =
+        sqlx::query_as("SELECT id, class_id FROM cmdb.configuration_items WHERE id = ANY($1)")
+            .bind(ci_ids)
+            .fetch_all(&mut *conn)
+            .await?;
+    // table class -> CIs that have a row in its table
+    let mut by_table: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for (ci, class) in &classes {
+        for c in model.lineage(*class) {
+            by_table.entry(c.id).or_default().push(*ci);
+        }
+    }
+    let mut out = Vec::new();
+    for (class_id, ids) in by_table {
+        let fields: Vec<_> = model.own_fields(class_id).collect();
+        let Some(table) = model.table(class_id) else { continue };
+        if fields.is_empty() {
+            continue;
+        }
+        let rows: Vec<(Uuid, Json<serde_json::Map<String, Value>>)> =
+            sqlx::query_as(AssertSqlSafe(format!("SELECT id, to_jsonb(t) FROM {} t WHERE id = ANY($1)", table.sql())))
+                .bind(&ids)
+                .persistent(false)
+                .fetch_all(&mut *conn)
+                .await?;
+        for (ci_id, Json(row)) in rows {
+            for f in &fields {
+                match row.get(&f.key) {
+                    None | Some(Value::Null) => {}
+                    Some(v) => out.push(ItemValue {
+                        ci_id,
+                        key: f.key.clone(),
+                        label: f.label.clone(),
+                        data_type: f.data_type,
+                        sort_order: f.sort_order,
+                        value: api_value(f.data_type, v),
+                    }),
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then_with(|| a.key.cmp(&b.key)));
+    Ok(out)
 }
 
-/// One typed value, bound to the column its data type is stored in.
+/// Name and deleted flag of referenced CIs.
+pub async fn reference_names(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<HashMap<Uuid, (String, bool)>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(Uuid, String, bool)> =
+        sqlx::query_as("SELECT id, name, deleted_at IS NOT NULL FROM cmdb.configuration_items WHERE id = ANY($1)")
+            .bind(ids)
+            .fetch_all(conn)
+            .await?;
+    Ok(rows.into_iter().map(|(id, name, deleted)| (id, (name, deleted))).collect())
+}
+
+/// One typed value, bound as text and cast to the column type.
 #[derive(Debug, Clone)]
 pub enum StoredValue {
     Text(String),
@@ -439,62 +542,140 @@ pub enum StoredValue {
     Lookup(Uuid),
 }
 
-pub async fn upsert_attribute_value(
-    conn: &mut PgConnection,
-    ci_id: Uuid,
-    attribute_id: Uuid,
-    value: &StoredValue,
-) -> sqlx::Result<()> {
-    let (mut text, mut number, mut boolean, mut date, mut datetime, mut ip, mut cidr, mut reference, mut lookup) =
-        (None, None, None, None, None, None, None, None, None);
-    match value {
-        StoredValue::Text(v) => text = Some(v.as_str()),
-        StoredValue::Number(v) => number = Some(v.to_string()),
-        StoredValue::Boolean(v) => boolean = Some(*v),
-        StoredValue::Date(v) => date = Some(v.as_str()),
-        StoredValue::Datetime(v) => datetime = Some(v.as_str()),
-        StoredValue::Ip(v) => ip = Some(v.as_str()),
-        StoredValue::Cidr(v) => cidr = Some(v.as_str()),
-        StoredValue::Reference(v) => reference = Some(*v),
-        StoredValue::Lookup(v) => lookup = Some(*v),
+impl StoredValue {
+    pub fn as_text(&self) -> String {
+        match self {
+            StoredValue::Text(v)
+            | StoredValue::Date(v)
+            | StoredValue::Datetime(v)
+            | StoredValue::Ip(v)
+            | StoredValue::Cidr(v) => v.clone(),
+            StoredValue::Number(n) => n.to_string(),
+            StoredValue::Boolean(b) => b.to_string(),
+            StoredValue::Reference(id) | StoredValue::Lookup(id) => id.to_string(),
+        }
     }
-    sqlx::query!(
-        "INSERT INTO ci_attribute_values
-           (ci_id, attribute_id, value_text, value_number, value_boolean, value_date, value_datetime,
-            value_ip, value_cidr, value_ref_ci_id, value_lookup_id)
-         VALUES ($1, $2, $3, $4::text::numeric, $5, $6::text::date, $7::text::timestamptz,
-                 $8::text::inet, $9::text::cidr, $10, $11)
-         ON CONFLICT (ci_id, attribute_id) DO UPDATE SET
-           value_text = EXCLUDED.value_text, value_number = EXCLUDED.value_number,
-           value_boolean = EXCLUDED.value_boolean, value_date = EXCLUDED.value_date,
-           value_datetime = EXCLUDED.value_datetime, value_ip = EXCLUDED.value_ip,
-           value_cidr = EXCLUDED.value_cidr, value_ref_ci_id = EXCLUDED.value_ref_ci_id,
-           value_lookup_id = EXCLUDED.value_lookup_id",
-        ci_id,
-        attribute_id,
-        text,
-        number,
-        boolean,
-        date,
-        datetime,
-        ip,
-        cidr,
-        reference,
-        lookup
-    )
-    .execute(conn)
-    .await?;
+}
+
+/// `$n::text::<column type>` for each value (None clears the column).
+fn cast(n: usize, f: &Field) -> String {
+    format!("${n}::text::{}", pg_type(f.data_type))
+}
+
+/// The CI's row in one type table, with these column values.
+pub async fn insert_type_row(
+    conn: &mut PgConnection,
+    table: &TableName,
+    id: Uuid,
+    values: &[(&Field, Option<String>)],
+) -> sqlx::Result<()> {
+    let mut cols = vec!["id".to_owned()];
+    let mut params = vec!["$1".to_owned()];
+    for (i, (f, _)) in values.iter().enumerate() {
+        cols.push(f.column().to_string());
+        params.push(cast(i + 2, f));
+    }
+    let sql = format!("INSERT INTO {} ({}) VALUES ({})", table.sql(), cols.join(", "), params.join(", "));
+    let mut q = sqlx::query(AssertSqlSafe(sql)).persistent(false).bind(id);
+    for (_, v) in values {
+        q = q.bind(v.clone());
+    }
+    q.execute(conn).await?;
     Ok(())
 }
 
-pub async fn delete_attribute_values(conn: &mut PgConnection, ci_id: Uuid, attribute_ids: &[Uuid]) -> sqlx::Result<()> {
-    if attribute_ids.is_empty() {
+pub async fn update_type_row(
+    conn: &mut PgConnection,
+    table: &TableName,
+    id: Uuid,
+    values: &[(&Field, Option<String>)],
+) -> sqlx::Result<()> {
+    if values.is_empty() {
         return Ok(());
     }
-    sqlx::query!("DELETE FROM ci_attribute_values WHERE ci_id = $1 AND attribute_id = ANY($2)", ci_id, attribute_ids)
+    let sets: Vec<String> =
+        values.iter().enumerate().map(|(i, (f, _))| format!("{} = {}", f.column(), cast(i + 2, f))).collect();
+    let sql = format!("UPDATE {} SET {} WHERE id = $1", table.sql(), sets.join(", "));
+    let mut q = sqlx::query(AssertSqlSafe(sql)).persistent(false).bind(id);
+    for (_, v) in values {
+        q = q.bind(v.clone());
+    }
+    q.execute(conn).await?;
+    Ok(())
+}
+
+/// Rows (id only) for CIs that move into a type's lineage.
+pub async fn insert_type_rows(conn: &mut PgConnection, table: &TableName, ids: &[Uuid]) -> sqlx::Result<()> {
+    sqlx::query(AssertSqlSafe(format!("INSERT INTO {} (id) SELECT unnest($1::uuid[])", table.sql())))
+        .persistent(false)
+        .bind(ids)
         .execute(conn)
         .await?;
     Ok(())
+}
+
+pub async fn delete_type_rows(conn: &mut PgConnection, table: &TableName, ids: &[Uuid]) -> sqlx::Result<()> {
+    sqlx::query(AssertSqlSafe(format!("DELETE FROM {} WHERE id = ANY($1)", table.sql())))
+        .persistent(false)
+        .bind(ids)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Of these fields of one table, those holding a value for any of the CIs.
+pub async fn fields_with_values(
+    conn: &mut PgConnection,
+    table: &TableName,
+    fields: &[&str],
+    ids: &[Uuid],
+) -> sqlx::Result<Vec<String>> {
+    let mut used = Vec::new();
+    for f in fields {
+        let col = crate::schema::naming::Ident::trusted(f);
+        let any: bool = sqlx::query_scalar(AssertSqlSafe(format!(
+            "SELECT EXISTS (SELECT 1 FROM {} WHERE id = ANY($1) AND {col} IS NOT NULL)",
+            table.sql()
+        )))
+        .persistent(false)
+        .bind(ids)
+        .fetch_one(&mut *conn)
+        .await?;
+        if any {
+            used.push((*f).to_owned());
+        }
+    }
+    Ok(used)
+}
+
+/// A type table's searchable columns (text, enum: substring; ip, cidr: prefix).
+#[derive(Debug, Clone)]
+pub struct SearchTable {
+    pub table: TableName,
+    pub text: Vec<Ident>,
+    pub ip: Vec<Ident>,
+    pub cidr: Vec<Ident>,
+}
+
+/// Every table with searchable fields.
+pub fn search_tables(model: &Model) -> Vec<SearchTable> {
+    let mut out = Vec::new();
+    for c in &model.classes {
+        let Some(table) = model.table(c.id) else { continue };
+        let mut t = SearchTable { table, text: Vec::new(), ip: Vec::new(), cidr: Vec::new() };
+        for f in model.own_fields(c.id) {
+            match f.data_type {
+                AttributeDataType::Text | AttributeDataType::Enum => t.text.push(f.column()),
+                AttributeDataType::Ip => t.ip.push(f.column()),
+                AttributeDataType::Cidr => t.cidr.push(f.column()),
+                _ => {}
+            }
+        }
+        if !(t.text.is_empty() && t.ip.is_empty() && t.cidr.is_empty()) {
+            out.push(t);
+        }
+    }
+    out
 }
 
 /// Of the given CI ids, those that exist and are not deleted.

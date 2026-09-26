@@ -17,6 +17,7 @@ use sqlx::{PgConnection, PgPool};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use super::areas::Areas;
 use super::classes::{AttributeDefinitions, CiClasses, RelationshipRules, RelationshipTypes};
 use super::lookups::{Environments, Locations, Statuses};
 use super::simple_resource::Resource;
@@ -26,6 +27,7 @@ use crate::auth::permissions::GlobalPermission;
 use crate::data::classes as class_data;
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet};
 use crate::http::error::{AppError, ErrorCode};
+use crate::schema::{self as engine, Purge, SchemaChange, Scope};
 
 // ---------------------------------------------------------------------------
 // Template content
@@ -119,7 +121,15 @@ pub struct Rule {
     pub target: &'static str,
 }
 
+/// The area (menu tab, PostgreSQL schema) the template's types are created in.
+pub struct AreaSpec {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+}
+
 pub struct Content {
+    pub area: AreaSpec,
     pub statuses: &'static [Status],
     /// key, name
     pub environments: &'static [(&'static str, &'static str)],
@@ -152,6 +162,7 @@ pub fn find(key: &str) -> Option<&'static Template> {
 #[derive(Debug, Default, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TemplateCounts {
+    pub areas: i64,
     pub classes: i64,
     pub attribute_definitions: i64,
     pub relationship_types: i64,
@@ -163,7 +174,8 @@ pub struct TemplateCounts {
 
 impl TemplateCounts {
     fn total(&self) -> i64 {
-        self.classes
+        self.areas
+            + self.classes
             + self.attribute_definitions
             + self.relationship_types
             + self.relationship_rules
@@ -231,6 +243,9 @@ pub struct TemplateInstallResult {
     pub existing: TemplateCounts,
     /// Rows not installed because they would clash with the current data model
     pub skipped: Vec<String>,
+    /// The DDL the install ran (null when every table and column already existed)
+    #[schema(required = true)]
+    pub schema_change: Option<SchemaChange>,
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +262,7 @@ async fn key_map(c: &mut PgConnection, table: &'static str) -> sqlx::Result<KeyM
 }
 
 struct State {
+    areas: KeyMap,
     statuses: KeyMap,
     environments: KeyMap,
     locations: KeyMap,
@@ -268,6 +284,7 @@ impl State {
         .fetch_all(&mut *c)
         .await?;
         Ok(State {
+            areas: key_map(c, "areas").await?,
             statuses: key_map(c, "statuses").await?,
             environments: key_map(c, "environments").await?,
             locations: key_map(c, "locations").await?,
@@ -292,6 +309,7 @@ impl State {
 
 fn contents(c: &Content) -> TemplateCounts {
     TemplateCounts {
+        areas: 1,
         classes: c.classes.len() as i64,
         attribute_definitions: c.classes.iter().map(|k| k.attributes.len() as i64).sum(),
         relationship_types: c.relationship_types.len() as i64,
@@ -305,6 +323,7 @@ fn contents(c: &Content) -> TemplateCounts {
 fn present(c: &Content, s: &State) -> TemplateCounts {
     let n = |it: &mut dyn Iterator<Item = bool>| it.filter(|b| *b).count() as i64;
     TemplateCounts {
+        areas: n(&mut std::iter::once(s.areas.contains_key(c.area.key))),
         classes: n(&mut c.classes.iter().map(|k| s.classes.contains_key(k.key))),
         attribute_definitions: n(&mut c
             .classes
@@ -390,11 +409,9 @@ pub async fn install(
     ctx: &RequestContext,
     template: &Template,
 ) -> Result<TemplateInstallResult, AppError> {
-    // Two concurrent installs would race on the unique keys; serialise them.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('shadoucmdb:template:' || $1))")
-        .bind(template.key)
-        .execute(&mut *conn)
-        .await?;
+    // Two concurrent installs would race on the unique keys, and any data model
+    // change must wait for the schema; serialise them.
+    engine::lock(conn).await?;
     let content = (template.content)();
     let mut state = State::load(conn).await?;
     let existing = present(&content, &state);
@@ -444,6 +461,20 @@ pub async fn install(
         created.locations += 1;
     }
 
+    let area_id = match state.areas.get(content.area.key) {
+        Some(id) => *id,
+        None => {
+            let mut c = ColumnSet::default();
+            c.opt("key", Some(text(content.area.key)))
+                .opt("name", Some(text(content.area.name)))
+                .opt("description", Some(text(content.area.description)));
+            let id = ins.insert::<Areas>(c).await?;
+            state.areas.insert(content.area.key.into(), id);
+            created.areas += 1;
+            id
+        }
+    };
+
     for (i, cls) in content.classes.iter().enumerate() {
         if state.classes.contains_key(cls.key) {
             continue;
@@ -451,6 +482,7 @@ pub async fn install(
         let parent_id = cls.parent.and_then(|p| state.classes.get(p).copied());
         let mut c = ColumnSet::default();
         c.opt("key", Some(text(cls.key)))
+            .opt("area_id", Some(area_id))
             .opt("name", Some(text(cls.name)))
             .opt("description", Some(text(cls.description)))
             .opt("is_abstract", Some(cls.is_abstract))
@@ -540,7 +572,11 @@ pub async fn install(
 
     let Installer { conn, audit } = ins;
     crud::write_audit(conn, ctx, audit).await?;
-    Ok(TemplateInstallResult { template: template.key.into(), created, existing, skipped })
+    // The area's schema, a table per type and a column per field.
+    let classes: Vec<Uuid> = content.classes.iter().filter_map(|c| state.classes.get(c.key).copied()).collect();
+    let summary = format!("Install template {} into area {}", template.key, content.area.key);
+    let change = engine::apply_with(conn, ctx, &summary, Scope::Classes(classes), Purge::default(), true).await?;
+    Ok(TemplateInstallResult { template: template.key.into(), created, existing, skipped, schema_change: change })
 }
 
 pub async fn install_by_key(pool: &PgPool, ctx: &RequestContext, key: &str) -> Result<TemplateInstallResult, AppError> {
@@ -570,8 +606,9 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Install a starter template (idempotent)")
             .description(
-                "Adds every class, attribute, relationship type and rule, status, environment and location of the \
-                 template whose key does not exist yet, in one transaction. Existing rows are left unchanged, so \
+                "Adds the template's area (a PostgreSQL schema), every class (a table in it), attribute (a column), \
+                 relationship type and rule, status, environment and location of the template whose key does not \
+                 exist yet, in one transaction. Existing rows are left unchanged, so \
                  installing again is a no-op and renamed or archived rows stay as they are. Each created row is \
                  written to the audit log.",
             )
@@ -591,6 +628,7 @@ mod tests {
     fn it_infrastructure_is_the_former_seed() {
         let t = find("it_infrastructure").expect("template");
         let c = contents(&(t.content)());
+        assert_eq!(c.areas, 1);
         assert_eq!(c.classes, 8);
         assert_eq!(c.attribute_definitions, 35);
         assert_eq!(c.relationship_types, 4);
@@ -606,8 +644,14 @@ mod tests {
         for t in TEMPLATES {
             assert!(key.is_match(t.key), "template key {}", t.key);
             let c = (t.content)();
+            use crate::schema::naming::{NameKind, validate};
+            assert_eq!(validate(c.area.key, NameKind::Area), Ok(()), "area {}", c.area.key);
             let mut classes = HashSet::new();
             for cls in &c.classes {
+                assert_eq!(validate(cls.key, NameKind::Type), Ok(()), "type {}", cls.key);
+                for a in &cls.attributes {
+                    assert_eq!(validate(a.key, NameKind::Field), Ok(()), "field {}.{}", cls.key, a.key);
+                }
                 assert!(cls.parent.is_none_or(|p| classes.contains(p)), "{}: parent listed later", cls.key);
                 assert!(classes.insert(cls.key), "duplicate class {}", cls.key);
                 let mut attrs = HashSet::new();

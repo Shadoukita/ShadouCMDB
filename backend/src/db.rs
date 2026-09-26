@@ -12,10 +12,19 @@ use crate::config::{DatabaseConfig, SslMode};
 
 /// `sql/migrations/*.sql`, embedded at compile time. The folder is the single
 /// source of truth for the schema; build.rs makes cargo rebuild when it changes.
-pub static MIGRATOR: Migrator = sqlx::migrate!("../sql/migrations");
+/// The bookkeeping table is named with its schema: the connection's search_path
+/// starts with `cmdb`, and the table has always lived in `public`.
+pub static MIGRATOR: Migrator = Migrator {
+    table_name: std::borrow::Cow::Borrowed("public._sqlx_migrations"),
+    ..sqlx::migrate!("../sql/migrations")
+};
 
-/// Where sqlx records applied migrations (its default table name).
-const MIGRATIONS_TABLE: &str = "_sqlx_migrations";
+/// Where sqlx records applied migrations.
+const MIGRATIONS_TABLE: &str = "public._sqlx_migrations";
+
+/// System tables live in `cmdb` (migration 0006); `public` holds the pg_trgm
+/// functions. Admin-defined areas are separate schemas, always schema-qualified.
+pub const SEARCH_PATH: &str = "cmdb, public";
 /// Where the Node/Drizzle runner recorded them before this binary existed.
 const DRIZZLE_TABLE: &str = "drizzle.__drizzle_migrations";
 
@@ -48,7 +57,7 @@ pub fn connect_options(cfg: &DatabaseConfig) -> anyhow::Result<PgConnectOptions>
         opts = opts.ssl_root_cert(ca);
     }
 
-    opts = opts.application_name("shadoucmdb");
+    opts = opts.application_name("shadoucmdb").options([("search_path", SEARCH_PATH)]);
     if !cfg.statement_timeout.is_zero() {
         opts = opts.options([("statement_timeout", cfg.statement_timeout.as_millis().to_string())]);
     }
@@ -84,7 +93,7 @@ pub async fn applied_versions(pool: &PgPool) -> sqlx::Result<HashSet<i64>> {
         return Ok(HashSet::new());
     }
     let rows: Vec<i64> =
-        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success").fetch_all(pool).await?;
+        sqlx::query_scalar("SELECT version FROM public._sqlx_migrations WHERE success").fetch_all(pool).await?;
     Ok(rows.into_iter().collect())
 }
 
@@ -150,7 +159,29 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
         println!("  applied {}", label(m));
     }
     let after = applied_count(pool).await?;
-    println!("Database is at migration {after}/{expected}{}", if pending.is_empty() { " (nothing to do)" } else { "" });
+
+    // Area schemas, type tables and reporting views follow the data model; bring
+    // anything missing (after migration 0007, or a new reporting role) in line.
+    let ctx = crate::api::context::RequestContext::system("migrate", "migrate");
+    let mut tx = pool.begin().await?;
+    let change = crate::schema::reconcile(&mut tx, &ctx, "Reconcile after migrate")
+        .await
+        .map_err(|e| anyhow::anyhow!("reconciling the data model failed: {}", e.message))?;
+    tx.commit().await?;
+    let reconciled = match &change {
+        Some(c) => {
+            println!("Data model: {} statements applied (reporting views and grants)", c.statements.len());
+            for i in c.impact.0.iter().filter(|i| i.kind == "warning") {
+                println!("  warning: {}", i.message);
+            }
+            true
+        }
+        None => false,
+    };
+    println!(
+        "Database is at migration {after}/{expected}{}",
+        if pending.is_empty() && !reconciled { " (nothing to do)" } else { "" }
+    );
     Ok(())
 }
 

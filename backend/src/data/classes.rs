@@ -86,37 +86,6 @@ pub async fn attribute_key_clash(
     .await
 }
 
-/// Enum values currently stored for an attribute that are not in the allowed list.
-pub async fn enum_values_in_use(
-    conn: &mut PgConnection,
-    attribute_id: Uuid,
-    allowed: &[String],
-) -> sqlx::Result<Vec<String>> {
-    let rows = sqlx::query_scalar!(
-        "SELECT DISTINCT value_text FROM ci_attribute_values
-         WHERE attribute_id = $1 AND NOT (value_text = ANY($2::text[]))
-         ORDER BY 1 LIMIT 10",
-        attribute_id,
-        allowed
-    )
-    .fetch_all(conn)
-    .await?;
-    Ok(rows.into_iter().flatten().collect())
-}
-
-/// Live CIs of this class (or a descendant) that hold no value for the attribute.
-pub async fn items_missing_value(conn: &mut PgConnection, class_id: Uuid, attribute_id: Uuid) -> sqlx::Result<i64> {
-    sqlx::query_scalar!(
-        r#"SELECT count(*) AS "n!" FROM configuration_items ci
-           WHERE ci.deleted_at IS NULL AND ci_class_is_a(ci.class_id, $1)
-             AND NOT EXISTS (SELECT 1 FROM ci_attribute_values v WHERE v.ci_id = ci.id AND v.attribute_id = $2)"#,
-        class_id,
-        attribute_id
-    )
-    .fetch_one(conn)
-    .await
-}
-
 /// `Some(is_active)` when the value belongs to the list, `None` otherwise.
 pub async fn lookup_value_state(conn: &mut PgConnection, list_id: Uuid, value_id: Uuid) -> sqlx::Result<Option<bool>> {
     sqlx::query_scalar!("SELECT is_active FROM lookup_list_values WHERE id = $1 AND list_id = $2", value_id, list_id)
@@ -133,22 +102,6 @@ pub async fn class_has_items(conn: &mut PgConnection, class_id: Uuid) -> sqlx::R
     .fetch_optional(conn)
     .await?
     .is_some())
-}
-
-/// After re-parenting a class: attribute values on CIs of this class (or its
-/// descendants) whose definition no longer sits in the CI's lineage.
-pub async fn orphaned_attribute_values(conn: &mut PgConnection, class_id: Uuid) -> sqlx::Result<Vec<String>> {
-    sqlx::query_scalar!(
-        "SELECT DISTINCT d.key
-         FROM ci_attribute_values v
-         JOIN ci_attribute_definitions d ON d.id = v.attribute_id
-         JOIN configuration_items ci ON ci.id = v.ci_id
-         WHERE ci_class_is_a(ci.class_id, $1) AND NOT ci_class_is_a(ci.class_id, d.class_id)
-         LIMIT 10",
-        class_id
-    )
-    .fetch_all(conn)
-    .await
 }
 
 /// What the CI service needs to know about a class (None when it does not exist).
