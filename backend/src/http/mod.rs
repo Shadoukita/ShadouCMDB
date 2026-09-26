@@ -47,14 +47,22 @@ impl AppState {
     }
 }
 
+/// Paths the API owns: they get the error envelope from `fallback` and the
+/// no-store cache policy from `security_headers`. Every authenticated route is
+/// under `/api/`; `/healthz`, `/readyz`, `/openapi.json`, `/docs` and the UI
+/// are not. A module that declares a route outside `/api/` is outside this
+/// gate, and its responses may be stored by a shared cache.
+fn is_api_path(path: &str) -> bool {
+    path.starts_with("/api/") || path == "/api"
+}
+
 /// Unknown routes: the embedded UI for browser paths, the error envelope for
 /// everything else (and always for /api/*, so API clients never get HTML).
 async fn fallback(req: Request) -> Response {
     let path = req.uri().path();
     let is_read = req.method() == Method::GET || req.method() == Method::HEAD;
     if is_read
-        && !path.starts_with("/api/")
-        && path != "/api"
+        && !is_api_path(path)
         && let Some(res) = ui::serve(path)
     {
         return res;
@@ -78,6 +86,15 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-
     connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'";
 
 const HSTS: &str = "max-age=31536000; includeSubDomains";
+
+/// Responses under `/api/` carry one principal's data (`GET /api/v1/auth/me`
+/// returns the username, permissions and the CSRF token) and are
+/// authenticated by the session cookie. RFC 9111 §3.5 only keeps a shared
+/// cache from storing responses to requests with `Authorization`, not with a
+/// cookie, and a 200 without freshness information is heuristically cacheable
+/// (§4.2.2). `no-store` stops a compliant intermediary from storing them;
+/// `Vary: Cookie` splits the cache key for one that stores anyway.
+const API_CACHE_CONTROL: &str = "no-store";
 
 /// The `Content-Security-Policy` and `Reporting-Endpoints` values, built
 /// once at startup from `CSP_REPORT_URI`; requests only clone them.
@@ -120,14 +137,27 @@ impl Csp {
 ///   LAN deployments on a scheme they cannot serve.
 /// - `Content-Security-Policy` (and `Reporting-Endpoints`) only on HTML
 ///   documents, never on JSON.
+/// - `Cache-Control: no-store` and `Vary: Cookie` on API responses, see
+///   [`API_CACHE_CONTROL`].
 async fn security_headers(
     axum::extract::State(csp): axum::extract::State<Arc<Csp>>,
     req: Request,
     next: axum::middleware::Next,
 ) -> Response {
     let https = request_is_https(req.headers());
+    let is_api = is_api_path(req.uri().path());
     let mut res = next.run(req).await;
     let headers = res.headers_mut();
+    if is_api {
+        // Overrides any handler value on purpose: an API path that should be
+        // cacheable needs an explicit exception here. Safe only because it is
+        // gated on API paths; `ui::file_response` owns the UI's caching
+        // (immutable `assets/*`), so widening the gate would break it.
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(API_CACHE_CONTROL));
+        // append, not insert: CorsLayer runs inside this layer and has already
+        // set its own `Vary: origin, ...`, which insert would drop.
+        headers.append(header::VARY, HeaderValue::from_static("Cookie"));
+    }
     if https {
         headers.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static(HSTS));
     }

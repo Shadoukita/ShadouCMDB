@@ -105,6 +105,14 @@ does not set (for example `Permissions-Policy`) are the proxy's to add.
 | `Referrer-Policy` | `no-referrer` | every response |
 | `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | only requests that arrived over HTTPS (`X-Forwarded-Proto: https` or `Forwarded: proto=https`); never over plain HTTP, so a lab or LAN install is not locked onto a scheme it cannot serve |
 | `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'` | HTML documents only (the web UI and `/docs`), not JSON |
+| `Cache-Control` | `no-store` | every `/api/` response, so no shared cache stores one user's data. The web UI keeps its own caching: `assets/*` `public, max-age=31536000, immutable`, `index.html` `no-cache` |
+| `Vary` | `Cookie` (appended to any `Vary` the CORS layer set) | every `/api/` response |
+
+API responses are authenticated by the session cookie and carry per-user data, including the
+CSRF token in `/api/v1/auth/me`. A proxy or CDN that rewrites `Cache-Control` on `/api/`
+responses, or caches them regardless, can serve one user's data to another; do not put a
+caching layer in front of `/api/`. If the deployment ran behind a caching CDN before this
+header was sent, purge it: `no-store` does not evict what was already stored.
 
 `includeSubDomains` tells browsers to use HTTPS for every subdomain of the host name the
 server is reached by, for a year. If that name has subdomains that cannot serve HTTPS, have the
