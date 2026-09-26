@@ -142,7 +142,7 @@ export interface paths {
         };
         /**
          * Inventory list: paginated, searchable, filterable, sortable
-         * @description Returns summaries (no attribute values) of CIs in classes the caller may view. Soft-deleted CIs are hidden unless `deleted=include|only`.
+         * @description Returns CIs in classes the caller may view, each with its attribute values (`attributes`, `attributeReferences`) as on `getConfigurationItem`. Soft-deleted CIs are hidden unless `deleted=include|only`.
          */
         get: operations["listConfigurationItems"];
         put?: never;
@@ -1580,7 +1580,7 @@ export interface components {
             };
         };
         ConfigurationItemList: {
-            data: components["schemas"]["ConfigurationItemSummary"][];
+            data: components["schemas"]["ConfigurationItem"][];
             page: components["schemas"]["PageMeta"];
         };
         ConfigurationItemSummary: {

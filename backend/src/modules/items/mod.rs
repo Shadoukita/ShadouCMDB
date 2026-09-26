@@ -21,7 +21,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Inventory list: paginated, searchable, filterable, sortable")
             .description(
-                "Returns summaries (no attribute values) of CIs in classes the caller may view. Soft-deleted CIs are hidden unless `deleted=include|only`.",
+                "Returns CIs in classes the caller may view, each with its attribute values (`attributes`, `attributeReferences`) as on `getConfigurationItem`. Soft-deleted CIs are hidden unless `deleted=include|only`.",
             )
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ListItemsQuery>, NoBody>| async move {
                 Ok(Json(service::list(&api.pool, &api.ctx, &q).await?))
