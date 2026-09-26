@@ -1,6 +1,6 @@
 # frontend
 
-The ShadouCMDB web UI: React + Vite + TanStack Query + TypeScript.
+The ShadouCMDB web UI: Vue 3 + Vite + TypeScript, with Vue Router, Pinia and TanStack Query for Vue.
 
 It talks **only** to the backend API (`/api/v1`). It never opens a database connection, never embeds
 SQL and never receives database credentials. There is nothing to configure here except where the API is.
@@ -14,8 +14,9 @@ cp frontend/.env.example frontend/.env   # optional
 API_PROXY_TARGET=http://<api-host>:3000 npm run dev -w frontend      # http://localhost:5173
 ```
 
-Production build: `npm run build -w frontend` writes static files to `frontend/dist/`. Serve them from any
-static web server with an SPA fallback (unknown paths → `index.html`).
+Production build: `npm run build -w frontend` type-checks (`vue-tsc`) and writes static files to `frontend/dist/`.
+Serve them from any static web server with an SPA fallback (unknown paths → `index.html`), or embed them in the
+backend binary. With no configuration the UI calls the API on its own origin at `/api/v1`.
 
 ## Configuration
 
@@ -70,12 +71,35 @@ row with no frontend change.
 src/config.ts          the only place deploy-time config is read
 src/api/schema.d.ts    types generated from backend/openapi.json (do not edit)
 src/api/client.ts      the one HTTP client (openapi-fetch) + ApiError / error-envelope handling
-src/api/queries.ts     TanStack Query hooks and cache keys; components never call fetch
+src/api/queries.ts     TanStack Query composables and cache keys; components never call fetch
+src/router.ts          routes (Vue Router, HTML5 history)
+src/stores/            Pinia stores (the one-shot "Created …/Saved …" notice)
 src/components/        shell, breadcrumbs, global search, pickers, dialogs, state views
-src/pages/             one file per screen; detail/ holds the detail-page panels
+src/pages/             one component per screen; detail/, form/ and dashboard/ hold their parts
+src/lib/               formatting, attribute value conversion, the breadcrumb walk trail
 src/styles/tokens.css  design tokens (spacing, type scale, colours); app.css uses only these
+e2e/                   Playwright end-to-end walk (see below)
 ```
 
 After an API change, regenerate the types with `npm run api:types -w frontend`. This reads
 `../backend/openapi.json`, so the backend spec must be present. `npm run api:check -w frontend` fails if the
 committed types are stale. `npm run typecheck` then flags every call site that no longer matches the contract.
+
+## End-to-end tests
+
+`e2e/` is a Playwright walk of every screen against a real API: create a CI with field-level validation, find
+it through URL-backed filters (and after a reload), edit it and read the History diff, provoke a
+`409 VERSION_CONFLICT`, add relationships in both directions, walk `CRM › crm-app-01 › fra1-esx-01 › FRA1 Rack A01`
+by clicking, delete with the "relationships that will break" confirmation, create a CI class through the API and
+use it without a frontend change, and check the empty, not-found and API-unreachable states. Any page error or Vue
+warning fails the test.
+
+The tests expect the demo inventory (`shadoucmdb seed --demo`) and create their own uniquely named records.
+
+```sh
+npx playwright install chromium                                           # once
+API_PROXY_TARGET=http://<api-host>:3000 npm run test:e2e -w frontend      # starts a dev server on :5199
+E2E_BASE_URL=http://localhost:4173 npm run test:e2e -w frontend           # or test an already-served build
+```
+
+Set `E2E_SCREENSHOT_DIR=<dir>` to save a screenshot of each step.

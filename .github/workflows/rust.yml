@@ -10,6 +10,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # sqlx checks its compile-time queries against backend/.sqlx, not a live database.
+  SQLX_OFFLINE: "true"
   # Throwaway credentials for the CI-only PostgreSQL service container.
   PGHOST: 127.0.0.1
   PGPORT: "5432"
@@ -44,10 +46,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: cargo build --release --locked
+      - name: backend/openapi.json matches the code
+        run: ./target/release/shadoucmdb openapi --check openapi.json
 
       - name: migrate, migrate (no-op), seed --demo, verify
         run: |
@@ -58,7 +65,7 @@ jobs:
           $B seed --demo
           $B verify
 
-      - name: serve, /healthz, /readyz, graceful shutdown
+      - name: serve, /healthz, /readyz, smoke suite (every operation), graceful shutdown
         run: |
           API_HOST=127.0.0.1 API_PORT=3000 ./target/release/shadoucmdb serve > serve.log &
           PID=$!
@@ -66,8 +73,13 @@ jobs:
           curl -sf http://127.0.0.1:3000/readyz | tee readyz.json
           grep -q '"upToDate":true' readyz.json
           echo "idle RSS: $(grep VmRSS /proc/$PID/status)"
+          API_URL=http://127.0.0.1:3000 node ../tools/smoke/smoke.ts
+          echo "RSS after smoke: $(grep VmRSS /proc/$PID/status)"
           kill -TERM $PID && wait $PID
           grep -q "server stopped" serve.log
+          errors=$(grep -c '"level":"ERROR"' serve.log || true)
+          echo "error-level log lines: $errors"
+          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log; exit 1; fi
 
       - name: systemd unit (deploy/systemd/shadoucmdb.service)
         run: |

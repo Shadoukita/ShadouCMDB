@@ -16,20 +16,20 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
 | Path | What |
 | --- | --- |
-| `backend/` | The backend. `Cargo.toml` + `rust/`: the Rust server `shadoucmdb` (Axum + sqlx), which runs migrations, seed, verify, health checks and the embedded UI. `package.json` + `src/`: the Node API that serves `/api/v1` until the port to Rust (SHAA-9). |
-| `backend/src/db/schema/` | Drizzle table definitions used by the Node API (kept in sync with `sql/migrations/` by hand). |
+| `backend/` | The backend: the Rust server `shadoucmdb` (Axum + Tokio + sqlx). One binary serves `/api/v1`, `/healthz`, `/readyz`, `/openapi.json`, `/docs` and the embedded web UI, and runs `migrate`, `seed`, `verify` and `openapi`. |
 | `sql/` | Database artifacts: versioned migrations, bootstrap scripts, ER diagram. See [`sql/README.md`](sql/README.md). |
-| `frontend/` | React + Vite + TanStack Query web UI. See [`frontend/README.md`](frontend/README.md). |
+| `frontend/` | Vue 3 + Vite + TanStack Query web UI. See [`frontend/README.md`](frontend/README.md). |
 | `docs/data-model.md` | Data model, integrity rules and soft-delete decisions. |
 | `.github/` | CI and release workflows, pull request template. Releases: see [CONTRIBUTING.md](CONTRIBUTING.md#cutting-a-release). |
 | `docs/api.md` | API conventions, error envelope, endpoint overview, extension seams. |
-| `backend/openapi.json` | Generated OpenAPI contract (`npm run openapi -w backend`). |
+| `backend/openapi.json` | OpenAPI contract generated from the code (`shadoucmdb openapi --out backend/openapi.json`; CI fails if it is stale). |
+| `tools/` | `smoke/smoke.ts`: end-to-end check of every API operation against any API URL. `openapi-diff.mjs`: semantic diff of two specs. |
 | `Dockerfile`, `deploy/` | Multi-arch container image of `shadoucmdb`; systemd unit; release Dockerfile and the READMEs shipped in the release archives. See [docs/deployment.md](docs/deployment.md). |
 
 ## Requirements
 
 - The `shadoucmdb` binary (Linux x64/ARM64, Windows x64), built with stable Rust 1.94+ or taken from a
-  release, or Docker. Node.js 22.9+ is needed for the Node API and the frontend tooling.
+  release, or Docker. Node.js 22.18+ is only needed for the frontend tooling and the smoke test.
 - A reachable PostgreSQL **14 or newer**, anywhere: a managed service (RDS,
   Cloud SQL, Azure), another host on your network, or a local install.
 
@@ -90,7 +90,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    ```
 
    Re-running is safe; it reports `nothing to do`. Applied migrations are tracked in `_sqlx_migrations`.
-   A dev database that was migrated by the old Node runner needs a one-time
+   A dev database that was migrated by the retired Node/Drizzle runner needs a one-time
    `shadoucmdb migrate --adopt-drizzle` (or a reset); see
    [docs/deployment.md](docs/deployment.md#moving-a-dev-database-off-the-nodedrizzle-migration-runner).
 
@@ -109,11 +109,11 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    shadoucmdb verify
    ```
 
-6. **Start the backend.** `shadoucmdb serve` serves `/healthz`, `/readyz` and the embedded web UI.
-   `GET /healthz` reports liveness. `GET /readyz` returns 200 only when the database is reachable and
-   all migrations are applied, and 503 otherwise. Until the API port (SHAA-9) lands, `/api/v1` comes from
-   the Node API: `npm install && npm run dev:backend`, or `npm run build -w backend && npm start -w backend`.
-   To run as a systemd service, a Windows Service or a container, see [docs/deployment.md](docs/deployment.md).
+6. **Start the backend.** `shadoucmdb serve` serves the API, `/healthz`, `/readyz` and the embedded web UI on
+   `API_HOST:API_PORT` (default `0.0.0.0:3000`). `GET /healthz` reports liveness. `GET /readyz` returns 200 only
+   when the database is reachable and all migrations are applied, and 503 otherwise. During development,
+   `cargo run -- serve` in `backend/` does the same. To run as a systemd service, a Windows Service or a
+   container, see [docs/deployment.md](docs/deployment.md).
 
 7. **Use the API.** It lives under `/api/v1`. The OpenAPI 3.1 contract is served at `/openapi.json`, and
    there is a browsable UI at `/docs`. The same contract is committed as
@@ -121,7 +121,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    (pagination, errors, attributes) and extension points. To check a deployment end to end:
 
    ```sh
-   API_URL=http://localhost:3000 npm run smoke -w backend
+   API_URL=http://localhost:3000 node tools/smoke/smoke.ts   # needs `shadoucmdb seed --demo` data
    ```
 
 ### With Docker
@@ -130,12 +130,12 @@ The root `Dockerfile` builds a small multi-arch (amd64/arm64), non-root image of
 `docker run --rm --env-file .env shadoucmdb migrate`, then `docker run -d --env-file .env -p 3000:3000 shadoucmdb`.
 See [docs/deployment.md](docs/deployment.md#docker).
 
-`docker-compose.yml` builds the Node API (until SHAA-9) and reads `.env`. It contains **no** database service.
+`docker-compose.yml` builds the same image and reads `.env`. It contains **no** database service.
 
 ```sh
 cp .env.example .env                     # point it at your PostgreSQL
 docker compose run --rm migrate          # apply migrations
-docker compose run --rm seed             # reference data
+docker compose run --rm seed             # reference data (`seed seed --demo` adds sample CIs)
 docker compose up api                    # http://localhost:3000/readyz
 ```
 
@@ -147,10 +147,9 @@ For a PostgreSQL running on the Docker host itself, set `PGHOST=host.docker.inte
 Every schema change is a migration. No hand-applied DDL.
 
 1. Write the next migration by hand as `sql/migrations/<NNNN>_<what_changed>.sql` (next number, four digits).
-2. Until the Node API is retired (SHAA-9): mirror the change in the Drizzle tables in
-   `backend/src/db/schema/` and append the migration to `sql/migrations/meta/_journal.json`.
-3. Rebuild and run `shadoucmdb migrate`, then `shadoucmdb verify`. Commit the migration, the schema change and
-   any ERD update together. See [`sql/README.md`](sql/README.md).
+2. Rebuild and run `shadoucmdb migrate`, then `shadoucmdb verify`. If a compile-time checked query
+   (`sqlx::query!`) is affected, refresh `backend/.sqlx` (see [docs/api.md](docs/api.md#layers-and-extension-seams)).
+   Commit the migration, the code change and any ERD update together. See [`sql/README.md`](sql/README.md).
 
 Adding a CI class, attribute or relationship type is **data**, not a schema change. See
 [docs/data-model.md](docs/data-model.md#extending-the-model-without-migrations).

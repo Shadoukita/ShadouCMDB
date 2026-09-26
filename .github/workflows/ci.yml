@@ -1,7 +1,7 @@
 name: CI
 
-# Node workspaces: the frontend (lint, typecheck, build) and, until SHAA-9
-# removes it, the Node API. The Rust checks are in rust.yml.
+# Node workspaces: the frontend (lint, typecheck, API types, build). The Rust
+# checks are in rust.yml, the release dry run in release.yml.
 
 on:
   push:
@@ -23,4 +23,6 @@ jobs:
       - run: npm ci
       - run: npm run lint --workspaces --if-present
       - run: npm run typecheck
+      - name: frontend API types match backend/openapi.json
+        run: npm run api:check -w frontend
       - run: npm run build --workspaces --if-present

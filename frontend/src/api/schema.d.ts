@@ -552,44 +552,43 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        PageMeta: {
-            limit: number;
-            offset: number;
-            /** @description Total rows matching the filters */
-            total: number;
-        };
-        /** @description Compact reference to a lookup row */
-        LookupRef: {
+        AttributeDefinition: {
             /** Format: uuid */
             id: string;
+            /** Format: uuid */
+            classId: string;
             key: string;
-            name: string;
-        };
-        OwnerRef: {
-            /** Format: uuid */
-            id: string;
-            name: string;
+            label: string;
+            description: string | null;
             /** @enum {string} */
-            kind: "person" | "team";
+            dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference";
+            isRequired: boolean;
+            /** @description Allowed values when dataType is "enum" */
+            enumValues: string[] | null;
+            /**
+             * Format: uuid
+             * @description When dataType is "reference": the class (or ancestor) the referenced CI must belong to
+             */
+            referenceClassId: string | null;
+            validation: {
+                [key: string]: unknown;
+            } | null;
+            /** @description UI grouping, e.g. "Hardware" */
+            groupName: string | null;
+            /** Format: int32 */
+            sortOrder: number;
+            isActive: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
-        ErrorEnvelope: {
-            error: {
-                /** @enum {string} */
-                code: "VALIDATION_ERROR" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "DATABASE_UNAVAILABLE" | "INTERNAL_ERROR";
-                message: string;
-                details?: {
-                    /** @enum {string} */
-                    in: "body" | "query" | "params" | "header";
-                    /** @description Dotted path, e.g. "attributes.cpu_cores" or "limit" */
-                    field: string;
-                    message: string;
-                    /** @description Machine-readable reason, e.g. "invalid_type", "required", "unique" */
-                    code: string;
-                }[];
-                requestId: string;
-            };
+        AttributeDefinitionList: {
+            data: components["schemas"]["AttributeDefinition"][];
+            page: components["schemas"]["PageMeta"];
         };
         AuditEntry: {
+            /** Format: int64 */
             id: number;
             /** Format: date-time */
             occurredAt: string;
@@ -609,13 +608,20 @@ export interface components {
             newValue: unknown;
             requestId: string | null;
         };
+        AuditEntryList: {
+            data: components["schemas"]["AuditEntry"][];
+            page: components["schemas"]["PageMeta"];
+        };
         CiClass: {
             /** Format: uuid */
             id: string;
             key: string;
             name: string;
             description: string | null;
-            /** @description Parent class; attributes and relationship rules are inherited from it */
+            /**
+             * Format: uuid
+             * @description Parent class; attributes and relationship rules are inherited from it
+             */
             parentId: string | null;
             /** @description Abstract classes group attributes and rules but cannot hold CIs */
             isAbstract: boolean;
@@ -626,156 +632,9 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        AttributeDefinition: {
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            classId: string;
-            key: string;
-            label: string;
-            description: string | null;
-            /** @enum {string} */
-            dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference";
-            isRequired: boolean;
-            /** @description Allowed values when dataType is "enum" */
-            enumValues: string[] | null;
-            /** @description When dataType is "reference": the class (or ancestor) the referenced CI must belong to */
-            referenceClassId: string | null;
-            validation: {
-                [key: string]: unknown;
-            } | null;
-            /** @description UI grouping, e.g. "Hardware" */
-            groupName: string | null;
-            sortOrder: number;
-            isActive: boolean;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-        };
-        EffectiveAttribute: {
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            classId: string;
-            key: string;
-            label: string;
-            description: string | null;
-            /** @enum {string} */
-            dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference";
-            isRequired: boolean;
-            /** @description Allowed values when dataType is "enum" */
-            enumValues: string[] | null;
-            /** @description When dataType is "reference": the class (or ancestor) the referenced CI must belong to */
-            referenceClassId: string | null;
-            validation: {
-                [key: string]: unknown;
-            } | null;
-            /** @description UI grouping, e.g. "Hardware" */
-            groupName: string | null;
-            sortOrder: number;
-            isActive: boolean;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-            /** @description Defined on an ancestor class rather than this one */
-            inherited: boolean;
-            definedOn: {
-                /** Format: uuid */
-                id: string;
-                key: string;
-                name: string;
-            };
-        };
-        /** @description All attributes a CI of this class can carry (not paginated; bounded by the class lineage) */
-        EffectiveAttributeList: {
-            data: components["schemas"]["EffectiveAttribute"][];
-        };
-        RelationshipType: {
-            /** Format: uuid */
-            id: string;
-            key: string;
-            name: string;
-            description: string | null;
-            /** @description Reads source -> target, e.g. "runs on" */
-            forwardLabel: string;
-            /** @description Reads target -> source, e.g. "hosts" */
-            reverseLabel: string;
-            /** @description false for symmetric types such as connected_to */
-            isDirectional: boolean;
-            sortOrder: number;
-            isActive: boolean;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-        };
-        RelationshipRule: {
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            relationshipTypeId: string;
-            /**
-             * Format: uuid
-             * @description Matches this class and all its descendants
-             */
-            sourceClassId: string;
-            /**
-             * Format: uuid
-             * @description Matches this class and all its descendants
-             */
-            targetClassId: string;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-        };
-        Liveness: {
-            /** @constant */
-            status: "ok";
-        };
-        Readiness: {
-            /** @enum {string} */
-            status: "ready" | "not_ready";
-            /** @enum {string} */
-            database: "ok" | "unreachable";
-            migrations: {
-                /** @description Absent when the database is unreachable */
-                applied?: number;
-                /** @description Migrations shipped with this build */
-                expected: number;
-                upToDate?: boolean;
-            };
-        };
-        ConfigurationItemSummary: {
-            /** Format: uuid */
-            id: string;
-            name: string;
-            /** Format: uuid */
-            classId: string;
-            class: components["schemas"]["LookupRef"];
-            /** Format: uuid */
-            statusId: string;
-            status: components["schemas"]["LookupRef"];
-            environmentId: string | null;
-            environment: components["schemas"]["LookupRef"] | null;
-            ownerId: string | null;
-            owner: components["schemas"]["OwnerRef"] | null;
-            locationId: string | null;
-            location: components["schemas"]["LookupRef"] | null;
-            hostname: string | null;
-            ipAddress: string | null;
-            serialNumber: string | null;
-            notes: string | null;
-            /** @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits */
-            version: number;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-            /** @description Set when the CI was deleted (soft delete); history keeps resolving */
-            deletedAt: string | null;
+        CiClassList: {
+            data: components["schemas"]["CiClass"][];
+            page: components["schemas"]["PageMeta"];
         };
         ConfigurationItem: {
             /** Format: uuid */
@@ -787,23 +646,32 @@ export interface components {
             /** Format: uuid */
             statusId: string;
             status: components["schemas"]["LookupRef"];
+            /** Format: uuid */
             environmentId: string | null;
             environment: components["schemas"]["LookupRef"] | null;
+            /** Format: uuid */
             ownerId: string | null;
             owner: components["schemas"]["OwnerRef"] | null;
+            /** Format: uuid */
             locationId: string | null;
             location: components["schemas"]["LookupRef"] | null;
             hostname: string | null;
             ipAddress: string | null;
             serialNumber: string | null;
             notes: string | null;
-            /** @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits */
+            /**
+             * Format: int32
+             * @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits
+             */
             version: number;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
-            /** @description Set when the CI was deleted (soft delete); history keeps resolving */
+            /**
+             * Format: date-time
+             * @description Set when the CI was deleted (soft delete); history keeps resolving
+             */
             deletedAt: string | null;
             /** @description Class attribute values by attribute key; unset attributes are absent */
             attributes: {
@@ -823,17 +691,121 @@ export interface components {
             data: components["schemas"]["ConfigurationItemSummary"][];
             page: components["schemas"]["PageMeta"];
         };
-        SearchResults: {
-            data: {
-                item: components["schemas"]["ConfigurationItemSummary"];
-                matches: {
-                    /** @description "name", "hostname", "serialNumber", "ipAddress", "notes" or "attributes.<key>" */
-                    field: string;
-                    label: string;
-                    value: string;
-                }[];
-            }[];
+        ConfigurationItemSummary: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: uuid */
+            classId: string;
+            class: components["schemas"]["LookupRef"];
+            /** Format: uuid */
+            statusId: string;
+            status: components["schemas"]["LookupRef"];
+            /** Format: uuid */
+            environmentId: string | null;
+            environment: components["schemas"]["LookupRef"] | null;
+            /** Format: uuid */
+            ownerId: string | null;
+            owner: components["schemas"]["OwnerRef"] | null;
+            /** Format: uuid */
+            locationId: string | null;
+            location: components["schemas"]["LookupRef"] | null;
+            hostname: string | null;
+            ipAddress: string | null;
+            serialNumber: string | null;
+            notes: string | null;
+            /**
+             * Format: int32
+             * @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits
+             */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /**
+             * Format: date-time
+             * @description Set when the CI was deleted (soft delete); history keeps resolving
+             */
+            deletedAt: string | null;
+        };
+        EffectiveAttribute: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            classId: string;
+            key: string;
+            label: string;
+            description: string | null;
+            /** @enum {string} */
+            dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference";
+            isRequired: boolean;
+            /** @description Allowed values when dataType is "enum" */
+            enumValues: string[] | null;
+            /**
+             * Format: uuid
+             * @description When dataType is "reference": the class (or ancestor) the referenced CI must belong to
+             */
+            referenceClassId: string | null;
+            validation: {
+                [key: string]: unknown;
+            } | null;
+            /** @description UI grouping, e.g. "Hardware" */
+            groupName: string | null;
+            /** Format: int32 */
+            sortOrder: number;
+            isActive: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Defined on an ancestor class rather than this one */
+            inherited: boolean;
+            definedOn: {
+                /** Format: uuid */
+                id: string;
+                key: string;
+                name: string;
+            };
+        };
+        /** @description All attributes a CI of this class can carry (not paginated; bounded by the class lineage) */
+        EffectiveAttributeList: {
+            data: components["schemas"]["EffectiveAttribute"][];
+        };
+        Environment: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+            name: string;
+            description: string | null;
+            /** Format: int32 */
+            sortOrder: number;
+            isActive: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        EnvironmentList: {
+            data: components["schemas"]["Environment"][];
             page: components["schemas"]["PageMeta"];
+        };
+        ErrorEnvelope: {
+            error: {
+                /** @enum {string} */
+                code: "VALIDATION_ERROR" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "DATABASE_UNAVAILABLE" | "INTERNAL_ERROR";
+                message: string;
+                details?: {
+                    /** @enum {string} */
+                    in: "body" | "query" | "params" | "header";
+                    /** @description Dotted path, e.g. "attributes.cpu_cores" or "limit" */
+                    field: string;
+                    message: string;
+                    /** @description Machine-readable reason, e.g. "invalid_type", "required", "unique" */
+                    code: string;
+                }[];
+                requestId: string;
+            };
         };
         GraphEdge: {
             /**
@@ -856,74 +828,9 @@ export interface components {
             targetCiId: string;
             notes: string | null;
         };
-        RelationshipGraph: {
-            /** Format: uuid */
-            rootId: string;
-            depth: number;
+        Liveness: {
             /** @enum {string} */
-            direction: "both" | "outgoing" | "incoming";
-            nodes: {
-                /** Format: uuid */
-                id: string;
-                name: string;
-                /** Format: uuid */
-                classId: string;
-                class: components["schemas"]["LookupRef"];
-                /** Format: uuid */
-                statusId: string;
-                status: components["schemas"]["LookupRef"];
-                environmentId: string | null;
-                environment: components["schemas"]["LookupRef"] | null;
-                ownerId: string | null;
-                owner: components["schemas"]["OwnerRef"] | null;
-                locationId: string | null;
-                location: components["schemas"]["LookupRef"] | null;
-                hostname: string | null;
-                ipAddress: string | null;
-                serialNumber: string | null;
-                notes: string | null;
-                /** @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits */
-                version: number;
-                /** Format: date-time */
-                createdAt: string;
-                /** Format: date-time */
-                updatedAt: string;
-                /** @description Set when the CI was deleted (soft delete); history keeps resolving */
-                deletedAt: string | null;
-                /** @description Hops from the root (root = 0) */
-                depth: number;
-            }[];
-            edges: components["schemas"]["GraphEdge"][];
-            /** @description true when maxNodes stopped the expansion early */
-            truncated: boolean;
-        };
-        Status: {
-            /** Format: uuid */
-            id: string;
-            key: string;
-            name: string;
-            description: string | null;
-            sortOrder: number;
-            isActive: boolean;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-            /** @description Counts as "live" in reports (in_service, maintenance) */
-            isOperational: boolean;
-        };
-        Environment: {
-            /** Format: uuid */
-            id: string;
-            key: string;
-            name: string;
-            description: string | null;
-            sortOrder: number;
-            isActive: boolean;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
+            status: "ok";
         };
         Location: {
             /** Format: uuid */
@@ -931,17 +838,32 @@ export interface components {
             key: string;
             name: string;
             description: string | null;
+            /** Format: int32 */
             sortOrder: number;
             isActive: boolean;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
-            /** @description Parent location (region > site > building > floor > room > rack) */
+            /**
+             * Format: uuid
+             * @description Parent location (region > site > building > floor > room > rack)
+             */
             parentId: string | null;
             /** @enum {string} */
             locationType: "region" | "site" | "building" | "floor" | "room" | "rack" | "cloud_region" | "other";
             address: string | null;
+        };
+        LocationList: {
+            data: components["schemas"]["Location"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description Compact reference to a lookup row */
+        LookupRef: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+            name: string;
         };
         Owner: {
             /** Format: uuid */
@@ -957,6 +879,41 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        OwnerList: {
+            data: components["schemas"]["Owner"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        OwnerRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            kind: "person" | "team";
+        };
+        PageMeta: {
+            /** Format: int64 */
+            limit: number;
+            /** Format: int64 */
+            offset: number;
+            /**
+             * Format: int64
+             * @description Total rows matching the filters
+             */
+            total: number;
+        };
+        Readiness: {
+            /** @enum {string} */
+            status: "ready" | "not_ready";
+            /** @enum {string} */
+            database: "ok" | "unreachable";
+            migrations: {
+                /** @description Absent when the database is unreachable */
+                applied?: number;
+                /** @description Migrations shipped with this build */
+                expected: number;
+                upToDate?: boolean;
+            };
         };
         Relationship: {
             /** Format: uuid */
@@ -997,47 +954,145 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
-            /** @description Set when the relationship was removed (soft delete) */
+            /**
+             * Format: date-time
+             * @description Set when the relationship was removed (soft delete)
+             */
             deletedAt: string | null;
+        };
+        RelationshipGraph: {
+            /** Format: uuid */
+            rootId: string;
+            /** Format: int32 */
+            depth: number;
+            /** @enum {string} */
+            direction: "both" | "outgoing" | "incoming";
+            nodes: {
+                /** Format: uuid */
+                id: string;
+                name: string;
+                /** Format: uuid */
+                classId: string;
+                class: components["schemas"]["LookupRef"];
+                /** Format: uuid */
+                statusId: string;
+                status: components["schemas"]["LookupRef"];
+                /** Format: uuid */
+                environmentId: string | null;
+                environment: components["schemas"]["LookupRef"] | null;
+                /** Format: uuid */
+                ownerId: string | null;
+                owner: components["schemas"]["OwnerRef"] | null;
+                /** Format: uuid */
+                locationId: string | null;
+                location: components["schemas"]["LookupRef"] | null;
+                hostname: string | null;
+                ipAddress: string | null;
+                serialNumber: string | null;
+                notes: string | null;
+                /**
+                 * Format: int32
+                 * @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits
+                 */
+                version: number;
+                /** Format: date-time */
+                createdAt: string;
+                /** Format: date-time */
+                updatedAt: string;
+                /**
+                 * Format: date-time
+                 * @description Set when the CI was deleted (soft delete); history keeps resolving
+                 */
+                deletedAt: string | null;
+                /** @description Hops from the root (root = 0) */
+                depth: number;
+            }[];
+            edges: components["schemas"]["GraphEdge"][];
+            /** @description true when maxNodes stopped the expansion early */
+            truncated: boolean;
         };
         RelationshipList: {
             data: components["schemas"]["Relationship"][];
             page: components["schemas"]["PageMeta"];
         };
-        CiClassList: {
-            data: components["schemas"]["CiClass"][];
-            page: components["schemas"]["PageMeta"];
-        };
-        AttributeDefinitionList: {
-            data: components["schemas"]["AttributeDefinition"][];
-            page: components["schemas"]["PageMeta"];
-        };
-        RelationshipTypeList: {
-            data: components["schemas"]["RelationshipType"][];
-            page: components["schemas"]["PageMeta"];
+        RelationshipRule: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            relationshipTypeId: string;
+            /**
+             * Format: uuid
+             * @description Matches this class and all its descendants
+             */
+            sourceClassId: string;
+            /**
+             * Format: uuid
+             * @description Matches this class and all its descendants
+             */
+            targetClassId: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
         RelationshipRuleList: {
             data: components["schemas"]["RelationshipRule"][];
             page: components["schemas"]["PageMeta"];
         };
+        RelationshipType: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+            name: string;
+            description: string | null;
+            /** @description Reads source -> target, e.g. "runs on" */
+            forwardLabel: string;
+            /** @description Reads target -> source, e.g. "hosts" */
+            reverseLabel: string;
+            /** @description false for symmetric types such as connected_to */
+            isDirectional: boolean;
+            /** Format: int32 */
+            sortOrder: number;
+            isActive: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        RelationshipTypeList: {
+            data: components["schemas"]["RelationshipType"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        SearchResults: {
+            data: {
+                item: components["schemas"]["ConfigurationItemSummary"];
+                matches: {
+                    /** @description "name", "hostname", "serialNumber", "ipAddress", "notes" or "attributes.<key>" */
+                    field: string;
+                    label: string;
+                    value: string;
+                }[];
+            }[];
+            page: components["schemas"]["PageMeta"];
+        };
+        Status: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+            name: string;
+            description: string | null;
+            /** Format: int32 */
+            sortOrder: number;
+            isActive: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Counts as "live" in reports (in_service, maintenance) */
+            isOperational: boolean;
+        };
         StatusList: {
             data: components["schemas"]["Status"][];
-            page: components["schemas"]["PageMeta"];
-        };
-        EnvironmentList: {
-            data: components["schemas"]["Environment"][];
-            page: components["schemas"]["PageMeta"];
-        };
-        LocationList: {
-            data: components["schemas"]["Location"][];
-            page: components["schemas"]["PageMeta"];
-        };
-        OwnerList: {
-            data: components["schemas"]["Owner"][];
-            page: components["schemas"]["PageMeta"];
-        };
-        AuditEntryList: {
-            data: components["schemas"]["AuditEntry"][];
             page: components["schemas"]["PageMeta"];
         };
     };
@@ -2495,7 +2550,10 @@ export interface operations {
                         min?: number;
                         /** @description number/integer: maximum */
                         max?: number;
-                        /** @description text: maximum length */
+                        /**
+                         * Format: int64
+                         * @description text: maximum length
+                         */
                         maxLength?: number;
                         /** @description text: regular expression the value must match */
                         pattern?: string;
@@ -2715,7 +2773,10 @@ export interface operations {
                         min?: number;
                         /** @description number/integer: maximum */
                         max?: number;
-                        /** @description text: maximum length */
+                        /**
+                         * Format: int64
+                         * @description text: maximum length
+                         */
                         maxLength?: number;
                         /** @description text: regular expression the value must match */
                         pattern?: string;

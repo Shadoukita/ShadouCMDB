@@ -1,7 +1,9 @@
-// TanStack Query hooks over the typed client. Query keys live here so that
-// mutations invalidate exactly what they change.
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, unwrap, type Schemas } from "./client";
+// TanStack Query composables over the typed client. Query keys live here so that
+// mutations invalidate exactly what they change. Arguments are refs or getters,
+// so a query refetches when the URL or form state it depends on changes.
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
+import { toValue, type MaybeRefOrGetter } from "vue";
+import { ApiError, api, unwrap, type Schemas } from "./client";
 import type { paths } from "./schema";
 
 export type CiSummary = Schemas["ConfigurationItemSummary"];
@@ -43,11 +45,14 @@ export const keys = {
 
 // ---------- Configuration items ----------
 
-export function useCiList(query: CiListQuery) {
-  return useQuery({
-    queryKey: keys.ciList(query),
-    queryFn: ({ signal }) => unwrap(api.GET("/api/v1/configuration-items", { params: { query }, signal })),
-    placeholderData: keepPreviousData,
+export function useCiList(query: MaybeRefOrGetter<CiListQuery>) {
+  return useQuery(() => {
+    const q = toValue(query);
+    return {
+      queryKey: keys.ciList(q),
+      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items", { params: { query: q }, signal })),
+      placeholderData: keepPreviousData,
+    };
   });
 }
 
@@ -62,11 +67,14 @@ export function ciCountQuery(query: CiListQuery) {
   };
 }
 
-export function useCi(id: string | undefined) {
-  return useQuery({
-    queryKey: keys.ci(id ?? ""),
-    enabled: !!id,
-    queryFn: ({ signal }) => unwrap(api.GET("/api/v1/configuration-items/{id}", { params: { path: { id: id! } }, signal })),
+export function useCi(id: MaybeRefOrGetter<string | undefined>) {
+  return useQuery(() => {
+    const ciId = toValue(id) ?? "";
+    return {
+      queryKey: keys.ci(ciId),
+      enabled: !!ciId,
+      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/{id}", { params: { path: { id: ciId } }, signal })),
+    };
   });
 }
 
@@ -81,14 +89,22 @@ export function useCreateCi() {
   });
 }
 
-export function useUpdateCi(id: string) {
+export function useUpdateCi(id: MaybeRefOrGetter<string>) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: CiUpdateBody) => unwrap(api.PATCH("/api/v1/configuration-items/{id}", { params: { path: { id } }, body })),
+    mutationFn: (body: CiUpdateBody) =>
+      unwrap(api.PATCH("/api/v1/configuration-items/{id}", { params: { path: { id: toValue(id) } }, body })),
     onSuccess: (ci) => {
       qc.invalidateQueries({ queryKey: keys.cis });
-      qc.invalidateQueries({ queryKey: keys.audit(id) });
+      qc.invalidateQueries({ queryKey: keys.audit(ci.id) });
       qc.setQueryData(keys.ci(ci.id), ci);
+    },
+    onError: (error) => {
+      // Our copy is outdated. Mark it stale so "Open the current version" refetches,
+      // but do not refetch now: that would re-key the open form and drop the operator's edits.
+      if (error instanceof ApiError && error.code === "VERSION_CONFLICT") {
+        qc.invalidateQueries({ queryKey: keys.ci(toValue(id)), refetchType: "none" });
+      }
     },
   });
 }
@@ -104,57 +120,77 @@ export function useDeleteCi() {
   });
 }
 
-export function useSearch(q: string, limit: number, offset = 0) {
-  return useQuery({
-    queryKey: keys.search(q, limit, offset),
-    enabled: q.trim().length > 0,
-    queryFn: ({ signal }) => unwrap(api.GET("/api/v1/search", { params: { query: { q, limit, offset } }, signal })),
-    placeholderData: keepPreviousData,
+export function useSearch(q: MaybeRefOrGetter<string>, limit: MaybeRefOrGetter<number>, offset: MaybeRefOrGetter<number> = 0) {
+  return useQuery(() => {
+    const text = toValue(q);
+    const l = toValue(limit);
+    const o = toValue(offset);
+    return {
+      queryKey: keys.search(text, l, o),
+      enabled: text.trim().length > 0,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/search", { params: { query: { q: text, limit: l, offset: o } }, signal })),
+      placeholderData: keepPreviousData,
+    };
   });
 }
 
-export function useGraph(id: string, depth: number, direction: "both" | "outgoing" | "incoming") {
-  return useQuery({
-    queryKey: keys.graph(id, depth, direction),
-    queryFn: ({ signal }) =>
-      unwrap(api.GET("/api/v1/configuration-items/{id}/graph", { params: { path: { id }, query: { depth, direction } }, signal })),
+export function useGraph(
+  id: MaybeRefOrGetter<string>,
+  depth: MaybeRefOrGetter<number>,
+  direction: MaybeRefOrGetter<"both" | "outgoing" | "incoming">,
+) {
+  return useQuery(() => {
+    const ciId = toValue(id);
+    const d = toValue(depth);
+    const dir = toValue(direction);
+    return {
+      queryKey: keys.graph(ciId, d, dir),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/configuration-items/{id}/graph", { params: { path: { id: ciId }, query: { depth: d, direction: dir } }, signal })),
+    };
   });
 }
 
-export function useAuditLog(entityId: string) {
-  return useQuery({
-    queryKey: keys.audit(entityId),
-    queryFn: ({ signal }) =>
-      unwrap(
-        api.GET("/api/v1/audit-log", {
-          params: { query: { entityId, sort: "-occurredAt", limit: 50 } },
-          signal,
-        }),
-      ),
+export function useAuditLog(entityId: MaybeRefOrGetter<string>) {
+  return useQuery(() => {
+    const id = toValue(entityId);
+    return {
+      queryKey: keys.audit(id),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityId: id, sort: "-occurredAt", limit: 50 } }, signal })),
+    };
   });
 }
 
 // ---------- Relationships ----------
 
-export function useRelationships(ciId: string) {
-  return useQuery({
-    queryKey: keys.relationships(ciId),
-    queryFn: ({ signal }) =>
-      unwrap(api.GET("/api/v1/relationships", { params: { query: { ciId, limit: MAX_PAGE, sort: "typeName" } }, signal })),
+export function useRelationships(ciId: MaybeRefOrGetter<string>) {
+  return useQuery(() => {
+    const id = toValue(ciId);
+    return {
+      queryKey: keys.relationships(id),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/relationships", { params: { query: { ciId: id, limit: MAX_PAGE, sort: "typeName" } }, signal })),
+    };
   });
 }
 
-export function useRelationshipTypes(sourceClassId: string | undefined, targetClassId: string | undefined) {
-  return useQuery({
-    queryKey: keys.relTypes(sourceClassId ?? "", targetClassId ?? ""),
-    enabled: !!sourceClassId && !!targetClassId,
-    queryFn: ({ signal }) =>
-      unwrap(
-        api.GET("/api/v1/relationship-types", {
-          params: { query: { sourceClassId, targetClassId, isActive: "true", limit: MAX_PAGE } },
-          signal,
-        }),
-      ),
+export function useRelationshipTypes(sourceClassId: MaybeRefOrGetter<string | undefined>, targetClassId: MaybeRefOrGetter<string | undefined>) {
+  return useQuery(() => {
+    const source = toValue(sourceClassId);
+    const target = toValue(targetClassId);
+    return {
+      queryKey: keys.relTypes(source ?? "", target ?? ""),
+      enabled: !!source && !!target,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(
+          api.GET("/api/v1/relationship-types", {
+            params: { query: { sourceClassId: source, targetClassId: target, isActive: "true", limit: MAX_PAGE } },
+            signal,
+          }),
+        ),
+    };
   });
 }
 
@@ -194,13 +230,16 @@ export function useCiClasses() {
 }
 
 /** Every attribute a CI of this class can carry, inherited ones included. The CI form is built from this. */
-export function useClassAttributes(classId: string | undefined) {
-  return useQuery({
-    queryKey: keys.classAttributes(classId ?? ""),
-    enabled: !!classId,
-    staleTime: 60_000,
-    queryFn: ({ signal }) =>
-      unwrap(api.GET("/api/v1/ci-classes/{id}/attributes", { params: { path: { id: classId! } }, signal })).then((r) => r.data),
+export function useClassAttributes(classId: MaybeRefOrGetter<string | undefined>) {
+  return useQuery(() => {
+    const id = toValue(classId) ?? "";
+    return {
+      queryKey: keys.classAttributes(id),
+      enabled: !!id,
+      staleTime: 60_000,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/ci-classes/{id}/attributes", { params: { path: { id } }, signal })).then((r) => r.data),
+    };
   });
 }
 

@@ -4,10 +4,11 @@
 
 | Path | What |
 | --- | --- |
-| `backend/` | The only database client: the Rust server `shadoucmdb` (`Cargo.toml`, `rust/`) and, until SHAA-9, the Node API (`package.json`, `src/`). |
-| `frontend/` | React + Vite + TanStack Query web UI. Talks to the API only. |
+| `backend/` | The only database client: the Rust server `shadoucmdb` (`Cargo.toml`, `src/`, sqlx offline query data in `.sqlx/`, generated `openapi.json`). |
+| `frontend/` | Vue 3 + Vite + TanStack Query web UI. Talks to the API only. |
 | `sql/` | Database artifacts: migrations, bootstrap scripts, ER diagram. |
-| `docs/` | Architecture and data-model documentation. |
+| `docs/` | Architecture, API, deployment and data-model documentation. |
+| `tools/` | Smoke test (`smoke/smoke.ts`, runs against any API URL) and the OpenAPI diff script. |
 | `.github/` | CI and release workflows, pull request template. |
 | `deploy/` | systemd unit, release Dockerfile, READMEs shipped inside the release archives. |
 
@@ -18,10 +19,9 @@
 2. Commit in small, reviewable steps. Write commit subjects in the imperative
    ("Add CI search endpoint") and reference the issue in the body (`Refs SHAA-3`).
 3. Push the branch and open a pull request against `main` using the template.
-4. CI must be green before merging: **CI** (frontend lint, typecheck and build), **Rust** (`cargo fmt
-   --check`, `cargo clippy -D warnings`, `cargo test`, integration against PostgreSQL on Linux and
-   Windows, Docker) and, for PRs that touch the pipeline, **Release** as a dry run. Squash-merge,
-   then delete the branch.
+4. CI must be green before merging: **CI** (frontend typecheck, API types, build), **Rust** (fmt, clippy,
+   tests, `openapi --check`, PostgreSQL integration and smoke suite, Windows, Docker) and, for PRs that
+   touch the pipeline, **Release** as a dry run. Squash-merge, then delete the branch.
 
 Never push directly to `main`, force-push a shared branch, or rewrite merged history.
 

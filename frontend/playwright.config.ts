@@ -1,0 +1,29 @@
+import { defineConfig, devices } from "@playwright/test";
+
+// End-to-end walk of the UI against a real ShadouCMDB API (demo seed recommended).
+//   E2E_BASE_URL=http://localhost:4173 npm run test:e2e -w frontend       # an already-running UI
+//   API_PROXY_TARGET=http://<api-host>:3000 npm run test:e2e -w frontend  # starts `vite` itself, proxying /api
+// The tests create their own uniquely named CIs and classes, so they can run against a shared database.
+const baseURL = process.env.E2E_BASE_URL;
+const proxyTarget = process.env.API_PROXY_TARGET;
+if (!baseURL && !proxyTarget) {
+  throw new Error("Set E2E_BASE_URL (a running UI) or API_PROXY_TARGET (the API to proxy a dev server to).");
+}
+
+export default defineConfig({
+  testDir: "e2e",
+  // The specs build on each other's data (create → edit → relate → delete), so run them in order.
+  fullyParallel: false,
+  workers: 1,
+  retries: 0,
+  reporter: [["list"]],
+  use: {
+    baseURL: baseURL ?? "http://localhost:5199",
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+  },
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } }],
+  webServer: baseURL
+    ? undefined
+    : { command: "npx vite --port 5199 --strictPort", url: "http://localhost:5199", reuseExistingServer: false },
+});

@@ -20,6 +20,7 @@ on:
       - backend/Cargo.toml
       - backend/Cargo.lock
       - backend/.cargo/**
+      - backend/build.rs
   workflow_dispatch:
 
 permissions:
@@ -31,6 +32,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # sqlx checks its compile-time queries against backend/.sqlx, not a live database.
+  SQLX_OFFLINE: "true"
   IMAGE: ghcr.io/shadoukita/shadoucmdb
   ZIG_VERSION: 0.14.1
   # Throwaway credentials for the CI-only PostgreSQL service containers.

@@ -1,40 +1,40 @@
-# Local development stack. There is deliberately NO PostgreSQL service here:
-# the backend connects to the external database described in .env
-# (see .env.example). Point PGHOST/DATABASE_URL at any reachable PostgreSQL 14+.
+# Local stack: the shadoucmdb image (API + web UI) built from ./Dockerfile.
+# There is deliberately NO PostgreSQL service here: the server connects to the
+# external database described in .env (see .env.example). Point
+# PGHOST/DATABASE_URL at any reachable PostgreSQL 14+.
 #
-#   cp .env.example .env            # then edit the connection settings
-#   docker compose run --rm migrate # apply migrations
-#   docker compose run --rm seed    # load reference data (add --demo for sample CIs)
+#   cp .env.example .env                        # then edit the connection settings
+#   docker compose run --rm migrate             # apply migrations
+#   docker compose run --rm seed                # load reference data
+#   docker compose run --rm seed seed --demo    # ... plus a small demo inventory
 #   docker compose up api
 #
 # If your database runs on this machine outside Docker, use
 # PGHOST=host.docker.internal (mapped below), not localhost.
+#
+# The image is distroless (no shell, no curl), so there is no Docker
+# healthcheck; probe GET /healthz (liveness) and GET /readyz (readiness) from
+# your orchestrator or load balancer instead.
 
-x-backend: &backend
+x-shadoucmdb: &shadoucmdb
   build:
     context: .
-    dockerfile: backend/Dockerfile
   env_file: .env
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
 services:
   api:
-    <<: *backend
+    <<: *shadoucmdb
     ports:
       - "${API_PORT:-3000}:${API_PORT:-3000}"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:${API_PORT:-3000}/readyz"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
 
   migrate:
-    <<: *backend
-    command: ["node", "dist/db/migrate.js"]
+    <<: *shadoucmdb
+    command: ["migrate"]
     profiles: ["tools"]
 
   seed:
-    <<: *backend
-    command: ["node", "dist/db/seed.js"]
+    <<: *shadoucmdb
+    command: ["seed"]
     profiles: ["tools"]

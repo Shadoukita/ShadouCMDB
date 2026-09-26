@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE ci_relationships\n         SET relationship_type_id = COALESCE($2, relationship_type_id),\n             notes = CASE WHEN $3 THEN $4 ELSE notes END\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c982899d6852afa6514252e8105c32c0fa60edbc76ee178ec70d084e54faa9e4"
+}

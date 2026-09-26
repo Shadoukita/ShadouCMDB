@@ -8,7 +8,7 @@ that need to look at other rows), not only in the API.
 
 Migrations: [`sql/migrations/`](../sql/migrations/)
 (`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`).
-Drizzle definitions: `backend/src/db/schema/`.
+SQL that reads and writes them: `backend/src/data/`.
 
 ## Tables
 
@@ -52,7 +52,7 @@ All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which 
   A Location-class CI sets its core `location_id` to the matching `locations` row, which ties the
   relationship graph to the lookup hierarchy used for filtering.
 
-### Seeded reference data (`npm run db:seed`)
+### Seeded reference data (`shadoucmdb seed`)
 
 - Classes: `hardware` (abstract) › `server`, `network_device`; `virtual_machine`, `application`,
   `database`, `service`, `location`. There are 35 attribute definitions across them, including an
@@ -116,7 +116,7 @@ VALUES ((SELECT id FROM ci_classes WHERE key = 'load_balancer'), 'vip', 'Virtual
 ```
 
 Load balancer CIs automatically inherit the `network_device` and `hardware` attributes and
-the `located_in` / `connected_to` rules. `npm run db:verify -w backend` exercises exactly this.
+the `located_in` / `connected_to` rules. `shadoucmdb verify` exercises exactly this.
 
 ## Known limits, deliberately deferred
 
