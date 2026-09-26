@@ -16,6 +16,10 @@ use clap::{Parser, Subcommand};
 
 use config::Config;
 
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Debug, Parser)]
 #[command(name = "shadoucmdb", version, about = "ShadouCMDB server and admin commands")]
 struct Cli {

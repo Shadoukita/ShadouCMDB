@@ -44,6 +44,11 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# musl's allocator serialises on one lock and scales poorly across threads; the
+# static release builds (x86_64/aarch64-unknown-linux-musl) use mimalloc instead.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
 
