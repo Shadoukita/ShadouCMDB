@@ -1,4 +1,4 @@
-//! Structured logs: one JSON object per line (like the Node API's pino output),
+//! Structured logs: one JSON object per line,
 //! to stdout or, with `--log-file`, appended to a file.
 
 use std::fs::OpenOptions;

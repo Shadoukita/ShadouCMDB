@@ -18,7 +18,6 @@ FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS ui
 WORKDIR /src
 COPY package.json package-lock.json ./
 COPY frontend/package.json frontend/
-COPY backend/package.json backend/
 RUN npm ci --workspace frontend --include-workspace-root --no-audit --no-fund
 COPY frontend frontend
 # Until the frontend has a build script this yields an empty dist/, and the
@@ -45,8 +44,11 @@ WORKDIR /src
 COPY sql sql
 COPY --from=ui /src/frontend/dist frontend/dist
 COPY backend/Cargo.toml backend/Cargo.lock backend/build.rs backend/
-COPY backend/rust backend/rust
+COPY backend/.sqlx backend/.sqlx
+COPY backend/src backend/src
 WORKDIR /src/backend
+# sqlx checks its queries against backend/.sqlx instead of a live database.
+ENV SQLX_OFFLINE=true
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/backend/target,id=shadoucmdb-target-${TARGETARCH},sharing=locked \
     set -eu; . /build.env; \

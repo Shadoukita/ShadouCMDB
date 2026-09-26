@@ -2,13 +2,14 @@
  * End-to-end smoke test against a running API (which must be connected to a
  * real, migrated and seeded PostgreSQL). It exercises every operation in the
  * OpenAPI document, including the error paths, and fails if any operation
- * was not called, any status is unexpected, or anything returns 5xx.
+ * was not called, any status is unexpected, anything returns 5xx, or a
+ * response body does not match the schema the document declares for it.
  *
- *   API_URL=http://localhost:3000 npm run smoke -w backend
+ *   API_URL=http://localhost:3000 node tools/smoke/smoke.ts   # Node.js 22.18+, no dependencies
  *
- * Run the API with NODE_ENV=development (or test) so it also checks each
- * response against its OpenAPI schema; a mismatch surfaces here as a 500.
- * The script only creates rows with a unique run suffix; it never deletes seed data.
+ * The API can run anywhere (a local binary, a container, a remote host); the
+ * script only needs its URL. It only creates rows with a unique run suffix and
+ * never deletes seed data (`shadoucmdb seed --demo` must have been run).
  */
 
 const BASE = (process.env.API_URL ?? '').replace(/\/$/, '');
@@ -26,15 +27,68 @@ interface Op {
   path: string;
   operationId: string;
   regex: RegExp;
+  responses: Record<string, Json>;
 }
 let ops: Op[] = [];
+let schemas: Record<string, Json> = {};
 const covered = new Set<string>();
 const failures: string[] = [];
 let calls = 0;
+let checkedBodies = 0;
 
-function operationFor(method: string, url: string): string | undefined {
+function operationFor(method: string, url: string): Op | undefined {
   const path = url.split('?')[0]!;
-  return ops.find((o) => o.method === method && o.regex.test(path))?.operationId;
+  return ops.find((o) => o.method === method && o.regex.test(path));
+}
+
+// --- Response bodies against the declared schemas (the JSON Schema subset the spec uses) ---
+const typeOf = (v: unknown) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v === 'number' && Number.isInteger(v) ? 'integer' : typeof v);
+
+function schemaErrors(schema: Json, value: unknown, path: string, out: string[]): void {
+  if (!schema || typeof schema !== 'object') return;
+  if (schema.$ref) return schemaErrors(schemas[String(schema.$ref).split('/').pop()!], value, path, out);
+  for (const key of ['anyOf', 'oneOf'] as const) {
+    if (Array.isArray(schema[key])) {
+      const results = schema[key].map((s: Json) => {
+        const e: string[] = [];
+        schemaErrors(s, value, path, e);
+        return e;
+      });
+      if (!results.some((e: string[]) => e.length === 0)) out.push(`${path}: matches none of ${key} (${results.map((e: string[]) => e[0]).join(' / ')})`);
+      return;
+    }
+  }
+  if (schema.type) {
+    const types: string[] = Array.isArray(schema.type) ? schema.type : [schema.type];
+    const t = typeOf(value);
+    if (!types.includes(t) && !(t === 'integer' && types.includes('number'))) return void out.push(`${path}: expected ${types.join('|')}, got ${t}`);
+  }
+  if (schema.enum && !schema.enum.some((e: unknown) => e === value)) out.push(`${path}: ${JSON.stringify(value)} not in enum`);
+  if ('const' in schema && schema.const !== value) out.push(`${path}: expected ${JSON.stringify(schema.const)}`);
+  if (typeOf(value) === 'array' && schema.items) (value as unknown[]).forEach((v, i) => schemaErrors(schema.items, v, `${path}[${i}]`, out));
+  if (typeOf(value) === 'object') {
+    const obj = value as Record<string, unknown>;
+    for (const r of schema.required ?? []) if (!(r in obj)) out.push(`${path}.${r}: required but missing`);
+    for (const [k, v] of Object.entries(obj)) {
+      if (schema.properties?.[k]) schemaErrors(schema.properties[k], v, `${path}.${k}`, out);
+      else if (schema.additionalProperties === false) out.push(`${path}.${k}: not declared in the schema`);
+      else if (typeof schema.additionalProperties === 'object') schemaErrors(schema.additionalProperties, v, `${path}.${k}`, out);
+    }
+  }
+}
+
+function checkResponse(op: Op, status: number, json: unknown): void {
+  const declared = op.responses[String(status)];
+  if (!declared) return void failures.push(`${op.operationId}: status ${status} is not documented`);
+  const schema = declared.content?.['application/json']?.schema;
+  if (!schema) return;
+  checkedBodies++;
+  const errors: string[] = [];
+  schemaErrors(schema, json, '$', errors);
+  if (errors.length) {
+    console.log(`FAIL schema: ${op.operationId} ${status}: ${errors.slice(0, 3).join('; ')}`);
+    failures.push(`${op.operationId} ${status} response does not match its schema: ${errors.slice(0, 5).join('; ')}`);
+  }
 }
 
 async function call(method: string, url: string, body?: unknown, expect?: number, headers: Record<string, string> = {}): Promise<{ status: number; json: Json }> {
@@ -51,7 +105,10 @@ async function call(method: string, url: string, body?: unknown, expect?: number
   const json = text ? JSON.parse(text) : undefined;
   calls++;
   const op = operationFor(method, url);
-  if (op) covered.add(op);
+  if (op) {
+    covered.add(op.operationId);
+    checkResponse(op, res.status, json);
+  }
   const ok = (expect === undefined ? res.status < 400 : res.status === expect) && res.status < 500;
   const summary = summarise(json);
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${method.padEnd(6)} ${url} -> ${res.status}${summary ? `  ${summary}` : ''}`);
@@ -89,7 +146,7 @@ const del = (url: string, expect = 204) => call('DELETE', url, undefined, expect
 async function idByKey(collection: string, key: string): Promise<string> {
   const { json } = await get(`/api/v1/${collection}?limit=200&q=${key}`);
   const row = json.data.find((r: Json) => r.key === key);
-  if (!row) throw new Error(`seed row ${collection}/${key} not found; run npm run db:seed first`);
+  if (!row) throw new Error(`seed row ${collection}/${key} not found; run \`shadoucmdb seed --demo\` first`);
   return row.id;
 }
 
@@ -102,8 +159,10 @@ async function main() {
       path,
       operationId: op.operationId as string,
       regex: new RegExp(`^${path.replace(/\{[^}]+\}/g, '[^/]+')}$`),
+      responses: op.responses ?? {},
     })),
   );
+  schemas = spec.components?.schemas ?? {};
   console.log(`# OpenAPI ${spec.openapi}: ${ops.length} operations`);
   await get('/healthz');
   const ready = await get('/readyz');
@@ -319,7 +378,7 @@ async function main() {
 
   // --- Coverage -------------------------------------------------------------------
   const missing = ops.filter((o) => !covered.has(o.operationId));
-  console.log(`\n# ${calls} requests, ${covered.size}/${ops.length} OpenAPI operations exercised`);
+  console.log(`\n# ${calls} requests, ${covered.size}/${ops.length} OpenAPI operations exercised, ${checkedBodies} response bodies checked against their schemas`);
   for (const m of missing) failures.push(`operation not exercised: ${m.method} ${m.path} (${m.operationId})`);
   if (failures.length) {
     console.log(`\n${failures.length} FAILURE(S):\n- ${failures.join('\n- ')}`);

@@ -7,12 +7,6 @@ description = "ShadouCMDB server: REST API, migrations and the embedded web UI i
 publish = false
 build = "build.rs"
 
-# The Node API (package.json, src/) shares this folder until the Rust port replaces
-# it (SHAA-9), so the Rust sources live in rust/.
-[[bin]]
-name = "shadoucmdb"
-path = "rust/main.rs"
-
 [dependencies]
 anyhow = "1"
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "query", "tokio", "tracing"] }

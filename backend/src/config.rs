@@ -1,9 +1,8 @@
 //! Runtime configuration, read only from environment variables.
 //!
-//! The variables and their semantics are the ones documented in `.env.example`
-//! (shared with the Node API). There are no host/port/user defaults for the
-//! database: PostgreSQL is an external service and the operator must say where
-//! it lives.
+//! The variables and their semantics are the ones documented in `.env.example`.
+//! There are no host/port/user defaults for the database: PostgreSQL is an
+//! external service and the operator must say where it lives.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -98,9 +97,7 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Config> {
         let mut r = Reader { errors: Vec::new() };
 
-        // NODE_ENV is validated for compatibility with the Node API but changes nothing here;
         // LOG_LEVEL is applied by logging::init before the config is loaded.
-        r.one_of("NODE_ENV", &["development", "production", "test"], "production");
         r.one_of("LOG_LEVEL", &["fatal", "error", "warn", "info", "debug", "trace", "silent"], "info");
         let api_host = r.string("API_HOST", "0.0.0.0");
         let api_port = r.int::<u16>("API_PORT", 1, 65535).unwrap_or(3000);
