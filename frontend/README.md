@@ -138,7 +138,17 @@ which actions are hidden, disable/enable the account, reset its password, and re
 The data model spec builds a lookup list and a class with attributes in the editors (drag and arrow reordering,
 moving between sections, an API error at its field), creates a CI from the generated form, archives the class,
 adds a relationship type and rule, checks the lookup delete guards, and the fresh-install guidance.
+
+`permissions.spec.ts` checks the same rules where they are enforced, at the API: a user with a restricted profile
+gets `403 FORBIDDEN` from every administration and data-model endpoint and from class operations the profile
+lacks (and the administrator reads back that nothing changed), anonymous calls get `401`, writes without the CSRF
+token are refused, signing out, disabling the account or resetting its password ends the session on the server,
+and repeated wrong passwords lock the username with `429`.
 Any page error or Vue warning fails the test.
+
+`first-run.spec.ts` walks the real first-run setup, nothing mocked, and only runs when `E2E_FRESH_BASE_URL` points
+at a second API whose database is migrated but has no user. It creates the first administrator there, so give it
+a newly migrated database for each run (CI starts one on port 3001).
 
 The tests expect the demo inventory (`shadoucmdb seed --demo`) and create their own uniquely named records.
 They run signed in: `e2e/global-setup.ts` completes first-run setup on a database without users, or signs in as
@@ -149,6 +159,7 @@ npx playwright install chromium                                           # once
 export E2E_USERNAME=admin E2E_PASSWORD=...                                # unless the database has no users yet
 API_PROXY_TARGET=http://<api-host>:3000 npm run test:e2e -w frontend      # starts a dev server on :5199
 E2E_BASE_URL=http://localhost:4173 npm run test:e2e -w frontend           # or test an already-served build
+E2E_FRESH_BASE_URL=http://localhost:3001 ...                              # also run first-run.spec.ts
 ```
 
 Set `E2E_SCREENSHOT_DIR=<dir>` to save a screenshot of each step.

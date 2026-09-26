@@ -80,12 +80,54 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
 
 - The proxy must pass `X-Forwarded-Proto: https` (or `Forwarded: proto=https`). The server
   then marks the cookies `Secure`, so a browser never sends them over plain HTTP. If the proxy
-  cannot send that header, set `COOKIE_SECURE=always`.
+  cannot send that header, set `COOKIE_SECURE=always`. With the default `COOKIE_SECURE=auto`,
+  the first session cookie issued without `Secure` logs a one-time warning naming this fix;
+  `COOKIE_SECURE=never` is taken as deliberate and is not warned about.
 - Serve the UI and the API from the same origin (the embedded UI does this). A UI on another
-  origin needs that origin in `CORS_ORIGINS`; those origins may send the session cookie.
+  origin needs that origin in `CORS_ORIGINS`, spelled exactly as the browser sends it
+  (`https://cmdb.example.com`: no path, no trailing slash); those origins may send the session
+  cookie. `*` and anything that is not an origin stop the server at startup.
 - `SESSION_IDLE_TIMEOUT_MINUTES` (default 12 h) and `SESSION_MAX_AGE_HOURS` (default 7 days)
   bound how long a session lives. Sessions are stored in PostgreSQL, so they survive restarts
   and work across several instances. The login backoff counters are per process.
+
+The server sets these security headers itself, on every response it sends (the web UI, the
+API and Swagger UI at `/docs`). Do not add them again at the proxy: two
+`Content-Security-Policy` headers are two independently enforced policies, and duplicate values
+of the others are confusing at best. In particular, a proxy cannot bolt violation reporting
+onto our policy: a second header containing only `report-uri`/`report-to` is a separate policy
+that blocks nothing and so reports nothing, while violations of ours still go nowhere. The
+proxy's only alternative is to strip our header and serve a complete policy of its own, which
+drifts from ours with every release. Use `CSP_REPORT_URI` instead (below). Headers the server
+does not set (for example `Permissions-Policy`) are the proxy's to add.
+
+| Header | Value | Sent on |
+| --- | --- | --- |
+| `X-Content-Type-Options` | `nosniff` | every response |
+| `Referrer-Policy` | `no-referrer` | every response |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | only requests that arrived over HTTPS (`X-Forwarded-Proto: https` or `Forwarded: proto=https`); never over plain HTTP, so a lab or LAN install is not locked onto a scheme it cannot serve |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'` | HTML documents only (the web UI and `/docs`), not JSON |
+
+`includeSubDomains` tells browsers to use HTTPS for every subdomain of the host name the
+server is reached by, for a year. If that name has subdomains that cannot serve HTTPS, have the
+proxy strip or override the header. Because of `frame-ancestors 'none'` the UI cannot be
+embedded in a frame on any site, including your own. `connect-src 'self'` means the embedded
+UI can only call the API on its own origin. If you point the UI at another origin
+(`VITE_API_BASE_URL` at build time, or `apiBaseUrl` in `config.js`), serve that UI from your
+own web server and set its CSP there.
+
+`CSP_REPORT_URI` (default unset: no reporting) makes browsers report CSP violations, so a policy
+break in production shows up somewhere other than a browser console nobody watches. Point it at
+an absolute `http`/`https` URL or at a path on this server (`/csp-reports`) where your own
+collector listens; reports go only there, the ShadouCMDB project never receives them. Setting it
+appends `; report-uri <uri>` to the policy. When the request arrived over HTTPS and the URI is
+`https:` or a path, it also appends `; report-to csp` and sends `Reporting-Endpoints: csp="<uri>"`.
+Chromium and Firefox ignore `report-uri` whenever `report-to` is present, and drop Reporting API
+endpoints that are not HTTPS, so on plain HTTP or with an `http:` collector `report-uri` is sent
+alone, since it is the one that still delivers. A collector on another origin needs no change to
+`connect-src`: reports are not subject to the page's policy. Whitespace, `;`, `,`, `"`, a scheme
+other than `http`/`https` and `user:password@` are rejected at startup, because the value becomes
+part of the policy.
 
 ## Release downloads
 
