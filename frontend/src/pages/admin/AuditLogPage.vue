@@ -19,21 +19,37 @@ useDocumentTitle("Audit log");
 type EntityType = NonNullable<AuditListQuery["entityType"]>;
 type Action = NonNullable<AuditListQuery["action"]>;
 
-const ENTITY_TYPES: { value: EntityType; label: string }[] = [
-  { value: "configuration_items", label: "Configuration item" },
-  { value: "ci_relationships", label: "Relationship" },
-  { value: "ci_classes", label: "CI class" },
-  { value: "ci_attribute_definitions", label: "Attribute definition" },
-  { value: "relationship_types", label: "Relationship type" },
-  { value: "relationship_type_rules", label: "Relationship rule" },
-  { value: "statuses", label: "Status" },
-  { value: "environments", label: "Environment" },
-  { value: "locations", label: "Location" },
-  { value: "owners", label: "Owner" },
-  { value: "users", label: "User" },
-  { value: "permission_profiles", label: "Permission profile" },
-];
-const ACTIONS: Action[] = ["create", "update", "delete", "restore"];
+// Records keyed by the OpenAPI enums: a value added to the API fails the typecheck until it is offered here.
+const ENTITY_LABELS: Record<EntityType, string> = {
+  configuration_items: "Configuration item",
+  ci_relationships: "Relationship",
+  ci_classes: "CI class",
+  ci_attribute_definitions: "Attribute definition",
+  relationship_types: "Relationship type",
+  relationship_type_rules: "Relationship rule",
+  statuses: "Status",
+  environments: "Environment",
+  locations: "Location",
+  owners: "Owner",
+  users: "User",
+  permission_profiles: "Permission profile",
+  ui_settings: "UI settings",
+  ui_assets: "UI asset",
+  sessions: "Sign-in / session",
+};
+const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));
+const ACTION_SET: Record<Action, true> = {
+  create: true,
+  update: true,
+  delete: true,
+  restore: true,
+  "login.success": true,
+  "login.failure": true,
+  "login.locked": true,
+  logout: true,
+  "session.revoke": true,
+};
+const ACTIONS = Object.keys(ACTION_SET) as Action[];
 const entityLabel = (t: string) => ENTITY_TYPES.find((e) => e.value === t)?.label ?? t;
 
 const session = useSessionStore();
@@ -70,10 +86,20 @@ function clearFilters() {
   update({ actorId: undefined, actorName: undefined, entityType: undefined, action: undefined });
 }
 
+const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+
 /** A readable name for the changed record, taken from its before/after snapshot. */
 function recordName(e: AuditEntry): string {
   const snap = (e.newValue ?? e.oldValue) as Record<string, unknown> | null;
   if (snap && typeof snap === "object") {
+    if (e.entityType === "sessions") {
+      // Sign-in events: the (attempted) username and the client address. Both are
+      // attacker-controlled text, so they are only ever interpolated, never v-html.
+      const session = (snap.session ?? {}) as Record<string, unknown>;
+      const who = str(snap.username) ?? str(snap.attemptedUsername) ?? "(unknown user)";
+      const ip = str(snap.ipAddress) ?? str(session.ipAddress);
+      return ip ? `${who} from ${ip}` : who;
+    }
     for (const k of ["name", "username", "label", "key"]) if (typeof snap[k] === "string") return snap[k] as string;
     if (e.entityType === "ci_relationships") {
       const s = snap.source as { name?: string } | undefined;
@@ -82,6 +108,21 @@ function recordName(e: AuditEntry): string {
     }
   }
   return e.entityId.slice(0, 8);
+}
+
+/** Hover text for sign-in events: the browser and, for revocations and lockouts, why. */
+function recordTitle(e: AuditEntry): string | undefined {
+  if (e.entityType !== "sessions") return undefined;
+  const snap = (e.newValue ?? {}) as Record<string, unknown>;
+  const session = (snap.session ?? {}) as Record<string, unknown>;
+  const parts = [
+    str(snap.reason) && `Reason: ${snap.reason}`,
+    typeof snap.lockedForSeconds === "number" && `Locked for ${snap.lockedForSeconds}s`,
+    str(session.ipAddress) && str(snap.ipAddress) !== str(session.ipAddress) && `Session opened from ${session.ipAddress}`,
+    str(snap.peerIpAddress) && `Peer address: ${snap.peerIpAddress}`,
+    (str(snap.userAgent) || str(session.userAgent)) && `Browser: ${str(snap.userAgent) ?? str(session.userAgent)}`,
+  ].filter((p): p is string => typeof p === "string");
+  return parts.length ? parts.join("\n") : undefined;
 }
 
 function recordLink(e: AuditEntry): RouteLocationRaw | undefined {
@@ -102,7 +143,8 @@ function changedFields(e: AuditEntry): string[] {
   return [...new Set([...Object.keys(o), ...Object.keys(n)])].filter((k) => !skip.has(k) && JSON.stringify(o[k]) !== JSON.stringify(n[k]));
 }
 
-const actionTone = (action: string) => (action === "delete" ? "danger" : action === "create" ? "ok" : "");
+const actionTone = (action: string) =>
+  ["delete", "login.failure", "login.locked"].includes(action) ? "danger" : ["create", "login.success"].includes(action) ? "ok" : "";
 </script>
 
 <template>
@@ -150,7 +192,7 @@ const actionTone = (action: string) => (action === "delete" ? "danger" : action 
     </div>
     <LoadingState v-if="list.isLoading.value" label="Loading audit log…" />
     <EmptyState v-if="list.data.value && total === 0" :title="filtered ? 'No changes match these filters' : 'No changes recorded yet'">
-      {{ filtered ? "Adjust or clear the filters above." : "Every create, update and delete is recorded here with the user who made it." }}
+      {{ filtered ? "Adjust or clear the filters above." : "Every change and every sign-in is recorded here with the user who made it." }}
     </EmptyState>
 
     <template v-if="rows.length > 0">
@@ -175,7 +217,7 @@ const actionTone = (action: string) => (action === "delete" ? "danger" : action 
               <td><AuditActor :entry="e" /></td>
               <td><span :class="['badge', actionTone(e.action)]">{{ e.action }}</span></td>
               <td>{{ entityLabel(e.entityType) }}</td>
-              <td>
+              <td :title="recordTitle(e)">
                 <RouterLink v-if="recordLink(e)" :to="recordLink(e)!">{{ recordName(e) }}</RouterLink>
                 <template v-else>{{ recordName(e) }}</template>
               </td>
