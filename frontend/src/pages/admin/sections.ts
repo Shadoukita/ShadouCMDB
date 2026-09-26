@@ -3,8 +3,7 @@ import type { GlobalPermission } from "../../api/admin";
 /**
  * The Administration area's sections, in sub-navigation order and grouped under
  * headings. A section is shown to users holding any of its permissions
- * (administrators hold all). Sections planned for later phases (customization,
- * export/import) are added here with their route when built.
+ * (administrators hold all).
  */
 export interface AdminSection {
   key: string;
@@ -22,6 +21,8 @@ export const ADMIN_SECTIONS: AdminSection[] = [
   { key: "relationships", label: "Relationship types", group: "Data model", to: "/admin/relationships", permissions: ["datamodel.manage"] },
   { key: "lookups", label: "Lookups", group: "Data model", to: "/admin/lookups", permissions: ["datamodel.manage"] },
   { key: "templates", label: "Templates", group: "Data model", to: "/admin/templates", permissions: ["datamodel.manage"] },
+  { key: "customization", label: "Customization", group: "System", to: "/admin/customization", permissions: ["customization.manage"] },
+  { key: "config", label: "Export / import", group: "System", to: "/admin/config", permissions: ["config.export_import"] },
   { key: "audit", label: "Audit log", group: "System", to: "/admin/audit", permissions: ["audit.view"] },
 ];
 

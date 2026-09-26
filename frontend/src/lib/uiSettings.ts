@@ -17,6 +17,8 @@ import { groupAttributes } from "./attributes";
  * by key, never by id.
  */
 
+export const EMPTY_FILTERS: UiListFilters = { q: null, statusKeys: [], environmentKeys: [], locationKeys: [] };
+
 export function emptyDocument(): UiSettingsDocument {
   return {
     branding: { appName: null, primaryColor: null, accentColor: null, defaultTheme: "system" },
@@ -34,9 +36,16 @@ export function normalizeDocument(doc: Partial<UiSettingsDocument> | undefined):
   return {
     branding: { ...e.branding, ...d.branding },
     navigation: { entries: d.navigation?.entries ?? [] },
-    dashboard: { widgets: d.dashboard?.widgets ?? null },
-    listViews: d.listViews ?? [],
-    layouts: d.layouts ?? [],
+    dashboard: {
+      widgets:
+        d.dashboard?.widgets?.map((w) =>
+          w.type === "saved_search"
+            ? { ...w, search: { classKeys: [], includeSubclasses: false, sort: null, ...w.search, filters: { ...EMPTY_FILTERS, ...w.search?.filters } } }
+            : w,
+        ) ?? null,
+    },
+    listViews: (d.listViews ?? []).map((v) => ({ columns: [], defaultSort: null, pageSize: null, ...v, defaultFilters: { ...EMPTY_FILTERS, ...v.defaultFilters } })),
+    layouts: (d.layouts ?? []).map((l) => ({ ...l, panels: l.panels ?? [], hiddenFields: l.hiddenFields ?? [], readOnlyFields: l.readOnlyFields ?? [] })),
   };
 }
 
@@ -176,10 +185,14 @@ export interface NavGroup {
 export function buildNav(entries: readonly UiNavEntry[], classes: readonly NavClass[], showPage: (p: UiPage) => boolean): NavGroup[] {
   const byKey = new Map(menuClasses(classes).map((c) => [c.key, c]));
   const groups: NavGroup[] = [];
-  const push = (heading: string | null, item: NavLinkItem, id = heading ?? "pages") => {
-    const last = groups[groups.length - 1];
-    if (last && last.heading === heading && last.id === id) last.items.push(item);
-    else groups.push({ id: `${id}-${groups.length}`, heading, items: [item] });
+  /** Consecutive pages and loose classes share a group; a section always starts its own. */
+  let open: NavGroup | null = null;
+  const push = (heading: string | null, item: NavLinkItem) => {
+    if (open && open.heading === heading) open.items.push(item);
+    else {
+      open = { id: `${heading ?? "pages"}-${groups.length}`, heading, items: [item] };
+      groups.push(open);
+    }
   };
   const classItem = (key: string, label: string | null | undefined): NavLinkItem | null => {
     const c = byKey.get(key);
@@ -198,6 +211,7 @@ export function buildNav(entries: readonly UiNavEntry[], classes: readonly NavCl
       const items = (e.items ?? []).filter((i) => !i.hidden).map((i) => classItem(i.classKey, i.label)).filter((i): i is NavLinkItem => !!i);
       if (items.length === 0) continue;
       groups.push({ id: `section:${e.key}`, heading: e.label || e.key || "", items });
+      open = null;
     }
   }
   return groups;

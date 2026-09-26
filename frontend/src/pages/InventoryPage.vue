@@ -12,6 +12,7 @@ import LookupSelect from "../components/LookupSelect.vue";
 import PaginationBar from "../components/PaginationBar.vue";
 import { useAppSettings } from "../lib/appSettings";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
+import { isInAppNavigation } from "../lib/navigation";
 import { flattenTree } from "../lib/tree";
 import { attributeKey, BUILTIN, DEFAULT_COLUMNS, fieldLabel, hasFilters, listViewFor, sortParam } from "../lib/uiSettings";
 import { useSessionStore } from "../stores/session";
@@ -23,7 +24,7 @@ import { useSessionStore } from "../stores/session";
  *
  * A class's list view (Administration › Customization › List views) sets its
  * columns, default sort and page size, and default filters that are written
- * into the URL when the class list is opened without any.
+ * into the URL when the operator navigates to the class list without any.
  */
 type SortField = NonNullable<CiListQuery["sort"]>;
 
@@ -69,19 +70,27 @@ const attrDefs = computed(() => attrs.data.value ?? []);
 const columnLabel = (field: string) => fieldLabel(field, attrDefs.value);
 const columnSort = (field: string) => BUILTIN.get(field)?.sort;
 
-// Default filters: opening a class list with nothing but the class in the URL writes the view's
-// filters into it (once per class), so they show in the toolbar and the operator can change them.
+// Default filters: navigating to a class list (menu, links) with nothing but the class in the URL
+// writes the view's filters into it, so they show in the toolbar and the operator can change them.
+// A reload or Back shows the URL as it is, so a cleared filter stays cleared.
 const statusLookup = useLookup("statuses");
 const envLookup = useLookup("environments");
 const locationLookup = useLookup("locations");
-const defaultsDoneFor = ref<string | null>(null);
+const defaultsFor = ref<string | null>(null);
 watch(
-  () => [get("classId"), currentClass.value, settings.query.isFetched.value, view.value, statusLookup.data.value, envLookup.data.value, locationLookup.data.value] as const,
+  () => get("classId"),
+  (id) => {
+    defaultsFor.value = id && isInAppNavigation() && Object.keys(route.query).every((k) => k === "classId") ? id : null;
+  },
+  { immediate: true },
+);
+watch(
+  () => [defaultsFor.value, currentClass.value, settings.query.isFetched.value, view.value, statusLookup.data.value, envLookup.data.value, locationLookup.data.value] as const,
   ([classId]) => {
-    if (!classId || defaultsDoneFor.value === classId || !currentClass.value || !settings.query.isFetched.value) return;
+    if (!classId || classId !== get("classId") || !currentClass.value || !settings.query.isFetched.value) return;
     const f = view.value?.defaultFilters;
-    if (!hasFilters(f) || Object.keys(route.query).some((k) => k !== "classId")) {
-      defaultsDoneFor.value = classId;
+    if (!hasFilters(f)) {
+      defaultsFor.value = null;
       return;
     }
     const ids = (keys: string[] | undefined, data: { id: string; key?: string }[] | undefined) =>
@@ -90,7 +99,7 @@ watch(
     const environmentId = ids(f!.environmentKeys, envLookup.data.value);
     const locationId = ids(f!.locationKeys, locationLookup.data.value);
     if (statusId === undefined || environmentId === undefined || locationId === undefined) return; // lookups still loading
-    defaultsDoneFor.value = classId;
+    defaultsFor.value = null;
     const next: LocationQueryRaw = { classId };
     if (f!.q) next.q = f!.q;
     if (statusId) next.statusId = statusId;
@@ -99,12 +108,6 @@ watch(
     router.replace({ path: "/cis", query: next });
   },
   { immediate: true },
-);
-watch(
-  () => get("classId"),
-  (id) => {
-    if (id !== defaultsDoneFor.value) defaultsDoneFor.value = null;
-  },
 );
 
 useDocumentTitle(() => currentClass.value?.name ?? "Inventory");

@@ -9,6 +9,8 @@ import SearchPage from "./pages/SearchPage.vue";
 import AdminLayout from "./pages/admin/AdminLayout.vue";
 import AuditLogPage from "./pages/admin/AuditLogPage.vue";
 import TemplatesPage from "./pages/admin/TemplatesPage.vue";
+import ConfigTransferPage from "./pages/admin/config/ConfigTransferPage.vue";
+import CustomizationPage from "./pages/admin/customization/CustomizationPage.vue";
 import ClassEditPage from "./pages/admin/datamodel/ClassEditPage.vue";
 import ClassesPage from "./pages/admin/datamodel/ClassesPage.vue";
 import RelationshipTypesPage from "./pages/admin/datamodel/RelationshipTypesPage.vue";
@@ -20,6 +22,7 @@ import UsersPage from "./pages/admin/UsersPage.vue";
 import { ADMIN_SECTIONS, visibleSections } from "./pages/admin/sections";
 import LoginPage from "./pages/auth/LoginPage.vue";
 import SetupPage from "./pages/auth/SetupPage.vue";
+import { trackNavigations } from "./lib/navigation";
 import { useSessionStore } from "./stores/session";
 import type { GlobalPermission } from "./api/admin";
 
@@ -68,6 +71,9 @@ export const router = createRouter({
         { path: "lookups", redirect: "/admin/lookups/statuses" },
         { path: "lookups/:kind", component: LookupsPage, meta: { permissions: section("lookups") } },
         { path: "templates", component: TemplatesPage, meta: { permissions: section("templates") } },
+        { path: "customization", redirect: "/admin/customization/branding" },
+        { path: "customization/:section", component: CustomizationPage, meta: { permissions: section("customization") } },
+        { path: "config", component: ConfigTransferPage, meta: { permissions: section("config") } },
         { path: "audit", component: AuditLogPage, meta: { permissions: section("audit") } },
       ],
     },
@@ -75,6 +81,8 @@ export const router = createRouter({
   ],
   scrollBehavior: (_to, _from, saved) => saved ?? { top: 0 },
 });
+
+trackNavigations(router);
 
 /** Only same-app paths are followed after sign-in (never another origin). */
 export function safeRedirect(value: unknown): string {
