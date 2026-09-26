@@ -124,6 +124,9 @@ jobs:
           workspaces: backend
       - run: cargo test --locked
         working-directory: backend
+        env:
+          # PostgreSQL is not running yet here; the Linux job runs those tests.
+          SHADOUCMDB_SKIP_DB_TESTS: "1"
       - run: cargo build --release --locked
         working-directory: backend
 

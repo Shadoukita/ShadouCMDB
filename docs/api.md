@@ -106,11 +106,13 @@ or `Forwarded: proto=https`); `COOKIE_SECURE=always|never` overrides that.
 password. A success resets the counter. Unknown usernames are throttled the same way and cost the same argon2
 work, so neither the answer nor its timing reveals which usernames exist.
 
-On top of that, the server allows at most 300 failed sign-ins in any 10 minutes, for all usernames together.
-Beyond that budget every sign-in answers `429` until the oldest failure leaves the window. This caps password
-spraying (a guess or two for each of many usernames), which the per-username lock does not see. The trade-off:
-someone who keeps failing sign-ins on purpose can keep sign-in locked for everyone. Sessions that already exist
-keep working, and `shadoucmdb create-admin` works regardless.
+On top of that, the server counts failed sign-ins for all usernames together. Once 300 fall within any
+10 minutes, sign-in is slowed down, not refused: attempts wait in a single queue that lets one through every
+2 s, so guessing across all accounts stays at about 300 per 10 minutes while a correct password still signs in
+(after a short wait). This caps password spraying (a guess or two for each of many usernames), which the
+per-username lock does not see. Only when 64 attempts are already queued is the next one answered `429` with
+`Retry-After`. The server logs a warning (at most once per 10 minutes) when the budget is exceeded. Sessions
+that already exist are unaffected.
 
 `PUT /api/v1/auth/password` has the same per-user backoff for wrong `currentPassword` values (5 free, then 1 s,
 2 s, … up to 15 min), so a stolen session cannot be turned into the password by guessing. The counters live in

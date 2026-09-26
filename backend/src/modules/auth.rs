@@ -1,6 +1,8 @@
 //! Sign-in: first-run setup, login, logout, the current user and their
 //! effective permissions, and changing one's own password.
 
+use std::time::Duration;
+
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -14,7 +16,7 @@ use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, WithCookies, route};
 use crate::api::schemas::{name_schema, trimmed};
 use crate::auth::permissions::{ClassRights, GlobalPermission, Permissions};
-use crate::auth::throttle::Locked;
+use crate::auth::throttle::{GLOBAL_PENALTY, Gate, LoginThrottle, SLOW_LANE_WAITERS};
 use crate::auth::{AuthState, Principal, password, session};
 use crate::data::auth as data;
 use crate::http::error::{AppError, ErrorCode, FieldError};
@@ -210,15 +212,33 @@ fn setup_done() -> AppError {
     AppError::conflict("Setup is already complete; sign in instead")
 }
 
-fn rate_limited(locked: Locked, what: &str) -> AppError {
-    let secs = locked.wait().as_secs().max(1);
-    let message = match locked {
-        Locked::Key(_) => format!("Too many failed {what}. Try again in {secs} s."),
-        Locked::Everyone(_) => format!("Too many failed sign-ins on this server. Try again in {secs} s."),
-    };
-    let mut err = AppError::new(ErrorCode::RateLimited, message);
+fn rate_limited(wait: Duration, message: &str) -> AppError {
+    let secs = wait.as_secs().max(1);
+    let mut err = AppError::new(ErrorCode::RateLimited, format!("{message}. Try again in {secs} s."));
     err.retry_after = Some(secs);
     err
+}
+
+/// Refuses an attempt while its key is locked; over the global budget, waits
+/// for a turn in the slow lane instead of refusing (so a correct password
+/// still gets in while someone sprays wrong ones).
+async fn throttle_gate(throttle: &LoginThrottle, key: &str, what: &str) -> Result<(), AppError> {
+    let locked = |wait| rate_limited(wait, &format!("Too many failed {what}"));
+    match throttle.check(key) {
+        Gate::Open => Ok(()),
+        Gate::Locked(wait) => Err(locked(wait)),
+        Gate::Slow => {
+            if !throttle.slow_lane().await {
+                let wait = GLOBAL_PENALTY * SLOW_LANE_WAITERS as u32;
+                return Err(rate_limited(wait, "Too many sign-ins are waiting on this server"));
+            }
+            // Failures for this key may have locked it while it waited.
+            match throttle.check(key) {
+                Gate::Locked(wait) => Err(locked(wait)),
+                Gate::Open | Gate::Slow => Ok(()),
+            }
+        }
+    }
 }
 
 fn invalid_credentials() -> AppError {
@@ -231,9 +251,7 @@ async fn login(
     headers: &HeaderMap,
     b: LoginBody,
 ) -> Result<WithCookies<Json<Session>>, AppError> {
-    if let Some(locked) = auth.throttle.check(&b.username) {
-        return Err(rate_limited(locked, "sign-ins for this username"));
-    }
+    throttle_gate(&auth.throttle, &b.username, "sign-ins for this username").await?;
     let row = data::find_for_login(pool, &b.username).await?;
     if !password::verify(&b.password, row.as_ref().map(|r| r.password_hash.as_str())).await? {
         let locked = auth.throttle.failure(&b.username);
@@ -265,9 +283,7 @@ async fn change_password(
 ) -> Result<(), AppError> {
     let me = principal(ctx)?;
     let key = me.user_id.to_string();
-    if let Some(locked) = auth.password_throttle.check(&key) {
-        return Err(rate_limited(locked, "attempts at your current password"));
-    }
+    throttle_gate(&auth.password_throttle, &key, "attempts at your current password").await?;
     let hash = data::password_hash(&mut *pool.acquire().await?, me.user_id).await?;
     if !password::verify(&b.current_password, hash.as_deref()).await? {
         let locked = auth.password_throttle.failure(&key);
@@ -310,7 +326,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Sign in with username and password")
             .description(
-                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. More than 300 failures in 10 min for all usernames together lock sign-in for everyone (429) until the window has room again.",
+                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429.",
             )
             .public()
             .errors(&[ErrorCode::Unauthenticated, ErrorCode::RateLimited])
@@ -348,8 +364,6 @@ pub fn routes() -> Vec<Route> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use sqlx::Executor;
 
     use super::*;
@@ -418,6 +432,29 @@ mod tests {
             tx.execute("DELETE FROM users").await.unwrap();
             tx.commit().await.unwrap();
         }
+        db.drop().await;
+    }
+
+    /// Spraying wrong passwords over many usernames slows sign-in down; it
+    /// must not lock the administrator out of the CMDB.
+    #[tokio::test]
+    async fn a_correct_password_signs_in_after_the_global_budget_is_spent() {
+        let Some(db) = scratch::database("a_correct_password_signs_in_after_the_global_budget_is_spent").await else {
+            return;
+        };
+        let (pool, auth) = (&db.pool, auth_state());
+        setup(pool, &auth, &HeaderMap::new(), body("admin")).await.expect("setup");
+        for i in 0..crate::auth::throttle::GLOBAL_BUDGET {
+            auth.throttle.failure(&format!("junk-{i}"));
+        }
+        assert_eq!(auth.throttle.check("admin"), Gate::Slow);
+        let started = std::time::Instant::now();
+        let login_as = |password: &str| LoginBody { username: "admin".into(), password: password.into() };
+        let signed_in = login(pool, &auth, &HeaderMap::new(), login_as("correct horse battery")).await;
+        assert!(signed_in.is_ok(), "refused: {:?}", signed_in.err().map(|e| e.code));
+        assert!(started.elapsed() >= GLOBAL_PENALTY, "through the slow lane");
+        let wrong = login(pool, &auth, &HeaderMap::new(), login_as("wrong guess")).await;
+        assert_eq!(wrong.err().map(|e| e.code), Some(ErrorCode::Unauthenticated), "slowed, then checked");
         db.drop().await;
     }
 
