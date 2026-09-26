@@ -6,7 +6,7 @@ migration and no code change. Integrity is enforced in PostgreSQL itself
 (foreign keys, `NOT NULL`, unique and check constraints, plus triggers for rules
 that need to look at other rows), not only in the API.
 
-Migrations: `backend/src/db/migrations/`
+Migrations: [`sql/migrations/`](../sql/migrations/)
 (`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`).
 Drizzle definitions: `backend/src/db/schema/`.
 

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type pg from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -7,7 +7,10 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { loadEnv } from '../config/env.js';
 import { createPool } from './client.js';
 
-export const MIGRATIONS_FOLDER = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+// Migrations live in the repo-level sql/migrations folder. This file sits at the
+// same depth in src/ and dist/ (backend/{src,dist}/db/), so one relative path works
+// for both tsx and the compiled build, including the Docker image.
+export const MIGRATIONS_FOLDER = resolve(dirname(fileURLToPath(import.meta.url)), '../../../sql/migrations');
 const MIGRATIONS_SCHEMA = 'drizzle';
 const MIGRATIONS_TABLE = '__drizzle_migrations';
 

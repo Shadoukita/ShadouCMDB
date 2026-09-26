@@ -18,9 +18,10 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 | --- | --- |
 | `backend/` | Node + Fastify + Drizzle (TypeScript). Owns the schema, migrations and API. |
 | `backend/src/db/schema/` | Drizzle table definitions (source of truth for generated migrations). |
-| `backend/src/db/migrations/` | Versioned SQL migrations, applied in order. |
+| `sql/` | Database artifacts: versioned migrations, bootstrap scripts, ER diagram. See [`sql/README.md`](sql/README.md). |
 | `frontend/` | React + Vite + TanStack Query UI (stub for now). |
 | `docs/data-model.md` | Data model, integrity rules and soft-delete decisions. |
+| `.github/` | CI workflow and pull request template. |
 
 ## Requirements
 
@@ -125,10 +126,14 @@ Every schema change is a migration. No hand-applied DDL.
 
 1. Edit the Drizzle tables in `backend/src/db/schema/`.
 2. `npm run db:generate -w backend -- --name=<what_changed>` writes the next SQL file into
-   `backend/src/db/migrations/`. Review it.
+   `sql/migrations/`. Review it.
 3. For triggers, functions or data fixes that Drizzle cannot express, create an empty migration
    with `npx drizzle-kit generate --custom --name=<what>` (from `backend/`) and write the SQL.
 4. `npm run db:migrate`, then commit the schema change and the migration together.
 
 Adding a CI class, attribute or relationship type is **data**, not a schema change. See
 [docs/data-model.md](docs/data-model.md#extending-the-model-without-migrations).
+
+## Contributing
+
+Branching, pull request and schema-change rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
