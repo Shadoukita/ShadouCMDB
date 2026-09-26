@@ -46,6 +46,11 @@ When the UI and API are on different origins, add the UI origin to the backend's
 | `/admin` | Administration, with its own sub-navigation. Opens the first section the user may use. |
 | `/admin/users` | Users: search, status and profile filters, sortable columns, paging (all in the URL). `/admin/users/new` creates one; `/admin/users/:id` edits it, assigns profiles, disables/enables it, resets the password or deletes it. |
 | `/admin/profiles` | Permission profiles: list, clone. `/admin/profiles/new` and `/admin/profiles/:id` edit the global permissions and the per-class view/create/edit/delete matrix; delete confirms and names the users who lose the profile. |
+| `/admin/classes` | Data model › CI classes: the class tree in menu order. Drag a row (or use ↑/↓) to reorder among its siblings; archive/restore; `?archived=show` lists archived classes. |
+| `/admin/classes/new`, `/admin/classes/:id` | Class editor: name, key (fixed after creation), parent, abstract, icon, colour; archive, delete (refused with the usage counts while anything refers to it). Below it, the **attribute editor**: every attribute defined on the class by form section, with drag-and-drop (or ↑/↓) ordering that also moves an attribute into another section; add/edit type, required, enum values, lookup list, reference class, validation, default value, help text and section; archive/restore/delete. Inherited attributes are listed read-only with a link to the class that defines them. |
+| `/admin/relationships` | Relationship types (reorder, edit labels, archive, delete) and, for the selected type (`?type=…`), its rules: which source and target classes it may connect. |
+| `/admin/lookups/:kind` | Lookups: `statuses` and `environments` (ordered, reorderable), `locations` and `owners` (searched, filtered, sorted and paged by the API; state in the URL), and `lists`, the administrator's own value lists (`?list=…`) with their ordered, coloured values. |
+| `/admin/templates` | Starter templates: what each contains and how much already exists; one click installs the IT infrastructure starter (idempotent). On an empty install it explains that the CMDB has no data model yet. |
 | `/admin/audit` | Audit log: every change with the user who made it, filterable by actor, record type and action. `?actorId=…` shows one user's changes. |
 
 ### Forms are generated from the API
@@ -57,9 +62,14 @@ The CI form has two parts:
   definitions, grouped by `groupName` and ordered by `sortOrder`.
 
 Each `dataType` maps to one input: `text`, `number`/`integer` (min/max), `boolean`, `enum`, `date`, `datetime`,
-`ip`, `cidr`, and `reference` (a type-ahead CI picker restricted to `referenceClassId`). No field list is written
-per class, so a CI class added through the API gets a working form, detail view, sidebar entry and dashboard
-row with no frontend change.
+`ip`, `cidr`, `reference` (a type-ahead CI picker restricted to `referenceClassId`) and `lookup` (the active values
+of the attribute's lookup list; the detail page shows the value's name and colour). A new CI starts from each
+attribute's `defaultValue`, and `helpText` shows under the field. No field list is written per class, so a CI class
+added under Administration (or through the API) gets a working form, detail view, sidebar entry and dashboard row
+with no frontend change. Classes, statuses and the other lookups appear in the order the administrator set.
+
+A fresh install has no classes. The dashboard, inventory, New CI page and sidebar then say so and send an
+administrator (`datamodel.manage`) to Templates or the class editor; everyone else is told to ask one.
 
 ### Sign-in and permissions
 
@@ -72,11 +82,11 @@ row with no frontend change.
 - The permissions from `/auth/me` hide actions the user cannot use: "+ New CI" and create links per class,
   Edit and Delete on a CI, adding and removing relationships, the History tab (needs `audit.view`), and the
   Administration sections (Users: `users.manage`; Permission profiles: `profiles.manage`, or read-only with
-  `users.manage`; Audit log: `audit.view`). The API enforces every rule; the UI only avoids offering what it
+  `users.manage`; CI classes, Relationship types, Lookups and Templates: `datamodel.manage`; Audit log: `audit.view`). The API enforces every rule; the UI only avoids offering what it
   would refuse. The rules live in `src/lib/permissions.ts` and mirror the server's: class grants apply to exactly
   that class, the "all classes" row to every class, and create/edit/delete imply view.
-- Administration sections are listed in `src/pages/admin/sections.ts`. Later sections (data model, lookups,
-  templates, customization, export/import) are added there with their route and permission.
+- Administration sections are listed, grouped (Access, Data model, System), in `src/pages/admin/sections.ts`.
+  Later sections (customization, export/import) are added there with their route and permission.
 
 ### Errors, states and navigation
 
@@ -85,6 +95,8 @@ row with no frontend change.
   tried, and an empty inventory offers "Create your first configuration item".
 - Deleting a CI opens a confirmation that lists every relationship that will break. Removing a relationship
   also confirms.
+- Deleting a class, attribute, relationship type or rule, or a lookup value first asks the API what refers to it
+  (`GET …/{id}/usage`) and lists it. A row still in use cannot be deleted: the dialog offers to archive it instead.
 - Related CIs are links. Walking from CI to CI builds a trail in the breadcrumb, for example
   `Inventory › CRM › crm-app-01 › fra1-esx-01 › FRA1 Rack A01`.
 
@@ -96,12 +108,15 @@ src/api/schema.d.ts    types generated from backend/openapi.json (do not edit)
 src/api/client.ts      the one HTTP client (openapi-fetch) + ApiError / error-envelope handling
 src/api/queries.ts     TanStack Query composables and cache keys; components never call fetch
 src/api/admin.ts       the same for sign-in, users, permission profiles and the audit log
+src/api/datamodel.ts   the same for classes, attributes, relationship types/rules, lookups, lists and templates
 src/lib/permissions.ts permission checks mirrored from the server
 src/router.ts          routes (Vue Router, HTML5 history) and the setup → sign-in → app guard
 src/stores/            Pinia stores (the session; the one-shot "Created …/Saved …" notice)
 src/components/        shell, breadcrumbs, global search, pickers, dialogs, state views
-src/pages/             one component per screen; detail/, form/ and dashboard/ hold their parts
-src/lib/               formatting, attribute value conversion, the breadcrumb walk trail
+src/pages/             one component per screen; detail/, form/ and dashboard/ hold their parts;
+                       admin/datamodel/ and admin/lookups/ hold the data model editors
+src/lib/               formatting, attribute value conversion, the breadcrumb walk trail, drag-and-drop
+                       reordering (reorder.ts), class trees, class icons
 src/styles/tokens.css  design tokens (spacing, type scale, colours); app.css uses only these
 e2e/                   Playwright end-to-end walk (see below)
 ```
@@ -120,6 +135,9 @@ use it without a frontend change, and check the empty, not-found and API-unreach
 admin specs sign in and out, follow an expired session to sign-in and back, walk first-run setup, build a
 permission profile in the matrix, clone and delete one, create a user holding it, sign in as that user to check
 which actions are hidden, disable/enable the account, reset its password, and read who did it in the audit log.
+The data model spec builds a lookup list and a class with attributes in the editors (drag and arrow reordering,
+moving between sections, an API error at its field), creates a CI from the generated form, archives the class,
+adds a relationship type and rule, checks the lookup delete guards, and the fresh-install guidance.
 Any page error or Vue warning fails the test.
 
 The tests expect the demo inventory (`shadoucmdb seed --demo`) and create their own uniquely named records.

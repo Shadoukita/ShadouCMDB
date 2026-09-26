@@ -72,8 +72,10 @@ All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which 
 migration 0003 creates). A fresh install therefore has no classes, attributes, relationship types or
 lookups. What `seed` loaded before SHAA-31 is now the **`it_infrastructure` starter template**
 (`backend/src/modules/templates/`), installed through `POST /api/v1/admin/templates/it_infrastructure/install`
-or `shadoucmdb seed --template it_infrastructure`. Installing matches rows by key, adds only what is
-missing, never changes existing rows and audits every row it creates, so it is idempotent. Databases
+or `shadoucmdb seed --template it_infrastructure`, or with one click under *Administration › Templates* in
+the web UI. Installing matches rows by key, adds only what is missing, never changes existing rows and audits
+every row it creates, so it is idempotent. Everything the template adds (and anything else in the data model)
+can then be changed under *Administration › CI classes, Relationship types and Lookups*. Databases
 seeded before migration 0004 keep all their rows; the template then reports `installed`.
 
 The template contains:
