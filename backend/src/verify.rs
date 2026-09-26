@@ -335,11 +335,22 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             )
             .execute(&mut *c)
             .await?;
-            reject!(
-                c,
-                "audit_log is append-only",
-                sqlx::query("UPDATE audit_log SET actor_name = 'tampered'").execute(&mut *c)
-            )
+            // As the API role of a three-role install the privilege check refuses first; as the
+            // owner (single-role install, CI) the trigger does. Both are insufficient_privilege.
+            let mut outcomes = Vec::new();
+            for stmt in ["UPDATE audit_log SET actor_name = 'tampered'", "DELETE FROM audit_log", "TRUNCATE audit_log"]
+            {
+                c.execute("SAVEPOINT sp").await?;
+                let result = sqlx::query(sqlx::AssertSqlSafe(stmt)).execute(&mut *c).await;
+                let Err(err) = result else { bail!("expected `{stmt}` to be rejected, but it succeeded") };
+                c.execute("ROLLBACK TO SAVEPOINT sp").await?;
+                let code = err.as_database_error().and_then(|d| d.code()).unwrap_or_default().into_owned();
+                if code != "42501" {
+                    bail!("expected `{stmt}` to fail with 42501, got {code}: {err}");
+                }
+                outcomes.push(stmt.split_whitespace().next().unwrap_or_default());
+            }
+            Ok(format!("rejected (42501: {})", outcomes.join(", ")))
         }
         15 => {
             let a = new_ci(c, "application", "soft-app").await?;
