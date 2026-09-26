@@ -47,14 +47,22 @@ impl AppState {
     }
 }
 
+/// Paths the API owns: they get the error envelope from `fallback` and the
+/// no-store cache policy from `security_headers`. Every authenticated route is
+/// under `/api/`; `/healthz`, `/readyz`, `/openapi.json`, `/docs` and the UI
+/// are not. A module that declares a route outside `/api/` is outside this
+/// gate, and its responses may be stored by a shared cache.
+fn is_api_path(path: &str) -> bool {
+    path.starts_with("/api/") || path == "/api"
+}
+
 /// Unknown routes: the embedded UI for browser paths, the error envelope for
 /// everything else (and always for /api/*, so API clients never get HTML).
 async fn fallback(req: Request) -> Response {
     let path = req.uri().path();
     let is_read = req.method() == Method::GET || req.method() == Method::HEAD;
     if is_read
-        && !path.starts_with("/api/")
-        && path != "/api"
+        && !is_api_path(path)
         && let Some(res) = ui::serve(path)
     {
         return res;
@@ -78,6 +86,15 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-
     connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'";
 
 const HSTS: &str = "max-age=31536000; includeSubDomains";
+
+/// Responses under `/api/` carry one principal's data (`GET /api/v1/auth/me`
+/// returns the username, permissions and the CSRF token) and are
+/// authenticated by the session cookie. RFC 9111 §3.5 only keeps a shared
+/// cache from storing responses to requests with `Authorization`, not with a
+/// cookie, and a 200 without freshness information is heuristically cacheable
+/// (§4.2.2). `no-store` stops a compliant intermediary from storing them;
+/// `Vary: Cookie` splits the cache key for one that stores anyway.
+const API_CACHE_CONTROL: &str = "no-store";
 
 /// The `Content-Security-Policy` and `Reporting-Endpoints` values, built
 /// once at startup from `CSP_REPORT_URI`; requests only clone them.
@@ -120,14 +137,27 @@ impl Csp {
 ///   LAN deployments on a scheme they cannot serve.
 /// - `Content-Security-Policy` (and `Reporting-Endpoints`) only on HTML
 ///   documents, never on JSON.
+/// - `Cache-Control: no-store` and `Vary: Cookie` on API responses, see
+///   [`API_CACHE_CONTROL`].
 async fn security_headers(
     axum::extract::State(csp): axum::extract::State<Arc<Csp>>,
     req: Request,
     next: axum::middleware::Next,
 ) -> Response {
     let https = request_is_https(req.headers());
+    let is_api = is_api_path(req.uri().path());
     let mut res = next.run(req).await;
     let headers = res.headers_mut();
+    if is_api {
+        // Overrides any handler value on purpose: an API path that should be
+        // cacheable needs an explicit exception here. Safe only because it is
+        // gated on API paths; `ui::file_response` owns the UI's caching
+        // (immutable `assets/*`), so widening the gate would break it.
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(API_CACHE_CONTROL));
+        // append, not insert: CorsLayer runs inside this layer and has already
+        // set its own `Vary: origin, ...`, which insert would drop.
+        headers.append(header::VARY, HeaderValue::from_static("Cookie"));
+    }
     if https {
         headers.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static(HSTS));
     }
@@ -267,17 +297,21 @@ mod tests {
     }
 
     fn app_reporting_to(csp_report_uri: Option<&str>) -> Router {
+        app_with(|cfg| cfg.csp_report_uri = csp_report_uri.map(str::to_owned))
+    }
+
+    fn app_with(configure: impl FnOnce(&mut Config)) -> Router {
         let pool = PgPool::connect_lazy("postgres://nobody@127.0.0.1:1/none").unwrap();
         let auth = AuthConfig {
             session_idle: Duration::from_secs(60),
             session_max_age: Duration::from_secs(3600),
             cookie_secure: CookieSecure::Auto,
         };
-        let cfg = Config {
+        let mut cfg = Config {
             api_host: "127.0.0.1".into(),
             api_port: 3000,
             cors_origins: Vec::new(),
-            csp_report_uri: csp_report_uri.map(str::to_owned),
+            csp_report_uri: None,
             database: crate::config::DatabaseConfig {
                 url: Some("postgres://nobody@127.0.0.1:1/none".into()),
                 host: None,
@@ -293,7 +327,81 @@ mod tests {
             },
             auth: auth.clone(),
         };
+        configure(&mut cfg);
         router(AppState::new(pool, auth), &cfg)
+    }
+
+    /// Every `Vary` entry, across however many `Vary` field lines there are.
+    fn vary(res: &Response) -> Vec<String> {
+        res.headers()
+            .get_all(header::VARY)
+            .iter()
+            .flat_map(|v| v.to_str().unwrap().split(','))
+            .map(|v| v.trim().to_ascii_lowercase())
+            .collect()
+    }
+
+    fn varies_on(res: &Response, name: &str) -> bool {
+        vary(res).iter().any(|v| v == name)
+    }
+
+    fn assert_not_stored(res: &Response) {
+        assert_eq!(header(res, header::CACHE_CONTROL), Some("no-store"));
+        assert!(varies_on(res, "cookie"), "{:?}", vary(res));
+    }
+
+    #[tokio::test]
+    async fn api_responses_are_not_stored_by_shared_caches() {
+        // Carries the user, their permissions and the CSRF token. The pool is dead, so this is an
+        // error rather than a 200; the headers are path-based and do not depend on the status.
+        assert_not_stored(&get(app(), "/api/v1/auth/me", &[]).await);
+        // The bare prefix gets the JSON envelope from `fallback`, so it gets the same headers.
+        assert_not_stored(&get(app(), "/api", &[]).await);
+    }
+
+    #[tokio::test]
+    async fn api_error_responses_are_not_stored() {
+        let res = get(app(), "/api/v1/nope", &[]).await;
+        assert_eq!(res.status(), 404);
+        assert_not_stored(&res);
+    }
+
+    #[tokio::test]
+    async fn cors_vary_survives() {
+        let app = app_with(|cfg| cfg.cors_origins = vec!["https://ui.example.com".into()]);
+        let res = get(app, "/api/v1/nope", &[("origin", "https://ui.example.com")]).await;
+        assert_eq!(header(&res, header::ACCESS_CONTROL_ALLOW_ORIGIN), Some("https://ui.example.com"));
+        assert_not_stored(&res);
+        assert!(varies_on(&res, "origin"), "CORS Vary dropped: {:?}", vary(&res));
+    }
+
+    /// Stands in for `ui::file_response`, which only exists in builds with frontend/dist.
+    fn ui_file(cache: &'static str) -> Router {
+        Router::new().fallback(move || async move { ([(header::CACHE_CONTROL, cache)], "ui file") })
+    }
+
+    #[tokio::test]
+    async fn immutable_ui_assets_keep_their_long_cache() {
+        let immutable = "public, max-age=31536000, immutable";
+        let res = get(with_security_headers(ui_file(immutable), Csp::new(None)), "/assets/index-abc123.js", &[]).await;
+        assert_eq!(header(&res, header::CACHE_CONTROL), Some(immutable));
+        assert!(!varies_on(&res, "cookie"), "{:?}", vary(&res));
+    }
+
+    #[tokio::test]
+    async fn spa_index_still_revalidates() {
+        let res = get(with_security_headers(ui_file("no-cache"), Csp::new(None)), "/", &[]).await;
+        assert_eq!(header(&res, header::CACHE_CONTROL), Some("no-cache"));
+        assert!(!varies_on(&res, "cookie"), "{:?}", vary(&res));
+    }
+
+    #[tokio::test]
+    async fn public_endpoints_are_left_alone() {
+        for path in ["/healthz", "/openapi.json"] {
+            let res = get(app(), path, &[]).await;
+            assert_eq!(header(&res, header::CACHE_CONTROL), None, "{path}");
+            assert!(vary(&res).is_empty(), "{path}: {:?}", vary(&res));
+        }
     }
 
     #[tokio::test]
