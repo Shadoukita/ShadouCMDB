@@ -81,6 +81,10 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
   cannot send that header, set `COOKIE_SECURE=always`.
 - Serve the UI and the API from the same origin (the embedded UI does this). A UI on another
   origin needs that origin in `CORS_ORIGINS`; those origins may send the session cookie.
+- The proxy should set `X-Forwarded-For` (or `Forwarded: for=`) to the client address,
+  **replacing** any value the client sent. The API records the first address in it (else the
+  TCP peer) with sign-in events in the audit log. Without a proxy that overwrites the header a
+  client can claim any address, so treat it as evidence, never as an access control.
 - `SESSION_IDLE_TIMEOUT_MINUTES` (default 12 h) and `SESSION_MAX_AGE_HOURS` (default 7 days)
   bound how long a session lives. Sessions are stored in PostgreSQL, so they survive restarts
   and work across several instances. The login backoff counters are per process.

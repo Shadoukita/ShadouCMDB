@@ -46,7 +46,7 @@ users ─< user_permission_profiles >─ permission_profiles ─┬─< permissi
 | `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
 | `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
-| `sessions` | Server-side login sessions: SHA-256 of the cookie token, `csrf_token`, `last_seen_at` (idle timeout), `expires_at` (absolute lifetime), `user_agent`. | unique `token_hash` (32 bytes); cascades with the user |
+| `sessions` | Server-side login sessions: SHA-256 of the cookie token, `csrf_token`, `last_seen_at` (idle timeout), `expires_at` (absolute lifetime), `user_agent`, `ip_address` (`inet`, client address at sign-in; evidence only). | unique `token_hash` (32 bytes); cascades with the user |
 | `audit_log` | actor (`actor_type`, `actor_id`, `actor_name`), `action`, `entity_type`, `entity_id`, `occurred_at`, `old_value`, `new_value` (jsonb), `request_id`. | action/actor checks; old/new presence per action; **UPDATE/DELETE rejected** (trigger) |
 
 All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which is a
@@ -86,7 +86,7 @@ All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which 
 | `audit_log` | **Never deleted** | Append-only by trigger. Retention/archival is an operator decision for a later milestone. |
 | `users` | **Disable** (`is_active = false`), hard delete allowed | Disabling is the normal way to remove access and ends the user's sessions. A hard delete is allowed because nothing references a user by foreign key: `audit_log` keeps `actor_id` and `actor_name` as text, so history still names them. |
 | `permission_profiles` and their permission rows, `user_permission_profiles` | **Hard delete** | Pure configuration; every change is in `audit_log` (a profile's before/after includes its permissions, a user's includes their profiles). Deleting a profile removes it from its holders. |
-| `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login. |
+| `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login. Every session the API ends (not expiry) leaves a `logout` or `session.revoke` row in `audit_log`. |
 
 ## Auditing
 
@@ -97,6 +97,25 @@ Changes made through the API record the signed-in user (`actor_type = 'user'`, `
 the user's id, `actor_name` = their username). First-run setup, `create-admin` and `seed`
 record `actor_type = 'system'`. Users and permission profiles are audited like everything
 else (`entity_type` `users` / `permission_profiles`); password hashes never appear in it.
+
+Authentication events are audit rows too, with `entity_type = 'sessions'`, `old_value` NULL
+and the details in `new_value` (every one also has `ipAddress` and `userAgent` of the request):
+
+| `action` | Actor | `entity_id` | `new_value` |
+| --- | --- | --- | --- |
+| `login.success` | the user | the new session | `userId`, `username`, `method` (`password` or `setup`) |
+| `login.failure` | anonymous (`api_client`, no id) | a fresh id for the attempt | `attemptedUsername` (first 64 characters, as typed) |
+| `login.locked` | anonymous | the failed attempt that set the lock | `attemptedUsername`, `lockedForSeconds` |
+| `logout` | the user | the session | `userId`, `username`, `session` (`createdAt`, `ipAddress`, `userAgent`) |
+| `session.revoke` | whoever caused it (an administrator, the user, `system`) | the ended session | as for `logout`, plus `reason`: `user_disabled`, `user_deleted`, `password_reset`, `password_changed` or `replaced` (a new sign-in in the same browser) |
+
+A failed sign-in never says whether the username exists (a wrong password, an unknown name
+and a disabled account look the same), so reading the audit log does not reveal account
+names. Sign-ins refused with 429 while a name is locked are not recorded: they cost the
+server nothing, and recording them would let an anonymous client grow `audit_log` at will.
+Passwords, session tokens, token hashes and CSRF tokens are never written. The IP address is
+evidence, not an access control: see [deployment](deployment.md#https-and-session-cookies)
+for the proxy it assumes. Nothing alerts on these rows yet.
 
 ## Indexes for UI queries
 
