@@ -99,17 +99,32 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/readyz && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/readyz | grep -q '"upToDate":true'
 
+      # A second instance on an empty, migrated database with no user: e2e/first-run.spec.ts walks the
+      # real first-run setup there (the instance above already has an administrator).
+      - name: migrate and serve an empty instance for first-run setup
+        env:
+          PGDATABASE: shadoucmdb_fresh
+          API_PORT: "3001"
+        run: |
+          B=backend/target/release/shadoucmdb
+          psql -d postgres -c 'CREATE DATABASE shadoucmdb_fresh'
+          $B migrate
+          $B serve > serve-fresh.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3001/readyz && break; sleep 1; done
+          curl -sf http://127.0.0.1:3001/api/v1/setup | grep -q '"setupRequired":true'
+
       - name: npx playwright test
         working-directory: frontend
         env:
           E2E_BASE_URL: http://127.0.0.1:3000
+          E2E_FRESH_BASE_URL: http://127.0.0.1:3001
         run: npx playwright test
 
       - name: No error-level server log lines
         run: |
-          errors=$(grep -c '"level":"ERROR"' serve.log || true)
+          errors=$(cat serve.log serve-fresh.log | grep -c '"level":"ERROR"' || true)
           echo "error-level log lines: $errors"
-          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log; exit 1; fi
+          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log serve-fresh.log; exit 1; fi
 
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -119,5 +134,6 @@ jobs:
             frontend/playwright-report
             frontend/test-results
             serve.log
+            serve-fresh.log
           if-no-files-found: ignore
           retention-days: 14

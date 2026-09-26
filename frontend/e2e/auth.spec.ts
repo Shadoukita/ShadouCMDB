@@ -1,5 +1,5 @@
 import { E2E_USER } from "./global-setup";
-import { expect, snap, test } from "./support";
+import { at, expect, snap, test } from "./support";
 
 test.describe("signed out", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -21,7 +21,7 @@ test.describe("signed out", () => {
 
     await page.getByLabel("Password").fill(E2E_USER.password);
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/cis\?q=crm$/);
+    await expect(page).toHaveURL(at("/cis", "?q=crm"));
     await expect(page.locator("#f-q")).toHaveValue("crm");
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 
@@ -54,7 +54,7 @@ test("an expired session goes to sign-in and back to where the operator was", as
   await page.getByLabel("Username").fill(E2E_USER.username);
   await page.getByLabel("Password").fill(E2E_USER.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/cis\?q=crm$/);
+  await expect(page).toHaveURL(at("/cis", "?q=crm"));
   await expect(page.getByRole("link", { name: "crm-db", exact: true })).toBeVisible();
   await context.close();
 });
