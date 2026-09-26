@@ -4,6 +4,7 @@ import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { ciCountQuery, useCiClasses, useCiList, useLookup } from "../api/queries";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
+import DataModelEmpty from "../components/DataModelEmpty.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
@@ -23,6 +24,8 @@ const total = useQuery(ciCountQuery({}));
 const recent = useCiList({ sort: "-updatedAt", limit: 12 });
 
 const classes = useCiClasses();
+/** A fresh install: no classes yet, so the first step is the data model, not a CI. */
+const noClasses = computed(() => classes.data.value?.length === 0);
 const concrete = computed(() => (classes.data.value ?? []).filter((c) => !c.isAbstract));
 const classCounts = useQueries({ queries: computed(() => concrete.value.map((c) => ciCountQuery({ classId: c.id }))) });
 const classRows = computed<CountRow[]>(() =>
@@ -54,12 +57,15 @@ const statusRows = computed<CountRow[]>(() =>
       <div class="title"><h1>Dashboard</h1></div>
       <div class="actions">
         <RouterLink class="btn" to="/cis">Open inventory</RouterLink>
-        <RouterLink v-if="session.canOnAnyClass('create')" class="btn btn-primary" to="/cis/new">+ New CI</RouterLink>
+        <RouterLink v-if="session.canOnAnyClass('create') && !noClasses" class="btn btn-primary" to="/cis/new">+ New CI</RouterLink>
       </div>
     </div>
 
     <LoadingState v-if="total.isLoading.value" />
-    <section v-if="total.data.value === 0" class="panel">
+    <section v-if="total.data.value === 0 && noClasses" class="panel callout">
+      <DataModelEmpty />
+    </section>
+    <section v-else-if="total.data.value === 0 && classes.data.value" class="panel">
       <EmptyState title="Welcome to ShadouCMDB — the inventory is empty">
         Start with the things everything else depends on: a location, then the servers in it, then the applications and
         databases that run on them. Relate them from each CI's detail page.

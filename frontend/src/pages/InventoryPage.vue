@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter, type LocationQueryRaw } from "vue-router";
 import { useCiClasses, useCiList, type CiListQuery } from "../api/queries";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
+import DataModelEmpty from "../components/DataModelEmpty.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
@@ -11,6 +12,7 @@ import PaginationBar from "../components/PaginationBar.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
 import { formatRelative } from "../lib/format";
+import { flattenTree } from "../lib/tree";
 import { useSessionStore } from "../stores/session";
 
 /**
@@ -61,6 +63,7 @@ const query = computed<CiListQuery>(() => ({
 }));
 const list = useCiList(query);
 const classes = useCiClasses();
+const classTree = computed(() => flattenTree(classes.data.value ?? []));
 const currentClass = computed(() => classes.data.value?.find((c) => c.id === query.value.classId));
 useDocumentTitle(() => currentClass.value?.name ?? "Inventory");
 
@@ -162,8 +165,8 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
         <label for="f-class">Class</label>
         <select id="f-class" :value="get('classId')" @change="update({ classId: ($event.target as HTMLSelectElement).value || undefined })">
           <option value="">All classes</option>
-          <option v-for="c in classes.data.value ?? []" :key="c.id" :value="c.id">
-            {{ c.name }}{{ c.isAbstract ? " (incl. subclasses)" : "" }}
+          <option v-for="n in classTree" :key="n.item.id" :value="n.item.id">
+            {{ "\u00a0\u00a0".repeat(n.depth) }}{{ n.item.name }}{{ n.item.isAbstract ? " (incl. subclasses)" : "" }}{{ n.item.isActive ? "" : " (archived)" }}
           </option>
         </select>
       </div>
@@ -223,7 +226,8 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
     </div>
     <LoadingState v-if="list.isLoading.value" label="Loading inventory…" />
 
-    <EmptyState v-if="list.data.value && total === 0 && activeFilters.length === 0" title="The inventory is empty">
+    <DataModelEmpty v-if="list.data.value && total === 0 && activeFilters.length === 0 && classes.data.value?.length === 0" />
+    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length === 0" title="The inventory is empty">
       Configuration items are the servers, VMs, applications, databases, network devices and locations you track. Create
       one, then relate it to others from its detail page.
       <template v-if="canCreate" #actions>

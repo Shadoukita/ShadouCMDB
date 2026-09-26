@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { CiSummary, EffectiveAttribute } from "../api/queries";
-import type { Validation } from "../lib/attributeValues";
+import type { CiSummary } from "../api/queries";
+import type { AttributeShape, Validation } from "../lib/attributeValues";
 import CiPicker from "./CiPicker.vue";
+import LookupValueSelect from "./LookupValueSelect.vue";
 
 /**
  * One input per attribute dataType. The value is always a string; see lib/attributeValues for conversion.
  * (Number inputs bind manually because v-model would cast them to numbers.)
  */
 const props = defineProps<{
-  def: EffectiveAttribute;
+  def: AttributeShape;
   id: string;
   invalid?: boolean;
   describedBy?: string;
@@ -60,6 +61,14 @@ function onReference(ci: CiSummary | null) {
     :invalid="invalid"
     :described-by="describedBy"
     @select="onReference"
+  />
+  <LookupValueSelect
+    v-else-if="def.dataType === 'lookup'"
+    :id="id"
+    v-model="model"
+    :list-id="def.lookupListId"
+    :invalid="invalid"
+    :described-by="describedBy"
   />
   <input
     v-else-if="def.dataType === 'ip' || def.dataType === 'cidr'"

@@ -5,6 +5,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { toValue, type MaybeRefOrGetter } from "vue";
 import { ApiError, api, unwrap, type Schemas } from "./client";
 import type { paths } from "./schema";
+import { bySortOrder, flattenTree } from "../lib/tree";
 
 export type CiSummary = Schemas["ConfigurationItemSummary"];
 export type Ci = Schemas["ConfigurationItem"];
@@ -220,12 +221,19 @@ export function useDeleteRelationship() {
 
 // ---------- Classes and attribute metadata ----------
 
+/**
+ * Every CI class, in the administrator's order (Administration › Data model):
+ * depth-first through the class tree, siblings by sortOrder then name. Menus,
+ * pickers and the dashboard all use this order.
+ */
 export function useCiClasses() {
   return useQuery({
     queryKey: keys.classes,
     staleTime: 5 * 60_000,
     queryFn: ({ signal }) =>
-      unwrap(api.GET("/api/v1/ci-classes", { params: { query: { limit: MAX_PAGE, sort: "name" } }, signal })).then((r) => r.data),
+      unwrap(api.GET("/api/v1/ci-classes", { params: { query: { limit: MAX_PAGE, sort: "sortOrder" } }, signal })).then((r) =>
+        flattenTree(r.data, bySortOrder).map((n) => n.item),
+      ),
   });
 }
 
@@ -276,7 +284,7 @@ export function useLookup(kind: LookupKind) {
         }
         case "locations": {
           const r = await unwrap(api.GET("/api/v1/locations", { params: { query: { limit: MAX_PAGE, sort: "name" } }, signal }));
-          return flattenTree(r.data).map(({ item, depth }) => ({
+          return flattenTree(r.data, bySortOrder).map(({ item, depth }) => ({
             id: item.id,
             name: item.name,
             isActive: item.isActive,
@@ -287,23 +295,4 @@ export function useLookup(kind: LookupKind) {
       }
     },
   });
-}
-
-/** Orders a parentId tree depth-first so pickers can indent children under their parent. */
-function flattenTree<T extends { id: string; parentId: string | null }>(items: T[]): { item: T; depth: number }[] {
-  const byParent = new Map<string | null, T[]>();
-  const ids = new Set(items.map((i) => i.id));
-  for (const i of items) {
-    const parent = i.parentId && ids.has(i.parentId) ? i.parentId : null;
-    byParent.set(parent, [...(byParent.get(parent) ?? []), i]);
-  }
-  const out: { item: T; depth: number }[] = [];
-  const walk = (parent: string | null, depth: number) => {
-    for (const i of byParent.get(parent) ?? []) {
-      out.push({ item: i, depth });
-      walk(i.id, depth + 1);
-    }
-  };
-  walk(null, 0);
-  return out;
 }
