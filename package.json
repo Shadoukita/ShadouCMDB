@@ -1,0 +1,19 @@
+{
+  "name": "shadoucmdb",
+  "private": true,
+  "description": "ShadouCMDB - self-hosted Configuration Management Database",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=22.9"
+  },
+  "scripts": {
+    "db:migrate": "npm run db:migrate -w backend",
+    "db:seed": "npm run db:seed -w backend",
+    "db:verify": "npm run db:verify -w backend",
+    "dev:backend": "npm run dev -w backend",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

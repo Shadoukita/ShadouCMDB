@@ -1,0 +1,7 @@
+{
+  "name": "@shadoucmdb/frontend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Web UI stub. React + Vite + TanStack Query; talks only to the backend API, never to PostgreSQL."
+}
