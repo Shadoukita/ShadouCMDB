@@ -11,7 +11,7 @@ use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use super::simple_resource::{self as simple, BoxFuture, ListQuery, Resource, Writable, bool_filter, non_empty};
+use super::simple_resource::{self as simple, BoxFuture, ListQuery, Resource, Usage, Writable, bool_filter, non_empty};
 use crate::api::route::{Check, IdPath, In, Json, NoBody, Query, Route, route};
 use crate::api::schemas::{
     self, IdOrNone, QueryBool, Sort, UuidList, description_schema, key_schema, name_schema, nullable_uuid_schema,
@@ -46,6 +46,12 @@ pub struct CiClass {
     pub is_abstract: bool,
     #[schema(required = true)]
     pub icon: Option<String>,
+    /// Hex colour for badges and charts, e.g. "#1f6feb"
+    #[schema(required = true)]
+    pub color: Option<String>,
+    /// Position in menus and pickers (ascending)
+    pub sort_order: i32,
+    /// Archived classes keep their CIs but accept no new ones
     pub is_active: bool,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
@@ -76,6 +82,11 @@ pub struct CiClassCreate {
     #[schema(schema_with = icon_schema)]
     #[serde(default)]
     icon: Option<String>,
+    #[schema(schema_with = schemas::nullable_color_schema)]
+    #[serde(default)]
+    color: Option<String>,
+    #[schema(schema_with = sort_order_schema)]
+    sort_order: Option<i32>,
     #[schema(nullable = false)]
     is_active: Option<bool>,
 }
@@ -98,6 +109,11 @@ pub struct CiClassUpdate {
     #[schema(schema_with = icon_schema)]
     #[serde(default, deserialize_with = "schemas::patch")]
     icon: Option<Option<String>>,
+    #[schema(schema_with = schemas::nullable_color_schema)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    color: Option<Option<String>>,
+    #[schema(schema_with = sort_order_schema)]
+    sort_order: Option<i32>,
     #[schema(nullable = false)]
     is_active: Option<bool>,
 }
@@ -111,6 +127,8 @@ impl Writable for CiClassCreate {
             .opt("parent_id", self.parent_id.map(Some))
             .opt("is_abstract", self.is_abstract)
             .opt("icon", self.icon.clone().map(Some))
+            .opt("color", self.color.clone().map(Some))
+            .opt("sort_order", self.sort_order)
             .opt("is_active", self.is_active);
         c
     }
@@ -125,6 +143,8 @@ impl Writable for CiClassUpdate {
             .opt("parent_id", self.parent_id)
             .opt("is_abstract", self.is_abstract)
             .opt("icon", self.icon.clone())
+            .opt("color", self.color.clone())
+            .opt("sort_order", self.sort_order)
             .opt("is_active", self.is_active);
         c
     }
@@ -140,7 +160,7 @@ fn class_parent_schema() -> Schema {
 }
 
 fn class_sort() -> Schema {
-    schemas::sort_schema(&["name", "key", "createdAt", "updatedAt"], "name")
+    schemas::sort_schema(&["name", "key", "sortOrder", "createdAt", "updatedAt"], "name")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -204,9 +224,53 @@ impl Resource for CiClasses {
     const TAG: &'static str = "CI classes";
     const SINGULAR: &'static str = "ciClass";
     const PLURAL: &'static str = "ciClasses";
-    const COLUMNS: &'static str =
-        "id, key, name, description, parent_id, is_abstract, icon, is_active, created_at, updated_at";
+    const COLUMNS: &'static str = "id, key, name, description, parent_id, is_abstract, icon, color, sort_order, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
+    const DELETE_DESCRIPTION: &'static str = "Hard delete, allowed only for a class nothing refers to: no CIs (deleted ones included), subclasses, attribute definitions, reference attributes or relationship rules. Otherwise 409 IN_USE lists them; archive the class with `PATCH {\"isActive\": false}` instead, which keeps its CIs and blocks new ones.";
+    const USAGE: &'static [Usage] = &[
+        Usage {
+            kind: "configurationItems",
+            label: "configuration items",
+            sql: "SELECT count(*) FROM configuration_items WHERE class_id = $1 AND deleted_at IS NULL",
+            blocking: true,
+        },
+        Usage {
+            kind: "deletedConfigurationItems",
+            label: "deleted configuration items (kept for history)",
+            sql: "SELECT count(*) FROM configuration_items WHERE class_id = $1 AND deleted_at IS NOT NULL",
+            blocking: true,
+        },
+        Usage {
+            kind: "subclasses",
+            label: "subclasses",
+            sql: "SELECT count(*) FROM ci_classes WHERE parent_id = $1",
+            blocking: true,
+        },
+        Usage {
+            kind: "attributeDefinitions",
+            label: "attribute definitions",
+            sql: "SELECT count(*) FROM ci_attribute_definitions WHERE class_id = $1",
+            blocking: true,
+        },
+        Usage {
+            kind: "referencingAttributes",
+            label: "reference attributes on other classes pointing at it",
+            sql: "SELECT count(*) FROM ci_attribute_definitions WHERE reference_class_id = $1 AND class_id <> $1",
+            blocking: true,
+        },
+        Usage {
+            kind: "relationshipRules",
+            label: "relationship rules",
+            sql: "SELECT count(*) FROM relationship_type_rules WHERE source_class_id = $1 OR target_class_id = $1",
+            blocking: true,
+        },
+        Usage {
+            kind: "permissionGrants",
+            label: "permission profile grants (removed with the class)",
+            sql: "SELECT count(*) FROM permission_profile_class_permissions WHERE class_id = $1",
+            blocking: false,
+        },
+    ];
 
     fn id(row: &CiClass) -> Uuid {
         row.id
@@ -262,6 +326,8 @@ pub enum AttributeDataType {
     Ip,
     Cidr,
     Reference,
+    /// A value from an admin-defined lookup list (stored by value id)
+    Lookup,
 }
 
 impl AttributeDataType {
@@ -277,6 +343,7 @@ impl AttributeDataType {
             AttributeDataType::Ip => "ip",
             AttributeDataType::Cidr => "cidr",
             AttributeDataType::Reference => "reference",
+            AttributeDataType::Lookup => "lookup",
         }
     }
 }
@@ -299,12 +366,23 @@ pub struct AttributeDefinition {
     /// When dataType is "reference": the class (or ancestor) the referenced CI must belong to
     #[schema(required = true)]
     pub reference_class_id: Option<Uuid>,
+    /// When dataType is "lookup": the admin-defined list its values come from
+    #[schema(required = true)]
+    pub lookup_list_id: Option<Uuid>,
     #[schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>, required = true)]
     pub validation: Option<SqlJson<Map<String, Value>>>,
-    /// UI grouping, e.g. "Hardware"
+    /// Form section the field is shown in, e.g. "Hardware"
     #[schema(required = true)]
     pub group_name: Option<String>,
+    /// Shown under the field on CI forms
+    #[schema(required = true)]
+    pub help_text: Option<String>,
+    /// Pre-filled on new CIs and stored when a CI is created without a value (same shape as the value)
+    #[schema(value_type = Option<serde_json::Value>, required = true)]
+    pub default_value: Option<SqlJson<Value>>,
+    /// Order within the form section
     pub sort_order: i32,
+    /// Retired attributes keep their stored values but accept no new ones
     pub is_active: bool,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
@@ -339,12 +417,23 @@ pub struct EffectiveAttribute {
     /// When dataType is "reference": the class (or ancestor) the referenced CI must belong to
     #[schema(required = true)]
     pub reference_class_id: Option<Uuid>,
+    /// When dataType is "lookup": the admin-defined list its values come from
+    #[schema(required = true)]
+    pub lookup_list_id: Option<Uuid>,
     #[schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>, required = true)]
     pub validation: Option<SqlJson<Map<String, Value>>>,
-    /// UI grouping, e.g. "Hardware"
+    /// Form section the field is shown in, e.g. "Hardware"
     #[schema(required = true)]
     pub group_name: Option<String>,
+    /// Shown under the field on CI forms
+    #[schema(required = true)]
+    pub help_text: Option<String>,
+    /// Pre-filled on new CIs and stored when a CI is created without a value (same shape as the value)
+    #[schema(value_type = Option<serde_json::Value>, required = true)]
+    pub default_value: Option<SqlJson<Value>>,
+    /// Order within the form section
     pub sort_order: i32,
+    /// Retired attributes keep their stored values but accept no new ones
     pub is_active: bool,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
@@ -375,8 +464,11 @@ impl From<data::EffectiveAttributeRow> for EffectiveAttribute {
             is_required: r.is_required,
             enum_values: r.enum_values,
             reference_class_id: r.reference_class_id,
+            lookup_list_id: r.lookup_list_id,
             validation: r.validation,
             group_name: r.group_name,
+            help_text: r.help_text,
+            default_value: r.default_value,
             sort_order: r.sort_order,
             is_active: r.is_active,
             created_at: r.created_at,
@@ -475,6 +567,23 @@ fn group_name_schema() -> Schema {
         .into()
 }
 
+fn help_text_schema() -> Schema {
+    schemas::nullable_string_schema(2000)
+}
+
+fn default_value_schema() -> Schema {
+    utoipa::openapi::schema::AnyOfBuilder::new()
+        .item(ObjectBuilder::new().schema_type(Type::String).max_length(Some(10_000)))
+        .item(ObjectBuilder::new().schema_type(Type::Number))
+        .item(ObjectBuilder::new().schema_type(Type::Boolean))
+        .item(ObjectBuilder::new().schema_type(Type::Null))
+        .description(Some(
+            "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). \
+             Not allowed for \"reference\" attributes.",
+        ))
+        .into()
+}
+
 fn trimmed_list<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<Vec<String>>>, D::Error> {
     Ok(Some(Option::<Vec<String>>::deserialize(d)?.map(|v| v.into_iter().map(|s| s.trim().to_owned()).collect())))
 }
@@ -490,6 +599,9 @@ pub struct AttributeDefinitionCreate {
     #[schema(schema_with = nullable_uuid_schema)]
     #[serde(default)]
     reference_class_id: Option<Uuid>,
+    #[schema(schema_with = nullable_uuid_schema)]
+    #[serde(default)]
+    lookup_list_id: Option<Uuid>,
     #[schema(schema_with = name_schema)]
     #[serde(deserialize_with = "trimmed")]
     label: String,
@@ -507,13 +619,19 @@ pub struct AttributeDefinitionCreate {
     #[schema(schema_with = group_name_schema)]
     #[serde(default, deserialize_with = "schemas::trimmed_opt")]
     group_name: Option<String>,
+    #[schema(schema_with = help_text_schema)]
+    #[serde(default, deserialize_with = "schemas::trimmed_opt")]
+    help_text: Option<String>,
+    #[schema(schema_with = default_value_schema)]
+    #[serde(default)]
+    default_value: Option<Value>,
     #[schema(schema_with = sort_order_schema)]
     sort_order: Option<i32>,
     #[schema(nullable = false)]
     is_active: Option<bool>,
 }
 
-// `classId`, `key` and `dataType` are immutable: stored values depend on them.
+// `classId`, `key`, `dataType`, `referenceClassId` and `lookupListId` are immutable: stored values depend on them.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AttributeDefinitionUpdate {
@@ -534,6 +652,12 @@ pub struct AttributeDefinitionUpdate {
     #[schema(schema_with = group_name_schema)]
     #[serde(default, deserialize_with = "schemas::patch_trimmed")]
     group_name: Option<Option<String>>,
+    #[schema(schema_with = help_text_schema)]
+    #[serde(default, deserialize_with = "schemas::patch_trimmed")]
+    help_text: Option<Option<String>>,
+    #[schema(schema_with = default_value_schema)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    default_value: Option<Option<Value>>,
     #[schema(schema_with = sort_order_schema)]
     sort_order: Option<i32>,
     #[schema(nullable = false)]
@@ -555,12 +679,15 @@ impl Writable for AttributeDefinitionCreate {
             .opt("key", Some(self.key.clone()))
             .opt("data_type", Some(self.data_type.as_str().to_owned()))
             .opt("reference_class_id", self.reference_class_id.map(Some))
+            .opt("lookup_list_id", self.lookup_list_id.map(Some))
             .opt("label", Some(self.label.clone()))
             .opt("description", self.description.clone().map(Some))
             .opt("is_required", self.is_required)
             .opt("enum_values", self.enum_values.clone().map(|v| v.map(|l| json_list(&l))))
             .opt("validation", self.validation.as_ref().map(|v| Some(json_rules(v))))
             .opt("group_name", self.group_name.clone().map(Some))
+            .opt("help_text", self.help_text.clone().map(Some))
+            .opt("default_value", self.default_value.clone().filter(|v| !v.is_null()).map(Some))
             .opt("sort_order", self.sort_order)
             .opt("is_active", self.is_active);
         c
@@ -585,6 +712,16 @@ impl Check for AttributeDefinitionCreate {
         if !is_ref && self.reference_class_id.is_some() {
             errors.push(custom("referenceClassId", "Only allowed for reference attributes"));
         }
+        let is_lookup = self.data_type == AttributeDataType::Lookup;
+        if is_lookup && self.lookup_list_id.is_none() {
+            errors.push(custom("lookupListId", "Required for lookup attributes"));
+        }
+        if !is_lookup && self.lookup_list_id.is_some() {
+            errors.push(custom("lookupListId", "Only allowed for lookup attributes"));
+        }
+        if is_ref && self.default_value.as_ref().is_some_and(|v| !v.is_null()) {
+            errors.push(custom("defaultValue", "Reference attributes cannot have a default"));
+        }
         if let Some(v) = &self.validation {
             v.check(self.data_type, &mut errors);
         }
@@ -601,6 +738,8 @@ impl Writable for AttributeDefinitionUpdate {
             .opt("enum_values", self.enum_values.clone().map(|v| v.map(|l| json_list(&l))))
             .opt("validation", self.validation.as_ref().map(|v| v.as_ref().map(json_rules)))
             .opt("group_name", self.group_name.clone())
+            .opt("help_text", self.help_text.clone())
+            .opt("default_value", self.default_value.clone())
             .opt("sort_order", self.sort_order)
             .opt("is_active", self.is_active);
         c
@@ -682,8 +821,15 @@ impl Resource for AttributeDefinitions {
     const TAG: &'static str = "Attribute definitions";
     const SINGULAR: &'static str = "attributeDefinition";
     const PLURAL: &'static str = "attributeDefinitions";
-    const COLUMNS: &'static str = "id, class_id, key, label, description, data_type, is_required, enum_values, reference_class_id, validation, group_name, sort_order, is_active, created_at, updated_at";
+    const COLUMNS: &'static str = "id, class_id, key, label, description, data_type, is_required, enum_values, reference_class_id, lookup_list_id, validation, group_name, help_text, default_value, sort_order, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "label", "description", "group_name"];
+    const DELETE_DESCRIPTION: &'static str = "Hard delete, allowed only while no CI stores a value for the attribute (409 IN_USE with the count otherwise). Retire it with `PATCH {\"isActive\": false}` instead: stored values stay readable and no new ones are accepted.";
+    const USAGE: &'static [Usage] = &[Usage {
+        kind: "attributeValues",
+        label: "values stored on configuration items",
+        sql: "SELECT count(*) FROM ci_attribute_values WHERE attribute_id = $1",
+        blocking: true,
+    }];
 
     fn id(row: &AttributeDefinition) -> Uuid {
         row.id
@@ -707,37 +853,90 @@ impl Resource for AttributeDefinitions {
                     code: "unique".into(),
                 }]));
             }
-            if previous.is_none() {
-                return Ok(());
+            if previous.is_some() {
+                check_changed_definition(conn, row).await?;
             }
-            let rules: ValidationRules = row
-                .validation
-                .as_ref()
-                .and_then(|v| serde_json::from_value(Value::Object(v.0.clone())).ok())
-                .unwrap_or_default();
-            let mut issues = Vec::new();
-            rules.check(row.data_type, &mut issues);
-            if !issues.is_empty() {
-                for i in &mut issues {
-                    i.code = "invalid".into();
-                }
-                return Err(AppError::validation(issues));
-            }
-            if row.data_type == AttributeDataType::Enum
-                && let Some(allowed) = &row.enum_values
-            {
-                let stale = data::enum_values_in_use(conn, row.id, &allowed.0).await?;
-                if !stale.is_empty() {
-                    return Err(AppError::field(
-                        "enumValues",
-                        format!("Values still stored on CIs cannot be removed: {}", stale.join(", ")),
-                        "enum_value_in_use",
-                    ));
+            check_default_value(conn, row).await?;
+            let newly_required =
+                row.is_required && row.is_active && previous.is_none_or(|p| !(p.is_required && p.is_active));
+            if newly_required {
+                let missing = data::items_missing_value(conn, row.class_id, row.id).await?;
+                if missing > 0 {
+                    return Err(AppError::conflict(format!(
+                        "Existing CIs without a value for \"{}\": {missing}. Fill it in on those CIs first, or keep the attribute optional.",
+                        row.key
+                    ))
+                    .with_details(vec![FieldError {
+                        location: FieldLocation::Body,
+                        field: "isRequired".into(),
+                        message: format!("CIs without a value: {missing}"),
+                        code: "values_missing".into(),
+                    }]));
                 }
             }
             Ok(())
         })
     }
+}
+
+/// Validation rules and enum values of an edited definition still fit the stored values.
+async fn check_changed_definition(conn: &mut PgConnection, row: &AttributeDefinition) -> Result<(), AppError> {
+    let rules: ValidationRules = row
+        .validation
+        .as_ref()
+        .and_then(|v| serde_json::from_value(Value::Object(v.0.clone())).ok())
+        .unwrap_or_default();
+    let mut issues = Vec::new();
+    rules.check(row.data_type, &mut issues);
+    if !issues.is_empty() {
+        for i in &mut issues {
+            i.code = "invalid".into();
+        }
+        return Err(AppError::validation(issues));
+    }
+    if row.data_type == AttributeDataType::Enum
+        && let Some(allowed) = &row.enum_values
+    {
+        let stale = data::enum_values_in_use(conn, row.id, &allowed.0).await?;
+        if !stale.is_empty() {
+            return Err(AppError::field(
+                "enumValues",
+                format!("Values still stored on CIs cannot be removed: {}", stale.join(", ")),
+                "enum_value_in_use",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The default must be a value a CI of this attribute could hold.
+async fn check_default_value(conn: &mut PgConnection, row: &AttributeDefinition) -> Result<(), AppError> {
+    let Some(default) = row.default_value.as_ref().map(|d| &d.0) else { return Ok(()) };
+    let schema = crate::modules::items::value_schema(
+        row.data_type,
+        row.enum_values.as_ref().map(|v| v.0.as_slice()),
+        row.validation.as_ref().map(|v| &v.0),
+    );
+    let problems = validate::check(&schema, default, FieldLocation::Body, None);
+    if let Some(p) = problems.into_iter().next() {
+        return Err(AppError::field(
+            "defaultValue",
+            format!("Not a valid value for this attribute: {}", p.message),
+            "invalid",
+        ));
+    }
+    if let (Some(list_id), Some(value_id)) =
+        (row.lookup_list_id, default.as_str().and_then(|v| Uuid::parse_str(v).ok()))
+    {
+        match data::lookup_value_state(conn, list_id, value_id).await? {
+            Some(true) => {}
+            Some(false) => return Err(AppError::field("defaultValue", "This list value is retired", "invalid")),
+            None => {
+                return Err(AppError::field("defaultValue", "Not a value of the attribute's lookup list", "not_found"));
+            }
+        }
+    }
+    Ok(())
 }
 
 // ===========================================================================
@@ -927,6 +1126,26 @@ impl Resource for RelationshipTypes {
     const PLURAL: &'static str = "relationshipTypes";
     const COLUMNS: &'static str = "id, key, name, description, forward_label, reverse_label, is_directional, sort_order, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "forward_label", "reverse_label"];
+    const USAGE: &'static [Usage] = &[
+        Usage {
+            kind: "relationships",
+            label: "relationships",
+            sql: "SELECT count(*) FROM ci_relationships WHERE relationship_type_id = $1 AND deleted_at IS NULL",
+            blocking: true,
+        },
+        Usage {
+            kind: "deletedRelationships",
+            label: "deleted relationships (kept for history)",
+            sql: "SELECT count(*) FROM ci_relationships WHERE relationship_type_id = $1 AND deleted_at IS NOT NULL",
+            blocking: true,
+        },
+        Usage {
+            kind: "relationshipRules",
+            label: "relationship rules (removed with the type)",
+            sql: "SELECT count(*) FROM relationship_type_rules WHERE relationship_type_id = $1",
+            blocking: false,
+        },
+    ];
 
     fn id(row: &RelationshipType) -> Uuid {
         row.id
@@ -1052,6 +1271,21 @@ impl Resource for RelationshipRules {
     const SEARCH_COLUMNS: &'static [&'static str] = &[];
     const DELETE_DESCRIPTION: &'static str =
         "Hard delete. Existing relationships stay; new ones need another matching rule.";
+    const USAGE: &'static [Usage] = &[Usage {
+        kind: "relationships",
+        label: "live relationships between classes it covers (they stay after a delete)",
+        sql: "SELECT count(*)
+              FROM relationship_type_rules r
+              JOIN relationship_types t ON t.id = r.relationship_type_id
+              JOIN ci_relationships e ON e.relationship_type_id = r.relationship_type_id AND e.deleted_at IS NULL
+              JOIN configuration_items s ON s.id = e.source_ci_id
+              JOIN configuration_items g ON g.id = e.target_ci_id
+              WHERE r.id = $1
+                AND ((ci_class_is_a(s.class_id, r.source_class_id) AND ci_class_is_a(g.class_id, r.target_class_id))
+                  OR (NOT t.is_directional
+                      AND ci_class_is_a(g.class_id, r.source_class_id) AND ci_class_is_a(s.class_id, r.target_class_id)))",
+        blocking: false,
+    }];
 
     fn id(row: &RelationshipRule) -> Uuid {
         row.id

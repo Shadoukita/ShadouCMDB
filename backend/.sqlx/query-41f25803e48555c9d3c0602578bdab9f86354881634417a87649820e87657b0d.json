@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT v.ci_id, v.attribute_id, d.key, d.label,\n                  v.value_text, v.value_number::float8 AS value_number, v.value_boolean,\n                  v.value_date::text AS value_date, v.value_datetime,\n                  host(v.value_ip) AS value_ip, v.value_cidr::text AS value_cidr, v.value_ref_ci_id,\n                  r.name AS \"ref_name?\", (r.deleted_at IS NOT NULL) AS ref_deleted\n           FROM ci_attribute_values v\n           JOIN ci_attribute_definitions d ON d.id = v.attribute_id\n           LEFT JOIN configuration_items r ON r.id = v.value_ref_ci_id\n           WHERE v.ci_id = ANY($1)\n           ORDER BY d.sort_order, d.key",
+  "query": "SELECT v.ci_id, v.attribute_id, d.key, d.label,\n                  v.value_text, v.value_number::float8 AS value_number, v.value_boolean,\n                  v.value_date::text AS value_date, v.value_datetime,\n                  host(v.value_ip) AS value_ip, v.value_cidr::text AS value_cidr, v.value_ref_ci_id, v.value_lookup_id,\n                  r.name AS \"ref_name?\", (r.deleted_at IS NOT NULL) AS ref_deleted\n           FROM ci_attribute_values v\n           JOIN ci_attribute_definitions d ON d.id = v.attribute_id\n           LEFT JOIN configuration_items r ON r.id = v.value_ref_ci_id\n           WHERE v.ci_id = ANY($1)\n           ORDER BY d.sort_order, d.key",
   "describe": {
     "columns": [
       {
@@ -117,6 +117,17 @@
       },
       {
         "ordinal": 12,
+        "name": "value_lookup_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_values",
+            "name": "value_lookup_id"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
         "name": "ref_name?",
         "type_info": "Text",
         "origin": {
@@ -127,7 +138,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "ref_deleted",
         "type_info": "Bool",
         "origin": "Expression"
@@ -151,9 +162,10 @@
       null,
       null,
       true,
+      true,
       false,
       null
     ]
   },
-  "hash": "ee88274b1e8e80f14f778cb4d26fa50208ddf486fe55e2a884a1ac2f0615ed52"
+  "hash": "41f25803e48555c9d3c0602578bdab9f86354881634417a87649820e87657b0d"
 }

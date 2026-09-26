@@ -31,6 +31,7 @@ const CHECKS: &[&str] = &[
     "Guard: usernames are unique regardless of case",
     "Guard: the built-in Administrator profile cannot be deleted or changed",
     "Guard: the last active Administrator cannot be disabled or lose the profile",
+    "Guard: lookup attribute values come from the attribute's list and cannot be deleted while stored",
 ];
 
 /// Placeholder that satisfies users_password_hash_argon2id; nobody can sign in with it.
@@ -454,6 +455,56 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             c.execute("SET CONSTRAINTS ALL DEFERRED").await?;
             result
         }
+        20 => {
+            let list = |key: &'static str| {
+                sqlx::query_scalar::<_, Uuid>("INSERT INTO lookup_lists (key, name) VALUES ($1, $1) RETURNING id")
+                    .bind(key)
+            };
+            let value = |list_id: Uuid, key: &'static str| {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO lookup_list_values (list_id, key, name) VALUES ($1, $2, $2) RETURNING id",
+                )
+                .bind(list_id)
+                .bind(key)
+            };
+            let contracts = list("verify_contract").fetch_one(&mut *c).await?;
+            let colours = list("verify_colour").fetch_one(&mut *c).await?;
+            let gold = value(contracts, "gold").fetch_one(&mut *c).await?;
+            let red = value(colours, "red").fetch_one(&mut *c).await?;
+            let server = id_by_key(c, "ci_classes", "server").await?;
+            let attr: Uuid = sqlx::query_scalar(
+                "INSERT INTO ci_attribute_definitions (class_id, key, label, data_type, lookup_list_id)
+                 VALUES ($1, 'verify_contract', 'Contract', 'lookup', $2) RETURNING id",
+            )
+            .bind(server)
+            .bind(contracts)
+            .fetch_one(&mut *c)
+            .await?;
+            let ci = new_ci(c, "server", "verify-lookup").await?;
+            let store = |v: Uuid| {
+                sqlx::query(
+                    "INSERT INTO ci_attribute_values (ci_id, attribute_id, value_lookup_id) VALUES ($1, $2, $3)",
+                )
+                .bind(ci)
+                .bind(attr)
+                .bind(v)
+            };
+            let foreign = reject!(c, "ci_attribute_values_lookup_list", store(red).execute(&mut *c))?;
+            store(gold).execute(&mut *c).await?;
+            let delete = reject!(
+                c,
+                "ci_attribute_values_value_lookup_id_fkey",
+                sqlx::query("DELETE FROM lookup_list_values WHERE id = $1").bind(gold).execute(&mut *c)
+            )?;
+            let list_delete = reject!(
+                c,
+                "ci_attribute_definitions_lookup_list_id_fkey",
+                sqlx::query("DELETE FROM lookup_lists WHERE id = $1").bind(contracts).execute(&mut *c)
+            )?;
+            Ok(format!(
+                "value of another list {foreign}; deleting a stored value {delete}; deleting a list in use {list_delete}"
+            ))
+        }
         _ => unreachable!("unknown check {i}"),
     }
 }
@@ -464,6 +515,16 @@ pub async fn run(cfg: &DatabaseConfig) -> anyhow::Result<()> {
         .context("could not connect to PostgreSQL")?;
     let mut failed = 0;
     conn.execute("BEGIN").await?;
+    // The checks build on the IT infrastructure data model. A bare install gets
+    // it inside this transaction, so it is rolled back with everything else.
+    let ctx = crate::api::context::RequestContext::system("verify", "verify");
+    let template = crate::modules::templates::find("it_infrastructure").context("template missing")?;
+    let installed = crate::modules::templates::install(&mut conn, &ctx, template)
+        .await
+        .map_err(|e| anyhow!("installing the IT infrastructure template: {}", e.message))?;
+    if installed.created.classes > 0 {
+        println!("(bare database: IT infrastructure template installed for the checks, rolled back afterwards)\n");
+    }
     for (i, name) in CHECKS.iter().enumerate() {
         conn.execute("SAVEPOINT chk").await?;
         match run_check(i, &mut conn).await {

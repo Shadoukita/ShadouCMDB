@@ -17,6 +17,8 @@ pub const KEY_PATTERN: &str = "^[a-z][a-z0-9_]{0,62}$";
 pub const HOSTNAME_PATTERN: &str = "^[A-Za-z0-9]([A-Za-z0-9._-]{0,252})$";
 /// At least one non-whitespace character; values are trimmed when read.
 pub const NOT_BLANK_PATTERN: &str = "\\S";
+/// "#rrggbb"
+pub const COLOR_PATTERN: &str = "^#[0-9a-fA-F]{6}$";
 pub const USERNAME_PATTERN: &str = "^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$";
 
 // ---------------------------------------------------------------------------
@@ -136,6 +138,11 @@ pub fn nullable_hostname_schema() -> Schema {
 
 pub fn nullable_trimmed_schema(max: usize) -> Schema {
     nullable(string().min_length(Some(1)).max_length(Some(max)).pattern(Some(NOT_BLANK_PATTERN)))
+}
+
+/// "#rrggbb" or null.
+pub fn nullable_color_schema() -> Schema {
+    nullable(string().pattern(Some(COLOR_PATTERN)).description(Some("Hex colour, e.g. \"#1f6feb\"")))
 }
 
 pub fn nullable_string_schema(max: usize) -> Schema {

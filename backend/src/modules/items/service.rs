@@ -81,17 +81,22 @@ fn value_to_json(v: &StoredValueRow) -> Option<Value> {
     if let Some(ip) = v.value_ip.as_ref().or(v.value_cidr.as_ref()) {
         return Some(Value::String(ip.clone()));
     }
-    v.value_ref_ci_id.map(|id| Value::String(id.to_string()))
+    v.value_ref_ci_id.or(v.value_lookup_id).map(|id| Value::String(id.to_string()))
 }
 
 // ---------------------------------------------------------------------------
 // Attribute validation
 // ---------------------------------------------------------------------------
 
-/// The JSON Schema a value of this attribute must satisfy (same rules the
-/// SHAA-3 API enforced), including the definition's extra validation.
-fn value_schema(def: &EffectiveAttributeRow) -> Value {
-    let rules = def.validation.as_ref().map(|v| v.0.clone()).unwrap_or_default();
+/// The JSON Schema a value of an attribute must satisfy (same rules the
+/// SHAA-3 API enforced), including the definition's extra validation. Also
+/// checks attribute defaults.
+pub fn value_schema(
+    data_type: AttributeDataType,
+    enum_values: Option<&[String]>,
+    validation: Option<&Map<String, Value>>,
+) -> Value {
+    let rules = validation.cloned().unwrap_or_default();
     let mut range = Map::new();
     for (rule, keyword) in [("min", "minimum"), ("max", "maximum")] {
         if let Some(n) = rules.get(rule).filter(|n| n.is_number()) {
@@ -103,7 +108,7 @@ fn value_schema(def: &EffectiveAttributeRow) -> Value {
         s.insert("type".into(), ty.into());
         Value::Object(s)
     };
-    match def.data_type {
+    match data_type {
         AttributeDataType::Text => {
             let mut s = json!({ "type": "string", "maxLength": rules.get("maxLength").and_then(Value::as_u64).unwrap_or(10_000) });
             if let Some(p) = rules.get("pattern").and_then(Value::as_str) {
@@ -112,7 +117,7 @@ fn value_schema(def: &EffectiveAttributeRow) -> Value {
             s
         }
         AttributeDataType::Enum => {
-            json!({ "enum": def.enum_values.as_ref().map(|v| v.0.clone()).unwrap_or_default() })
+            json!({ "enum": enum_values.unwrap_or_default() })
         }
         AttributeDataType::Number => with_range("number"),
         AttributeDataType::Integer => with_range("integer"),
@@ -123,7 +128,7 @@ fn value_schema(def: &EffectiveAttributeRow) -> Value {
             { "type": "string", "format": "ipv4" }, { "type": "string", "format": "ipv6" } ] }),
         AttributeDataType::Cidr => json!({ "anyOf": [
             { "type": "string", "format": "cidrv4" }, { "type": "string", "format": "cidrv6" } ] }),
-        AttributeDataType::Reference => json!({ "type": "string", "format": "uuid" }),
+        AttributeDataType::Reference | AttributeDataType::Lookup => json!({ "type": "string", "format": "uuid" }),
     }
 }
 
@@ -138,6 +143,7 @@ fn to_stored(def: &EffectiveAttributeRow, v: &Value) -> Option<StoredValue> {
         T::Ip => StoredValue::Ip(v.as_str()?.to_owned()),
         T::Cidr => StoredValue::Cidr(v.as_str()?.to_owned()),
         T::Reference => StoredValue::Reference(Uuid::parse_str(v.as_str()?).ok()?),
+        T::Lookup => StoredValue::Lookup(Uuid::parse_str(v.as_str()?).ok()?),
     })
 }
 
@@ -165,6 +171,7 @@ async fn prepare_attributes<'d>(
     let mut errors = Vec::new();
     let mut prepared = Prepared { set: Vec::new(), clear: Vec::new() };
     let mut refs: Vec<(&EffectiveAttributeRow, Uuid)> = Vec::new();
+    let mut lookups: Vec<(&EffectiveAttributeRow, Uuid)> = Vec::new();
 
     for (key, value) in input.into_iter().flatten() {
         let field = format!("attributes.{key}");
@@ -190,7 +197,12 @@ async fn prepare_attributes<'d>(
             ));
             continue;
         }
-        let problems = validate::check(&value_schema(def), value, FieldLocation::Body, None);
+        let schema = value_schema(
+            def.data_type,
+            def.enum_values.as_ref().map(|v| v.0.as_slice()),
+            def.validation.as_ref().map(|v| &v.0),
+        );
+        let problems = validate::check(&schema, value, FieldLocation::Body, None);
         if !problems.is_empty() {
             let pattern = def.validation.as_ref().and_then(|v| v.0.get("pattern")).and_then(Value::as_str);
             for mut p in problems {
@@ -206,10 +218,22 @@ async fn prepare_attributes<'d>(
             errors.push(body_error(field, "Invalid input", "invalid_type"));
             continue;
         };
-        if let StoredValue::Reference(id) = stored {
-            refs.push((def, id));
+        match stored {
+            StoredValue::Reference(id) => refs.push((def, id)),
+            StoredValue::Lookup(id) => lookups.push((def, id)),
+            _ => {}
         }
         prepared.set.push((def, stored));
+    }
+
+    for (def, id) in lookups {
+        let field = format!("attributes.{}", def.key);
+        let list_id = def.lookup_list_id.unwrap_or_default();
+        match class_data::lookup_value_state(conn, list_id, id).await? {
+            Some(true) => {}
+            Some(false) => errors.push(body_error(field, "This list value is retired", "lookup_value_inactive")),
+            None => errors.push(body_error(field, "Not a value of this attribute's list", "not_found")),
+        }
     }
 
     if !refs.is_empty() {
@@ -226,6 +250,19 @@ async fn prepare_attributes<'d>(
     }
 
     if errors.is_empty() { Ok(prepared) } else { Err(AppError::validation(errors)) }
+}
+
+/// The input plus the default of every active attribute it leaves out.
+fn with_defaults(defs: &[EffectiveAttributeRow], input: Option<&Map<String, Value>>) -> Map<String, Value> {
+    let mut out = input.cloned().unwrap_or_default();
+    for d in defs.iter().filter(|d| d.is_active) {
+        if let Some(default) = &d.default_value
+            && !out.contains_key(&d.key)
+        {
+            out.insert(d.key.clone(), default.0.clone());
+        }
+    }
+    out
 }
 
 async fn write_attributes(
@@ -399,7 +436,8 @@ pub async fn create(
     let mut tx = pool.begin().await?;
     let key = class_key(&mut tx, input.class_id).await?;
     let defs = class_data::effective_attributes(&mut tx, input.class_id).await?;
-    let prepared = prepare_attributes(&mut tx, &defs, input.attributes.as_ref(), &key, None, false).await?;
+    let attributes = with_defaults(&defs, input.attributes.as_ref());
+    let prepared = prepare_attributes(&mut tx, &defs, Some(&attributes), &key, None, false).await?;
 
     let id = data::insert(
         &mut tx,
