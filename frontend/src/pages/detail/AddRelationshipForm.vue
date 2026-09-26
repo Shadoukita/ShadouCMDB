@@ -4,8 +4,12 @@ import { ApiError } from "../../api/client";
 import { useCreateRelationship, useRelationshipTypes, type Ci, type CiSummary } from "../../api/queries";
 import CiPicker from "../../components/CiPicker.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import { useSessionStore } from "../../stores/session";
 
-/** Relate this CI to another. Only types the API allows between the two classes are offered, in both directions. */
+/**
+ * Relate this CI to another. Only types the API allows between the two classes are offered, in both directions,
+ * and only in a direction the user may create (edit right on the source CI's class).
+ */
 const props = defineProps<{ ci: Ci }>();
 const target = ref<CiSummary | null>(null);
 const choice = ref("");
@@ -14,12 +18,15 @@ const done = ref<string | null>(null);
 const outTypes = useRelationshipTypes(() => props.ci.classId, () => target.value?.classId);
 const inTypes = useRelationshipTypes(() => target.value?.classId, () => props.ci.classId);
 const create = useCreateRelationship();
+const session = useSessionStore();
+const mayOut = computed(() => session.canOnClass(props.ci.classId, "edit"));
+const mayIn = computed(() => !!target.value && session.canOnClass(target.value.classId, "edit"));
 
 const options = computed(() => {
   const out: { value: string; label: string }[] = [];
   const name = target.value?.name;
-  for (const t of outTypes.data.value?.data ?? []) out.push({ value: `${t.id}:out`, label: `${props.ci.name} ${t.forwardLabel} ${name}` });
-  for (const t of inTypes.data.value?.data ?? []) {
+  if (mayOut.value) for (const t of outTypes.data.value?.data ?? []) out.push({ value: `${t.id}:out`, label: `${props.ci.name} ${t.forwardLabel} ${name}` });
+  for (const t of mayIn.value ? (inTypes.data.value?.data ?? []) : []) {
     if (!t.isDirectional && out.some((o) => o.value === `${t.id}:out`)) continue;
     out.push({ value: `${t.id}:in`, label: `${props.ci.name} ${t.isDirectional ? t.reverseLabel : t.forwardLabel} ${name}` });
   }

@@ -4,6 +4,12 @@ import { join } from "node:path";
 /** Browser and API-request state of the signed-in e2e user (cookies), shared by every test. */
 export const STORAGE_STATE = join(import.meta.dirname, ".auth", "state.json");
 
+/** The administrator the tests run as (created by first-run setup, or given by CI). */
+export const E2E_USER = {
+  username: process.env.E2E_USERNAME ?? "e2e-admin",
+  password: process.env.E2E_PASSWORD ?? "e2e-admin-password",
+};
+
 /**
  * Signs in once before the tests. On a database without users this completes
  * first-run setup as E2E_USERNAME; otherwise E2E_USERNAME / E2E_PASSWORD must
@@ -12,8 +18,7 @@ export const STORAGE_STATE = join(import.meta.dirname, ".auth", "state.json");
  */
 export default async function globalSetup(config: FullConfig) {
   const baseURL = config.projects[0]?.use.baseURL;
-  const username = process.env.E2E_USERNAME ?? "e2e-admin";
-  const password = process.env.E2E_PASSWORD ?? "e2e-admin-password";
+  const { username, password } = E2E_USER;
   const ctx = await request.newContext({ baseURL });
   const setup = await ctx.get("/api/v1/setup");
   if (!setup.ok()) throw new Error(`GET /api/v1/setup → ${setup.status()}: is the API running at ${baseURL}?`);

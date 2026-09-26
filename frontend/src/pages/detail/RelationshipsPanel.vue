@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { useDeleteRelationship, useRelationships, type Ci, type Relationship } from "../../api/queries";
+import { useCiClasses, useDeleteRelationship, useRelationships, type Ci, type Relationship } from "../../api/queries";
 import CiLink from "../../components/CiLink.vue";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import EmptyState from "../../components/EmptyState.vue";
@@ -8,12 +8,19 @@ import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import { describeEdge } from "../../lib/relationships";
 import type { TrailStep } from "../../lib/trail";
+import { useSessionStore } from "../../stores/session";
 import AddRelationshipForm from "./AddRelationshipForm.vue";
 
 const props = defineProps<{ ci: Ci; self: TrailStep; trail: TrailStep[] }>();
 const rels = useRelationships(() => props.ci.id);
 const removing = ref<Relationship | null>(null);
 const del = useDeleteRelationship();
+const session = useSessionStore();
+const classes = useCiClasses();
+// A relationship belongs to its source CI: adding or removing one needs the edit right on the source's class.
+const classIdByKey = computed(() => new Map((classes.data.value ?? []).map((c) => [c.key, c.id])));
+const mayRemove = (r: Relationship) => session.canOnClass(classIdByKey.value.get(r.source.classKey), "edit");
+const mayAdd = computed(() => session.canOnAnyClass("edit"));
 const rows = computed(() =>
   [...(rels.data.value?.data ?? [])]
     .map((r) => ({ r, d: describeEdge(r, props.ci.id) }))
@@ -45,7 +52,9 @@ function confirmRemove() {
         {{
           ci.deletedAt
             ? "Deleted CIs keep no live relationships."
-            : "Relate this CI to the things it runs on, depends on, or is located in using the form below."
+            : mayAdd
+              ? "Relate this CI to the things it runs on, depends on, or is located in using the form below."
+              : "This CI is not related to anything yet."
         }}
       </EmptyState>
       <div v-if="rows.length > 0" class="table-wrap">
@@ -72,6 +81,7 @@ function confirmRemove() {
               <td :title="r.notes ?? undefined">{{ r.notes ?? "" }}</td>
               <td v-if="!ci.deletedAt" class="num">
                 <button
+                  v-if="mayRemove(r)"
                   type="button"
                   class="btn-link danger"
                   :aria-label="`Remove relationship: ${ci.name} ${d.label} ${d.other.name}`"
@@ -84,7 +94,7 @@ function confirmRemove() {
           </tbody>
         </table>
       </div>
-      <AddRelationshipForm v-if="!ci.deletedAt" :ci="ci" />
+      <AddRelationshipForm v-if="!ci.deletedAt && mayAdd" :ci="ci" />
     </div>
     <ConfirmDialog
       :open="!!removing"

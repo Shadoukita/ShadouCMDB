@@ -5,6 +5,7 @@ import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import { formatDateTime } from "../../lib/format";
+import AuditActor from "../admin/AuditActor.vue";
 
 /** Change history from GET /audit-log?entityId=… with a field-level diff of each update. */
 const props = defineProps<{ ci: Ci }>();
@@ -55,7 +56,7 @@ const actionTone = (action: string) => (action === "delete" ? "danger" : action 
           <tr>
             <th scope="col">When</th>
             <th scope="col">Action</th>
-            <th scope="col">Actor</th>
+            <th scope="col">Changed by</th>
             <th scope="col" style="width: 100%">Changes</th>
           </tr>
         </thead>
@@ -63,10 +64,7 @@ const actionTone = (action: string) => (action === "delete" ? "danger" : action 
           <tr v-for="e in entries" :key="e.id" style="vertical-align: top">
             <td style="padding-top: 5px">{{ formatDateTime(e.occurredAt) }}</td>
             <td style="padding-top: 5px"><span :class="['badge', actionTone(e.action)]">{{ e.action }}</span></td>
-            <td style="padding-top: 5px">
-              <template v-if="e.actorName">{{ e.actorName }}</template><span v-else class="muted">unknown</span>
-              <span class="muted">({{ e.actorType }})</span>
-            </td>
+            <td style="padding-top: 5px"><AuditActor :entry="e" /></td>
             <td style="white-space: normal; padding-top: 5px; padding-bottom: 5px">
               <span v-if="e.action === 'create'" class="muted">Created</span>
               <span v-else-if="e.action === 'delete'" class="muted">Deleted (relationships removed with it)</span>

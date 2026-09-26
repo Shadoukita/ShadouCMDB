@@ -7,12 +7,14 @@ import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import { useDocumentTitle } from "../lib/composables";
+import { useSessionStore } from "../stores/session";
 import CiForm from "./form/CiForm.vue";
 
 const route = useRoute();
 const ci = useCi(() => String(route.params.id));
 useDocumentTitle(() => (ci.data.value ? `Edit ${ci.data.value.name}` : "Edit CI"));
 const c = computed(() => ci.data.value);
+const session = useSessionStore();
 </script>
 
 <template>
@@ -20,6 +22,10 @@ const c = computed(() => ci.data.value);
   <ErrorAlert v-else-if="ci.isError.value" :error="ci.error.value" :on-retry="() => ci.refetch()" />
   <EmptyState v-else-if="c && c.deletedAt" title="This configuration item is deleted">
     Deleted CIs cannot be edited.
+    <template #actions><RouterLink :to="`/cis/${c.id}`">Back to the record</RouterLink></template>
+  </EmptyState>
+  <EmptyState v-else-if="c && !session.canOnClass(c.classId, 'edit')" title="Permission denied">
+    None of your permission profiles allows editing {{ c.class.name }} configuration items.
     <template #actions><RouterLink :to="`/cis/${c.id}`">Back to the record</RouterLink></template>
   </EmptyState>
   <template v-else-if="c">

@@ -1,0 +1,195 @@
+// TanStack Query composables for sign-in and the Administration area (users,
+// permission profiles, audit log). Same rules as queries.ts: every request goes
+// through the typed client, and mutations invalidate exactly what they change.
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
+import { toValue, type MaybeRefOrGetter } from "vue";
+import { api, unwrap, type Schemas } from "./client";
+import { MAX_PAGE } from "./queries";
+import type { paths } from "./schema";
+
+export type Session = Schemas["Session"];
+export type User = Schemas["User"];
+export type PermissionProfile = Schemas["PermissionProfile"];
+export type ClassPermission = Schemas["ClassPermission"];
+export type EffectivePermissions = Schemas["EffectivePermissions"];
+export type GlobalPermission = EffectivePermissions["global"][number];
+
+type Body<P extends keyof paths, M extends "post" | "patch" | "put"> = NonNullable<
+  (paths[P][M] & { requestBody?: { content: { "application/json": unknown } } })["requestBody"]
+>["content"]["application/json"];
+
+export type SetupBody = Body<"/api/v1/setup", "post">;
+export type LoginBody = Body<"/api/v1/auth/login", "post">;
+export type UserCreateBody = Body<"/api/v1/admin/users", "post">;
+export type UserUpdateBody = Body<"/api/v1/admin/users/{id}", "patch">;
+export type ProfileCreateBody = Body<"/api/v1/admin/profiles", "post">;
+export type ProfileUpdateBody = Body<"/api/v1/admin/profiles/{id}", "patch">;
+export type UserListQuery = NonNullable<paths["/api/v1/admin/users"]["get"]["parameters"]["query"]>;
+export type ProfileListQuery = NonNullable<paths["/api/v1/admin/profiles"]["get"]["parameters"]["query"]>;
+export type AuditListQuery = NonNullable<paths["/api/v1/audit-log"]["get"]["parameters"]["query"]>;
+
+export const adminKeys = {
+  users: ["admin", "users"] as const,
+  userList: (q: UserListQuery) => ["admin", "users", "list", q] as const,
+  user: (id: string) => ["admin", "users", "detail", id] as const,
+  profiles: ["admin", "profiles"] as const,
+  profileList: (q: ProfileListQuery) => ["admin", "profiles", "list", q] as const,
+  profile: (id: string) => ["admin", "profiles", "detail", id] as const,
+  auditList: (q: AuditListQuery) => ["audit", "list", q] as const,
+};
+
+// ---------- Sign-in (called by the session store, not by components) ----------
+
+export const authApi = {
+  setupStatus: () => unwrap(api.GET("/api/v1/setup")),
+  setup: (body: SetupBody) => unwrap(api.POST("/api/v1/setup", { body })),
+  login: (body: LoginBody) => unwrap(api.POST("/api/v1/auth/login", { body })),
+  logout: () => unwrap(api.POST("/api/v1/auth/logout")),
+  me: () => unwrap(api.GET("/api/v1/auth/me")),
+};
+
+// ---------- Users ----------
+
+export function useUserList(query: MaybeRefOrGetter<UserListQuery>, enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery(() => {
+    const q = toValue(query);
+    return {
+      queryKey: adminKeys.userList(q),
+      enabled: toValue(enabled),
+      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/admin/users", { params: { query: q }, signal })),
+      placeholderData: keepPreviousData,
+    };
+  });
+}
+
+export function useUser(id: MaybeRefOrGetter<string | undefined>) {
+  return useQuery(() => {
+    const userId = toValue(id) ?? "";
+    return {
+      queryKey: adminKeys.user(userId),
+      enabled: !!userId,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/admin/users/{id}", { params: { path: { id: userId } }, signal })),
+    };
+  });
+}
+
+export function useCreateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: UserCreateBody) => unwrap(api.POST("/api/v1/admin/users", { body })),
+    onSuccess: (user) => {
+      qc.invalidateQueries({ queryKey: adminKeys.users });
+      qc.invalidateQueries({ queryKey: adminKeys.profiles }); // userCount
+      qc.setQueryData(adminKeys.user(user.id), user);
+    },
+  });
+}
+
+export function useUpdateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: UserUpdateBody }) =>
+      unwrap(api.PATCH("/api/v1/admin/users/{id}", { params: { path: { id } }, body })),
+    onSuccess: (user) => {
+      qc.invalidateQueries({ queryKey: adminKeys.users });
+      qc.invalidateQueries({ queryKey: adminKeys.profiles });
+      qc.setQueryData(adminKeys.user(user.id), user);
+    },
+  });
+}
+
+export function useSetUserPassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, password }: { id: string; password: string }) =>
+      unwrap(api.PUT("/api/v1/admin/users/{id}/password", { params: { path: { id } }, body: { password } })),
+    onSuccess: (user) => qc.setQueryData(adminKeys.user(user.id), user),
+  });
+}
+
+export function useDeleteUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.DELETE("/api/v1/admin/users/{id}", { params: { path: { id } } })),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: adminKeys.users });
+      qc.invalidateQueries({ queryKey: adminKeys.profiles });
+    },
+  });
+}
+
+// ---------- Permission profiles ----------
+
+export function useProfileList(query: MaybeRefOrGetter<ProfileListQuery>) {
+  return useQuery(() => {
+    const q = toValue(query);
+    return {
+      queryKey: adminKeys.profileList(q),
+      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/admin/profiles", { params: { query: q }, signal })),
+      placeholderData: keepPreviousData,
+    };
+  });
+}
+
+/** Every profile, for pickers (the API serves at most MAX_PAGE; beyond that the picker says so). */
+export function useAllProfiles() {
+  return useProfileList({ limit: MAX_PAGE, sort: "name" });
+}
+
+export function useProfile(id: MaybeRefOrGetter<string | undefined>) {
+  return useQuery(() => {
+    const profileId = toValue(id) ?? "";
+    return {
+      queryKey: adminKeys.profile(profileId),
+      enabled: !!profileId,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/admin/profiles/{id}", { params: { path: { id: profileId } }, signal })),
+    };
+  });
+}
+
+function useProfileMutation<V>(fn: (vars: V) => Promise<PermissionProfile | undefined>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (profile) => {
+      qc.invalidateQueries({ queryKey: adminKeys.profiles });
+      // Users list their profiles by name, and holders' effective permissions change.
+      qc.invalidateQueries({ queryKey: adminKeys.users });
+      if (profile) qc.setQueryData(adminKeys.profile(profile.id), profile);
+    },
+  });
+}
+
+export const useCreateProfile = () =>
+  useProfileMutation((body: ProfileCreateBody) => unwrap(api.POST("/api/v1/admin/profiles", { body })));
+
+export const useUpdateProfile = () =>
+  useProfileMutation(({ id, body }: { id: string; body: ProfileUpdateBody }) =>
+    unwrap(api.PATCH("/api/v1/admin/profiles/{id}", { params: { path: { id } }, body })),
+  );
+
+export const useCloneProfile = () =>
+  useProfileMutation(({ id, name }: { id: string; name: string }) =>
+    unwrap(api.POST("/api/v1/admin/profiles/{id}/clone", { params: { path: { id } }, body: { name } })),
+  );
+
+export const useDeleteProfile = () =>
+  useProfileMutation(async (id: string) => {
+    await unwrap(api.DELETE("/api/v1/admin/profiles/{id}", { params: { path: { id } } }));
+    return undefined;
+  });
+
+// ---------- Audit log ----------
+
+export function useAuditList(query: MaybeRefOrGetter<AuditListQuery>) {
+  return useQuery(() => {
+    const q = toValue(query);
+    return {
+      queryKey: adminKeys.auditList(q),
+      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/audit-log", { params: { query: q }, signal })),
+      placeholderData: keepPreviousData,
+    };
+  });
+}
