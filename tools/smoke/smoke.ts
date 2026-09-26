@@ -125,7 +125,7 @@ async function call(
   expect?: number,
   headers: Record<string, string> = {},
   opts: { cover?: boolean; accept?: number[] } = {},
-): Promise<{ status: number; json: Json; headers: Headers }> {
+): Promise<{ status: number; json: Json; headers: Headers; bytes: Uint8Array }> {
   const res = await fetch(BASE + url, {
     method,
     headers: {
@@ -136,7 +136,9 @@ async function call(
     },
     body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
   });
-  const text = await res.text();
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const binary = /^image\//.test(res.headers.get('content-type') ?? '');
+  const text = binary ? '' : new TextDecoder().decode(bytes);
   const json = text ? JSON.parse(text) : undefined;
   calls++;
   const op = operationFor(method, url);
@@ -149,7 +151,7 @@ async function call(
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${method.padEnd(6)} ${url} -> ${res.status}${summary ? `  ${summary}` : ''}`);
   if (VERBOSE && json) console.log(JSON.stringify(json, null, 1).slice(0, 2000));
   if (!ok) failures.push(`${method} ${url}: expected ${expect ?? '2xx'}, got ${res.status} ${text.slice(0, 400)}`);
-  return { status: res.status, json, headers: res.headers };
+  return { status: res.status, json, headers: res.headers, bytes };
 }
 
 /** The session and CSRF cookies from a login or setup response. */
@@ -222,7 +224,7 @@ async function main() {
 
   // --- Without a session, everything but health, login and setup is 401 ----------
   console.log('\n# Unauthenticated');
-  const PUBLIC = ['getLiveness', 'getReadiness', 'getSetupStatus', 'completeSetup', 'login'];
+  const PUBLIC = ['getLiveness', 'getReadiness', 'getSetupStatus', 'completeSetup', 'login', 'getPublicBranding', 'getUiAsset'];
   const specPublic = Object.values(spec.paths as Record<string, Record<string, Json>>)
     .flatMap((m) => Object.values(m))
     .filter((op) => Array.isArray(op.security) && op.security.length === 0)
@@ -466,6 +468,7 @@ async function main() {
   await get('/api/v1/search', 400);
 
   await permissions({ serverClass, appClass, dbClass, server, app, database, r1, inService, adminMe });
+  await customization({ serverClass, adminMe });
 
   // --- Deletes and history ------------------------------------------------------
   console.log('\n# Deletes, audit');
@@ -713,6 +716,172 @@ async function permissions(x: Json) {
   await del(`/api/v1/admin/users/${nobody.id}`);
   for (const p of [readers, editors, copy, userManagers]) await del(`/api/v1/admin/profiles/${p.id}`);
   await del(`/api/v1/admin/profiles/${readers.id}`, 404);
+}
+
+const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const b64 = (s: string | Uint8Array) => Buffer.from(s).toString('base64');
+const fields = (r: { json: Json }) => (r.json?.error?.details ?? []).map((d: Json) => d.field as string);
+
+/** UI settings (versioned, audited), logo and favicon, configuration export and import. */
+async function customization(x: Json) {
+  const { serverClass, adminMe } = x;
+  const put = (url: string, body: unknown, expect = 200) => call('PUT', url, body, expect);
+
+  console.log('\n# UI settings');
+  const before = (await get('/api/v1/ui-settings')).json;
+  const firstVersion: number = before.version;
+  const serverKey: string = (await get(`/api/v1/ci-classes/${serverClass}`)).json.key;
+  const gone = `gone_${RUN}`;
+  const doc = {
+    branding: { appName: `Smoke CMDB ${RUN}`, primaryColor: '#1f6feb', accentColor: null, defaultTheme: 'dark' },
+    navigation: {
+      entries: [
+        { type: 'page', page: 'dashboard' },
+        { type: 'section', key: 'infra', label: 'Infrastructure', items: [{ classKey: serverKey, label: 'Hosts' }, { classKey: gone }] },
+        { type: 'page', page: 'audit_log', hidden: true },
+      ],
+    },
+    dashboard: {
+      widgets: [
+        { id: 'by_class', type: 'count_by_class', classKeys: [serverKey] },
+        { id: 'recent', type: 'recent_changes', limit: 5, size: 'large' },
+        { id: 'prod', type: 'saved_search', title: 'Production servers', search: { classKeys: [serverKey], filters: { environmentKeys: ['production'], statusKeys: [gone] } } },
+      ],
+    },
+    listViews: [{ classKey: serverKey, columns: ['name', 'status', 'attributes.cpu_cores', `attributes.${gone}`], defaultSort: { field: 'name', direction: 'desc' }, pageSize: 25 }],
+    layouts: [{ classKey: serverKey, panels: [{ key: 'main', label: 'Main', fields: ['name', 'hostname'] }], hiddenFields: ['notes'], readOnlyFields: ['serialNumber'] }],
+  };
+  const stale = await put('/api/v1/ui-settings', { version: firstVersion + 1000, settings: doc }, 409);
+  check(stale.json.error?.code === 'VERSION_CONFLICT', 'saving over a newer version is a VERSION_CONFLICT');
+  const invalid = await put('/api/v1/ui-settings', { version: firstVersion, settings: { navigation: { entries: [{ type: 'page' }] }, layouts: [{ classKey: serverKey, hiddenFields: ['name'] }] } }, 400);
+  check(fields(invalid).includes('settings.navigation.entries.0.page') && fields(invalid).includes('settings.layouts.0.hiddenFields.0'), 'cross-field rules report paths into the document');
+  await put('/api/v1/ui-settings', { version: firstVersion, settings: { branding: { primaryColor: 'blue' } } }, 400);
+  await put('/api/v1/ui-settings', { version: firstVersion, settings: { menu: [] } }, 400);
+  const saved = (await put('/api/v1/ui-settings', { version: firstVersion, settings: doc, comment: 'smoke' })).json;
+  const codes = saved.issues.map((i: Json) => i.code);
+  check(saved.version === firstVersion + 1 && codes.includes('unknown_class') && codes.includes('unknown_attribute') && codes.includes('unknown_status'), 'dangling references are accepted and reported as issues');
+  check(saved.settings.navigation.entries[1].items.length === 1 && !saved.settings.listViews[0].columns.includes(`attributes.${gone}`), 'the effective settings leave dangling references out');
+  const same = (await put('/api/v1/ui-settings', { version: saved.version, settings: doc })).json;
+  check(same.version === saved.version, 'saving an unchanged document creates no version');
+  const branding = (await as(null, () => get('/api/v1/ui-settings/branding'))).json;
+  check(branding.appName === `Smoke CMDB ${RUN}` && branding.defaultTheme === 'dark' && branding.primaryColor === '#1f6feb', 'branding is public for the login page');
+  const versions = (await get('/api/v1/ui-settings/versions?limit=2')).json;
+  check(versions.data[0]?.version === saved.version && versions.data[0].isCurrent && versions.data[0].comment === 'smoke' && versions.data[0].actorName === ADMIN_USERNAME, 'versions list the saved document, newest first');
+  const v1 = (await get(`/api/v1/ui-settings/versions/${firstVersion}`)).json;
+  check(v1.isCurrent === false && typeof v1.settings.branding === 'object', 'an earlier version keeps its document');
+  await get('/api/v1/ui-settings/versions/999999', 404);
+  await get('/api/v1/ui-settings/versions/abc', 400);
+  const trail = (await get('/api/v1/audit-log?entityType=ui_settings&limit=1')).json;
+  check(trail.data[0]?.newValue?.version === saved.version && trail.data[0].oldValue?.version === firstVersion && trail.data[0].actorId === adminMe.user.id, 'settings changes are audited with both versions');
+
+  console.log('\n# Logo and favicon');
+  const originals: Record<string, Json> = {};
+  for (const kind of ['logo', 'favicon']) {
+    const a = saved.assets[kind];
+    if (a) originals[kind] = { contentType: a.contentType, data: b64((await get(`/api/v1/ui-settings/assets/${kind}`)).bytes) };
+  }
+  const logo = (await put('/api/v1/ui-settings/assets/logo', { contentType: 'image/png', data: PNG_1X1 })).json;
+  check(logo.kind === 'logo' && logo.size === 70 && logo.url.startsWith('/api/v1/ui-settings/assets/logo?v='), 'logo uploaded');
+  const img = await as(null, () => get('/api/v1/ui-settings/assets/logo'));
+  check(img.headers.get('content-type') === 'image/png' && b64(img.bytes) === PNG_1X1, 'the logo is served as uploaded, without a session');
+  check(/sandbox/.test(img.headers.get('content-security-policy') ?? '') && img.headers.get('x-content-type-options') === 'nosniff', 'images are served with a sandboxing CSP and nosniff');
+  await as(null, () => call('GET', '/api/v1/ui-settings/assets/logo', undefined, 304, { 'if-none-match': img.headers.get('etag') ?? '' }));
+  await put('/api/v1/ui-settings/assets/favicon', { contentType: 'image/jpeg', data: b64('\xff\xd8\xff') }, 400);
+  const script = await put('/api/v1/ui-settings/assets/logo', { contentType: 'image/svg+xml', data: b64('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>') }, 400);
+  check(script.json.error?.details?.[0]?.code === 'unsafe_content', 'SVGs with scripts are refused');
+  await put('/api/v1/ui-settings/assets/logo', { contentType: 'image/jpeg', data: PNG_1X1 }, 400);
+  await put('/api/v1/ui-settings/assets/logo', { contentType: 'image/png', data: 'not base64!' }, 400);
+  const big = new Uint8Array(130 * 1024);
+  big.set(Buffer.from(PNG_1X1, 'base64'));
+  const tooBig = await put('/api/v1/ui-settings/assets/favicon', { contentType: 'image/png', data: b64(big) }, 400);
+  check(tooBig.json.error?.details?.[0]?.code === 'too_big', 'favicons are limited to 128 KiB');
+  await put('/api/v1/ui-settings/assets/banner', { contentType: 'image/png', data: PNG_1X1 }, 400);
+  await put('/api/v1/ui-settings/assets/favicon', { contentType: 'image/svg+xml', data: b64('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>') });
+  const withImages = (await as(null, () => get('/api/v1/ui-settings/branding'))).json;
+  check(withImages.logo?.contentType === 'image/png' && withImages.favicon?.contentType === 'image/svg+xml', 'branding lists both images');
+
+  console.log('\n# Configuration export/import');
+  const scratch = (await post('/api/v1/statuses', { key: `smoke_exp_${RUN}`, name: 'Exported status' })).json;
+  const exported = await get('/api/v1/admin/config/export');
+  const file = exported.json;
+  const raw = JSON.stringify(file);
+  check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 1 && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
+  check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
+  const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
+  check(noop.applied === false && noop.changes.length === 0 && noop.summary.every((s: Json) => s.created + s.updated + s.deleted === 0), `importing an install's own export changes nothing (${JSON.stringify(noop.changes).slice(0, 300)})`);
+
+  const changed = structuredClone(file);
+  changed.lookups.statuses.find((s: Json) => s.key === scratch.key).name = 'Renamed by import';
+  changed.lookups.statuses.push({ key: `smoke_imp_${RUN}`, name: 'Imported status' });
+  changed.dataModel.classes.push({ key: `smoke_imp_${RUN}`, name: 'Imported class', parent: serverKey });
+  changed.dataModel.attributes.push({ class: `smoke_imp_${RUN}`, key: 'rack_unit', label: 'Rack unit', dataType: 'integer', validation: { min: 1 } });
+  changed.uiSettings.settings.branding.appName = `Imported ${RUN}`;
+  changed.uiSettings.favicon = null;
+  const dry = (await post('/api/v1/admin/config/import?mode=dry_run', changed, 200)).json;
+  const change = (section: string, key: string) => dry.changes.find((c: Json) => c.section === section && c.key === key);
+  check(change('statuses', scratch.key)?.action === 'update' && change('statuses', scratch.key).fields[0]?.to === 'Renamed by import', 'dry run: updated fields with old and new values');
+  check(change('statuses', `smoke_imp_${RUN}`)?.action === 'create' && change('classes', `smoke_imp_${RUN}`)?.action === 'create' && change('attributes', `smoke_imp_${RUN}.rack_unit`)?.action === 'create', 'dry run: created rows');
+  check(change('uiSettings', 'settings')?.action === 'update' && change('uiSettings', 'favicon')?.action === 'delete', 'dry run: UI settings and images');
+  check(dry.summary.find((s: Json) => s.section === 'statuses')?.notInFile === 0, 'dry run: counts rows missing from the file');
+  check((await get(`/api/v1/statuses?q=smoke_imp_${RUN}`)).json.page.total === 0 && (await get(`/api/v1/statuses/${scratch.id}`)).json.name === 'Exported status', 'a dry run changes nothing');
+  const applied = (await post('/api/v1/admin/config/import?mode=apply', changed, 200)).json;
+  check(applied.applied === true && applied.changes.length === dry.changes.length, 'apply makes the changes the dry run reported');
+  const imported = (await get(`/api/v1/statuses?q=smoke_imp_${RUN}`)).json.data[0];
+  check(imported && (await get(`/api/v1/statuses/${scratch.id}`)).json.name === 'Renamed by import', 'imported rows exist');
+  const after = (await as(null, () => get('/api/v1/ui-settings/branding'))).json;
+  check(after.appName === `Imported ${RUN}` && after.favicon === null && after.logo !== null, 'imported UI settings and images apply');
+  const importAudit = (await get(`/api/v1/audit-log?entityType=statuses&entityId=${imported.id}`)).json;
+  check(importAudit.data[0]?.action === 'create' && importAudit.data[0].actorId === adminMe.user.id, 'imported rows are audited with the importing user');
+  const again = (await post('/api/v1/admin/config/import?mode=apply', changed, 200)).json;
+  check(again.changes.length === 0, 're-importing the same file changes nothing');
+
+  const broken = await post('/api/v1/admin/config/import?mode=dry_run', {
+    format: 'shadoucmdb.config',
+    formatVersion: 1,
+    dataModel: { attributes: [{ class: `nope_${RUN}`, key: 'x', label: 'X', dataType: 'enum' }] },
+    lookups: { statuses: [{ key: `dup_${RUN}`, name: 'A' }, { key: `dup_${RUN}`, name: 'B' }] },
+  }, 400);
+  check(['dataModel.attributes.0.class', 'dataModel.attributes.0.enumValues', 'lookups.statuses.1'].every((f) => fields(broken).includes(f)), 'every problem in the file is reported with its path');
+  const retyped = structuredClone(file);
+  const attr = retyped.dataModel.attributes.find((a: Json) => a.dataType === 'integer' || a.dataType === 'number');
+  attr.dataType = 'text';
+  const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
+  check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 2 }, 400);
+  await post('/api/v1/admin/config/import', file, 400); // mode is required
+  await post('/api/v1/admin/config/import?mode=later', file, 400);
+
+  console.log('\n# Export/import permission');
+  const password = `importer-${RUN}-password`;
+  const importers = (await post('/api/v1/admin/profiles', { name: `smoke-importers-${RUN}`, globalPermissions: ['config.export_import'] })).json;
+  const importer = (await post('/api/v1/admin/users', { username: `smoke-importer-${RUN}`, displayName: 'Importer', password, profileIds: [importers.id] })).json;
+  await as(await login(importer.username, password), async () => {
+    await get('/api/v1/admin/config/export');
+    const esc = await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 1, permissionProfiles: [{ name: `smoke-escalate-${RUN}`, globalPermissions: ['users.manage'] }] }, 403);
+    check(esc.json.error?.code === 'FORBIDDEN', 'an import cannot create a profile granting more than the importer holds');
+    await put('/api/v1/ui-settings', { version: 1, settings: {} }, 403);
+    await get('/api/v1/ui-settings'); // any signed-in user reads the settings
+  });
+
+  // Clean up and put the settings and images back.
+  await del(`/api/v1/admin/users/${importer.id}`);
+  await del(`/api/v1/admin/profiles/${importers.id}`);
+  const attrs = (await get(`/api/v1/attribute-definitions?q=rack_unit&limit=200`)).json.data;
+  const newClass = (await get(`/api/v1/ci-classes?q=smoke_imp_${RUN}`)).json.data[0];
+  for (const a of attrs.filter((a: Json) => a.classId === newClass.id)) await del(`/api/v1/attribute-definitions/${a.id}`);
+  await del(`/api/v1/ci-classes/${newClass.id}`);
+  await del(`/api/v1/statuses/${imported.id}`);
+  await del(`/api/v1/statuses/${scratch.id}`);
+  const current = (await get('/api/v1/ui-settings')).json;
+  const restored = (await post(`/api/v1/ui-settings/versions/${firstVersion}/restore`, { version: current.version }, 200)).json;
+  check(restored.version === current.version + 1 && JSON.stringify(restored.settings) === JSON.stringify(before.settings), 'restoring an earlier version saves it as a new version');
+  await post(`/api/v1/ui-settings/versions/${firstVersion}/restore`, { version: current.version }, 409);
+  await del('/api/v1/ui-settings/assets/logo');
+  await del('/api/v1/ui-settings/assets/logo', 404);
+  await get('/api/v1/ui-settings/assets/logo', 404);
+  for (const [kind, asset] of Object.entries(originals)) await put(`/api/v1/ui-settings/assets/${kind}`, asset);
 }
 
 main().catch((err) => {
