@@ -234,13 +234,30 @@ test("history: an earlier version can be restored", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Customize the Server layout" })).toBeVisible();
 });
 
+test("a concurrent save is reported, not overwritten", async ({ page, request }) => {
+  await page.goto("/admin/customization/branding");
+  await page.getByLabel("Application name").fill(`${APP} mine`);
+  // Someone else saves in between.
+  const s = await apiGet<Settings>(request, "/ui-settings");
+  const res = await request.put("/api/v1/ui-settings", {
+    data: { version: s.version, settings: { ...s.settings, branding: { ...(s.settings.branding as object), appName: `${APP} theirs` } } },
+    headers: { "X-CSRF-Token": await csrf(request) },
+  });
+  expect(res.ok()).toBeTruthy();
+  await page.getByRole("region", { name: "Save changes" }).getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Someone else saved the settings" })).toBeVisible();
+  await page.getByRole("button", { name: "Load the latest version" }).click();
+  await expect(page.getByLabel("Application name")).toHaveValue(`${APP} theirs`);
+  await expect(page.getByRole("region", { name: "Save changes" }).getByText("No unsaved changes")).toBeVisible();
+});
+
 test("export/import: download, dry run shows the diff, apply changes the app", async ({ page }) => {
   await page.goto("/admin");
   await page.getByRole("navigation", { name: "Administration" }).getByRole("link", { name: "Export / import" }).click();
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download configuration" }).click()]);
   const file = JSON.parse(await (await download.createReadStream()).toArray().then((c) => Buffer.concat(c).toString("utf8")));
   expect(file.format).toBe("shadoucmdb.config");
-  expect(file.uiSettings.settings.branding.appName).toBe(APP);
+  expect(file.uiSettings.settings.branding.appName).toBe(`${APP} theirs`);
   expect(JSON.stringify(file)).not.toContain("admin-password");
 
   const input = page.locator("#config-file");
