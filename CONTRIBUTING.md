@@ -5,7 +5,7 @@
 | Path | What |
 | --- | --- |
 | `backend/` | The only database client: the Rust server `shadoucmdb` (`Cargo.toml`, `src/`, sqlx offline query data in `.sqlx/`, generated `openapi.json`). |
-| `frontend/` | React + Vite + TanStack Query web UI. Talks to the API only. |
+| `frontend/` | Vue 3 + Vite + TanStack Query web UI. Talks to the API only. |
 | `sql/` | Database artifacts: migrations, bootstrap scripts, ER diagram. |
 | `docs/` | Architecture, API, deployment and data-model documentation. |
 | `tools/` | Smoke test (`smoke/smoke.ts`, runs against any API URL) and the OpenAPI diff script. |

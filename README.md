@@ -18,7 +18,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 | --- | --- |
 | `backend/` | The backend: the Rust server `shadoucmdb` (Axum + Tokio + sqlx). One binary serves `/api/v1`, `/healthz`, `/readyz`, `/openapi.json`, `/docs` and the embedded web UI, and runs `migrate`, `seed`, `verify` and `openapi`. |
 | `sql/` | Database artifacts: versioned migrations, bootstrap scripts, ER diagram. See [`sql/README.md`](sql/README.md). |
-| `frontend/` | React + Vite + TanStack Query web UI. See [`frontend/README.md`](frontend/README.md). |
+| `frontend/` | Vue 3 + Vite + TanStack Query web UI. See [`frontend/README.md`](frontend/README.md). |
 | `docs/data-model.md` | Data model, integrity rules and soft-delete decisions. |
 | `.github/` | CI workflow and pull request template. |
 | `docs/api.md` | API conventions, error envelope, endpoint overview, extension seams. |
