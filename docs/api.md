@@ -2,12 +2,14 @@
 
 The backend is the only database client. Everything the UI needs goes through this API.
 
-- **Contract:** [`backend/openapi.json`](../backend/openapi.json) (OpenAPI 3.1). It is generated from the
-  same zod schemas that validate requests. The running server also serves it at `GET /openapi.json`,
-  with a browsable UI at `GET /docs`.
+- **Contract:** [`backend/openapi.json`](../backend/openapi.json) (OpenAPI 3.1). It is generated from the code
+  (utoipa): the same route table builds the router and the document, and requests are validated against the
+  same JSON Schemas the document publishes. The running server also serves it at `GET /openapi.json`, with a
+  browsable UI (Swagger UI, bundled in the binary) at `GET /docs`.
 - **Base path:** `/api/v1`. The health probes `/healthz` and `/readyz` sit at the root.
-- **Regenerate the contract** after changing a route: `npm run openapi -w backend`.
-  `npm run openapi -w backend -- --check` fails if the committed file is stale.
+- **Regenerate the contract** after changing a route: `shadoucmdb openapi --out backend/openapi.json`
+  (or `cargo run -- openapi --out openapi.json` in `backend/`). `shadoucmdb openapi --check backend/openapi.json`
+  fails if the committed file is stale; CI runs it. Then refresh the UI types with `npm run api:types -w frontend`.
 
 ## Conventions
 
@@ -85,21 +87,58 @@ checked against the final state. An error on one value is reported at `attribute
 
 ## Layers and extension seams
 
+The server is the Rust binary `shadoucmdb` (Axum + Tokio + sqlx) in `backend/`:
+
 ```
-src/modules/*   routes (zod schemas + handlers) and services (rules, transactions, audit)
-src/data/*      SQL / Drizzle queries only
-src/http/*      route registry, validation, error envelope, OpenAPI generation, request context
+src/http/*      transport: middleware (request id, CORS, body limit), error envelope, fallback, shutdown
+src/api/*       route table, request validation (schema-driven), OpenAPI document, actor context, PG error mapping
+src/modules/*   routes and services (rules, transactions, audit) per resource
+src/data/*      SQL only: compile-time checked sqlx queries (offline data in backend/.sqlx) and QueryBuilder lists
 ```
 
-- **Authentication and RBAC:** `buildApp({ resolveActor })` in `src/app.ts`. Swap the resolver to verify a
-  token. Services already receive the actor, and audit rows already record it.
-- **Discovery and imports:** call the services with an actor of type `import`. Validation and audit then apply
-  exactly as they do for the UI.
-- **Integrations and reporting:** add a module under `src/modules/` and append its routes in `buildRoutes()`. They
-  show up in the spec automatically.
+- **Authentication and RBAC:** `AppState.actors` in `src/http/mod.rs` holds an `ActorResolver`
+  (`src/api/context.rs`). Replace `AnonymousActorResolver` with one that verifies a token and returns the user,
+  or rejects the request. Services already receive the actor, and audit rows already record it.
+- **Discovery and imports:** call the services directly with `RequestContext::import(source, run_id)`.
+  Validation and audit then apply exactly as they do for the UI, with `actor_type = import`.
+- **Integrations and reporting:** add a module under `src/modules/` and append its `routes()` in `api::routes()`
+  (`src/api/mod.rs`). They show up in the spec and the router automatically; a route cannot exist without a spec entry.
+- **Changing a fixed query:** the `sqlx::query!` macros are checked against `backend/.sqlx`. After changing one,
+  rebuild once against a migrated database with `SQLX_OFFLINE_DIR=$PWD/.sqlx DATABASE_URL=... cargo build` and commit
+  the updated files (delete stale ones first).
 
 ## Smoke test
 
-`API_URL=http://localhost:3000 npm run smoke -w backend` runs every operation in the spec against a running API,
-covering the success paths and the error paths. It fails on any unexpected status, any 5xx, or any spec operation it
-did not call. Run the API with `NODE_ENV=development` so each response is also checked against its schema.
+`API_URL=http://localhost:3000 node tools/smoke/smoke.ts` (Node.js 22.18+, no dependencies, `npm run smoke` does
+the same) runs every operation in the spec against a running API with a seeded database (`shadoucmdb seed --demo`),
+covering the success paths and the error paths. It fails on any unexpected status, any 5xx, any spec operation it
+did not call, or any response body that does not match the schema the spec declares for it. It works against any
+URL: a local binary, a container or a remote host.
+
+## Differences from the SHAA-3 Node API
+
+The Rust server replaced the Node API in SHAA-9 with the same contract. `node tools/openapi-diff.mjs old.json new.json`
+compares two specs semantically. Against the SHAA-3 `backend/openapi.json`, the only differences are:
+
+- **Not-blank strings are published as `pattern: "\\S"`** (names, labels, `serialNumber`, `externalRef`, `enumValues`
+  items). SHAA-3 trimmed these and required at least one character, which zod could not express in the schema.
+- **`enumValues` publishes `uniqueItems: true`.** SHAA-3 enforced uniqueness without saying so in the schema.
+- **Single-value literals are `enum: ["none"]` / `enum: ["ok"]`** instead of `const` (`parentId=none`, `Liveness.status`).
+  Equivalent.
+- Spellings that mean the same thing: nullable types as `type: [T, "null"]` or `oneOf`, `int32`/`int64` formats,
+  and no regex patterns next to `uuid`/`date-time`/`ipv4` formats.
+
+Behaviour differences, all deliberate:
+
+- **Search ranking:** the exact-match and name-prefix criteria sort `NULLS LAST`. In SHAA-3 a CI with an empty
+  hostname or serial number could rank above an exact match.
+- **Changing a CI's class:** `"attributes": {"<old key>": null}` for keys the new class does not define is accepted
+  as "clear". SHAA-3 rejected it as an unknown attribute, although its own error message suggested exactly that.
+- **Validation details:** when a body already fails its schema (for example an unknown key), cross-field rules such
+  as "Provide at least one field to update" are not reported in the same response. Malformed JSON is reported as
+  `Body is not valid JSON: <parser detail>` with code `invalid_json`.
+- **`q` that looks like a CIDR with an impossible prefix** (`10.0.0.0/99`) is searched as text instead of failing.
+- **`validation.pattern` of text attributes uses Rust regex syntax** (no look-around or back-references). Patterns
+  that do not compile are rejected when the definition is created or updated, as before.
+- **`X-Actor-Name`** must be visible ASCII to be recorded; other values are ignored.
+- JSON key order inside objects can differ (JSON objects are unordered).

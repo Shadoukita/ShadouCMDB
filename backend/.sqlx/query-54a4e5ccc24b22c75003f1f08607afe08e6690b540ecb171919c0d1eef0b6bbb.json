@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT d.key\n         FROM ci_attribute_values v\n         JOIN ci_attribute_definitions d ON d.id = v.attribute_id\n         JOIN configuration_items ci ON ci.id = v.ci_id\n         WHERE ci_class_is_a(ci.class_id, $1) AND NOT ci_class_is_a(ci.class_id, d.class_id)\n         LIMIT 10",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "54a4e5ccc24b22c75003f1f08607afe08e6690b540ecb171919c0d1eef0b6bbb"
+}

@@ -1,0 +1,227 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.id, d.class_id, d.key, d.label, d.description,\n                  d.data_type AS \"data_type: AttributeDataType\", d.is_required,\n                  d.enum_values AS \"enum_values: Json<Vec<String>>\", d.reference_class_id,\n                  d.validation AS \"validation: Json<Map<String, Value>>\", d.group_name, d.sort_order,\n                  d.is_active, d.created_at, d.updated_at,\n                  l.depth AS \"depth!\", c.key AS defined_on_key, c.name AS defined_on_name\n           FROM ci_class_lineage($1) l\n           JOIN ci_attribute_definitions d ON d.class_id = l.class_id\n           JOIN ci_classes c ON c.id = d.class_id\n           ORDER BY l.depth DESC, d.sort_order, d.key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "class_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "class_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "data_type: AttributeDataType",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "data_type"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "is_required",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "is_required"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "enum_values: Json<Vec<String>>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "enum_values"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "reference_class_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "reference_class_id"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "validation: Json<Map<String, Value>>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "validation"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "group_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "group_name"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "sort_order",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "sort_order"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "is_active",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "is_active"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "depth!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 16,
+        "name": "defined_on_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ci_classes",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "defined_on_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ci_classes",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "e18b53d5f4d16dd3f3463d48e4fe86ef4b7eb4fff7d31c834718992f0a942627"
+}

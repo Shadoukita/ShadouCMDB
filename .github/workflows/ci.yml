@@ -19,4 +19,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: frontend API types match backend/openapi.json
+        run: npm run api:check -w frontend
       - run: npm run build --workspaces --if-present
