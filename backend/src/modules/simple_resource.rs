@@ -164,10 +164,14 @@ pub async fn get<R: Resource>(pool: &PgPool, id: Uuid) -> Result<R::Dto, AppErro
     crud::select_by_id(&mut conn, R::TABLE, R::COLUMNS, id, false).await?.ok_or_else(|| AppError::missing(R::LABEL, id))
 }
 
-pub async fn create<R: Resource>(pool: &PgPool, ctx: &RequestContext, body: &R::Create) -> Result<R::Dto, AppError> {
-    let mut tx = pool.begin().await?;
-    let row: R::Dto = crud::insert_row(&mut tx, R::TABLE, R::COLUMNS, body.columns()).await?;
-    R::after_write(&mut tx, &row, None).await?;
+/// Inserts a row in the caller's transaction with the resource's checks and its audit row.
+pub async fn create_in<R: Resource>(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    columns: ColumnSet,
+) -> Result<R::Dto, AppError> {
+    let row: R::Dto = crud::insert_row(conn, R::TABLE, R::COLUMNS, columns).await?;
+    R::after_write(conn, &row, None).await?;
     let entry = AuditEntry {
         action: AuditAction::Create,
         entity_type: R::TABLE,
@@ -175,7 +179,36 @@ pub async fn create<R: Resource>(pool: &PgPool, ctx: &RequestContext, body: &R::
         old_value: None,
         new_value: Some(crud::json(&row)),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    crud::write_audit(conn, ctx, vec![entry]).await?;
+    Ok(row)
+}
+
+/// Updates a row in the caller's transaction with the resource's checks and its audit row.
+pub async fn update_in<R: Resource>(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    columns: ColumnSet,
+) -> Result<R::Dto, AppError> {
+    let before: R::Dto = crud::select_by_id(conn, R::TABLE, R::COLUMNS, id, true)
+        .await?
+        .ok_or_else(|| AppError::missing(R::LABEL, id))?;
+    let row: R::Dto = crud::update_row(conn, R::TABLE, R::COLUMNS, id, columns).await?;
+    R::after_write(conn, &row, Some(&before)).await?;
+    let entry = AuditEntry {
+        action: AuditAction::Update,
+        entity_type: R::TABLE,
+        entity_id: id,
+        old_value: Some(crud::json(&before)),
+        new_value: Some(crud::json(&row)),
+    };
+    crud::write_audit(conn, ctx, vec![entry]).await?;
+    Ok(row)
+}
+
+pub async fn create<R: Resource>(pool: &PgPool, ctx: &RequestContext, body: &R::Create) -> Result<R::Dto, AppError> {
+    let mut tx = pool.begin().await?;
+    let row = create_in::<R>(&mut tx, ctx, body.columns()).await?;
     tx.commit().await?;
     Ok(row)
 }
@@ -187,19 +220,7 @@ pub async fn update<R: Resource>(
     body: &R::Update,
 ) -> Result<R::Dto, AppError> {
     let mut tx = pool.begin().await?;
-    let before: R::Dto = crud::select_by_id(&mut tx, R::TABLE, R::COLUMNS, id, true)
-        .await?
-        .ok_or_else(|| AppError::missing(R::LABEL, id))?;
-    let row: R::Dto = crud::update_row(&mut tx, R::TABLE, R::COLUMNS, id, body.columns()).await?;
-    R::after_write(&mut tx, &row, Some(&before)).await?;
-    let entry = AuditEntry {
-        action: AuditAction::Update,
-        entity_type: R::TABLE,
-        entity_id: id,
-        old_value: Some(crud::json(&before)),
-        new_value: Some(crud::json(&row)),
-    };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    let row = update_in::<R>(&mut tx, ctx, id, body.columns()).await?;
     tx.commit().await?;
     Ok(row)
 }

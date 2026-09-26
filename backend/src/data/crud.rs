@@ -188,6 +188,14 @@ where
         .await
 }
 
+/// Every row of a table, in `order_by` order (configuration export).
+pub async fn select_all<T>(conn: &mut PgConnection, table: &str, columns: &str, order_by: &str) -> sqlx::Result<Vec<T>>
+where
+    T: for<'r> FromRow<'r, PgRow> + Send + Unpin,
+{
+    sqlx::query_as(AssertSqlSafe(format!("SELECT {columns} FROM {table} ORDER BY {order_by}"))).fetch_all(conn).await
+}
+
 pub async fn insert_row<T>(conn: &mut PgConnection, table: &str, columns: &str, values: ColumnSet) -> sqlx::Result<T>
 where
     T: for<'r> FromRow<'r, PgRow> + Send + Unpin,

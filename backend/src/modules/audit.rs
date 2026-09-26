@@ -35,6 +35,8 @@ pub enum EntityType {
     Owners,
     Users,
     PermissionProfiles,
+    UiSettings,
+    UiAssets,
 }
 
 impl EntityType {
@@ -52,6 +54,8 @@ impl EntityType {
             EntityType::Owners => "owners",
             EntityType::Users => "users",
             EntityType::PermissionProfiles => "permission_profiles",
+            EntityType::UiSettings => "ui_settings",
+            EntityType::UiAssets => "ui_assets",
         }
     }
 }

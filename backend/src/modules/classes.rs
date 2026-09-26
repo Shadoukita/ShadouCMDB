@@ -59,7 +59,7 @@ pub struct CiClass {
     pub updated_at: DateTime<Utc>,
 }
 
-fn icon_schema() -> Schema {
+pub(crate) fn icon_schema() -> Schema {
     schemas::nullable_string_schema(100)
 }
 
@@ -480,7 +480,7 @@ impl From<data::EffectiveAttributeRow> for EffectiveAttribute {
 }
 
 /// Extra validation the API enforces on attribute values
-#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ValidationRules {
     /// number/integer: minimum
@@ -506,7 +506,7 @@ pub struct ValidationRules {
 }
 
 impl ValidationRules {
-    fn check(&self, data_type: AttributeDataType, errors: &mut Vec<FieldError>) {
+    pub(crate) fn check(&self, data_type: AttributeDataType, errors: &mut Vec<FieldError>) {
         let numeric = matches!(data_type, AttributeDataType::Number | AttributeDataType::Integer);
         if (self.min.is_some() || self.max.is_some()) && !numeric {
             errors.push(custom("validation", "min/max apply to number and integer attributes only"));
@@ -537,7 +537,7 @@ fn max_schema() -> Schema {
     number_schema("number/integer: maximum")
 }
 
-fn enum_values_schema() -> Schema {
+pub(crate) fn enum_values_schema() -> Schema {
     let item = ObjectBuilder::new()
         .schema_type(Type::String)
         .min_length(Some(1))
@@ -547,7 +547,7 @@ fn enum_values_schema() -> Schema {
     utoipa::openapi::schema::AnyOfBuilder::new().item(array).item(ObjectBuilder::new().schema_type(Type::Null)).into()
 }
 
-fn validation_schema() -> Schema {
+pub(crate) fn validation_schema() -> Schema {
     utoipa::openapi::schema::AnyOfBuilder::new()
         .item(ValidationRules::schema_inline())
         .item(ObjectBuilder::new().schema_type(Type::Null))
@@ -560,18 +560,18 @@ impl ValidationRules {
     }
 }
 
-fn group_name_schema() -> Schema {
+pub(crate) fn group_name_schema() -> Schema {
     utoipa::openapi::schema::AnyOfBuilder::new()
         .item(ObjectBuilder::new().schema_type(Type::String).max_length(Some(100)))
         .item(ObjectBuilder::new().schema_type(Type::Null))
         .into()
 }
 
-fn help_text_schema() -> Schema {
+pub(crate) fn help_text_schema() -> Schema {
     schemas::nullable_string_schema(2000)
 }
 
-fn default_value_schema() -> Schema {
+pub(crate) fn default_value_schema() -> Schema {
     utoipa::openapi::schema::AnyOfBuilder::new()
         .item(ObjectBuilder::new().schema_type(Type::String).max_length(Some(10_000)))
         .item(ObjectBuilder::new().schema_type(Type::Number))

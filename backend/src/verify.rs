@@ -32,6 +32,7 @@ const CHECKS: &[&str] = &[
     "Guard: the built-in Administrator profile cannot be deleted or changed",
     "Guard: the last active Administrator cannot be disabled or lose the profile",
     "Guard: lookup attribute values come from the attribute's list and cannot be deleted while stored",
+    "Guard: one UI settings row, append-only version history, image types and sizes",
 ];
 
 /// Placeholder that satisfies users_password_hash_argon2id; nobody can sign in with it.
@@ -503,6 +504,42 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             )?;
             Ok(format!(
                 "value of another list {foreign}; deleting a stored value {delete}; deleting a list in use {list_delete}"
+            ))
+        }
+        21 => {
+            let second = reject!(
+                c,
+                "ui_settings_singleton_uq",
+                sqlx::query("INSERT INTO ui_settings (version, settings) VALUES (1, '{}')").execute(&mut *c)
+            )?;
+            let rewrite = reject!(
+                c,
+                "ui_settings_versions_append_only",
+                sqlx::query("UPDATE ui_settings_versions SET comment = 'rewritten'").execute(&mut *c)
+            )?;
+            let unknown = reject!(c, "ui_settings_version_fk", async {
+                sqlx::query("UPDATE ui_settings SET version = 2147483647").execute(&mut *c).await?;
+                c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
+            })?;
+            c.execute("SET CONSTRAINTS ALL DEFERRED").await?;
+            let html = reject!(
+                c,
+                "ui_assets_content_type_valid",
+                sqlx::query("INSERT INTO ui_assets (kind, content_type, data, sha256) VALUES ('logo', 'text/html', '\\x3c', repeat('0', 64))")
+                    .execute(&mut *c)
+            )?;
+            let big = reject!(
+                c,
+                "ui_assets_size",
+                sqlx::query(
+                    "INSERT INTO ui_assets (kind, content_type, data, sha256)
+                     VALUES ('favicon', 'image/png', decode(repeat('00', 131073), 'hex'), repeat('0', 64))"
+                )
+                .execute(&mut *c)
+            )?;
+            Ok(format!(
+                "second settings row {second}; rewriting history {rewrite}; current version not in history {unknown}; \
+                 HTML as an image {html}; favicon over 128 KiB {big}"
             ))
         }
         _ => unreachable!("unknown check {i}"),
