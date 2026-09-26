@@ -3,5 +3,28 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Web UI stub. React + Vite + TanStack Query; talks only to the backend API, never to PostgreSQL."
+  "description": "ShadouCMDB web UI. React + Vite + TanStack Query; talks only to the backend API, never to PostgreSQL.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "api:types": "openapi-typescript ../backend/openapi.json -o src/api/schema.d.ts",
+    "api:check": "openapi-typescript ../backend/openapi.json -o src/api/schema.d.ts --check"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.104.0",
+    "openapi-fetch": "^0.17.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.1"
+  }
 }
