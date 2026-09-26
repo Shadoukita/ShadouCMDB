@@ -180,8 +180,11 @@ Every schema change is a migration. No hand-applied DDL.
    (`sqlx::query!`) is affected, refresh `backend/.sqlx` (see [docs/api.md](docs/api.md#layers-and-extension-seams)).
    Commit the migration, the code change and any ERD update together. See [`sql/README.md`](sql/README.md).
 
-Adding a CI class, attribute or relationship type is **data**, not a schema change. See
-[docs/data-model.md](docs/data-model.md#extending-the-model-without-migrations).
+Adding an area, CI type, field or relationship type is **data**, not a migration: the application's
+DDL engine creates the matching PostgreSQL schema, table or column (area "Bestand" + type "Netzwerk"
+→ table `bestand.netzwerk`), so the app role needs the `CREATE` privilege on its database (see
+[`sql/README.md`](sql/README.md)). See
+[docs/data-model.md](docs/data-model.md#areas-type-tables-and-the-ddl-engine).
 
 ## Contributing
 
