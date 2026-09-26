@@ -33,6 +33,12 @@ export async function snap(page: Page, name: string) {
   await page.screenshot({ path: join(dir, `${name}.png`), fullPage: true });
 }
 
+/**
+ * A toHaveURL matcher for the exact path and query. A regex like /\/cis\?q=crm$/ also matches
+ * "/login?redirect=/cis?q=crm", so it passes before sign-in has finished.
+ */
+export const at = (pathname: string, search = "") => (url: URL) => url.pathname === pathname && url.search === search;
+
 /** Direct API access through the UI origin (same /api/v1 the app uses). */
 export async function apiGet<T>(request: APIRequestContext, path: string): Promise<T> {
   const res = await request.get(`/api/v1${path}`);
