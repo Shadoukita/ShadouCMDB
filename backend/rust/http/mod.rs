@@ -1,13 +1,11 @@
 //! HTTP server: routing, middleware and graceful shutdown.
 //!
-//! Layers: `http` (transport concerns, this module) -> API modules (routes and
-//! services, added by the /api/v1 port) -> `sqlx` data access. Auth, RBAC and
-//! other future modules plug in as extra routers and middleware here.
+//! Layers: `http` (transport concerns, this module) -> `api` (route table,
+//! validation, OpenAPI) -> `modules` (routes and services) -> `data` (SQL).
+//! Auth, RBAC and other future modules plug in as a different
+//! [`ActorResolver`], extra routes in `api::routes` and middleware here.
 
-// The full envelope (validation details, conflict codes) is used by the /api/v1 modules.
-#[allow(dead_code)]
 pub mod error;
-mod health;
 pub mod request_id;
 mod ui;
 
@@ -19,12 +17,15 @@ use axum::Router;
 use axum::extract::{DefaultBodyLimit, Request};
 use axum::http::{HeaderName, HeaderValue, Method};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use std::sync::Arc;
+
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+use crate::api;
+use crate::api::context::{ActorResolver, AnonymousActorResolver};
 use crate::config::Config;
 use crate::db;
 use error::AppError;
@@ -33,6 +34,15 @@ use error::AppError;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    /// Who is calling; the authentication seam.
+    pub actors: Arc<dyn ActorResolver>,
+}
+
+impl AppState {
+    /// Milestone 1: no authentication.
+    pub fn new(pool: PgPool) -> Self {
+        AppState { pool, actors: Arc::new(AnonymousActorResolver) }
+    }
 }
 
 /// Unknown routes: the embedded UI for browser paths, the error envelope for
@@ -56,9 +66,7 @@ fn panic_response(_: Box<dyn Any + Send + 'static>) -> Response {
 }
 
 pub fn router(state: AppState, cfg: &Config) -> Router {
-    let mut app = Router::new()
-        .route("/healthz", get(health::liveness))
-        .route("/readyz", get(health::readiness))
+    let mut app = api::router()
         .fallback(fallback)
         .method_not_allowed_fallback(fallback)
         .with_state(state)
@@ -88,7 +96,7 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
 /// and closes the pool.
 pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
     let pool = db::lazy_pool(&cfg.database)?;
-    let app = router(AppState { pool: pool.clone() }, &cfg);
+    let app = router(AppState::new(pool.clone()), &cfg);
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
         .await

@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE configuration_items SET\n           class_id = COALESCE($2, class_id),\n           name = COALESCE($3, name),\n           status_id = COALESCE($4, status_id),\n           environment_id = CASE WHEN $5 THEN $6 ELSE environment_id END,\n           owner_id = CASE WHEN $7 THEN $8 ELSE owner_id END,\n           location_id = CASE WHEN $9 THEN $10 ELSE location_id END,\n           hostname = CASE WHEN $11 THEN $12 ELSE hostname END,\n           ip_address = CASE WHEN $13 THEN $14::text::inet ELSE ip_address END,\n           serial_number = CASE WHEN $15 THEN $16 ELSE serial_number END,\n           notes = CASE WHEN $17 THEN $18 ELSE notes END,\n           version = version + 1\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Bool",
+        "Uuid",
+        "Bool",
+        "Uuid",
+        "Bool",
+        "Uuid",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ff27fd1c92e41a4211dae20084f32b02c85d5d5c3cd60935fb49c4a706bc0d10"
+}

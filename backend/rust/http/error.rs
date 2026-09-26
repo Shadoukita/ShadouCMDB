@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use super::request_id;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
     ValidationError,
@@ -43,12 +43,14 @@ impl ErrorCode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum FieldLocation {
     Body,
     Query,
     Params,
+    // Part of the published contract; used once headers are validated (auth).
+    #[allow(dead_code)]
     Header,
 }
 
@@ -91,6 +93,35 @@ impl AppError {
     pub fn internal() -> Self {
         Self::new(ErrorCode::InternalError, "An unexpected error occurred")
     }
+
+    /// One problem with one body field; the message doubles as the envelope message.
+    pub fn field(field: impl Into<String>, message: impl Into<String>, code: impl Into<String>) -> Self {
+        let message = message.into();
+        AppError {
+            code: ErrorCode::ValidationError,
+            message: message.clone(),
+            details: Some(vec![FieldError {
+                location: FieldLocation::Body,
+                field: field.into(),
+                message,
+                code: code.into(),
+            }]),
+        }
+    }
+
+    /// "<Entity> <id> not found".
+    pub fn missing(entity: &str, id: impl std::fmt::Display) -> Self {
+        Self::not_found(format!("{entity} {id} not found"))
+    }
+
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Conflict, message)
+    }
+
+    pub fn with_details(mut self, details: Vec<FieldError>) -> Self {
+        self.details = Some(details);
+        self
+    }
 }
 
 #[derive(Serialize)]
@@ -123,19 +154,19 @@ impl IntoResponse for AppError {
 }
 
 impl From<sqlx::Error> for AppError {
-    /// Connection-level failures become 503 DATABASE_UNAVAILABLE; anything else
-    /// is logged and hidden behind INTERNAL_ERROR. Constraint violations are
-    /// mapped per resource by the API modules, not here.
+    /// Client-caused constraint violations become 400/409 with field details
+    /// (see [`crate::api::pg_error`]); connection-level failures become 503
+    /// DATABASE_UNAVAILABLE; anything else is logged and hidden behind
+    /// INTERNAL_ERROR.
     fn from(err: sqlx::Error) -> Self {
-        match err {
-            sqlx::Error::Io(_) | sqlx::Error::Tls(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
-                tracing::error!(error = %err, "database unavailable");
-                AppError::new(ErrorCode::DatabaseUnavailable, "The database is unreachable; try again shortly")
-            }
-            _ => {
-                tracing::error!(error = %err, "unhandled database error");
-                AppError::internal()
-            }
+        if let Some(mapped) = crate::api::pg_error::map(&err, None) {
+            return mapped;
         }
+        if crate::api::pg_error::is_connection_error(&err) {
+            tracing::error!(error = %err, "database unavailable");
+            return AppError::new(ErrorCode::DatabaseUnavailable, "The database is unreachable; try again shortly");
+        }
+        tracing::error!(error = %err, "unhandled database error");
+        AppError::internal()
     }
 }

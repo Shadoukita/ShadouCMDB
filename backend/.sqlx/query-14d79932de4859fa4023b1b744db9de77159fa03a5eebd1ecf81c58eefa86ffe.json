@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM ci_attribute_values WHERE ci_id = $1 AND attribute_id = ANY($2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "14d79932de4859fa4023b1b744db9de77159fa03a5eebd1ecf81c58eefa86ffe"
+}

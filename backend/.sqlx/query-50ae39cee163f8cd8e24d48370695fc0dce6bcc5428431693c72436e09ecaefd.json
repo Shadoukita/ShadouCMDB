@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.key\n         FROM ci_attribute_definitions d JOIN ci_classes c ON c.id = d.class_id\n         WHERE d.key = $2 AND d.id <> $3\n           AND (ci_class_is_a($1, d.class_id) OR ci_class_is_a(d.class_id, $1))\n         LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ci_classes",
+            "name": "key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "50ae39cee163f8cd8e24d48370695fc0dce6bcc5428431693c72436e09ecaefd"
+}

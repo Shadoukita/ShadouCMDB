@@ -1,9 +1,12 @@
 //! `shadoucmdb`: the ShadouCMDB server and its admin commands in one binary.
 
+mod api;
 mod config;
+mod data;
 mod db;
 mod http;
 mod logging;
+mod modules;
 mod seed;
 mod service;
 mod verify;
@@ -50,6 +53,15 @@ enum Command {
     },
     /// Run schema acceptance checks inside a rolled-back transaction.
     Verify,
+    /// Print the OpenAPI document generated from the code, or compare it with a file.
+    Openapi {
+        /// Write the document to this file instead of stdout.
+        #[arg(long, value_name = "PATH", conflicts_with = "check")]
+        out: Option<PathBuf>,
+        /// Fail if this file differs from the generated document (CI: the committed spec is stale).
+        #[arg(long, value_name = "PATH")]
+        check: Option<PathBuf>,
+    },
     /// Install, remove or run as a Windows Service.
     #[command(subcommand)]
     Service(service::ServiceCommand),
@@ -62,6 +74,7 @@ impl Command {
             Command::Migrate { .. } => "migrate",
             Command::Seed { .. } => "seed",
             Command::Verify => "verify",
+            Command::Openapi { .. } => "openapi",
             Command::Service(_) => "service",
         }
     }
@@ -88,6 +101,11 @@ fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
 fn run(cli: Cli) -> anyhow::Result<()> {
     load_env_file(cli.env_file.as_ref())?;
     let launch = service::LaunchOptions { env_file: cli.env_file, log_file: cli.log_file.clone() };
+
+    // Generating the spec needs no configuration, database or logger.
+    if let Command::Openapi { out, check } = &cli.command {
+        return openapi(out.as_deref(), check.as_deref());
+    }
 
     // Installing or removing a service needs neither configuration nor a logger.
     if let Command::Service(
@@ -119,7 +137,33 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             runtime()?.block_on(verify::run(&cfg.database))
         }
         Command::Service(cmd) => service::run(cmd, launch),
+        Command::Openapi { .. } => unreachable!("handled above"),
     }
+}
+
+fn openapi(out: Option<&std::path::Path>, check: Option<&std::path::Path>) -> anyhow::Result<()> {
+    let generated = api::openapi_json();
+    if let Some(path) = check {
+        let committed = std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+        if committed.replace("\r\n", "\n") != generated {
+            anyhow::bail!(
+                "{} is stale: it differs from the OpenAPI document generated from the code.\n\
+                 Regenerate it with `shadoucmdb openapi --out {}` and commit the result.",
+                path.display(),
+                path.display()
+            );
+        }
+        println!("{} is up to date", path.display());
+        return Ok(());
+    }
+    match out {
+        Some(path) => {
+            std::fs::write(path, &generated).with_context(|| format!("cannot write {}", path.display()))?;
+            println!("wrote {}", path.display());
+        }
+        None => print!("{generated}"),
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
