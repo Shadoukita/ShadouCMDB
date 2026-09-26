@@ -9,17 +9,24 @@ import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import StatusBadge from "../components/StatusBadge.vue";
+import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { formatRelative } from "../lib/format";
 import { useSessionStore } from "../stores/session";
+import { useBrandingStore } from "../stores/branding";
 import CountTable, { type CountRow } from "./dashboard/CountTable.vue";
+import DashboardWidgets from "./dashboard/DashboardWidgets.vue";
 
 /**
  * Operational overview. Counts are server-side (each is a limit=1 list request
  * reading page.total), so they stay correct at any inventory size.
+ * Customization › Dashboard can replace the built-in panels with its own widgets.
  */
 useDocumentTitle("Dashboard");
 const session = useSessionStore();
+const branding = useBrandingStore();
+const settings = useAppSettings();
+const widgets = computed(() => settings.doc.value.dashboard.widgets ?? null);
 const total = useQuery(ciCountQuery({}));
 const recent = useCiList({ sort: "-updatedAt", limit: 12 });
 
@@ -66,7 +73,7 @@ const statusRows = computed<CountRow[]>(() =>
       <DataModelEmpty />
     </section>
     <section v-else-if="total.data.value === 0 && classes.data.value" class="panel">
-      <EmptyState title="Welcome to ShadouCMDB — the inventory is empty">
+      <EmptyState :title="`Welcome to ${branding.effective.appName} — the inventory is empty`">
         Start with the things everything else depends on: a location, then the servers in it, then the applications and
         databases that run on them. Relate them from each CI's detail page.
         <template v-if="session.canOnAnyClass('create')" #actions>
@@ -74,7 +81,17 @@ const statusRows = computed<CountRow[]>(() =>
         </template>
       </EmptyState>
     </section>
-    <template v-if="total.data.value !== undefined && total.data.value > 0">
+    <template v-if="total.data.value !== undefined && total.data.value > 0 && widgets">
+      <DashboardWidgets v-if="widgets.length > 0" :widgets="widgets" />
+      <EmptyState v-else title="This dashboard has no widgets">
+        An administrator removed every widget under Administration › Customization › Dashboard.
+        <template v-if="session.can('customization.manage')" #actions>
+          <RouterLink class="btn" to="/admin/customization/dashboard">Add widgets</RouterLink>
+        </template>
+      </EmptyState>
+    </template>
+    <LoadingState v-else-if="settings.query.isLoading.value" />
+    <template v-else-if="total.data.value !== undefined && total.data.value > 0">
       <div class="kpis">
         <div class="kpi">
           <div class="value">{{ total.data.value.toLocaleString() }}</div>
