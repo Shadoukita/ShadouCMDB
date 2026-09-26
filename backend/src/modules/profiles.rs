@@ -341,7 +341,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> Result<PermissionProfile, AppError>
     load(&mut *pool.acquire().await?, id).await
 }
 
-async fn insert(
+pub(crate) async fn insert(
     conn: &mut PgConnection,
     ctx: &RequestContext,
     name: &str,
@@ -391,33 +391,42 @@ pub async fn clone(
     Ok(dto)
 }
 
-pub async fn update(
-    pool: &PgPool,
+/// Every profile except the built-in one, by name (configuration export).
+pub(crate) async fn all_editable(conn: &mut PgConnection) -> Result<Vec<PermissionProfile>, AppError> {
+    let rows = data::editable_profiles(conn).await?;
+    dtos(conn, rows).await
+}
+
+/// Changes a profile in the caller's transaction; `None` leaves a part as it is.
+pub(crate) async fn update_in(
+    conn: &mut PgConnection,
     ctx: &RequestContext,
     id: Uuid,
-    b: &ProfileUpdate,
+    name: Option<&str>,
+    description: Option<Option<&str>>,
+    global_permissions: Option<&[GlobalPermission]>,
+    class_permissions: Option<&[ClassPermission]>,
 ) -> Result<PermissionProfile, AppError> {
-    let mut tx = pool.begin().await?;
-    let row = data::get_profile(&mut tx, id, true).await?.ok_or_else(|| AppError::missing("Permission profile", id))?;
+    let row = data::get_profile(conn, id, true).await?.ok_or_else(|| AppError::missing("Permission profile", id))?;
     if row.is_builtin {
         return Err(builtin_is_read_only());
     }
-    let before = dtos(&mut tx, vec![row]).await?.remove(0);
+    let before = dtos(conn, vec![row]).await?.remove(0);
     must_cover(ctx, &grants(&before.global_permissions, &before.class_permissions), "This profile")?;
-    let global = b.global_permissions.as_deref().unwrap_or(&before.global_permissions);
-    let classes = b.class_permissions.as_deref().unwrap_or(&before.class_permissions);
+    let global = global_permissions.unwrap_or(&before.global_permissions);
+    let classes = class_permissions.unwrap_or(&before.class_permissions);
     must_cover(ctx, &grants(global, classes), "The updated profile")?;
 
-    data::update_profile(&mut tx, id, b.name.as_deref(), b.description.as_ref().map(|d| d.as_deref())).await?;
-    if let Some(g) = &b.global_permissions {
-        data::set_global_permissions(&mut tx, id, g).await?;
+    data::update_profile(conn, id, name, description).await?;
+    if let Some(g) = global_permissions {
+        data::set_global_permissions(conn, id, g).await?;
     }
-    if let Some(c) = &b.class_permissions {
-        check_classes(&mut tx, c).await?;
+    if let Some(c) = class_permissions {
+        check_classes(conn, c).await?;
         let class_grants: Vec<(Option<Uuid>, ClassRights)> = c.iter().map(|c| (c.class_id, c.rights())).collect();
-        data::set_class_permissions(&mut tx, id, &class_grants).await?;
+        data::set_class_permissions(conn, id, &class_grants).await?;
     }
-    let dto = load(&mut tx, id).await?;
+    let dto = load(conn, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
         entity_type: TABLE,
@@ -425,7 +434,27 @@ pub async fn update(
         old_value: Some(crud::json(&before)),
         new_value: Some(crud::json(&dto)),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    crud::write_audit(conn, ctx, vec![entry]).await?;
+    Ok(dto)
+}
+
+pub async fn update(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    id: Uuid,
+    b: &ProfileUpdate,
+) -> Result<PermissionProfile, AppError> {
+    let mut tx = pool.begin().await?;
+    let dto = update_in(
+        &mut tx,
+        ctx,
+        id,
+        b.name.as_deref(),
+        b.description.as_ref().map(|d| d.as_deref()),
+        b.global_permissions.as_deref(),
+        b.class_permissions.as_deref(),
+    )
+    .await?;
     tx.commit().await?;
     Ok(dto)
 }

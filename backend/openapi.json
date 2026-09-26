@@ -10558,6 +10558,912 @@
         ]
       }
     },
+    "/api/v1/ui-settings": {
+      "get": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "The UI settings every user sees",
+        "description": "Any signed-in user may read them; the web UI applies them for everyone. `settings` is the effective document: entries that refer to classes, attributes, statuses, environments or locations that do not exist are left out and listed in `issues` (they stay in the stored document, see the versions).",
+        "operationId": "getUiSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "Replace the UI settings (saved as a new version)",
+        "description": "Requires `customization.manage`. Replaces the whole document. Send the `version` you loaded: if the settings were saved in between, the request fails with 409 VERSION_CONFLICT. The document is validated against its schema and the cross-field rules (400 with per-field details); references to classes or attributes that do not exist are accepted and reported in `issues`. Saving an unchanged document does not create a version. Each saved version is kept and audited.",
+        "operationId": "updateUiSettings",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "settings"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT",
+                    "minimum": 1
+                  },
+                  "settings": {
+                    "$ref": "#/components/schemas/UiSettingsDocument"
+                  },
+                  "comment": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/ui-settings/branding": {
+      "get": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "App name, colours, theme, logo and favicon for the login page",
+        "description": "Public: no session needed.",
+        "operationId": "getPublicBranding",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicBranding"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/ui-settings/versions": {
+      "get": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "Saved versions of the UI settings, newest first",
+        "description": "Requires `customization.manage`.",
+        "operationId": "listUiSettingsVersions",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 20,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiSettingsVersionList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/ui-settings/versions/{version}": {
+      "get": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "One saved version, with its document as stored",
+        "description": "Requires `customization.manage`.",
+        "operationId": "getUiSettingsVersion",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 2147483647,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiSettingsVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/ui-settings/versions/{version}/restore": {
+      "post": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "Make an earlier version current again (saved as a new version)",
+        "description": "Requires `customization.manage`.",
+        "operationId": "restoreUiSettingsVersion",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 2147483647,
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The current version you loaded (optimistic concurrency, as for PUT)",
+                    "minimum": 1
+                  },
+                  "comment": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/ui-settings/assets/{kind}": {
+      "get": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "The logo or favicon image",
+        "description": "Public (the login page shows it). Answers with the image bytes, an ETag and `Cache-Control: no-cache`; send `If-None-Match` to get 304 Not Modified. Served with a sandboxing Content-Security-Policy.",
+        "operationId": "getUiAsset",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "logo",
+                "favicon"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "image/*": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "application/octet-stream"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified (If-None-Match matched the ETag); no body"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      },
+      "put": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "Upload or replace the logo or favicon",
+        "description": "Requires `customization.manage`. JSON body with the content type and the base64 file. Logo: PNG, JPEG, WebP or SVG up to 512 KiB. Favicon: PNG, ICO or SVG up to 128 KiB. The content must match the declared type; SVGs with scripts, event handlers or embedded HTML are refused.",
+        "operationId": "uploadUiAsset",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "logo",
+                "favicon"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "A logo or favicon, base64-encoded",
+                "required": [
+                  "contentType",
+                  "data"
+                ],
+                "properties": {
+                  "contentType": {
+                    "type": "string",
+                    "description": "Logo: image/png, image/jpeg, image/webp or image/svg+xml (max 512 KiB). Favicon: image/png, image/x-icon or image/svg+xml (max 128 KiB).",
+                    "enum": [
+                      "image/png",
+                      "image/jpeg",
+                      "image/webp",
+                      "image/svg+xml",
+                      "image/x-icon"
+                    ]
+                  },
+                  "data": {
+                    "type": "string",
+                    "description": "The file, base64 (standard alphabet, padding optional)",
+                    "maxLength": 700000,
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiAsset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "Remove the logo or favicon (the UI falls back to the built-in one)",
+        "description": "Requires `customization.manage`.",
+        "operationId": "deleteUiAsset",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "logo",
+                "favicon"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/audit-log": {
       "get": {
         "tags": [
@@ -10625,7 +11531,9 @@
                 "locations",
                 "owners",
                 "users",
-                "permission_profiles"
+                "permission_profiles",
+                "ui_settings",
+                "ui_assets"
               ]
             }
           },
@@ -12444,10 +13352,394 @@
           }
         ]
       }
+    },
+    "/api/v1/admin/config/export": {
+      "get": {
+        "tags": [
+          "Configuration export/import"
+        ],
+        "summary": "Download the whole configuration as one JSON file",
+        "description": "Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookups (statuses, environments, locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`.",
+        "operationId": "exportConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigFile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/config/import": {
+      "post": {
+        "tags": [
+          "Configuration export/import"
+        ],
+        "summary": "Import a configuration file (dry run or apply)",
+        "description": "Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. Profiles cannot grant more than the importing user holds (403). Every applied change is audited.",
+        "operationId": "importConfig",
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "description": "dry_run reports what would change without changing anything; apply makes the changes",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "dry_run",
+                "apply"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "A whole configuration: data model, lookups, permission profiles and UI settings (no users, passwords or CIs)",
+                "required": [
+                  "format",
+                  "formatVersion"
+                ],
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "description": "Always \"shadoucmdb.config\"",
+                    "enum": [
+                      "shadoucmdb.config"
+                    ]
+                  },
+                  "formatVersion": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "File format version; this server reads version 1",
+                    "maximum": 1,
+                    "minimum": 1
+                  },
+                  "exportedAt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "appVersion": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "dataModel": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/DataModelSection"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lookups": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/LookupSection"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "permissionProfiles": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "A permission profile, matched by name (case-insensitive). The built-in Administrator profile is never exported or imported.",
+                      "required": [
+                        "name"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "description": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 4000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "globalPermissions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "description": "Rights that are not tied to a CI class.",
+                            "enum": [
+                              "users.manage",
+                              "profiles.manage",
+                              "datamodel.manage",
+                              "customization.manage",
+                              "config.export_import",
+                              "audit.view"
+                            ]
+                          },
+                          "uniqueItems": true
+                        },
+                        "classPermissions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "description": "Rights on one class (by key), or on every class when `class` is null",
+                            "properties": {
+                              "class": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "description": "Stable machine key, lower_snake_case",
+                                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "view": {
+                                "type": "boolean"
+                              },
+                              "create": {
+                                "type": "boolean"
+                              },
+                              "edit": {
+                                "type": "boolean"
+                              },
+                              "delete": {
+                                "type": "boolean"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "maxItems": 5000
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 1000
+                  },
+                  "uiSettings": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/UiSettingsSection"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "AssetData": {
+        "type": "object",
+        "description": "An image, base64-encoded",
+        "required": [
+          "contentType",
+          "data"
+        ],
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "description": "Logo: image/png, image/jpeg, image/webp or image/svg+xml (max 512 KiB). Favicon: image/png, image/x-icon or image/svg+xml (max 128 KiB).",
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/svg+xml",
+              "image/x-icon"
+            ]
+          },
+          "data": {
+            "type": "string",
+            "maxLength": 700000,
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
       "AttributeDefinition": {
         "type": "object",
         "required": [
@@ -12855,6 +14147,165 @@
         },
         "additionalProperties": false
       },
+      "ConfigFile": {
+        "type": "object",
+        "description": "A whole configuration: data model, lookups, permission profiles and UI settings (no users, passwords or CIs)",
+        "required": [
+          "format",
+          "formatVersion"
+        ],
+        "properties": {
+          "format": {
+            "type": "string",
+            "description": "Always \"shadoucmdb.config\"",
+            "enum": [
+              "shadoucmdb.config"
+            ]
+          },
+          "formatVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "File format version; this server reads version 1",
+            "maximum": 1,
+            "minimum": 1
+          },
+          "exportedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appVersion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dataModel": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DataModelSection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lookups": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LookupSection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "permissionProfiles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A permission profile, matched by name (case-insensitive). The built-in Administrator profile is never exported or imported.",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "globalPermissions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "description": "Rights that are not tied to a CI class.",
+                    "enum": [
+                      "users.manage",
+                      "profiles.manage",
+                      "datamodel.manage",
+                      "customization.manage",
+                      "config.export_import",
+                      "audit.view"
+                    ]
+                  },
+                  "uniqueItems": true
+                },
+                "classPermissions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "Rights on one class (by key), or on every class when `class` is null",
+                    "properties": {
+                      "class": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "description": "Stable machine key, lower_snake_case",
+                            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "view": {
+                        "type": "boolean"
+                      },
+                      "create": {
+                        "type": "boolean"
+                      },
+                      "edit": {
+                        "type": "boolean"
+                      },
+                      "delete": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 5000
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          },
+          "uiSettings": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UiSettingsSection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "ConfigurationItem": {
         "type": "object",
         "required": [
@@ -13199,6 +14650,378 @@
             ],
             "format": "date-time",
             "description": "Set when the CI was deleted (soft delete); history keeps resolving"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DataModelSection": {
+        "type": "object",
+        "description": "Classes (parents before children is not required), attributes, relationship types and rules",
+        "properties": {
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "name"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parent": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "Stable machine key, lower_snake_case",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "isAbstract": {
+                  "type": "boolean"
+                },
+                "icon": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 100
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "color": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "Hex colour, e.g. \"#1f6feb\"",
+                      "pattern": "^#[0-9a-fA-F]{6}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sortOrder": {
+                  "type": "integer",
+                  "maximum": 1000000,
+                  "minimum": -1000000
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 5000
+          },
+          "attributes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "class",
+                "key",
+                "label",
+                "dataType"
+              ],
+              "properties": {
+                "class": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "label": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "dataType": {
+                  "type": "string",
+                  "enum": [
+                    "text",
+                    "number",
+                    "integer",
+                    "boolean",
+                    "enum",
+                    "date",
+                    "datetime",
+                    "ip",
+                    "cidr",
+                    "reference",
+                    "lookup"
+                  ]
+                },
+                "isRequired": {
+                  "type": "boolean"
+                },
+                "enumValues": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "maxItems": 500,
+                      "minItems": 1,
+                      "uniqueItems": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "referenceClass": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "Stable machine key, lower_snake_case",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "lookupList": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "Stable machine key, lower_snake_case",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "validation": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "description": "Extra validation the API enforces on attribute values",
+                      "properties": {
+                        "min": {
+                          "type": "number",
+                          "description": "number/integer: minimum"
+                        },
+                        "max": {
+                          "type": "number",
+                          "description": "number/integer: maximum"
+                        },
+                        "maxLength": {
+                          "type": "integer",
+                          "format": "int64",
+                          "description": "text: maximum length",
+                          "minimum": 1
+                        },
+                        "pattern": {
+                          "type": "string",
+                          "description": "text: regular expression the value must match",
+                          "maxLength": 500
+                        },
+                        "unit": {
+                          "type": "string",
+                          "description": "Display unit, e.g. \"GB\"",
+                          "maxLength": 20
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "groupName": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 100
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "helpText": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 2000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "defaultValue": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 10000
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). Not allowed for \"reference\" attributes."
+                },
+                "sortOrder": {
+                  "type": "integer",
+                  "maximum": 1000000,
+                  "minimum": -1000000
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 50000
+          },
+          "relationshipTypes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "name",
+                "forwardLabel",
+                "reverseLabel"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "forwardLabel": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "reverseLabel": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "isDirectional": {
+                  "type": "boolean"
+                },
+                "sortOrder": {
+                  "type": "integer",
+                  "maximum": 1000000,
+                  "minimum": -1000000
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          },
+          "relationshipRules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Which classes a relationship type may connect (by keys)",
+              "required": [
+                "relationshipType",
+                "sourceClass",
+                "targetClass"
+              ],
+              "properties": {
+                "relationshipType": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "sourceClass": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "targetClass": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 20000
           }
         },
         "additionalProperties": false
@@ -13570,6 +15393,23 @@
         },
         "additionalProperties": false
       },
+      "FieldChange": {
+        "type": "object",
+        "description": "One changed field: API names, values as in the file format (keys, not ids)",
+        "required": [
+          "field",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "from": {},
+          "to": {}
+        },
+        "additionalProperties": false
+      },
       "GraphEdge": {
         "type": "object",
         "required": [
@@ -13631,6 +15471,140 @@
               "string",
               "null"
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportChange": {
+        "type": "object",
+        "required": [
+          "section",
+          "key",
+          "action",
+          "fields"
+        ],
+        "properties": {
+          "section": {
+            "type": "string",
+            "description": "e.g. classes, attributes, lookupListValues, permissionProfiles, uiSettings"
+          },
+          "key": {
+            "type": "string",
+            "description": "The row's key in the file (class.key for attributes, list.value for list values, kind:name for owners)"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "update",
+              "delete"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldChange"
+            },
+            "description": "Changed fields (updates only)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportResult": {
+        "type": "object",
+        "required": [
+          "mode",
+          "applied",
+          "summary",
+          "changes",
+          "warnings",
+          "uiSettingsIssues"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "apply"
+            ]
+          },
+          "applied": {
+            "type": "boolean",
+            "description": "True only for mode=apply (a dry run never changes anything)"
+          },
+          "summary": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SectionSummary"
+            },
+            "description": "Per section, in import order"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportChange"
+            },
+            "description": "Every create, update and delete (unchanged rows are only counted)"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportWarning"
+            }
+          },
+          "uiSettingsIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            },
+            "description": "References in the imported UI settings that do not resolve after the import (see GET /api/v1/ui-settings)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportWarning": {
+        "type": "object",
+        "required": [
+          "path",
+          "message"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path in the file"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Issue": {
+        "type": "object",
+        "description": "A reference the effective settings ignore, or a setting worth a second look",
+        "required": [
+          "path",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path in the stored document, e.g. \"listViews.2.columns.3\""
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "unknown_class",
+              "unknown_attribute",
+              "unknown_status",
+              "unknown_environment",
+              "unknown_location",
+              "required_field_not_editable"
+            ]
+          },
+          "message": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -13914,6 +15888,341 @@
         },
         "additionalProperties": false
       },
+      "LookupSection": {
+        "type": "object",
+        "properties": {
+          "statuses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "name"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "isOperational": {
+                  "type": "boolean"
+                },
+                "sortOrder": {
+                  "type": "integer",
+                  "maximum": 1000000,
+                  "minimum": -1000000
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          },
+          "environments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "name"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sortOrder": {
+                  "type": "integer",
+                  "maximum": 1000000,
+                  "minimum": -1000000
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "name",
+                "locationType"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parent": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "Stable machine key, lower_snake_case",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "locationType": {
+                  "type": "string",
+                  "enum": [
+                    "region",
+                    "site",
+                    "building",
+                    "floor",
+                    "room",
+                    "rack",
+                    "cloud_region",
+                    "other"
+                  ]
+                },
+                "address": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 1000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sortOrder": {
+                  "type": "integer",
+                  "maximum": 1000000,
+                  "minimum": -1000000
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 20000
+          },
+          "owners": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Owners have no key; they are matched by kind and name (case-insensitive)",
+              "required": [
+                "kind",
+                "name"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "person",
+                    "team"
+                  ]
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "email": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "email",
+                      "maxLength": 320
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "externalRef": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 20000
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "An admin-defined lookup list with its values",
+              "required": [
+                "key",
+                "name"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sortOrder": {
+                  "type": "integer",
+                  "maximum": 1000000,
+                  "minimum": -1000000
+                },
+                "isActive": {
+                  "type": "boolean"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "key",
+                      "name"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "description": "Stable machine key, lower_snake_case",
+                        "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                      },
+                      "name": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "description": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 4000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "color": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "description": "Hex colour, e.g. \"#1f6feb\"",
+                            "pattern": "^#[0-9a-fA-F]{6}$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "sortOrder": {
+                        "type": "integer",
+                        "maximum": 1000000,
+                        "minimum": -1000000
+                      },
+                      "isActive": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 5000
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          }
+        },
+        "additionalProperties": false
+      },
       "Owner": {
         "type": "object",
         "required": [
@@ -14141,6 +16450,65 @@
           },
           "isBuiltin": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PublicBranding": {
+        "type": "object",
+        "description": "Branding for the login page (no sign-in needed)",
+        "required": [
+          "appName",
+          "primaryColor",
+          "accentColor",
+          "defaultTheme",
+          "logo",
+          "favicon"
+        ],
+        "properties": {
+          "appName": {
+            "type": "string"
+          },
+          "primaryColor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accentColor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "defaultTheme": {
+            "type": "string",
+            "description": "Theme for users who have not picked one",
+            "enum": [
+              "light",
+              "dark",
+              "system"
+            ]
+          },
+          "logo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UiAsset"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "favicon": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UiAsset"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -14745,6 +17113,45 @@
         },
         "additionalProperties": false
       },
+      "SectionSummary": {
+        "type": "object",
+        "description": "Counts for one section of the file",
+        "required": [
+          "section",
+          "created",
+          "updated",
+          "deleted",
+          "unchanged",
+          "notInFile"
+        ],
+        "properties": {
+          "section": {
+            "type": "string"
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "deleted": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "unchanged": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "notInFile": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rows of this kind that exist here but are not in the file (kept as they are)"
+          }
+        },
+        "additionalProperties": false
+      },
       "Session": {
         "type": "object",
         "description": "The signed-in user, their permissions and the CSRF token to send back.",
@@ -15158,6 +17565,875 @@
         },
         "additionalProperties": false
       },
+      "UiAsset": {
+        "type": "object",
+        "description": "An uploaded image",
+        "required": [
+          "kind",
+          "contentType",
+          "size",
+          "sha256",
+          "url",
+          "updatedAt"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "logo",
+              "favicon"
+            ]
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Bytes"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Hex SHA-256 of the file (also its ETag)"
+          },
+          "url": {
+            "type": "string",
+            "description": "Where to load it from; the `v` parameter changes with the content, so it can be cached"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiAssets": {
+        "type": "object",
+        "description": "Logo and favicon (null when not uploaded)",
+        "required": [
+          "logo",
+          "favicon"
+        ],
+        "properties": {
+          "logo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UiAsset"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "favicon": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UiAsset"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiBranding": {
+        "type": "object",
+        "description": "App name, colours and the default theme. Logo and favicon are uploaded separately (`/api/v1/ui-settings/assets/{kind}`).",
+        "properties": {
+          "appName": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Shown in the header, the login page and the browser title; null means \"ShadouCMDB\""
+          },
+          "primaryColor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hex colour, e.g. \"#1f6feb\"; null keeps the built-in theme colour"
+          },
+          "accentColor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hex colour, e.g. \"#1f6feb\"; null keeps the built-in theme colour"
+          },
+          "defaultTheme": {
+            "type": "string",
+            "description": "Theme for users who have not picked one; system follows the operating system",
+            "default": "system",
+            "enum": [
+              "light",
+              "dark",
+              "system"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiClassLayout": {
+        "type": "object",
+        "description": "Detail page and form layout of one class. Fields not placed in a panel\nfollow in a trailing panel, grouped by attribute group as before.",
+        "required": [
+          "classKey"
+        ],
+        "properties": {
+          "classKey": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "panels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiLayoutPanel"
+            },
+            "maxItems": 50
+          },
+          "hiddenFields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^(name|class|status|environment|owner|location|hostname|ipAddress|serialNumber|notes|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+            },
+            "description": "Fields not shown on the detail page or the form (name cannot be hidden)",
+            "maxItems": 200,
+            "uniqueItems": true
+          },
+          "readOnlyFields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^(name|class|status|environment|owner|location|hostname|ipAddress|serialNumber|notes|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+            },
+            "description": "Fields shown but not editable on the form (name cannot be read-only)",
+            "maxItems": 200,
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiDashboard": {
+        "type": "object",
+        "description": "Dashboard widgets in display order; null keeps the built-in dashboard",
+        "properties": {
+          "widgets": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/UiWidget"
+            },
+            "default": null,
+            "maxItems": 50
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiLayoutPanel": {
+        "type": "object",
+        "description": "A panel (card) on the detail page and the form",
+        "required": [
+          "key",
+          "label"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^(name|class|status|environment|owner|location|hostname|ipAddress|serialNumber|notes|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+            },
+            "description": "Fields in display order (built-in fields or attributes.<key>)",
+            "maxItems": 200,
+            "uniqueItems": true
+          },
+          "collapsed": {
+            "type": "boolean",
+            "description": "Start collapsed on the detail page"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiListFilters": {
+        "type": "object",
+        "description": "Inventory filters, by key",
+        "properties": {
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Search text",
+            "default": null,
+            "maxLength": 200
+          },
+          "statusKeys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            },
+            "description": "Status keys",
+            "maxItems": 100,
+            "uniqueItems": true
+          },
+          "environmentKeys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            },
+            "description": "Environment keys",
+            "maxItems": 100,
+            "uniqueItems": true
+          },
+          "locationKeys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            },
+            "description": "Location keys",
+            "maxItems": 500,
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiListSort": {
+        "type": "object",
+        "description": "Sort for an inventory list; `field` is one of the inventory sort fields",
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "pattern": "^(name|hostname|ipAddress|serialNumber|className|statusName|createdAt|updatedAt)$"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiListView": {
+        "type": "object",
+        "description": "The inventory list of one class",
+        "required": [
+          "classKey"
+        ],
+        "properties": {
+          "classKey": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^(name|class|status|environment|owner|location|hostname|ipAddress|serialNumber|notes|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+            },
+            "description": "Columns in display order: built-in fields (name, class, status, environment, owner, location, hostname, ipAddress, serialNumber, notes, createdAt, updatedAt) or attributes.<key>",
+            "maxItems": 200,
+            "uniqueItems": true
+          },
+          "defaultSort": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UiListSort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaultFilters": {
+            "$ref": "#/components/schemas/UiListFilters"
+          },
+          "pageSize": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Rows per page (default 50)",
+            "maximum": 200,
+            "minimum": 10
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiNavClassItem": {
+        "type": "object",
+        "description": "A class inside a navigation section",
+        "required": [
+          "classKey"
+        ],
+        "properties": {
+          "classKey": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Display label; null keeps the default"
+          },
+          "hidden": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiNavEntry": {
+        "type": "object",
+        "description": "One menu entry. `type` decides which other fields apply: page -> `page`;\nclass -> `classKey`; section -> `key`, `label` and `items`.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "page",
+              "class",
+              "section"
+            ]
+          },
+          "page": {
+            "type": "string",
+            "description": "Built-in pages of the web UI",
+            "enum": [
+              "dashboard",
+              "inventory",
+              "search",
+              "audit_log",
+              "administration"
+            ]
+          },
+          "classKey": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "key": {
+            "type": "string",
+            "description": "Section key (unique among sections)",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Display label; null keeps the default"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiNavClassItem"
+            },
+            "description": "section: its classes in display order",
+            "maxItems": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiNavigation": {
+        "type": "object",
+        "description": "Menu order, labels, hidden entries and class sections. Pages and classes\nthat are not listed appear after the listed ones, in their default order.",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiNavEntry"
+            },
+            "default": [],
+            "maxItems": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiSavedSearch": {
+        "type": "object",
+        "description": "A stored inventory search",
+        "properties": {
+          "classKeys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            },
+            "description": "CI class keys",
+            "maxItems": 500,
+            "uniqueItems": true
+          },
+          "includeSubclasses": {
+            "type": "boolean",
+            "description": "Include CIs of subclasses of `classKeys`",
+            "default": false
+          },
+          "filters": {
+            "allOf": [
+              {
+                "type": "object",
+                "description": "Inventory filters, by key",
+                "properties": {
+                  "q": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Search text",
+                    "default": null,
+                    "maxLength": 200
+                  },
+                  "statusKeys": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    "description": "Status keys",
+                    "maxItems": 100,
+                    "uniqueItems": true
+                  },
+                  "environmentKeys": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    "description": "Environment keys",
+                    "maxItems": 100,
+                    "uniqueItems": true
+                  },
+                  "locationKeys": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    "description": "Location keys",
+                    "maxItems": 500,
+                    "uniqueItems": true
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "default": {
+                  "q": null,
+                  "statusKeys": [],
+                  "environmentKeys": [],
+                  "locationKeys": []
+                }
+              }
+            ]
+          },
+          "sort": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "Sort for an inventory list; `field` is one of the inventory sort fields",
+                "required": [
+                  "field"
+                ],
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "pattern": "^(name|hostname|ipAddress|serialNumber|className|statusName|createdAt|updatedAt)$"
+                  },
+                  "direction": {
+                    "type": "string",
+                    "enum": [
+                      "asc",
+                      "desc"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiSettings": {
+        "type": "object",
+        "description": "The current UI settings as the web UI applies them",
+        "required": [
+          "version",
+          "updatedAt",
+          "updatedBy",
+          "settings",
+          "issues",
+          "assets"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Send it back in PUT; it changes with every save"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Username of whoever saved this version"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/UiSettingsDocument",
+            "description": "The effective settings: references to classes, attributes and lookups that do not exist are left out (see `issues`)"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            },
+            "description": "What the effective settings ignore or flag, with paths into the stored document"
+          },
+          "assets": {
+            "$ref": "#/components/schemas/UiAssets"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiSettingsDocument": {
+        "type": "object",
+        "description": "Every UI setting. All sections are optional; `{}` is the default UI.",
+        "properties": {
+          "branding": {
+            "$ref": "#/components/schemas/UiBranding",
+            "default": {
+              "appName": null,
+              "primaryColor": null,
+              "accentColor": null,
+              "defaultTheme": "system"
+            }
+          },
+          "navigation": {
+            "$ref": "#/components/schemas/UiNavigation",
+            "default": {
+              "entries": []
+            }
+          },
+          "dashboard": {
+            "$ref": "#/components/schemas/UiDashboard",
+            "default": {
+              "widgets": null
+            }
+          },
+          "listViews": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiListView"
+            },
+            "description": "At most one per class",
+            "default": [],
+            "maxItems": 1000
+          },
+          "layouts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiClassLayout"
+            },
+            "description": "At most one per class",
+            "default": [],
+            "maxItems": 1000
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiSettingsSection": {
+        "type": "object",
+        "description": "The UI settings document with the logo and favicon. Importing it replaces\nthe current settings (as a new version) and the images: a null logo or\nfavicon removes the current one.",
+        "required": [
+          "settings"
+        ],
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/UiSettingsDocument"
+          },
+          "logo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AssetData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "favicon": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AssetData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiSettingsVersion": {
+        "type": "object",
+        "description": "A saved version with its document as stored",
+        "required": [
+          "version",
+          "createdAt",
+          "actorType",
+          "actorName",
+          "comment",
+          "isCurrent",
+          "settings"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actorType": {
+            "type": "string",
+            "enum": [
+              "system",
+              "user",
+              "api_client",
+              "import"
+            ]
+          },
+          "actorName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isCurrent": {
+            "type": "boolean"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/UiSettingsDocument"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiSettingsVersionList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiSettingsVersionSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiSettingsVersionSummary": {
+        "type": "object",
+        "description": "A saved version (without the document)",
+        "required": [
+          "version",
+          "createdAt",
+          "actorType",
+          "actorName",
+          "comment",
+          "isCurrent"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actorType": {
+            "type": "string",
+            "enum": [
+              "system",
+              "user",
+              "api_client",
+              "import"
+            ]
+          },
+          "actorName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isCurrent": {
+            "type": "boolean",
+            "description": "The version in use now"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiWidget": {
+        "type": "object",
+        "required": [
+          "id",
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "count_by_class",
+              "count_by_status",
+              "count_by_environment",
+              "recent_changes",
+              "saved_search"
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Display label; null keeps the default"
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "small",
+              "medium",
+              "large"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "recent_changes and saved_search: rows shown (default 10)",
+            "maximum": 50,
+            "minimum": 1
+          },
+          "classKeys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            },
+            "description": "CI class keys",
+            "maxItems": 500,
+            "uniqueItems": true
+          },
+          "search": {
+            "$ref": "#/components/schemas/UiSavedSearch",
+            "description": "saved_search: the search (required for that type)"
+          }
+        },
+        "additionalProperties": false
+      },
       "UsageCount": {
         "type": "object",
         "description": "How many records of one kind refer to the row.",
@@ -15373,6 +18649,10 @@
       "description": "Administration: starter data models (classes, attributes, relationship rules and lookups) installed on a bare database."
     },
     {
+      "name": "UI settings",
+      "description": "Branding, navigation, dashboard, list views and detail/form layouts for every user: one versioned, audited document plus the logo and favicon. Reading needs a session (branding and images are public for the login page); changing needs customization.manage."
+    },
+    {
       "name": "Audit log",
       "description": "Read-only change history written in the same transaction as every change."
     },
@@ -15383,6 +18663,10 @@
     {
       "name": "Permission profiles",
       "description": "Administration: named sets of global and per-CI-class permissions. Users can hold several; the built-in Administrator profile holds everything."
+    },
+    {
+      "name": "Configuration export/import",
+      "description": "Administration: the whole configuration (data model, lookups, permission profiles, UI settings) as one JSON file, and importing such a file with a dry-run diff first. Needs config.export_import."
     }
   ]
 }

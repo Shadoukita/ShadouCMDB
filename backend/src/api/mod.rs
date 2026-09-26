@@ -31,9 +31,11 @@ pub fn routes() -> Vec<Route> {
         modules::classes::routes(),
         modules::lookups::routes(),
         modules::templates::routes(),
+        modules::ui_settings::routes(),
         modules::audit::routes(),
         modules::users::routes(),
         modules::profiles::routes(),
+        modules::config_transfer::routes(),
     ]
     .into_iter()
     .flatten()

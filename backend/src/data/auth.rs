@@ -299,6 +299,15 @@ pub async fn get_profile(conn: &mut PgConnection, id: Uuid, for_update: bool) ->
     .await
 }
 
+/// Every profile except the built-in one, by name.
+pub async fn editable_profiles(conn: &mut PgConnection) -> sqlx::Result<Vec<ProfileRow>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {PROFILE_COLUMNS} FROM permission_profiles p WHERE NOT p.is_builtin ORDER BY lower(p.name)"
+    )))
+    .fetch_all(conn)
+    .await
+}
+
 pub async fn builtin_profile_id(conn: &mut PgConnection) -> sqlx::Result<Uuid> {
     sqlx::query_scalar("SELECT id FROM permission_profiles WHERE is_builtin").fetch_one(conn).await
 }

@@ -52,6 +52,14 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
         "Templates",
         "Administration: starter data models (classes, attributes, relationship rules and lookups) installed on a bare database.",
     ),
+    (
+        "UI settings",
+        "Branding, navigation, dashboard, list views and detail/form layouts for every user: one versioned, audited document plus the logo and favicon. Reading needs a session (branding and images are public for the login page); changing needs customization.manage.",
+    ),
+    (
+        "Configuration export/import",
+        "Administration: the whole configuration (data model, lookups, permission profiles, UI settings) as one JSON file, and importing such a file with a dry-run diff first. Needs config.export_import.",
+    ),
     ("Audit log", "Read-only change history written in the same transaction as every change."),
     ("Users", "Administration: local user accounts, passwords and the permission profiles they hold."),
     (
@@ -188,13 +196,23 @@ pub fn document(routes: &[Route]) -> OpenApi {
 
         let mut responses: BTreeMap<u16, utoipa::openapi::Response> = BTreeMap::new();
         match &r.response {
-            Some(doc) => {
+            Some(doc) if doc.name.is_empty() => {
                 responses.insert(
                     r.status.as_u16(),
                     ResponseBuilder::new()
                         .description("Success")
-                        .content("application/json", json_ref(&doc.name))
+                        .content(doc.media_type, ContentBuilder::new().schema(Some(doc.schema.clone())).build())
                         .build(),
+                );
+                // Other statuses of a raw body (304 Not Modified) carry no content.
+                for (status, description) in &r.also_returns {
+                    responses.insert(status.as_u16(), ResponseBuilder::new().description(description.clone()).build());
+                }
+            }
+            Some(doc) => {
+                responses.insert(
+                    r.status.as_u16(),
+                    ResponseBuilder::new().description("Success").content(doc.media_type, json_ref(&doc.name)).build(),
                 );
                 for (status, description) in &r.also_returns {
                     responses.insert(
