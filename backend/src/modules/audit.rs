@@ -35,6 +35,8 @@ pub enum EntityType {
     Owners,
     Users,
     PermissionProfiles,
+    /// Authentication events: sign-in, sign-out, session revocation
+    Sessions,
 }
 
 impl EntityType {
@@ -52,6 +54,7 @@ impl EntityType {
             EntityType::Owners => "owners",
             EntityType::Users => "users",
             EntityType::PermissionProfiles => "permission_profiles",
+            EntityType::Sessions => "sessions",
         }
     }
 }
@@ -70,13 +73,13 @@ pub struct AuditEntry {
     pub actor_name: Option<String>,
     #[schema(inline)]
     pub action: AuditAction,
-    /// Table of the changed entity, e.g. configuration_items
+    /// Table of the changed entity, e.g. configuration_items (sessions for authentication events)
     pub entity_type: String,
     pub entity_id: Uuid,
     /// API representation before the change (null for create)
     #[schema(value_type = serde_json::Value, required = true)]
     pub old_value: Option<Value>,
-    /// API representation after the change (null for delete)
+    /// API representation after the change (null for delete); the details of an authentication event
     #[schema(value_type = serde_json::Value, required = true)]
     pub new_value: Option<Value>,
     #[schema(required = true)]
@@ -187,7 +190,9 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, "/api/v1/audit-log", "listAuditLog")
             .tag("Audit log")
             .summary("Change history (read-only, paginated, newest first by default)")
-            .description("Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username).")
+            .description(
+                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. Passwords, session tokens and CSRF tokens are never recorded.",
+            )
             .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<AuditQuery>, NoBody>| async move {
                 Ok(Json(list(&api.pool, &q).await?))

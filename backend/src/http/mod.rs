@@ -12,6 +12,7 @@ mod ui;
 
 use std::any::Any;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::Router;
@@ -113,7 +114,10 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         "server listening"
     );
 
-    axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
+    // The peer address is the client IP of last resort for the audit trail (auth::session::client_ip).
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown)
+        .await?;
     tracing::info!("draining complete, closing database pool");
     // Do not let a wedged connection hold up process exit.
     let _ = tokio::time::timeout(Duration::from_secs(5), pool.close()).await;

@@ -7,6 +7,7 @@
 //! the principal to the service in its [`crate::api::context::RequestContext`].
 
 pub mod cli;
+pub mod events;
 pub mod password;
 pub mod permissions;
 pub mod session;

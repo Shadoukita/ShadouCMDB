@@ -11,11 +11,13 @@
 //! route beyond 401.
 
 use std::future::Future;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::Extension;
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
-use axum::extract::{RawPathParams, RawQuery, State};
+use axum::extract::{ConnectInfo, RawPathParams, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodFilter, MethodRouter, on};
@@ -28,7 +30,7 @@ use utoipa::openapi::{RefOr, Required, schema::Schema};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use super::context::{RequestContext, forbidden, unauthenticated};
+use super::context::{ClientInfo, RequestContext, forbidden, unauthenticated};
 use super::schemas;
 use super::validate::{self, QueryParam};
 use crate::auth::permissions::GlobalPermission;
@@ -42,7 +44,7 @@ pub struct Api {
     pub pool: PgPool,
     pub ctx: RequestContext,
     pub auth: Arc<AuthState>,
-    /// Request headers (the auth routes read User-Agent and the forwarded protocol).
+    /// Request headers (the auth routes read cookies and the forwarded protocol).
     pub headers: HeaderMap,
 }
 
@@ -434,11 +436,16 @@ impl RouteBuilder {
                             raw_path: RawPathParams,
                             RawQuery(raw_query): RawQuery,
                             headers: HeaderMap,
+                            peer: Option<Extension<ConnectInfo<SocketAddr>>>,
                             body: Result<Bytes, BytesRejection>| {
             let f = f.clone();
             async move {
                 let run = async move {
-                    let ctx = authorise(&state, &headers, access, safe_method).await?;
+                    let client = ClientInfo {
+                        ip: auth::session::client_ip(&headers, peer.map(|Extension(ConnectInfo(a))| a.ip())),
+                        user_agent: auth::session::user_agent(&headers),
+                    };
+                    let ctx = authorise(&state, &headers, access, safe_method).await?.with_client(client);
                     let body = read_body(&headers, body)?;
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
                     let api = Api { pool: state.pool, ctx, auth: state.auth, headers };
