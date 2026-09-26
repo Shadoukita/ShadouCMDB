@@ -19,7 +19,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 | `backend/` | Node + Fastify + Drizzle (TypeScript). Owns the schema, migrations and API. |
 | `backend/src/db/schema/` | Drizzle table definitions (source of truth for generated migrations). |
 | `sql/` | Database artifacts: versioned migrations, bootstrap scripts, ER diagram. See [`sql/README.md`](sql/README.md). |
-| `frontend/` | React + Vite + TanStack Query UI (stub for now). |
+| `frontend/` | React + Vite + TanStack Query web UI. See [`frontend/README.md`](frontend/README.md). |
 | `docs/data-model.md` | Data model, integrity rules and soft-delete decisions. |
 | `.github/` | CI workflow and pull request template. |
 | `docs/api.md` | API conventions, error envelope, endpoint overview, extension seams. |
