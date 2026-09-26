@@ -39,6 +39,8 @@ pub enum EntityType {
     UiAssets,
     /// Authentication events: sign-in, sign-out, session revocation
     Sessions,
+    /// Operator purges (`audit.purge`)
+    AuditLog,
 }
 
 impl EntityType {
@@ -59,6 +61,7 @@ impl EntityType {
             EntityType::UiSettings => "ui_settings",
             EntityType::UiAssets => "ui_assets",
             EntityType::Sessions => "sessions",
+            EntityType::AuditLog => "audit_log",
         }
     }
 }

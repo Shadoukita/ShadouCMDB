@@ -9983,7 +9983,7 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log";
                 /** @description History of these entities */
                 entityId?: string;
                 action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge";
