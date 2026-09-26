@@ -1,11 +1,11 @@
--- Upgrade check for migration 0007 (per-type tables), part 1 of 2.
+-- Upgrade check for migration 0008 (per-type tables), part 1 of 2.
 --
--- Run BEFORE upgrading to a release with migration 0007, on a database still at
--- migration 0005 or 0006, as the application role:
+-- Run BEFORE upgrading to a release with migration 0008, on a database still at
+-- migration 0005, 0006 or 0007, as the application role:
 --   psql "$DATABASE_URL" -f sql/checks/eav_upgrade_1_before.sql
 --
 -- Copies every stored attribute value, as the text of the column type it will
--- have in its type table, into public.eav_upgrade_before. Migration 0006 moves
+-- have in its type table, into public.eav_upgrade_before. Migration 0007 moves
 -- only the system tables (a fixed list) out of public, so this table is left
 -- alone by the upgrade.
 -- Part 2 compares it with the type tables and drops it.

@@ -9,7 +9,7 @@ binary embeds the migrations from this folder at build time.
 | [`migrations/`](migrations/) | Versioned schema migrations `<NNNN>_<name>.sql`, applied in order by `shadoucmdb migrate` and tracked in `_sqlx_migrations`. |
 | [`bootstrap/`](bootstrap/) | One-time admin scripts: `00_…` creates the three roles and the database before the first migration; `10_split_roles.sql` upgrades an install made with the older single-role script. Not tracked by the migration runner. |
 | [`diagrams/`](diagrams/) | Schema diagrams. Start with [`diagrams/erd.md`](diagrams/erd.md). |
-| [`checks/`](checks/) | Optional operator scripts, e.g. the before/after comparison for the upgrade to per-type tables (migration 0007). |
+| [`checks/`](checks/) | Optional operator scripts, e.g. the before/after comparison for the upgrade to per-type tables (migration 0008). |
 
 The table-by-table reference, integrity rules and soft-delete decisions are in
 [`docs/data-model.md`](../docs/data-model.md).
@@ -67,9 +67,9 @@ anything. Resetting the database is the alternative. See
   API or a starter template (`backend/src/modules/templates/`). The DDL engine creates the matching
   schema, table or column; never create or alter type tables by hand.
 
-## Upgrading to per-type tables (migration 0007)
+## Upgrading to per-type tables (migration 0008)
 
-Migration 0007 copies every value from `ci_attribute_values` into the new type tables, checks the
+Migration 0008 copies every value from `ci_attribute_values` into the new type tables, checks the
 counts per attribute, and drops the EAV table; if a count differs, it fails and nothing changes.
 For an independent check, run [`checks/eav_upgrade_1_before.sql`](checks/eav_upgrade_1_before.sql)
 before the upgrade and [`checks/eav_upgrade_2_after.sql`](checks/eav_upgrade_2_after.sql) after it;

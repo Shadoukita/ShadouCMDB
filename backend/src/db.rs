@@ -22,7 +22,7 @@ pub static MIGRATOR: Migrator = Migrator {
 /// Where sqlx records applied migrations.
 const MIGRATIONS_TABLE: &str = "public._sqlx_migrations";
 
-/// System tables live in `cmdb` (migration 0006); `public` holds the pg_trgm
+/// System tables live in `cmdb` (migration 0007); `public` holds the pg_trgm
 /// functions. Admin-defined areas are separate schemas, always schema-qualified.
 pub const SEARCH_PATH: &str = "cmdb, public";
 /// Where the Node/Drizzle runner recorded them before this binary existed.
@@ -161,7 +161,7 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
     let after = applied_count(pool).await?;
 
     // Area schemas, type tables and reporting views follow the data model; bring
-    // anything missing (after migration 0007, or a new reporting role) in line.
+    // anything missing (after migration 0008, or a new reporting role) in line.
     let ctx = crate::api::context::RequestContext::system("migrate", "migrate");
     let mut tx = pool.begin().await?;
     let change = crate::schema::reconcile(&mut tx, &ctx, "Reconcile after migrate")

@@ -23,7 +23,7 @@
 --
 -- Existing installs: the CI classes they already have are placed in an area
 -- "Infrastruktur" (schema `infrastruktur`), the area the IT infrastructure
--- starter template installs into. Migration 0007 then builds their tables and
+-- starter template installs into. Migration 0008 then builds their tables and
 -- moves the values out of ci_attribute_values.
 --
 -- Soft delete: areas are archived with is_active = false (the API's DELETE);

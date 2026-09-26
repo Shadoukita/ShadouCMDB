@@ -1,4 +1,4 @@
--- Upgrade check for migration 0007 (per-type tables), part 2 of 2.
+-- Upgrade check for migration 0008 (per-type tables), part 2 of 2.
 --
 -- Run AFTER `shadoucmdb migrate`, on the database part 1 ran on:
 --   psql "$DATABASE_URL" -f sql/checks/eav_upgrade_2_after.sql

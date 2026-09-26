@@ -27,7 +27,7 @@ use crate::paged;
 use crate::schema::naming::{self, Ident, NameKind};
 use crate::schema::{self as engine, Purge, SchemaChange, Scope};
 
-/// Where types go that were created before areas existed (migration 0006), by
+/// Where types go that were created before areas existed (migration 0007), by
 /// a version 1 configuration file, or by the IT infrastructure template.
 pub const DEFAULT_AREA: (&str, &str) = ("infrastruktur", "Infrastruktur");
 

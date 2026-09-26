@@ -12,8 +12,8 @@ that need to look at other rows), not only in the API.
 
 Migrations: [`sql/migrations/`](../sql/migrations/)
 (`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`,
-`0003_users_and_permission_profiles`, `0004_data_model_admin`, `0005_ui_settings`,
-`0006_cmdb_schema_and_areas`, `0007_type_tables`).
+`0003_users_and_permission_profiles`, `0004_data_model_admin`, `0005_ui_settings`, `0006_auth_audit`,
+`0007_cmdb_schema_and_areas`, `0008_type_tables`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -164,7 +164,7 @@ area schema and `SELECT` on every reporting view, and nothing else: it cannot re
 or the type tables directly. `POST /api/v1/schema-changes/reconcile` (and every `shadoucmdb migrate`)
 catches up after the role is created later. See `sql/bootstrap/00_create_role_and_database.sql`.
 
-**The move from `ci_attribute_values` (migration 0007).** Existing classes go into the area
+**The move from `ci_attribute_values` (migration 0008).** Existing classes go into the area
 `infrastruktur`; each gets its table, each attribute its column, and every value is copied into it.
 For every attribute the number of values written must equal its number of rows in
 `ci_attribute_values`, and the totals must match, or the migration fails and nothing changes. The

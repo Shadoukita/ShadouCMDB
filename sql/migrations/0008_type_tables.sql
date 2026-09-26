@@ -149,8 +149,8 @@ BEGIN
 
   IF cardinality(stmts) > 1 THEN
     INSERT INTO cmdb.schema_changes (actor_type, actor_name, summary, statements, impact)
-    VALUES ('system', 'migration 0007',
-            format('Migration 0007: %s attribute values moved into per-type tables', total_moved),
+    VALUES ('system', 'migration 0008',
+            format('Migration 0008: %s attribute values moved into per-type tables', total_moved),
             stmts,
             jsonb_build_array(jsonb_build_object('kind', 'data_moved', 'rows', total_moved,
               'message', format('%s values moved from ci_attribute_values and verified', total_moved))) || notes);

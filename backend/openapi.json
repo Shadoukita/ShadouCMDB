@@ -13284,11 +13284,7 @@
           "Audit log"
         ],
         "summary": "Change history (read-only, paginated, newest first by default)",
-<<<<<<< HEAD
-        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. Passwords, session tokens and CSRF tokens are never recorded. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned.",
-=======
-        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username).",
->>>>>>> 9a71b70 (Regenerate the OpenAPI document and frontend API types)
+        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. Passwords, session tokens and CSRF tokens are never recorded.",
         "operationId": "listAuditLog",
         "parameters": [
           {
@@ -13352,13 +13348,9 @@
                 "permission_profiles",
                 "ui_settings",
                 "ui_assets",
-<<<<<<< HEAD
                 "sessions",
-                "audit_log"
-=======
                 "areas",
                 "schema_changes"
->>>>>>> 9a71b70 (Regenerate the OpenAPI document and frontend API types)
               ]
             }
           },
@@ -13381,17 +13373,12 @@
                 "create",
                 "update",
                 "delete",
-<<<<<<< HEAD
                 "restore",
                 "login.success",
                 "login.failure",
                 "login.locked",
                 "logout",
-                "session.revoke",
-                "audit.purge"
-=======
-                "restore"
->>>>>>> 9a71b70 (Regenerate the OpenAPI document and frontend API types)
+                "session.revoke"
               ]
             }
           },
@@ -15870,22 +15857,17 @@
               "create",
               "update",
               "delete",
-<<<<<<< HEAD
               "restore",
               "login.success",
               "login.failure",
               "login.locked",
               "logout",
-              "session.revoke",
-              "audit.purge"
-=======
-              "restore"
->>>>>>> 9a71b70 (Regenerate the OpenAPI document and frontend API types)
+              "session.revoke"
             ]
           },
           "entityType": {
             "type": "string",
-            "description": "Table of the changed entity, e.g. configuration_items"
+            "description": "Table of the changed entity, e.g. configuration_items (sessions for authentication events)"
           },
           "entityId": {
             "type": "string",
@@ -15895,7 +15877,7 @@
             "description": "API representation before the change (null for create)"
           },
           "newValue": {
-            "description": "API representation after the change (null for delete)"
+            "description": "API representation after the change (null for delete); the details of an authentication event"
           },
           "requestId": {
             "type": [
