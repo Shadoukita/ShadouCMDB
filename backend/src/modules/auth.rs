@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::http::{HeaderMap, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::ToSchema;
@@ -256,7 +256,7 @@ async fn record_failure(
     pool: &PgPool,
     ctx: &RequestContext,
     username: &str,
-    locked: Option<std::time::Duration>,
+    locked: Option<Duration>,
 ) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
     let attempt = events::login_failure(&mut tx, ctx, username).await?;
@@ -486,17 +486,17 @@ mod tests {
             return;
         };
         let (pool, auth) = (&db.pool, auth_state());
-        setup(pool, &auth, &HeaderMap::new(), body("admin")).await.expect("setup");
+        setup(pool, &auth, &HeaderMap::new(), &anon(), body("admin")).await.expect("setup");
         for i in 0..crate::auth::throttle::GLOBAL_BUDGET {
             auth.throttle.failure(&format!("junk-{i}"));
         }
         assert_eq!(auth.throttle.check("admin"), Gate::Slow);
         let started = std::time::Instant::now();
         let login_as = |password: &str| LoginBody { username: "admin".into(), password: password.into() };
-        let signed_in = login(pool, &auth, &HeaderMap::new(), login_as("correct horse battery")).await;
+        let signed_in = login(pool, &auth, &HeaderMap::new(), &anon(), login_as("correct horse battery")).await;
         assert!(signed_in.is_ok(), "refused: {:?}", signed_in.err().map(|e| e.code));
         assert!(started.elapsed() >= GLOBAL_PENALTY, "through the slow lane");
-        let wrong = login(pool, &auth, &HeaderMap::new(), login_as("wrong guess")).await;
+        let wrong = login(pool, &auth, &HeaderMap::new(), &anon(), login_as("wrong guess")).await;
         assert_eq!(wrong.err().map(|e| e.code), Some(ErrorCode::Unauthenticated), "slowed, then checked");
         db.drop().await;
     }
