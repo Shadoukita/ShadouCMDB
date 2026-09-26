@@ -48,6 +48,25 @@ shadoucmdb verify          # optional, writes nothing
 shadoucmdb serve           # http://<host>:3000/readyz
 ```
 
+## Release downloads
+
+Each [GitHub Release](https://github.com/Shadoukita/ShadouCMDB/releases) has:
+
+| Asset | Contents |
+| --- | --- |
+| `shadoucmdb-<version>-linux-x64.tar.gz` | `x86_64-unknown-linux-musl`: statically linked, runs on any x64 distribution (glibc or musl, old or new). Plus the systemd unit, `shadoucmdb.env.example`, `README.txt`. |
+| `shadoucmdb-<version>-linux-arm64.tar.gz` | The same for `aarch64-unknown-linux-musl` (Graviton, Ampere, Raspberry Pi 4/5 with a 64-bit OS). |
+| `shadoucmdb-<version>-windows-x64.zip` | `shadoucmdb.exe` (`x86_64-pc-windows-msvc`, static C runtime, so no Visual C++ Redistributable), `shadoucmdb.env.example`, and a `README.txt` with the Windows Service install steps. |
+| `SHA256SUMS` | `sha256sum --ignore-missing -c SHA256SUMS` |
+| image `ghcr.io/shadoukita/shadoucmdb:<version>` | `linux/amd64` + `linux/arm64`, made from the two Linux binaries above. |
+
+All three binaries embed the same web UI build. The Linux builds are static musl
+executables. musl's own allocator serialises threads on a single lock, so those
+builds use mimalloc as the global allocator instead (see `backend/rust/main.rs`),
+and concurrent requests do not queue on `malloc`.
+
+How releases are cut: [CONTRIBUTING.md](../CONTRIBUTING.md#cutting-a-release).
+
 ## Building from source
 
 Requirements:
@@ -67,10 +86,16 @@ cargo build --release          # -> backend/target/release/shadoucmdb(.exe)
 | `x86_64-unknown-linux-gnu` | `cargo build --release` on Linux x64 |
 | `aarch64-unknown-linux-gnu` | natively on ARM64, or cross: `apt install gcc-aarch64-linux-gnu`, then `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc cargo build --release --target aarch64-unknown-linux-gnu` |
 | `x86_64-pc-windows-msvc` | `cargo build --release` on Windows with the Visual Studio Build Tools ("Desktop development with C++") |
-| any of the above from Linux | [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild): `cargo zigbuild --release --target <triple>`; use `x86_64-pc-windows-gnu` for Windows |
+| `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` (static, what releases ship) | from any Linux host: `rustup target add <triple>`, install [zig](https://ziglang.org/) 0.14 and [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild), then `cargo zigbuild --release --target <triple>` |
+| any of the above from Linux | cargo-zigbuild: `cargo zigbuild --release --target <triple>`; use `x86_64-pc-windows-gnu` for Windows |
 
-CI (`.github/workflows/rust.yml`) builds Linux x64 natively, cross-builds Linux
-ARM64 and runs it under QEMU, and builds Windows x64 with MSVC.
+`backend/.cargo/config.toml` links the MSVC C runtime statically, so a Windows
+build runs without the Visual C++ Redistributable.
+
+CI on every PR (`.github/workflows/rust.yml`) builds Linux x64 natively,
+cross-builds Linux ARM64 and runs it under QEMU, and builds Windows x64 with
+MSVC. The release workflow (`.github/workflows/release.yml`) builds the static
+musl binaries and the Windows exe that are shipped.
 
 ### Web UI
 
@@ -175,6 +200,17 @@ docker build -t shadoucmdb .                                                 # c
 docker run --rm --env-file .env shadoucmdb migrate
 docker run --rm --env-file .env shadoucmdb seed
 docker run -d --name shadoucmdb --env-file .env -p 3000:3000 shadoucmdb    # CMD is `serve`
+```
+
+Released images (`ghcr.io/shadoukita/shadoucmdb:<version>`) are built differently:
+[`deploy/docker/Dockerfile.release`](../deploy/docker/Dockerfile.release) copies the
+already-tested static musl binary from the release onto
+`gcr.io/distroless/static-debian12:nonroot`. The container runs the same bytes as
+the `linux-x64` / `linux-arm64` downloads. Usage is the same:
+
+```sh
+docker run --rm --env-file .env ghcr.io/shadoukita/shadoucmdb:<version> migrate
+docker run -d --name shadoucmdb --env-file .env -p 3000:3000 ghcr.io/shadoukita/shadoucmdb:<version>
 ```
 
 The image has no `HEALTHCHECK` because it has no shell or curl. Probe
