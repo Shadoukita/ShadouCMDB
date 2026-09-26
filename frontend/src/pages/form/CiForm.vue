@@ -5,6 +5,7 @@ import { ApiError } from "../../api/client";
 import {
   useClassAttributes,
   useCreateCi,
+  useLookup,
   useUpdateCi,
   type Ci,
   type CiCreateBody,
@@ -18,6 +19,7 @@ import { groupAttributes } from "../../lib/attributes";
 import { vAutofocus } from "../../lib/directives";
 import { hintFor, toApiValue, toFormValue, type FormValue } from "../../lib/attributeValues";
 import { useFlashStore } from "../../stores/flash";
+import { useSessionStore } from "../../stores/session";
 import FormErrorBanner from "./FormErrorBanner.vue";
 import FormField from "./FormField.vue";
 
@@ -35,6 +37,10 @@ type CoreValues = Record<CoreField, string>;
 
 const router = useRouter();
 const flash = useFlashStore();
+const session = useSessionStore();
+/** Every CI needs a status; on a fresh install there may be none yet. */
+const statuses = useLookup("statuses");
+const noStatuses = computed(() => !!statuses.data.value && !statuses.data.value.some((s) => s.isActive));
 const attrs = useClassAttributes(() => props.classId);
 const create = useCreateCi();
 const update = useUpdateCi(() => props.ci?.id ?? "");
@@ -63,13 +69,13 @@ const missing = ref<Record<string, string>>({});
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || (props.ci && props.ci.attributes[d.key] != null)));
 const groups = computed(() => groupAttributes(defs.value));
 
-// Seed attribute values once the definitions arrive.
+// Seed attribute values once the definitions arrive. A new CI starts from each attribute's default value.
 watch(
   () => attrs.data.value,
   (data) => {
     if (!data) return;
     const v: Record<string, FormValue> = {};
-    for (const d of data) v[d.key] = toFormValue(d, props.ci?.attributes[d.key]);
+    for (const d of data) v[d.key] = toFormValue(d, props.ci ? props.ci.attributes[d.key] : d.isActive ? d.defaultValue : undefined);
     values.value = v;
     initialValues = { ...v };
   },
@@ -168,6 +174,14 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
 <template>
   <form novalidate :aria-label="mode === 'create' ? `New ${className}` : `Edit ${ci?.name}`" @submit.prevent="onSubmit">
     <FormErrorBanner v-if="error != null" :error="error" :unplaced="unplaced" :version-conflict-href="ci ? `/cis/${ci.id}` : undefined" />
+    <div v-if="noStatuses" class="alert alert-warn" role="alert">
+      <strong>No statuses are defined yet.</strong> Every configuration item needs one.
+      <template v-if="session.can('datamodel.manage')">
+        Add them under <RouterLink to="/admin/lookups/statuses">Administration › Lookups</RouterLink>, or install the
+        <RouterLink to="/admin/templates">IT infrastructure starter</RouterLink>.
+      </template>
+      <template v-else>Ask an administrator to add statuses under Administration › Lookups.</template>
+    </div>
     <section class="panel">
       <div class="panel-header">
         <h2>General</h2>

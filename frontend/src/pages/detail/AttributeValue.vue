@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { EffectiveAttribute } from "../../api/queries";
 import CiLink from "../../components/CiLink.vue";
+import LookupValueName from "../../components/LookupValueName.vue";
 import { formatDate, formatDateTime } from "../../lib/format";
 import type { TrailStep } from "../../lib/trail";
 
@@ -24,6 +25,7 @@ const isUrl = (v: unknown) => /^https?:\/\//.test(String(v));
   <CiLink v-else-if="def.dataType === 'reference'" :id="String(value)" :from="self" :trail="trail">
     {{ refInfo?.name ?? String(value) }}{{ refInfo?.deleted ? " (deleted)" : "" }}
   </CiLink>
+  <LookupValueName v-else-if="def.dataType === 'lookup'" :list-id="def.lookupListId" :value-id="String(value)" />
   <a v-else-if="def.dataType === 'text' && isUrl(value)" :href="String(value)" target="_blank" rel="noreferrer noopener">{{ String(value) }}</a>
   <template v-else>{{ String(value) }}</template>
 </template>
