@@ -22,8 +22,19 @@ export function readJournal(): Journal {
   return JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8')) as Journal;
 }
 
+/** True when the Rust binary (`shadoucmdb migrate`) manages this database's migrations. */
+async function managedByRust(pool: pg.Pool): Promise<boolean> {
+  const res = await pool.query<{ t: string | null }>(`SELECT to_regclass('_sqlx_migrations') AS t`);
+  return Boolean(res.rows[0]?.t);
+}
+
 /** Number of migrations recorded as applied (0 on an empty database). */
 export async function appliedMigrationCount(pool: pg.Pool): Promise<number> {
+  // Until the Node API is retired (SHAA-9), accept databases migrated by the Rust binary too.
+  if (await managedByRust(pool)) {
+    const res = await pool.query<{ n: string }>(`SELECT count(*) AS n FROM _sqlx_migrations WHERE success`);
+    return Number(res.rows[0]?.n ?? 0);
+  }
   const exists = await pool.query<{ t: string | null }>(`SELECT to_regclass($1) AS t`, [
     `${MIGRATIONS_SCHEMA}.${MIGRATIONS_TABLE}`,
   ]);
@@ -45,6 +56,14 @@ async function main(): Promise<void> {
     console.log(`Connected to database "${info?.db}" (PostgreSQL ${info?.version}), ssl=${env.DATABASE_SSL}`);
 
     const journal = readJournal();
+    if (await managedByRust(pool)) {
+      const applied = await appliedMigrationCount(pool);
+      console.log(`Database is at migration ${applied}/${journal.entries.length} (managed by \`shadoucmdb migrate\`)`);
+      if (applied < journal.entries.length) {
+        throw new Error('pending migrations: apply them with `shadoucmdb migrate` (see README)');
+      }
+      return;
+    }
     const before = await appliedMigrationCount(pool);
     const pending = journal.entries.slice(before);
     console.log(`Migrations: ${journal.entries.length} in repo, ${before} applied, ${pending.length} pending`);
