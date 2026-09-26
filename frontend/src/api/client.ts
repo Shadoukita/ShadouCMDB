@@ -7,6 +7,16 @@ import type { components, paths } from "./schema";
 
 export type Schemas = components["schemas"];
 
+/** The JSON request body of an operation, e.g. JsonBody<"/api/v1/statuses", "post">. */
+export type JsonBody<P extends keyof paths, M extends "post" | "patch" | "put"> = NonNullable<
+  (paths[P][M] & { requestBody?: { content: { "application/json": unknown } } })["requestBody"]
+>["content"]["application/json"];
+
+/** The query parameters of a GET operation. */
+export type ListQuery<P extends keyof paths> = NonNullable<
+  (paths[P] & { get: { parameters: { query?: unknown } } })["get"]["parameters"]["query"]
+>;
+
 export const api = createClient<paths>({
   baseUrl: config.apiBaseUrl,
   // The session cookie also travels when the API is on another origin (CORS_ORIGINS on the server).

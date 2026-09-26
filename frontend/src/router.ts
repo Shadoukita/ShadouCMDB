@@ -8,6 +8,11 @@ import NotFoundPage from "./pages/NotFoundPage.vue";
 import SearchPage from "./pages/SearchPage.vue";
 import AdminLayout from "./pages/admin/AdminLayout.vue";
 import AuditLogPage from "./pages/admin/AuditLogPage.vue";
+import TemplatesPage from "./pages/admin/TemplatesPage.vue";
+import ClassEditPage from "./pages/admin/datamodel/ClassEditPage.vue";
+import ClassesPage from "./pages/admin/datamodel/ClassesPage.vue";
+import RelationshipTypesPage from "./pages/admin/datamodel/RelationshipTypesPage.vue";
+import LookupsPage from "./pages/admin/lookups/LookupsPage.vue";
 import ProfileEditPage from "./pages/admin/ProfileEditPage.vue";
 import ProfilesPage from "./pages/admin/ProfilesPage.vue";
 import UserEditPage from "./pages/admin/UserEditPage.vue";
@@ -56,6 +61,13 @@ export const router = createRouter({
         { path: "profiles", component: ProfilesPage, meta: { permissions: section("profiles") } },
         { path: "profiles/new", component: ProfileEditPage, meta: { permissions: ["profiles.manage"] } },
         { path: "profiles/:id", component: ProfileEditPage, meta: { permissions: section("profiles") } },
+        { path: "classes", component: ClassesPage, meta: { permissions: section("classes") } },
+        { path: "classes/new", component: ClassEditPage, meta: { permissions: section("classes") } },
+        { path: "classes/:id", component: ClassEditPage, meta: { permissions: section("classes") } },
+        { path: "relationships", component: RelationshipTypesPage, meta: { permissions: section("relationships") } },
+        { path: "lookups", redirect: "/admin/lookups/statuses" },
+        { path: "lookups/:kind", component: LookupsPage, meta: { permissions: section("lookups") } },
+        { path: "templates", component: TemplatesPage, meta: { permissions: section("templates") } },
         { path: "audit", component: AuditLogPage, meta: { permissions: section("audit") } },
       ],
     },

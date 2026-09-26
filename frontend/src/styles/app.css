@@ -261,6 +261,13 @@ code,
   cursor: pointer;
   font: inherit;
 }
+/* Row-level destructive action in dense tables: the confirmation dialog carries the red button. */
+.btn-quiet-danger {
+  color: var(--c-danger);
+}
+.btn-quiet-danger:hover {
+  border-color: var(--c-danger);
+}
 .btn-link.danger {
   color: var(--c-danger);
 }
@@ -331,6 +338,9 @@ textarea {
   align-items: center;
   gap: var(--sp-2);
   height: var(--control-h);
+}
+.field label.checkbox-row {
+  font-weight: 400;
 }
 fieldset.group {
   border: 0;
@@ -856,4 +866,158 @@ table.matrix tbody th {
 }
 table.matrix tr.wildcard th {
   font-weight: 600;
+}
+
+/* ---------- Administration › Data model, Lookups, Templates ---------- */
+.class-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+}
+.class-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.class-swatch {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+/* Class colours are chosen for light backgrounds: on the dark sidebar the icon sits on a light chip. */
+.shell-nav .class-icon {
+  width: 16px;
+  height: 16px;
+  padding: 1px;
+  border-radius: 3px;
+  background: #eef1f5;
+  color: var(--c-sidebar);
+}
+.shell-nav .nav-note {
+  margin: 0;
+  padding: 2px var(--sp-5) var(--sp-3);
+  font-size: var(--fs-sm);
+  color: #8793a3;
+}
+.shell-nav .nav-note a {
+  display: inline;
+  padding: 0;
+  color: #9ec1ff;
+}
+.inline-control {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.inline-control select {
+  flex: 1;
+}
+input[type="color"] {
+  width: 44px;
+  height: var(--control-h);
+  padding: 1px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+}
+table.data tbody th[scope="row"],
+table.data tbody th[scope="colgroup"] {
+  position: static;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 400;
+}
+table.data tr.selected td {
+  background: var(--c-row-hover);
+}
+table.data tr.selected td:first-child {
+  box-shadow: inset 3px 0 0 var(--c-primary);
+}
+table.data .cell-note {
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+  padding-bottom: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+table.data td.row-actions,
+table.data td.order-buttons {
+  width: 1%;
+  text-align: right;
+}
+table.data td.row-actions > * + *,
+table.data td.order-buttons > * + * {
+  margin-left: var(--sp-2);
+}
+table.reorderable th.drag-col,
+table.reorderable td.drag-handle {
+  width: 18px;
+  padding: 0 0 0 var(--sp-3);
+  color: var(--c-text-muted);
+}
+table.reorderable tr[draggable="true"] td.drag-handle {
+  cursor: grab;
+}
+table.reorderable tr.dragging td {
+  opacity: 0.45;
+}
+table.reorderable tr.drop-target td,
+table.reorderable tr.drop-target th {
+  box-shadow: inset 0 2px 0 var(--c-primary);
+}
+table.attributes tr.section-row th {
+  background: var(--c-surface-alt);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--c-text-muted);
+}
+table.attributes tr.section-row td {
+  background: var(--c-surface-alt);
+}
+dialog.form-dialog {
+  width: min(640px, 94vw);
+}
+dialog.form-dialog.wide {
+  width: min(820px, 96vw);
+}
+dialog.form-dialog .body {
+  max-height: 70vh;
+}
+dialog.form-dialog .body > .alert {
+  margin-bottom: var(--sp-4);
+}
+nav.tabs a {
+  padding: var(--sp-3) var(--sp-4);
+  font-weight: 600;
+  color: var(--c-text-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+nav.tabs a:hover {
+  color: var(--c-text);
+  text-decoration: none;
+}
+nav.tabs a[aria-current="page"] {
+  color: var(--c-text);
+  border-bottom-color: var(--c-primary);
+}
+.panel.callout {
+  border-color: var(--c-primary);
+  box-shadow: inset 3px 0 0 var(--c-primary);
+}
+.rule-verb {
+  align-self: center;
+  padding-top: 16px;
+  font-style: italic;
 }
