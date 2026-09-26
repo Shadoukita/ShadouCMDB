@@ -41,6 +41,12 @@ When the UI and API are on different origins, add the UI origin to the backend's
 | `/cis/:id` | Detail: general fields, class attributes (reference attributes are links), relationships (add/remove), relationship map (multi-hop graph), history (audit log with field diffs) |
 | `/cis/:id/edit` | Edit form (sends `version` for optimistic locking and handles `409 VERSION_CONFLICT`) |
 | `/search?q=…` | Global search results, ranked by the API with the field that matched. The header search box has type-ahead; press `/` to focus it. |
+| `/login` | Sign-in. `?redirect=/cis?…` returns there afterwards (only same-app paths are followed). |
+| `/setup` | First-run setup: creates the first administrator and signs them in. Shown only while `GET /setup` says no user exists. |
+| `/admin` | Administration, with its own sub-navigation. Opens the first section the user may use. |
+| `/admin/users` | Users: search, status and profile filters, sortable columns, paging (all in the URL). `/admin/users/new` creates one; `/admin/users/:id` edits it, assigns profiles, disables/enables it, resets the password or deletes it. |
+| `/admin/profiles` | Permission profiles: list, clone. `/admin/profiles/new` and `/admin/profiles/:id` edit the global permissions and the per-class view/create/edit/delete matrix; delete confirms and names the users who lose the profile. |
+| `/admin/audit` | Audit log: every change with the user who made it, filterable by actor, record type and action. `?actorId=…` shows one user's changes. |
 
 ### Forms are generated from the API
 
@@ -54,6 +60,23 @@ Each `dataType` maps to one input: `text`, `number`/`integer` (min/max), `boolea
 `ip`, `cidr`, and `reference` (a type-ahead CI picker restricted to `referenceClassId`). No field list is written
 per class, so a CI class added through the API gets a working form, detail view, sidebar entry and dashboard
 row with no frontend change.
+
+### Sign-in and permissions
+
+- On load the UI asks `GET /auth/me`. Without a session it asks `GET /setup` and shows first-run setup or
+  sign-in. The session is an HttpOnly cookie set by the API; the UI sends the session's CSRF token as
+  `X-CSRF-Token` on every POST, PUT, PATCH and DELETE (`src/api/client.ts`).
+- Any `401` to a signed-in request means the session ended (idle or absolute timeout, signed out elsewhere, account
+  disabled). The UI goes to `/login?redirect=<current page>`, says the session ended, and returns there after
+  sign-in. Signing in or out clears the query cache, so one user never sees another's data.
+- The permissions from `/auth/me` hide actions the user cannot use: "+ New CI" and create links per class,
+  Edit and Delete on a CI, adding and removing relationships, the History tab (needs `audit.view`), and the
+  Administration sections (Users: `users.manage`; Permission profiles: `profiles.manage`, or read-only with
+  `users.manage`; Audit log: `audit.view`). The API enforces every rule; the UI only avoids offering what it
+  would refuse. The rules live in `src/lib/permissions.ts` and mirror the server's: class grants apply to exactly
+  that class, the "all classes" row to every class, and create/edit/delete imply view.
+- Administration sections are listed in `src/pages/admin/sections.ts`. Later sections (data model, lookups,
+  templates, customization, export/import) are added there with their route and permission.
 
 ### Errors, states and navigation
 
@@ -72,8 +95,10 @@ src/config.ts          the only place deploy-time config is read
 src/api/schema.d.ts    types generated from backend/openapi.json (do not edit)
 src/api/client.ts      the one HTTP client (openapi-fetch) + ApiError / error-envelope handling
 src/api/queries.ts     TanStack Query composables and cache keys; components never call fetch
-src/router.ts          routes (Vue Router, HTML5 history)
-src/stores/            Pinia stores (the one-shot "Created …/Saved …" notice)
+src/api/admin.ts       the same for sign-in, users, permission profiles and the audit log
+src/lib/permissions.ts permission checks mirrored from the server
+src/router.ts          routes (Vue Router, HTML5 history) and the setup → sign-in → app guard
+src/stores/            Pinia stores (the session; the one-shot "Created …/Saved …" notice)
 src/components/        shell, breadcrumbs, global search, pickers, dialogs, state views
 src/pages/             one component per screen; detail/, form/ and dashboard/ hold their parts
 src/lib/               formatting, attribute value conversion, the breadcrumb walk trail
@@ -91,8 +116,11 @@ committed types are stale. `npm run typecheck` then flags every call site that n
 it through URL-backed filters (and after a reload), edit it and read the History diff, provoke a
 `409 VERSION_CONFLICT`, add relationships in both directions, walk `CRM › crm-app-01 › fra1-esx-01 › FRA1 Rack A01`
 by clicking, delete with the "relationships that will break" confirmation, create a CI class through the API and
-use it without a frontend change, and check the empty, not-found and API-unreachable states. Any page error or Vue
-warning fails the test.
+use it without a frontend change, and check the empty, not-found and API-unreachable states. The auth and
+admin specs sign in and out, follow an expired session to sign-in and back, walk first-run setup, build a
+permission profile in the matrix, clone and delete one, create a user holding it, sign in as that user to check
+which actions are hidden, disable/enable the account, reset its password, and read who did it in the audit log.
+Any page error or Vue warning fails the test.
 
 The tests expect the demo inventory (`shadoucmdb seed --demo`) and create their own uniquely named records.
 They run signed in: `e2e/global-setup.ts` completes first-run setup on a database without users, or signs in as
