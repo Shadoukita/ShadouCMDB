@@ -1,6 +1,7 @@
 //! `shadoucmdb`: the ShadouCMDB server and its admin commands in one binary.
 
 mod api;
+mod auth;
 mod config;
 mod data;
 mod db;
@@ -57,6 +58,8 @@ enum Command {
     },
     /// Run schema acceptance checks inside a rolled-back transaction.
     Verify,
+    /// Create a user with the built-in Administrator profile (first install or lost access).
+    CreateAdmin(auth::cli::CreateAdminArgs),
     /// Print the OpenAPI document generated from the code, or compare it with a file.
     Openapi {
         /// Write the document to this file instead of stdout.
@@ -78,6 +81,7 @@ impl Command {
             Command::Migrate { .. } => "migrate",
             Command::Seed { .. } => "seed",
             Command::Verify => "verify",
+            Command::CreateAdmin(_) => "create-admin",
             Command::Openapi { .. } => "openapi",
             Command::Service(_) => "service",
         }
@@ -139,6 +143,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Verify => {
             let cfg = Config::from_env()?;
             runtime()?.block_on(verify::run(&cfg.database))
+        }
+        Command::CreateAdmin(args) => {
+            let cfg = Config::from_env()?;
+            runtime()?.block_on(auth::cli::create_admin(&cfg.database, args))
         }
         Command::Service(cmd) => service::run(cmd, launch),
         Command::Openapi { .. } => unreachable!("handled above"),

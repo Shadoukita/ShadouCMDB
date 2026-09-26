@@ -546,7 +546,7 @@ pub struct Owner {
     pub updated_at: DateTime<Utc>,
 }
 
-fn email_schema() -> utoipa::openapi::schema::Schema {
+pub fn email_schema() -> utoipa::openapi::schema::Schema {
     utoipa::openapi::schema::AnyOfBuilder::new()
         .item(
             utoipa::openapi::schema::ObjectBuilder::new()

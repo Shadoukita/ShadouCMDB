@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::api::context::ActorType;
 use crate::api::route::{In, Json, NoBody, NoPath, Query, Route, route};
 use crate::api::schemas::{self, Page, Paged, Sort, UuidList, like_pattern, ts};
+use crate::auth::permissions::GlobalPermission;
 use crate::data::crud::{self, AuditAction, Where};
 use crate::http::error::AppError;
 use crate::paged;
@@ -32,6 +33,8 @@ pub enum EntityType {
     Environments,
     Locations,
     Owners,
+    Users,
+    PermissionProfiles,
 }
 
 impl EntityType {
@@ -47,6 +50,8 @@ impl EntityType {
             EntityType::Environments => "environments",
             EntityType::Locations => "locations",
             EntityType::Owners => "owners",
+            EntityType::Users => "users",
+            EntityType::PermissionProfiles => "permission_profiles",
         }
     }
 }
@@ -126,6 +131,9 @@ pub struct AuditQuery {
     entity_id: Option<UuidList>,
     #[param(inline)]
     action: Option<AuditAction>,
+    /// Changes made by this user (their id)
+    #[param(max_length = 128)]
+    actor_id: Option<String>,
     #[param(schema_with = actor_name_schema)]
     #[serde(default, deserialize_with = "schemas::trimmed_opt")]
     actor_name: Option<String>,
@@ -150,6 +158,9 @@ pub async fn list(pool: &PgPool, q: &AuditQuery) -> Result<Page<AuditEntry>, App
         }
         if let Some(a) = q.action {
             w.and().push("action = ").push_bind(a.as_str());
+        }
+        if let Some(id) = &q.actor_id {
+            w.and().push("actor_id = ").push_bind(id.clone());
         }
         if let Some(name) = &q.actor_name {
             w.and().push("actor_name ILIKE ").push_bind(like_pattern(name));
@@ -176,6 +187,8 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, "/api/v1/audit-log", "listAuditLog")
             .tag("Audit log")
             .summary("Change history (read-only, paginated, newest first by default)")
+            .description("Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username).")
+            .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<AuditQuery>, NoBody>| async move {
                 Ok(Json(list(&api.pool, &q).await?))
             }),

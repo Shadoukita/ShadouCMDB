@@ -3,8 +3,8 @@
 //! Layers: routes (modules/*, declared with [`route::route`]) -> services
 //! (modules/*) -> SQL (data/*). [`routes`] is the single list of everything
 //! the API serves: the axum router and the OpenAPI document are both built
-//! from it. Future modules (auth, RBAC, discovery, imports, reports) append
-//! their routes here and plug middleware into http/mod.rs.
+//! from it. Future modules (discovery, imports, reports) append their routes
+//! here and plug middleware into http/mod.rs.
 
 pub mod context;
 pub mod openapi;
@@ -25,11 +25,14 @@ use route::Route;
 pub fn routes() -> Vec<Route> {
     [
         modules::health::routes(),
+        modules::auth::routes(),
         modules::items::routes(),
         modules::relationships::routes(),
         modules::classes::routes(),
         modules::lookups::routes(),
         modules::audit::routes(),
+        modules::users::routes(),
+        modules::profiles::routes(),
     ]
     .into_iter()
     .flatten()

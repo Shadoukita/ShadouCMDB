@@ -9,6 +9,8 @@ build = "build.rs"
 
 [dependencies]
 anyhow = "1"
+# Password hashing: argon2id with the crate defaults (OWASP: m=19 MiB, t=2, p=1).
+argon2 = { version = "0.5", features = ["std"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "query", "tokio", "tracing"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -16,7 +18,10 @@ dotenvy = "0.15"
 hex = "0.4"
 ipnetwork = "0.21"
 mime_guess = "2"
+password-hash = { version = "0.5", features = ["getrandom"] }
 regex = "1"
+# Reads the password for `create-admin` without echoing it.
+rpassword = "7"
 rust-embed = { version = "8", features = ["mime-guess"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: JSON objects keep insertion order (attribute values follow the class definition order).

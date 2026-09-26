@@ -15,6 +15,7 @@ use super::schemas::{
 use crate::api::context::RequestContext;
 use crate::api::schemas::{LookupRef, OwnerRef, Page, Paged, iso};
 use crate::api::{pg_error, validate};
+use crate::auth::permissions::ClassOp;
 use crate::data::classes::{self as class_data, EffectiveAttributeRow};
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::items::{self as data, Direction, ItemFilters, StoredValue, StoredValueRow, SummaryRow, inet_text};
@@ -283,17 +284,24 @@ async fn filters(pool: &PgPool, q: &impl ItemFilterQuery) -> Result<ItemFilters,
         location_ids: q.location_id().map(|l| l.0.clone()),
         ip_within: q.ip_within().map(str::to_owned),
         deleted: Some(q.deleted()),
+        visible_class_ids: None,
     })
 }
 
-pub async fn list(pool: &PgPool, q: &ListItemsQuery) -> Result<Page<ConfigurationItemSummary>, AppError> {
-    let f = ItemFilters { q: q.q.clone(), ..filters(pool, q).await? };
+/// Only CIs of classes the caller may view.
+pub async fn list(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    q: &ListItemsQuery,
+) -> Result<Page<ConfigurationItemSummary>, AppError> {
+    let f =
+        ItemFilters { q: q.q.clone(), visible_class_ids: ctx.class_scope(ClassOp::View), ..filters(pool, q).await? };
     let (rows, total) = data::list(pool, &f, &q.sort.field, q.sort.desc, q.limit, q.offset).await?;
     Ok(Page { data: rows.into_iter().map(summary_dto).collect(), page: q.page_meta(total) })
 }
 
-pub async fn search(pool: &PgPool, q: &SearchQuery) -> Result<SearchResults, AppError> {
-    let f = filters(pool, q).await?;
+pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Result<SearchResults, AppError> {
+    let f = ItemFilters { visible_class_ids: ctx.class_scope(ClassOp::View), ..filters(pool, q).await? };
     let (rows, total) = data::search(pool, &q.q, &f, q.limit, q.offset).await?;
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
     let values = data::attribute_values(&mut *pool.acquire().await?, &ids).await?;
@@ -372,8 +380,10 @@ async fn must_detail(conn: &mut PgConnection, id: Uuid) -> Result<ConfigurationI
     detail(conn, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))
 }
 
-pub async fn get(pool: &PgPool, id: Uuid) -> Result<ConfigurationItem, AppError> {
-    must_detail(&mut *pool.acquire().await?, id).await
+pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<ConfigurationItem, AppError> {
+    let dto = must_detail(&mut *pool.acquire().await?, id).await?;
+    ctx.require_class(dto.summary.class_id, ClassOp::View)?;
+    Ok(dto)
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +395,7 @@ pub async fn create(
     ctx: &RequestContext,
     input: &CreateItemBody,
 ) -> Result<ConfigurationItem, AppError> {
+    ctx.require_class(input.class_id, ClassOp::Create)?;
     let mut tx = pool.begin().await?;
     let key = class_key(&mut tx, input.class_id).await?;
     let defs = class_data::effective_attributes(&mut tx, input.class_id).await?;
@@ -430,6 +441,11 @@ pub async fn update(
 ) -> Result<ConfigurationItem, AppError> {
     let mut tx = pool.begin().await?;
     let before = data::lock(&mut tx, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))?;
+    ctx.require_class(before.class_id, ClassOp::Edit)?;
+    // Moving a CI to another class also needs create rights there.
+    if let Some(new_class) = input.class_id.filter(|c| *c != before.class_id) {
+        ctx.require_class(new_class, ClassOp::Create)?;
+    }
     if before.deleted_at.is_some() {
         return Err(AppError::conflict("This configuration item is deleted and cannot be modified"));
     }
@@ -518,7 +534,7 @@ pub async fn update(
 pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
     match data::lock(&mut tx, id).await? {
-        Some(row) if row.deleted_at.is_none() => {}
+        Some(row) if row.deleted_at.is_none() => ctx.require_class(row.class_id, ClassOp::Delete)?,
         _ => return Err(AppError::missing("Configuration item", id)),
     }
     let before = must_detail(&mut tx, id).await?;
@@ -552,12 +568,16 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
 // ---------------------------------------------------------------------------
 
 /// Breadth-first expansion from a root CI: one query per hop (not per CI),
-/// then one query for all node summaries.
-pub async fn graph(pool: &PgPool, root_id: Uuid, q: &GraphQuery) -> Result<Graph, AppError> {
+/// then one query for all node summaries. The traversal never enters CIs of
+/// classes the caller may not view.
+pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &GraphQuery) -> Result<Graph, AppError> {
     let mut conn = pool.acquire().await?;
-    if data::summary(&mut conn, root_id).await?.is_none() {
+    let Some(root) = data::summary(&mut conn, root_id).await? else {
         return Err(AppError::missing("Configuration item", root_id));
-    }
+    };
+    ctx.require_class(root.class_id, ClassOp::View)?;
+    let visible = ctx.class_scope(ClassOp::View);
+    let visible = visible.as_deref();
     let direction = match q.direction {
         GraphDirection::Both => Direction::Both,
         GraphDirection::Outgoing => Direction::Outgoing,
@@ -580,7 +600,7 @@ pub async fn graph(pool: &PgPool, root_id: Uuid, q: &GraphQuery) -> Result<Graph
 
     let mut hop = 1;
     while hop <= q.depth && !frontier.is_empty() {
-        let found = data::edges_touching(pool, &frontier, direction, types).await?;
+        let found = data::edges_touching(pool, &frontier, direction, types, visible).await?;
         let mut next = Vec::new();
         for e in &found {
             for other in [e.source_ci_id, e.target_ci_id] {
@@ -602,7 +622,7 @@ pub async fn graph(pool: &PgPool, root_id: Uuid, q: &GraphQuery) -> Result<Graph
     // Edges between nodes discovered at the last hop (e.g. app -> db when both
     // hang off the same server) are included too, so the picture is complete.
     if !frontier.is_empty() {
-        for e in data::edges_touching(pool, &frontier, Direction::Both, types).await? {
+        for e in data::edges_touching(pool, &frontier, Direction::Both, types, visible).await? {
             keep_edge(&e, &depth_of, &mut edges);
         }
     }

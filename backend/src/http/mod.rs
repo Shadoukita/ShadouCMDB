@@ -1,9 +1,10 @@
 //! HTTP server: routing, middleware and graceful shutdown.
 //!
 //! Layers: `http` (transport concerns, this module) -> `api` (route table,
-//! validation, OpenAPI) -> `modules` (routes and services) -> `data` (SQL).
-//! Auth, RBAC and other future modules plug in as a different
-//! [`ActorResolver`], extra routes in `api::routes` and middleware here.
+//! validation, access control, OpenAPI) -> `modules` (routes and services) ->
+//! `data` (SQL). Sessions and permissions are resolved per route in
+//! `api::route` (see [`crate::auth`]); future modules add routes in
+//! `api::routes` and middleware here.
 
 pub mod error;
 pub mod request_id;
@@ -25,8 +26,9 @@ use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::api;
-use crate::api::context::{ActorResolver, AnonymousActorResolver};
-use crate::config::Config;
+use crate::auth::AuthState;
+use crate::auth::session::CSRF_HEADER;
+use crate::config::{AuthConfig, Config};
 use crate::db;
 use error::AppError;
 
@@ -34,14 +36,13 @@ use error::AppError;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
-    /// Who is calling; the authentication seam.
-    pub actors: Arc<dyn ActorResolver>,
+    /// Session settings and the login backoff.
+    pub auth: Arc<AuthState>,
 }
 
 impl AppState {
-    /// Milestone 1: no authentication.
-    pub fn new(pool: PgPool) -> Self {
-        AppState { pool, actors: Arc::new(AnonymousActorResolver) }
+    pub fn new(pool: PgPool, auth: AuthConfig) -> Self {
+        AppState { pool, auth: Arc::new(AuthState::new(auth)) }
     }
 }
 
@@ -75,14 +76,16 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
 
     if !cfg.cors_origins.is_empty() {
         let origins: Vec<HeaderValue> = cfg.cors_origins.iter().filter_map(|o| HeaderValue::from_str(o).ok()).collect();
+        // Credentials: the session cookie travels with cross-origin requests from these origins only.
         app = app.layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::list(origins))
-                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+                .allow_credentials(true)
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
                 .allow_headers([
                     axum::http::header::CONTENT_TYPE,
                     HeaderName::from_static(request_id::HEADER),
-                    HeaderName::from_static("x-actor-name"),
+                    HeaderName::from_static(CSRF_HEADER),
                 ])
                 .expose_headers([HeaderName::from_static(request_id::HEADER)]),
         );
@@ -96,7 +99,7 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
 /// and closes the pool.
 pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
     let pool = db::lazy_pool(&cfg.database)?;
-    let app = router(AppState::new(pool.clone()), &cfg);
+    let app = router(AppState::new(pool.clone(), cfg.auth.clone()), &cfg);
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
         .await

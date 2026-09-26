@@ -1,19 +1,21 @@
-//! Who is making a change, as recorded in `audit_log`.
+//! Who is calling: the actor recorded in `audit_log`, and what they may do.
 //!
-//! This is the seam for authentication: Milestone 1 has no auth, so the
-//! default resolver labels every caller an unauthenticated `api_client` and
-//! takes an optional, untrusted display name from the `X-Actor-Name` header.
-//! An auth module replaces the resolver in [`crate::http::AppState`] (and fills
-//! `id`) without touching routes or services. Route-level authorisation (RBAC)
-//! hooks in at the same point: a resolver may reject the request.
+//! Every HTTP request is resolved to a [`Caller`] before its handler runs (see
+//! [`crate::api::route`]): anonymous for the public routes (health, login,
+//! first-run setup), otherwise the signed-in user with their effective
+//! permissions. Routes check global permissions declaratively; services check
+//! class permissions with [`RequestContext::require_class`] and
+//! [`RequestContext::class_scope`], because only they know a CI's class.
+//! Imports and discovery run as [`Caller::System`] and are not restricted.
 
-use std::future::Future;
-use std::pin::Pin;
+use std::sync::Arc;
 
-use axum::http::HeaderMap;
 use serde::Serialize;
+use uuid::Uuid;
 
-use crate::http::error::AppError;
+use crate::auth::Principal;
+use crate::auth::permissions::{ClassOp, GlobalPermission};
+use crate::http::error::{AppError, ErrorCode};
 
 // `audit_log.actor_type`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema, sqlx::Type)]
@@ -41,49 +43,107 @@ impl ActorType {
 #[derive(Debug, Clone)]
 pub struct Actor {
     pub actor_type: ActorType,
+    /// The user's id for `user` actors.
     pub id: Option<String>,
     pub name: Option<String>,
 }
 
-/// Per-request context handed to services: the actor and a request id for audit correlation.
+#[derive(Debug, Clone)]
+pub enum Caller {
+    /// No session (public routes only).
+    Anonymous,
+    User(Arc<Principal>),
+    /// The CLI, imports and discovery: not subject to permissions.
+    System,
+}
+
+/// Per-request context handed to services: the caller, the audit actor and a request id.
 #[derive(Debug, Clone)]
 pub struct RequestContext {
+    pub caller: Caller,
     pub actor: Actor,
     pub request_id: String,
 }
 
+pub fn unauthenticated() -> AppError {
+    AppError::new(ErrorCode::Unauthenticated, "Sign in to use this endpoint")
+}
+
+pub fn forbidden(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::Forbidden, message)
+}
+
 impl RequestContext {
+    pub fn user(principal: Arc<Principal>, request_id: String) -> Self {
+        let actor = Actor {
+            actor_type: ActorType::User,
+            id: Some(principal.user_id.to_string()),
+            name: Some(principal.username.clone()),
+        };
+        RequestContext { caller: Caller::User(principal), actor, request_id }
+    }
+
+    pub fn anonymous(request_id: String) -> Self {
+        RequestContext {
+            caller: Caller::Anonymous,
+            actor: Actor { actor_type: ActorType::ApiClient, id: None, name: None },
+            request_id,
+        }
+    }
+
+    /// Changes made by the CLI or on behalf of the system (first-run setup).
+    pub fn system(name: impl Into<String>, request_id: impl Into<String>) -> Self {
+        RequestContext {
+            caller: Caller::System,
+            actor: Actor { actor_type: ActorType::System, id: None, name: Some(name.into()) },
+            request_id: request_id.into(),
+        }
+    }
+
     /// Context for a bulk import or discovery run that calls the services
     /// without going through HTTP; its audit rows carry `actor_type = import`.
     #[allow(dead_code)] // seam for the import/discovery modules
     pub fn import(source: impl Into<String>, run_id: impl Into<String>) -> Self {
         RequestContext {
+            caller: Caller::System,
             actor: Actor { actor_type: ActorType::Import, id: None, name: Some(source.into()) },
             request_id: run_id.into(),
         }
     }
-}
 
-pub type ActorFuture<'a> = Pin<Box<dyn Future<Output = Result<Actor, AppError>> + Send + 'a>>;
+    pub fn principal(&self) -> Option<&Principal> {
+        match &self.caller {
+            Caller::User(p) => Some(p),
+            _ => None,
+        }
+    }
 
-/// Resolves the actor of an HTTP request. Async so that an auth module can
-/// verify a token or look up a session.
-pub trait ActorResolver: Send + Sync + 'static {
-    fn resolve<'a>(&'a self, headers: &'a HeaderMap) -> ActorFuture<'a>;
-}
+    pub fn require(&self, permission: GlobalPermission) -> Result<(), AppError> {
+        match &self.caller {
+            Caller::System => Ok(()),
+            Caller::Anonymous => Err(unauthenticated()),
+            Caller::User(p) if p.permissions.has(permission) => Ok(()),
+            Caller::User(_) => Err(forbidden(format!("This requires the {} permission", permission.as_str()))),
+        }
+    }
 
-pub const ACTOR_NAME_HEADER: &str = "x-actor-name";
+    pub fn require_class(&self, class_id: Uuid, op: ClassOp) -> Result<(), AppError> {
+        match &self.caller {
+            Caller::System => Ok(()),
+            Caller::Anonymous => Err(unauthenticated()),
+            Caller::User(p) if p.permissions.can(class_id, op) => Ok(()),
+            Caller::User(_) => {
+                Err(forbidden(format!("You do not have the {} permission on this CI class", op.as_str())))
+            }
+        }
+    }
 
-/// Milestone 1: no authentication, optional display name from `X-Actor-Name`.
-pub struct AnonymousActorResolver;
-
-impl ActorResolver for AnonymousActorResolver {
-    fn resolve<'a>(&'a self, headers: &'a HeaderMap) -> ActorFuture<'a> {
-        let name = headers
-            .get(ACTOR_NAME_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim().chars().take(200).collect::<String>())
-            .filter(|s| !s.is_empty());
-        Box::pin(async move { Ok(Actor { actor_type: ActorType::ApiClient, id: None, name }) })
+    /// Classes the caller may perform `op` on; `None` means every class.
+    pub fn class_scope(&self, op: ClassOp) -> Option<Vec<Uuid>> {
+        match &self.caller {
+            Caller::System => None,
+            Caller::Anonymous => Some(Vec::new()),
+            Caller::User(p) => p.permissions.class_scope(op),
+        }
     }
 }

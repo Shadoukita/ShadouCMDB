@@ -45,12 +45,34 @@ pub struct DatabaseConfig {
     pub connect_timeout: Duration,
 }
 
+/// When session cookies get the `Secure` attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CookieSecure {
+    /// When the request arrived over HTTPS (X-Forwarded-Proto / Forwarded from the reverse proxy).
+    Auto,
+    Always,
+    Never,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthConfig {
+    /// A session unused for this long ends.
+    pub session_idle: Duration,
+    /// A session ends this long after login, however active.
+    pub session_max_age: Duration,
+    pub cookie_secure: CookieSecure,
+}
+
+const DEFAULT_SESSION_IDLE_MINUTES: u64 = 12 * 60;
+const DEFAULT_SESSION_MAX_AGE_HOURS: u64 = 7 * 24;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub api_host: String,
     pub api_port: u16,
     pub cors_origins: Vec<String>,
     pub database: DatabaseConfig,
+    pub auth: AuthConfig,
 }
 
 /// Collects every problem so the operator sees them all at once.
@@ -131,6 +153,16 @@ impl Config {
             .map(|s| s.split(',').map(str::trim).filter(|o| !o.is_empty()).map(str::to_owned).collect())
             .unwrap_or_default();
 
+        let session_idle_minutes =
+            r.int::<u64>("SESSION_IDLE_TIMEOUT_MINUTES", 5, 525_600).unwrap_or(DEFAULT_SESSION_IDLE_MINUTES);
+        let session_max_age_hours =
+            r.int::<u64>("SESSION_MAX_AGE_HOURS", 1, 8_760).unwrap_or(DEFAULT_SESSION_MAX_AGE_HOURS);
+        let cookie_secure = match r.one_of("COOKIE_SECURE", &["auto", "always", "never"], "auto").as_str() {
+            "always" => CookieSecure::Always,
+            "never" => CookieSecure::Never,
+            _ => CookieSecure::Auto,
+        };
+
         if !r.errors.is_empty() {
             let detail: Vec<String> = r.errors.iter().map(|e| format!("  - {e}")).collect();
             anyhow::bail!(
@@ -155,6 +187,11 @@ impl Config {
                 pool_max,
                 statement_timeout: Duration::from_millis(statement_timeout_ms),
                 connect_timeout: Duration::from_millis(connect_timeout_ms),
+            },
+            auth: AuthConfig {
+                session_idle: Duration::from_secs(session_idle_minutes * 60),
+                session_max_age: Duration::from_secs(session_max_age_hours * 3600),
+                cookie_secure,
             },
         })
     }
