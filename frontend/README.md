@@ -190,6 +190,18 @@ Any page error or Vue warning fails the test.
 at a second API whose database is migrated but has no user. It creates the first administrator there, so give it
 a newly migrated database for each run (CI starts one on port 3001).
 
+`fresh-install.spec.ts` builds a CMDB up from a bare install and moves it to another one, nothing mocked. It runs
+when `E2E_BARE_BASE_URL` and `E2E_IMPORT_BASE_URL` point at two more APIs, each on its own database that is
+migrated and `seed`ed (system rows only) with no user; global setup creates the administrator `fresh-admin` on
+both. On the bare install it checks that nothing but system rows exist, installs the IT infrastructure starter
+template from the empty state (and checks that installing again adds nothing), builds a lookup list and a class
+with a required number and a lookup attribute in the editors, creates two CIs, and reads them back in a list view,
+the search and the API. It then exports the whole setup (template, own class, lookup list, profile, branding,
+menu, dashboard, list view and layout) and imports it into the second install: dry run first (nothing written),
+then apply. Exporting the second install again must give the same file, no CIs or users may have moved, and the
+imported class, lookup list, menu, dashboard, list view, form layout and profile must work there. Give both
+newly created databases for each run (CI starts them on ports 3002 and 3003).
+
 The tests expect the demo inventory (`shadoucmdb seed --demo`) and create their own uniquely named records.
 They run signed in: `e2e/global-setup.ts` completes first-run setup on a database without users, or signs in as
 `E2E_USERNAME` / `E2E_PASSWORD` (an Administrator account, e.g. from `shadoucmdb create-admin`).
@@ -200,6 +212,7 @@ export E2E_USERNAME=admin E2E_PASSWORD=...                                # unle
 API_PROXY_TARGET=http://<api-host>:3000 npm run test:e2e -w frontend      # starts a dev server on :5199
 E2E_BASE_URL=http://localhost:4173 npm run test:e2e -w frontend           # or test an already-served build
 E2E_FRESH_BASE_URL=http://localhost:3001 ...                              # also run first-run.spec.ts
+E2E_BARE_BASE_URL=http://localhost:3002 E2E_IMPORT_BASE_URL=http://localhost:3003 ...  # also run fresh-install.spec.ts
 ```
 
 Set `E2E_SCREENSHOT_DIR=<dir>` to save a screenshot of each step.
