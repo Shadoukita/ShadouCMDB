@@ -284,8 +284,12 @@ async fn login(
     }
     let Some(user) = row else { return Err(invalid_credentials()) };
     if !user.is_active {
-        // Recorded like any other failure: the row does not say why.
-        record_failure(pool, ctx, &b.username, None).await?;
+        // Treated exactly like a wrong password: same throttle, same rows, same
+        // lock. Otherwise the right password for a disabled account would be
+        // an unthrottled way to grow audit_log, and its rows would stand out.
+        let locked = auth.throttle.failure(&b.username);
+        tracing::warn!(username = %user.username, ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in to a disabled account");
+        record_failure(pool, ctx, &b.username, locked).await?;
         return Err(AppError::new(ErrorCode::Unauthenticated, "This account is disabled"));
     }
     auth.throttle.success(&b.username);
@@ -529,9 +533,18 @@ mod tests {
         db.drop().await;
     }
 
+    /// A request straight from `ip`, no proxy.
     fn from(ip: &str) -> RequestContext {
-        let client =
-            crate::api::context::ClientInfo { ip: Some(ip.parse().unwrap()), user_agent: Some("audit-test".into()) };
+        via(ip, ip)
+    }
+
+    /// A request whose forwarded headers say `ip`, from TCP peer `peer`.
+    fn via(ip: &str, peer: &str) -> RequestContext {
+        let client = crate::api::context::ClientInfo {
+            ip: Some(ip.parse().unwrap()),
+            peer_ip: Some(peer.parse().unwrap()),
+            user_agent: Some("audit-test".into()),
+        };
         anon().with_client(client)
     }
 
@@ -668,6 +681,73 @@ mod tests {
                 assert!(!row.contains(secret.as_str()), "{row} contains secret material");
             }
         }
+        db.drop().await;
+    }
+    /// The right password for a disabled account counts as a failure for the
+    /// throttle: it locks the name like a wrong one, and the rows look the same.
+    #[tokio::test]
+    async fn a_disabled_account_is_throttled_like_a_wrong_password() {
+        let Some(db) = scratch::database("a_disabled_account_is_throttled_like_a_wrong_password").await else { return };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        let input = UserCreate {
+            username: "gone".into(),
+            display_name: "Gone".into(),
+            email: None,
+            password: "gone correct horse".into(),
+            is_active: Some(false),
+            profile_ids: vec![],
+        };
+        users::create(pool, &RequestContext::system("test", "test"), &input).await.unwrap();
+        for _ in 0..crate::auth::throttle::FREE_FAILURES {
+            let e = login(pool, &auth, &headers, &from("198.51.100.8"), login_body("gone", "gone correct horse"))
+                .await
+                .err()
+                .expect("disabled");
+            assert_eq!(e.code, ErrorCode::Unauthenticated);
+        }
+        let locked = auth_rows(pool, "login.locked").await;
+        assert_eq!(locked.len(), 1, "the disabled account's name is locked");
+        assert_eq!(locked[0].3["attemptedUsername"], "gone");
+        let failures = auth_rows(pool, "login.failure").await;
+        assert_eq!(failures.len() as u32, crate::auth::throttle::FREE_FAILURES);
+        assert_eq!(
+            failures[0].3,
+            serde_json::json!({ "attemptedUsername": "gone", "ipAddress": "198.51.100.8", "userAgent": "audit-test" })
+        );
+        let e = login(pool, &auth, &headers, &from("198.51.100.8"), login_body("gone", "gone correct horse"))
+            .await
+            .err()
+            .expect("locked");
+        assert_eq!(e.code, ErrorCode::RateLimited);
+        assert_eq!(auth_rows(pool, "login.failure").await.len(), failures.len(), "a 429 writes no row");
+        db.drop().await;
+    }
+
+    /// When the forwarded address is not the TCP peer, the row keeps both.
+    #[tokio::test]
+    async fn the_peer_address_is_kept_when_forwarded_headers_differ() {
+        let Some(db) = scratch::database("the_peer_address_is_kept_when_forwarded_headers_differ").await else {
+            return;
+        };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        login(pool, &auth, &headers, &via("198.51.100.9", "10.0.0.2"), login_body("owner", "correct horse battery"))
+            .await
+            .unwrap();
+        login(pool, &auth, &headers, &via("198.51.100.9", "10.0.0.2"), login_body("owner", "wrong"))
+            .await
+            .err()
+            .expect("refused");
+        let success = auth_rows(pool, "login.success").await;
+        let failure = auth_rows(pool, "login.failure").await;
+        for v in [&success[1].3, &failure[0].3] {
+            assert_eq!(
+                (v["ipAddress"].as_str(), v["peerIpAddress"].as_str()),
+                (Some("198.51.100.9"), Some("10.0.0.2"))
+            );
+        }
+        assert!(success[0].3.get("peerIpAddress").is_none(), "no peerIpAddress when it equals ipAddress");
         db.drop().await;
     }
 }

@@ -735,9 +735,13 @@ async function permissions(x: Json) {
     typeof success.requestId === 'string', 'login.success: the user as actor, client IP from X-Forwarded-For, user agent, request id');
   const failure = ofReader.find((e) => e.action === 'login.failure');
   const ghostFailure = events.find((e) => e.action === 'login.failure' && about(e, ghost));
-  const keys = (e: Json) => Object.keys(e?.newValue ?? {}).sort().join(',');
+  // peerIpAddress depends on the request's headers (the ghost's came without a proxy), not on the account.
+  const keys = (e: Json) => Object.keys(e?.newValue ?? {}).filter((k) => k !== 'peerIpAddress').sort().join(',');
   check(failure && failure.actorId === null && failure.newValue.attemptedUsername === reader.username && failure.newValue.ipAddress === '203.0.113.38',
     'login.failure: no actor id, the attempted username and the client IP');
+  check([success, failure].every((e) => typeof e?.newValue.peerIpAddress === 'string' && e.newValue.peerIpAddress !== '203.0.113.38') &&
+    ghostFailure && ghostFailure.newValue.peerIpAddress === undefined,
+    'the TCP peer is kept as peerIpAddress when X-Forwarded-For names another address, and only then');
   check(ghostFailure && keys(failure) === 'attemptedUsername,ipAddress,userAgent' && keys(ghostFailure) === keys(failure),
     'login.failure looks the same for existing and unknown usernames (no enumeration oracle)');
   const locked = events.find((e) => e.action === 'login.locked' && about(e, ghost));

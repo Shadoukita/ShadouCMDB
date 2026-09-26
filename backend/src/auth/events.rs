@@ -1,6 +1,7 @@
 //! Authentication events in `audit_log` (entity type `sessions`).
 //!
-//! Each row carries the request's id, the client IP and user agent (see
+//! Each row carries the request's id, the client IP (and the TCP peer when it
+//! differs) and user agent (see
 //! [`crate::api::context::ClientInfo`]) and, in `new_value`, the event's
 //! details. Never recorded: the password, the session token or its hash, the
 //! CSRF token.
@@ -63,9 +64,15 @@ fn attempted(username: &str) -> String {
     username.chars().take(ATTEMPTED_USERNAME_MAX).collect()
 }
 
-/// `{...details, ipAddress, userAgent}` of the request being handled.
+/// `{...details, ipAddress, userAgent}` of the request being handled, plus
+/// `peerIpAddress` when the TCP peer differs from `ipAddress` (a proxy, or a
+/// client that sent forwarded headers itself): the one address in the row the
+/// client could not have made up.
 fn details(ctx: &RequestContext, mut fields: serde_json::Map<String, Value>) -> Value {
     fields.insert("ipAddress".into(), json!(ctx.client.ip));
+    if let Some(peer) = ctx.client.peer_ip.filter(|p| Some(*p) != ctx.client.ip) {
+        fields.insert("peerIpAddress".into(), json!(peer));
+    }
     fields.insert("userAgent".into(), json!(ctx.client.user_agent));
     Value::Object(fields)
 }

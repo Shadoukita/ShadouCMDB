@@ -128,7 +128,8 @@ audited as `ui_settings` updates (old and new version with their documents), log
 the importing user as the actor; a dry run writes none.
 
 Authentication events are audit rows too, with `entity_type = 'sessions'`, `old_value` NULL
-and the details in `new_value` (every one also has `ipAddress` and `userAgent` of the request):
+and the details in `new_value` (every one also has `ipAddress` and `userAgent` of the request,
+and `peerIpAddress`, the TCP peer, when that differs from `ipAddress`):
 
 | `action` | Actor | `entity_id` | `new_value` |
 | --- | --- | --- | --- |
@@ -139,7 +140,7 @@ and the details in `new_value` (every one also has `ipAddress` and `userAgent` o
 | `session.revoke` | whoever caused it (an administrator, the user, `system`) | the ended session | as for `logout`, plus `reason`: `user_disabled`, `user_deleted`, `password_reset`, `password_changed` or `replaced` (a new sign-in in the same browser) |
 
 A failed sign-in never says whether the username exists (a wrong password, an unknown name
-and a disabled account look the same), so reading the audit log does not reveal account
+and a disabled account look the same, and all three count towards the same login lock), so reading the audit log does not reveal account
 names. Sign-ins refused with 429 while a name is locked are not recorded: they cost the
 server nothing, and recording them would let an anonymous client grow `audit_log` at will.
 Passwords, session tokens, token hashes and CSRF tokens are never written. The IP address is

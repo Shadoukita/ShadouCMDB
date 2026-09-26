@@ -64,6 +64,8 @@ pub enum Caller {
 #[derive(Debug, Clone, Default)]
 pub struct ClientInfo {
     pub ip: Option<IpAddr>,
+    /// The TCP peer: the one hop the client cannot forge (the proxy, if there is one).
+    pub peer_ip: Option<IpAddr>,
     pub user_agent: Option<String>,
 }
 

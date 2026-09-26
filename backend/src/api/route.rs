@@ -543,8 +543,10 @@ impl RouteBuilder {
             let f = f.clone();
             async move {
                 let run = async move {
+                    let peer_ip = peer.map(|Extension(ConnectInfo(a))| a.ip());
                     let client = ClientInfo {
-                        ip: auth::session::client_ip(&headers, peer.map(|Extension(ConnectInfo(a))| a.ip())),
+                        ip: auth::session::client_ip(&headers, peer_ip),
+                        peer_ip,
                         user_agent: auth::session::user_agent(&headers),
                     };
                     let ctx = authorise(&state, &headers, access, safe_method).await?.with_client(client);
