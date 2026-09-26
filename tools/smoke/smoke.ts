@@ -332,8 +332,10 @@ async function main() {
   const serverClass = await idByKey('ci-classes', 'server');
   const appClass = await idByKey('ci-classes', 'application');
   const dbClass = await idByKey('ci-classes', 'database');
-  await get(`/api/v1/ci-classes?descendantOf=${hardware}`);
-  const lb = (await post('/api/v1/ci-classes', { key: `smoke_lb_${RUN}`, name: 'Smoke load balancer', parentId: networkDevice })).json;
+  const infra = await idByKey('areas', 'infrastruktur');
+  await get(`/api/v1/ci-classes?descendantOf=${hardware}&areaId=${infra}`);
+  const lb = (await post('/api/v1/ci-classes', { key: `smoke_lb_${RUN}`, name: 'Smoke load balancer', parentId: networkDevice, areaId: infra })).json;
+  check(lb.tableName === `infrastruktur.smoke_lb_${RUN}` && lb.viewName === `infrastruktur.v_smoke_lb_${RUN}`, 'a new type gets a table and a reporting view in its area');
   await get(`/api/v1/ci-classes/${lb.id}`);
   await patch(`/api/v1/ci-classes/${lb.id}`, { description: 'LB for smoke test', icon: 'scale', color: '#0a7ea4', sortOrder: 25 });
   await patch(`/api/v1/ci-classes/${lb.id}`, { color: 'teal' }, 400);
@@ -352,7 +354,7 @@ async function main() {
   await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'tier', label: 'Tier', dataType: 'lookup' }, 400); // no list
   await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'tier', label: 'Tier', dataType: 'enum', enumValues: ['a'], defaultValue: 'b' }, 400);
   await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'peer', label: 'Peer', dataType: 'reference', referenceClassId: lb.id, defaultValue: 'x' }, 400);
-  await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'model', label: 'Model again', dataType: 'text' }, 409); // defined on hardware
+  await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'model', label: 'Model again', dataType: 'text' }, 422); // defined on hardware
   await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'mode', label: 'Mode', dataType: 'enum' }, 400); // enum w/o values
   await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'w', label: 'W', dataType: 'text', validation: { min: 1 } }, 400);
   await get(`/api/v1/attribute-definitions/${vip.id}`);
@@ -414,14 +416,15 @@ async function main() {
     classId: lb.id, name: `smoke-lb-${RUN}`, statusId: inService, attributes: { device_role: 'load_balancer', algorithm: 'round_robin', vip: '10.77.5.5', management_subnet: '10.77.5.0/24' },
   })).json;
   await post('/api/v1/configuration-items', { classId: lb.id, name: 'bad-cidr', statusId: inService, attributes: { device_role: 'load_balancer', algorithm: 'least_conn', management_subnet: '10.77.5.1/24' } }, 400); // host bits set
-  await patch(`/api/v1/attribute-definitions/${algo.id}`, { enumValues: ['least_conn'] }, 400); // round_robin in use
+  const inUse = await patch(`/api/v1/attribute-definitions/${algo.id}`, { enumValues: ['least_conn'] }, 422); // round_robin in use
+  check(inUse.json.error?.code === 'SCHEMA_CHANGE_REFUSED' && inUse.json.error.details?.[0]?.code === 'enum_value_in_use', 'an enum value still stored cannot be removed');
   check(lbItem.attributes.support === silver.id, 'a CI created without a value gets the attribute default');
   const lbUpd = (await patch(`/api/v1/configuration-items/${lbItem.id}`, { version: lbItem.version, attributes: { support: gold.id } })).json;
   check(lbUpd.attributes.support === gold.id, 'lookup value stored by id');
   await patch(`/api/v1/configuration-items/${lbItem.id}`, { version: lbUpd.version, attributes: { support: anyId } }, 400); // not in the list
   const slaRef = (await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'sla_ref', label: 'SLA reference', dataType: 'text' })).json;
-  const required = await patch(`/api/v1/attribute-definitions/${slaRef.id}`, { isRequired: true }, 409);
-  check(required.json.error.details?.[0]?.code === 'values_missing', 'an attribute cannot become required while CIs lack a value');
+  const required = await patch(`/api/v1/attribute-definitions/${slaRef.id}`, { isRequired: true }, 422);
+  check(required.json.error?.code === 'SCHEMA_CHANGE_REFUSED' && required.json.error.details?.[0]?.code === 'values_missing', 'an attribute cannot become required (NOT NULL) while CIs lack a value');
 
   await get(`/api/v1/configuration-items/${server.id}`);
   const upd = (await patch(`/api/v1/configuration-items/${server.id}`, { version: server.version, notes: 'Updated by smoke test', attributes: { memory_gb: 128, os_version: null } })).json;
@@ -478,6 +481,7 @@ async function main() {
 
   await permissions({ serverClass, appClass, dbClass, server, app, database, r1, inService, adminMe });
   await customization({ serverClass, adminMe });
+  await realTables({ inService, infra, adminMe });
 
   // --- Deletes and history ------------------------------------------------------
   console.log('\n# Deletes, audit');
@@ -506,15 +510,15 @@ async function main() {
   const runsOnUsage = (await get(`/api/v1/relationship-types/${runsOn}/usage`)).json;
   check(runsOnUsage.inUse && runsOnUsage.data.some((u: Json) => u.kind === 'relationships' && u.count > 0), 'runs_on usage counts live relationships');
   const vipUsage = (await get(`/api/v1/attribute-definitions/${vip.id}/usage`)).json;
-  check(vipUsage.inUse && vipUsage.data[0].kind === 'attributeValues' && vipUsage.data[0].count === 1, 'attribute usage counts stored values');
-  await del(`/api/v1/attribute-definitions/${vip.id}`, 409); // lb item stored a vip value
-  await del(`/api/v1/attribute-definitions/${slaRef.id}`); // no values: deletable
-  await patch(`/api/v1/ci-classes/${lb.id}`, { isActive: false });
+  check(vipUsage.data[0].kind === 'attributeValues' && vipUsage.data[0].count === 1, 'field usage counts stored values');
+  await del(`/api/v1/attribute-definitions/${vip.id}`); // archives: the column and its value stay
+  check((await get(`/api/v1/attribute-definitions/${vip.id}`)).json.isActive === false, 'deleting a field archives it');
+  check((await get(`/api/v1/configuration-items/${lbItem.id}`)).json.attributes.vip === '10.77.5.5', 'an archived field keeps its stored values');
+  await del(`/api/v1/attribute-definitions/${slaRef.id}`);
   const lbUsage = (await get(`/api/v1/ci-classes/${lb.id}/usage`)).json;
   check(lbUsage.inUse && lbUsage.data.some((u: Json) => u.kind === 'deletedConfigurationItems' && u.count === 1), 'class usage counts deleted CIs');
-  const lbDelete = await del(`/api/v1/ci-classes/${lb.id}`, 409);
-  check(lbDelete.json.error.code === 'IN_USE' && lbDelete.json.error.details.some((d: Json) => d.field === 'attributeDefinitions'),
-    'deleting a class in use names what refers to it');
+  await del(`/api/v1/ci-classes/${lb.id}`); // archives the type; its table and CIs stay
+  check((await get(`/api/v1/ci-classes/${lb.id}`)).json.isActive === false, 'deleting a type archives it');
   await post('/api/v1/configuration-items', { classId: lb.id, name: 'archived-class', statusId: inService, attributes: { device_role: 'other', algorithm: 'least_conn' } }, 400);
   await get(`/api/v1/locations/${room.id}/usage`);
   await del(`/api/v1/locations/${room.id}`, 409);
@@ -777,6 +781,170 @@ async function permissions(x: Json) {
   await del(`/api/v1/admin/profiles/${readers.id}`, 404);
 }
 
+/** Areas are PostgreSQL schemas, types are tables, fields are typed columns: names, DDL, guards, concurrency, purge. */
+async function realTables(x: Json) {
+  const { inService, infra, adminMe } = x;
+  const ddl = async (q: string) => (await get(`/api/v1/schema-changes?q=${encodeURIComponent(q)}&limit=200`)).json.data.flatMap((c: Json) => c.statements as string[]);
+  const detail = async (id: string) => (await get(`/api/v1/configuration-items/${id}`)).json;
+  const code = (r: { json: Json }) => `${r.json?.error?.code}/${r.json?.error?.details?.[0]?.code}`;
+
+  console.log('\n# Technical names');
+  const suggest = async (q: string) => (await get(`/api/v1/technical-names?${q}`)).json;
+  const vmName = await suggest(`kind=type&name=${encodeURIComponent('Virtuelle Maschinen')}&areaId=${infra}`);
+  check(vmName.technicalName === 'virtuelle_maschinen' && vmName.derived && vmName.valid && vmName.qualifiedName === 'infrastruktur.virtuelle_maschinen', '"Virtuelle Maschinen" -> virtuelle_maschinen');
+  check((await suggest(`kind=field&name=${encodeURIComponent('Größe')}`)).technicalName === 'groesse', '"Größe" -> groesse');
+  check((await suggest('kind=area&name=Bestand')).technicalName === 'bestand', '"Bestand" -> bestand');
+  const reserved = await suggest('kind=area&name=x&key=pg_temp');
+  check(!reserved.valid && reserved.code === 'reserved_prefix', 'a typed pg_ name is reported as reserved');
+  const takenArea = await suggest('kind=area&name=Infrastruktur');
+  check(!takenArea.valid && takenArea.code === 'name_taken', 'a taken area name is reported before anything is created');
+  await get('/api/v1/technical-names?kind=table&name=x', 400);
+
+  console.log('\n# Areas');
+  const area = (await post('/api/v1/areas', { name: 'Bestand', description: `Smoke ${RUN}`, color: '#1f6feb', sortOrder: 50 })).json;
+  check(area.key === 'bestand' && area.typeCount === 0, 'area "Bestand" gets the technical name bestand');
+  check((await ddl('Create area bestand')).includes('CREATE SCHEMA "bestand"'), 'creating the area ran CREATE SCHEMA "bestand"');
+  await get(`/api/v1/areas/${area.id}`);
+  await get('/api/v1/areas?isActive=true&sort=name&q=bestand');
+  await patch(`/api/v1/areas/${area.id}`, { name: 'Bestand (renamed)', icon: 'boxes' });
+  check((await get(`/api/v1/areas/${area.id}`)).json.key === 'bestand', 'renaming an area changes only its display name');
+  await patch(`/api/v1/areas/${area.id}`, { key: 'other' }, 400); // technical names are immutable
+  check(code(await post('/api/v1/areas', { name: 'Bestand' }, 422)) === 'INVALID_NAME/name_taken', 'a taken area name is 422 INVALID_NAME');
+  const hostileKeys: [string, string][] = [
+    ['bestand"; DROP SCHEMA cmdb CASCADE; --', 'invalid_format'],
+    ["x'); DELETE FROM cmdb.users; --", 'invalid_format'],
+    ['a;b', 'invalid_format'],
+    ['Bestand', 'invalid_format'],
+    ['pg_catalog', 'reserved_prefix'],
+    ['cmdb', 'reserved_name'],
+    ['public', 'reserved_name'],
+    ['information_schema', 'reserved_name'],
+    ['cmdb_reporting', 'reserved_prefix'],
+    ['select', 'reserved_word'],
+    ['a'.repeat(64), 'too_long'],
+  ];
+  for (const [key, why] of hostileKeys) {
+    const r = await post('/api/v1/areas', { key, name: 'Injected' }, 422);
+    check(code(r) === `INVALID_NAME/${why}` && r.json.error.details[0].field === 'key', `area key ${JSON.stringify(key).slice(0, 44)} is refused (${why})`);
+  }
+  // A hostile display name never reaches SQL: it only yields a derived identifier.
+  const hostile = (await post('/api/v1/areas', { name: `Robert'); DROP TABLE cmdb.users; -- ${RUN}` })).json;
+  check(/^robert_drop_table_cmdb_users_[a-z0-9]+$/.test(hostile.key), `a hostile display name yields the plain identifier ${hostile.key}`);
+  check((await get('/api/v1/admin/users?limit=1')).json.page.total > 0, 'cmdb.users is untouched');
+
+  console.log('\n# Types are tables');
+  const net = (await post('/api/v1/ci-classes', { name: 'Netzwerk', areaId: area.id, icon: 'network' })).json;
+  check(net.key === 'netzwerk' && net.tableName === 'bestand.netzwerk' && net.viewName === 'bestand.v_netzwerk', 'type "Netzwerk" in area "Bestand" is the table bestand.netzwerk');
+  const history = (await get('/api/v1/schema-changes?q=bestand.netzwerk&sort=-occurredAt')).json;
+  const created = history.data.find((c: Json) => c.summary === 'Create type bestand.netzwerk');
+  check(created?.statements.includes('CREATE TABLE "bestand"."netzwerk" (id uuid PRIMARY KEY REFERENCES cmdb.configuration_items (id) ON DELETE CASCADE)') &&
+    created.statements.some((st: string) => st.startsWith('CREATE VIEW "bestand"."v_netzwerk" AS SELECT')) && created.actorId === adminMe.user.id,
+    'the CREATE TABLE and its reporting view ran and are recorded with the acting user');
+  await get(`/api/v1/schema-changes/${created.id}`);
+  await get('/api/v1/schema-changes/00000000-0000-4000-8000-000000000000', 404);
+  const createAudit = (await get(`/api/v1/audit-log?entityType=schema_changes&entityId=${created.id}`)).json;
+  check(createAudit.data[0]?.action === 'create' && createAudit.data[0].newValue.statements.length === created.statements.length, 'every schema change is in the audit log');
+  const vm = (await post('/api/v1/ci-classes', { name: 'Virtuelle Maschinen', areaId: area.id })).json;
+  check(vm.tableName === 'bestand.virtuelle_maschinen', 'type "Virtuelle Maschinen" is the table bestand.virtuelle_maschinen');
+  check(code(await post('/api/v1/ci-classes', { name: 'Netzwerk', areaId: area.id }, 422)) === 'INVALID_NAME/name_taken', 'a taken type name is 422 INVALID_NAME');
+  check(code(await post('/api/v1/ci-classes', { key: 'v_netzwerk', name: 'View', areaId: area.id }, 422)) === 'INVALID_NAME/reserved_prefix', 'v_ is reserved for reporting views');
+  check(code(await post('/api/v1/ci-classes', { key: 'x"; DROP TABLE cmdb.ci_classes; --', name: 'X', areaId: area.id }, 422)) === 'INVALID_NAME/invalid_format', 'a type key with quotes and semicolons is refused');
+  await patch(`/api/v1/ci-classes/${net.id}`, { name: 'Netzwerkgeräte' });
+  check((await get(`/api/v1/ci-classes/${net.id}`)).json.tableName === 'bestand.netzwerk', 'renaming a type keeps its table');
+  await patch(`/api/v1/ci-classes/${net.id}`, { areaId: infra }, 400); // a type cannot move to another area
+
+  console.log('\n# Fields are typed columns');
+  const field = (body: Json, expect = 201) => post('/api/v1/attribute-definitions', { classId: net.id, ...body }, expect);
+  const groesse = (await field({ label: 'Größe', dataType: 'integer' })).json;
+  check(groesse.key === 'groesse' && (await ddl('groesse')).includes('ALTER TABLE "bestand"."netzwerk" ADD COLUMN "groesse" bigint'), 'field "Größe" adds the column groesse bigint');
+  const types: Record<string, string> = { text: 'text', number: 'numeric', boolean: 'boolean', date: 'date', datetime: 'timestamp with time zone', ip: 'inet', cidr: 'cidr' };
+  const f: Record<string, Json> = {};
+  for (const t of Object.keys(types)) f[t] = (await field({ key: `f_${t}`, label: `F ${t}`, dataType: t })).json;
+  const netDdl = await ddl('"bestand"."netzwerk"');
+  check(Object.entries(types).every(([t, pg]) => netDdl.includes(`ALTER TABLE "bestand"."netzwerk" ADD COLUMN "f_${t}" ${pg}`)), 'text, number, boolean, date, datetime, ip and cidr map to their PostgreSQL types');
+  const rolle = (await field({ key: 'rolle', label: 'Rolle', dataType: 'enum', enumValues: ['core', 'access'] })).json;
+  const uplink = (await field({ key: 'uplink', label: 'Uplink', dataType: 'reference', referenceClassId: net.id })).json;
+  const hex = (id: string) => id.replaceAll('-', '');
+  const netDdl2 = await ddl('"bestand"."netzwerk"');
+  check(netDdl2.some((st: string) => st.startsWith(`ALTER TABLE "bestand"."netzwerk" ADD CONSTRAINT "ck_${hex(rolle.id)}_`) && st.endsWith(`CHECK ("rolle" = ANY ('{core,access}'::text[]))`)), 'an enum field is text with a CHECK on its values');
+  check(netDdl2.includes(`ALTER TABLE "bestand"."netzwerk" ADD CONSTRAINT "fk_${hex(uplink.id)}" FOREIGN KEY ("uplink") REFERENCES cmdb.configuration_items (id) ON DELETE NO ACTION`), 'a reference field is a foreign key to the registry');
+  for (const [key, why] of [['id', 'reserved_name'], ['name', 'reserved_name'], ['a"b', 'invalid_format'], ['x; DROP TABLE y', 'invalid_format'], ['pg_x', 'reserved_prefix'], ['b'.repeat(64), 'too_long'], ['groesse', 'name_taken']]) {
+    check(code(await field({ key, label: 'Hostile', dataType: 'text' }, 422)) === `INVALID_NAME/${why}`, `field key ${JSON.stringify(key).slice(0, 30)} is refused (${why})`);
+  }
+  check(code(await field({ label: 'Name', dataType: 'text' }, 422)) === 'INVALID_NAME/reserved_name', 'a label deriving a registry column name is refused');
+
+  console.log('\n# CIs in type tables');
+  const n1 = (await post('/api/v1/configuration-items', {
+    classId: net.id, name: `sw-core-${RUN}`, statusId: inService,
+    attributes: { groesse: 48, f_text: '42', f_number: 1.5, f_boolean: true, f_date: '2025-01-02', f_datetime: '2025-01-02T03:04:05Z', f_ip: '10.9.0.1', f_cidr: '10.9.0.0/24', rolle: 'core' },
+  })).json;
+  check(n1.attributes.groesse === 48 && n1.attributes.f_number === 1.5 && n1.attributes.f_boolean === true && n1.attributes.f_date === '2025-01-02' &&
+    Date.parse(n1.attributes.f_datetime) === Date.parse('2025-01-02T03:04:05Z') && n1.attributes.f_ip === '10.9.0.1' && n1.attributes.f_cidr === '10.9.0.0/24',
+    'a CI of the new type stores and reads back typed values');
+  let n2 = (await post('/api/v1/configuration-items', { classId: net.id, name: `sw-access-${RUN}`, statusId: inService, attributes: { f_text: 'not a number', rolle: 'access', uplink: n1.id } })).json;
+  check(n2.attributeReferences?.uplink?.name === n1.name, 'a reference field resolves across the type table');
+  await post('/api/v1/configuration-items', { classId: net.id, name: 'bad', statusId: inService, attributes: { rolle: 'edge' } }, 400);
+  const found = (await get(`/api/v1/search?q=${encodeURIComponent('not a number')}`)).json;
+  check(found.data.some((r: Json) => r.item.id === n2.id && r.matches.some((m: Json) => m.field === 'attributes.f_text')), 'search finds values in type tables');
+  check((await get(`/api/v1/configuration-items?classId=${net.id}&q=10.9.0.1`)).json.data.some((c: Json) => c.id === n1.id), 'the inventory filter searches type columns');
+
+  console.log('\n# Data-loss guards');
+  const toNumber = { operation: 'updateField', id: f.text.id, body: { dataType: 'number' } };
+  const refusedPreview = await post('/api/v1/schema-changes/preview', toNumber, 422);
+  check(code(refusedPreview) === 'SCHEMA_CHANGE_REFUSED/type_change_failed' && /"not a number"/.test(refusedPreview.json.error.message), 'preview: a type change that would not convert every value is refused, naming the value');
+  check(code(await patch(`/api/v1/attribute-definitions/${f.text.id}`, { dataType: 'number' }, 422)) === 'SCHEMA_CHANGE_REFUSED/type_change_failed', 'the type change itself is refused');
+  check((await get(`/api/v1/attribute-definitions/${f.text.id}`)).json.dataType === 'text', 'a refused change leaves the field as it was');
+  n2 = (await patch(`/api/v1/configuration-items/${n2.id}`, { version: n2.version, attributes: { f_text: '7' } })).json;
+  const preview = (await post('/api/v1/schema-changes/preview', toNumber, 200)).json;
+  check(preview.statements.some((st: string) => st.startsWith('ALTER TABLE "bestand"."netzwerk" ALTER COLUMN "f_text" TYPE numeric USING')) &&
+    preview.impact.some((i: Json) => i.kind === 'rewrite' && i.rows === 2) && preview.result?.dataType === 'number', 'preview: the ALTER COLUMN TYPE and the 2 values it converts');
+  check((await get(`/api/v1/attribute-definitions/${f.text.id}`)).json.dataType === 'text', 'a preview changes nothing');
+  await patch(`/api/v1/attribute-definitions/${f.text.id}`, { dataType: 'number' });
+  check((await detail(n1.id)).attributes.f_text === 42 && (await detail(n2.id)).attributes.f_text === 7, 'converted values read back as numbers');
+  check(code(await patch(`/api/v1/attribute-definitions/${f.ip.id}`, { isRequired: true }, 422)) === 'SCHEMA_CHANGE_REFUSED/values_missing', 'a field cannot become required while an asset has no value');
+  n2 = (await patch(`/api/v1/configuration-items/${n2.id}`, { version: n2.version, attributes: { f_ip: '10.9.0.2' } })).json;
+  await patch(`/api/v1/attribute-definitions/${f.ip.id}`, { isRequired: true });
+  check((await ddl('f_ip')).includes('ALTER TABLE "bestand"."netzwerk" ALTER COLUMN "f_ip" SET NOT NULL'), 'once every asset has a value the column becomes NOT NULL');
+  await post('/api/v1/configuration-items', { classId: net.id, name: 'no-ip', statusId: inService }, 400);
+
+  console.log('\n# Concurrent schema changes');
+  const burst = await Promise.all([0, 1, 2, 3].map((i) => call('POST', '/api/v1/attribute-definitions', { classId: vm.id, key: `port_${i}`, label: `Port ${i}`, dataType: 'integer' }, 201)));
+  const vmDdl = await ddl('"bestand"."virtuelle_maschinen"');
+  check(burst.every((r) => r.status === 201) && [0, 1, 2, 3].every((i) => vmDdl.includes(`ALTER TABLE "bestand"."virtuelle_maschinen" ADD COLUMN "port_${i}" bigint`)), 'four fields added at once all get their column');
+  const twice = await Promise.all([0, 1].map(() => call('POST', '/api/v1/attribute-definitions', { classId: vm.id, key: 'mac', label: 'MAC', dataType: 'text' }, undefined, {}, { accept: [201, 422] })));
+  check(twice.map((r) => r.status).sort().join() === '201,422' && twice.some((r) => code(r) === 'INVALID_NAME/name_taken'), 'the same field added twice at once: one 201, one 422 (the schema lock serialises them)');
+  const reconciled = (await post('/api/v1/schema-changes/reconcile', undefined, 200)).json;
+  check(reconciled.schemaChange === null, 'after all that the database matches the data model (reconcile has nothing to do)');
+
+  console.log('\n# Archive and purge');
+  await del(`/api/v1/attribute-definitions/${groesse.id}`);
+  check((await detail(n1.id)).attributes.groesse === 48, 'an archived field keeps its column and values');
+  await post(`/api/v1/attribute-definitions/${f.date.id}/purge`, { confirm: 'f_date' }, 409); // not archived
+  await post(`/api/v1/attribute-definitions/${groesse.id}/purge`, { confirm: 'wrong' }, 400);
+  const purgedField = (await post(`/api/v1/attribute-definitions/${groesse.id}/purge`, { confirm: 'groesse' }, 200)).json;
+  check(purgedField.schemaChange.statements.includes('ALTER TABLE "bestand"."netzwerk" DROP COLUMN "groesse"') &&
+    purgedField.schemaChange.impact.some((i: Json) => i.kind === 'drop_column' && i.rows === 1), 'purging a field drops its column (1 stored value)');
+  check(!('groesse' in (await detail(n1.id)).attributes), 'the purged value is gone');
+  await get(`/api/v1/attribute-definitions/${groesse.id}`, 404);
+  await del(`/api/v1/ci-classes/${vm.id}`);
+  const purgePreview = (await post('/api/v1/schema-changes/preview', { operation: 'purgeType', id: vm.id, body: { confirm: 'virtuelle_maschinen' } }, 200)).json;
+  check(purgePreview.statements.includes('DROP TABLE "bestand"."virtuelle_maschinen"') && purgePreview.result === null, 'preview of a type purge shows the DROP TABLE');
+  await get(`/api/v1/ci-classes/${vm.id}`); // still there
+  await post(`/api/v1/ci-classes/${vm.id}/purge`, { confirm: 'virtuelle_maschinen' }, 200);
+  await post(`/api/v1/areas/${area.id}/purge`, { confirm: 'bestand' }, 409); // not archived
+  await del(`/api/v1/areas/${area.id}`);
+  const stillTyped = await post(`/api/v1/areas/${area.id}/purge`, { confirm: 'bestand' }, 409);
+  check(stillTyped.json.error?.code === 'IN_USE', 'an area holding types cannot be purged');
+  await del(`/api/v1/ci-classes/${net.id}`);
+  const purgedType = (await post(`/api/v1/ci-classes/${net.id}/purge`, { confirm: 'netzwerk' }, 200)).json;
+  check(purgedType.schemaChange.statements.includes('DROP TABLE "bestand"."netzwerk"') && purgedType.schemaChange.statements.includes('DROP VIEW "bestand"."v_netzwerk"'), 'purging a type drops its table and view');
+  await get(`/api/v1/configuration-items/${n1.id}`, 404);
+  const purgedArea = (await post(`/api/v1/areas/${area.id}/purge`, { confirm: 'bestand' }, 200)).json;
+  check(purgedArea.schemaChange.statements.includes('DROP SCHEMA "bestand"'), 'purging the empty area drops its schema');
+  await del(`/api/v1/areas/${hostile.id}`);
+  await post(`/api/v1/areas/${hostile.id}/purge`, { confirm: hostile.key }, 200);
+}
+
 const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 const b64 = (s: string | Uint8Array) => Buffer.from(s).toString('base64');
 const fields = (r: { json: Json }) => (r.json?.error?.details ?? []).map((d: Json) => d.field as string);
@@ -865,7 +1033,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 1 && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 2 && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -883,6 +1051,9 @@ async function customization(x: Json) {
   check(change('statuses', scratch.key)?.action === 'update' && change('statuses', scratch.key).fields[0]?.to === 'Renamed by import', 'dry run: updated fields with old and new values');
   check(change('statuses', `smoke_imp_${RUN}`)?.action === 'create' && change('classes', `smoke_imp_${RUN}`)?.action === 'create' && change('attributes', `smoke_imp_${RUN}.rack_unit`)?.action === 'create', 'dry run: created rows');
   check(change('uiSettings', 'settings')?.action === 'update' && change('uiSettings', 'favicon')?.action === 'delete', 'dry run: UI settings and images');
+  check(dry.schemaChanges.some((c: Json) => c.statements.some((st: string) => st.startsWith(`CREATE TABLE "infrastruktur"."smoke_imp_${RUN}"`))) &&
+    dry.schemaChanges.some((c: Json) => c.statements.some((st: string) => st === `ALTER TABLE "infrastruktur"."smoke_imp_${RUN}" ADD COLUMN "rack_unit" bigint`)),
+    'the import dry run shows the DDL it would run');
   check(dry.summary.find((s: Json) => s.section === 'statuses')?.notInFile === 0, 'dry run: counts rows missing from the file');
   check((await get(`/api/v1/statuses?q=smoke_imp_${RUN}`)).json.page.total === 0 && (await get(`/api/v1/statuses/${scratch.id}`)).json.name === 'Exported status', 'a dry run changes nothing');
   const applied = (await post('/api/v1/admin/config/import?mode=apply', changed, 200)).json;
@@ -908,7 +1079,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 2 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 3 }, 400);
   await post('/api/v1/admin/config/import', file, 400); // mode is required
   await post('/api/v1/admin/config/import?mode=later', file, 400);
 

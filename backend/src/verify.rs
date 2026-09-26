@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::config::DatabaseConfig;
 
 const CHECKS: &[&str] = &[
-    "New CI class with custom attributes is pure data entry",
+    "New type with custom fields: data entry, its table built by the DDL engine",
     "Server -> Application -> Database and Device -> Location are expressible",
     "Demo graph traversal (recursive, downstream of the CRM service)",
     "Guard: self-edge",
@@ -19,10 +19,10 @@ const CHECKS: &[&str] = &[
     "Guard: reverse duplicate of non-directional connected_to",
     "Guard: illegal endpoint classes (database located_in location)",
     "Guard: CI of an abstract class",
-    "Guard: attribute from another class",
-    "Guard: value stored in the wrong type column",
+    "Guard: type row without a registry row (foreign key)",
+    "Guard: value of the wrong type for its column",
     "Guard: enum value not in the allowed list",
-    "Guard: reference attribute pointing at the wrong class",
+    "Guard: reference field pointing at a CI that does not exist",
     "Guard: class hierarchy cycle",
     "Guard: unknown status (foreign key)",
     "Guard: audit_log is append-only",
@@ -31,7 +31,7 @@ const CHECKS: &[&str] = &[
     "Guard: usernames are unique regardless of case",
     "Guard: the built-in Administrator profile cannot be deleted or changed",
     "Guard: the last active Administrator cannot be disabled or lose the profile",
-    "Guard: lookup attribute values come from the attribute's list and cannot be deleted while stored",
+    "Guard: lookup values must exist and cannot be deleted while stored",
     "Guard: one UI settings row, append-only version history, image types and sizes",
 ];
 
@@ -69,16 +69,96 @@ async fn attribute_id(c: &mut PgConnection, class: &str, key: &str) -> anyhow::R
     .ok_or_else(|| anyhow!("no attribute {class}.{key}"))
 }
 
+/// The table of a type, schema-qualified and quoted ("infrastruktur"."server").
+async fn type_table(c: &mut PgConnection, class: &str) -> anyhow::Result<String> {
+    sqlx::query_scalar("SELECT cmdb.type_table(id) FROM ci_classes WHERE key = $1")
+        .bind(class)
+        .fetch_optional(c)
+        .await?
+        .ok_or_else(|| anyhow!("no class {class}"))
+}
+
+/// Builds the table and columns of these types, as the API does after a data model write.
+async fn build_tables(c: &mut PgConnection, classes: Vec<Uuid>) -> anyhow::Result<usize> {
+    let ctx = crate::api::context::RequestContext::system("verify", "verify");
+    let change = crate::schema::apply(c, &ctx, "verify", crate::schema::Scope::Classes(classes), Default::default())
+        .await
+        .map_err(|e| anyhow!("DDL engine: {}", e.message))?;
+    Ok(change.map(|ch| ch.statements.len()).unwrap_or(0))
+}
+
+/// Stores one field value of a CI in its type table (the CI's row there already exists).
+async fn set_value(c: &mut PgConnection, class: &str, ci: Uuid, field: &str, value: &str) -> anyhow::Result<()> {
+    set_value_sql(c, class, ci, field, value).await?.execute(c).await?;
+    Ok(())
+}
+
+/// The UPDATE that stores `value` (cast from text to the column's type) in a CI's type row.
+async fn set_value_sql<'q>(
+    c: &mut PgConnection,
+    class: &str,
+    ci: Uuid,
+    field: &str,
+    value: &'q str,
+) -> anyhow::Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>> {
+    let table = type_table(c, class).await?;
+    let column = crate::schema::naming::Ident::trusted(field);
+    let pg_type: String = sqlx::query_scalar(
+        "SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = $1::regclass AND attname = $2",
+    )
+    .bind(&table)
+    .bind(field)
+    .fetch_optional(&mut *c)
+    .await?
+    .ok_or_else(|| anyhow!("no column {field} in {table}"))?;
+    Ok(sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE {table} SET {column} = $2::text::{pg_type} WHERE id = $1")))
+        .bind(ci)
+        .bind(value))
+}
+
+/// A CI in the registry plus its (empty) rows in the tables of its type and every ancestor type.
 async fn new_ci(c: &mut PgConnection, class: &str, name: &str) -> sqlx::Result<Uuid> {
-    sqlx::query_scalar(
+    let id: Uuid = sqlx::query_scalar(
         "INSERT INTO configuration_items (class_id, name, status_id)
          VALUES ((SELECT id FROM ci_classes WHERE key = $1), $2, (SELECT id FROM statuses WHERE key = 'in_service'))
          RETURNING id",
     )
     .bind(class)
     .bind(name)
-    .fetch_one(c)
-    .await
+    .fetch_one(&mut *c)
+    .await?;
+    let tables: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT l.class_id, cmdb.type_table(l.class_id) FROM ci_class_lineage((SELECT id FROM ci_classes WHERE key = $1)) l
+         ORDER BY l.depth DESC",
+    )
+    .bind(class)
+    .fetch_all(&mut *c)
+    .await?;
+    for (class_id, t) in tables {
+        // Required fields (NOT NULL columns) get their default or first allowed value.
+        let required: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT d.key, format_type(a.atttypid, a.atttypmod), coalesce(d.default_value #>> '{}', d.enum_values ->> 0)
+             FROM ci_attribute_definitions d
+             JOIN pg_attribute a ON a.attrelid = cmdb.type_table(d.class_id)::regclass AND a.attname = d.key
+             WHERE d.class_id = $1 AND a.attnotnull",
+        )
+        .bind(class_id)
+        .fetch_all(&mut *c)
+        .await?;
+        let mut columns = String::from("id");
+        let mut params = String::from("$1");
+        for (i, (key, pg_type, _)) in required.iter().enumerate() {
+            columns.push_str(&format!(", {}", crate::schema::naming::Ident::trusted(key)));
+            params.push_str(&format!(", ${}::text::{pg_type}", i + 2));
+        }
+        let sql = format!("INSERT INTO {t} ({columns}) VALUES ({params})");
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id);
+        for (_, _, value) in required {
+            q = q.bind(value);
+        }
+        q.execute(&mut *c).await?;
+    }
+    Ok(id)
 }
 
 async fn link(c: &mut PgConnection, ty: &str, src: Uuid, tgt: Uuid) -> sqlx::Result<()> {
@@ -126,7 +206,8 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
         0 => {
             let parent = id_by_key(c, "ci_classes", "network_device").await?;
             let lb: Uuid = sqlx::query_scalar(
-                "INSERT INTO ci_classes (key, name, parent_id) VALUES ('load_balancer', 'Load balancer', $1) RETURNING id",
+                "INSERT INTO ci_classes (key, name, parent_id, area_id)
+                 VALUES ('load_balancer', 'Load balancer', $1, (SELECT area_id FROM ci_classes WHERE id = $1)) RETURNING id",
             )
             .bind(parent)
             .fetch_one(&mut *c)
@@ -144,30 +225,14 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             .bind(lb)
             .fetch_one(&mut *c)
             .await?;
+            let statements = build_tables(c, vec![lb]).await?;
+            let table = type_table(c, "load_balancer").await?;
             let ci = new_ci(c, "load_balancer", "fra1-lb-01").await?;
-            let role = attribute_id(c, "network_device", "device_role").await?;
-            sqlx::query(
-                "INSERT INTO ci_attribute_values (ci_id, attribute_id, value_ip) VALUES ($1, $2, '192.0.2.10')",
-            )
-            .bind(ci)
-            .bind(vip)
-            .execute(&mut *c)
-            .await?;
-            sqlx::query(
-                "INSERT INTO ci_attribute_values (ci_id, attribute_id, value_text) VALUES ($1, $2, 'least_conn')",
-            )
-            .bind(ci)
-            .bind(algo)
-            .execute(&mut *c)
-            .await?;
-            // Inherited from network_device, which inherits from hardware.
-            sqlx::query(
-                "INSERT INTO ci_attribute_values (ci_id, attribute_id, value_text) VALUES ($1, $2, 'load_balancer')",
-            )
-            .bind(ci)
-            .bind(role)
-            .execute(&mut *c)
-            .await?;
+            let _ = (vip, algo);
+            set_value(c, "load_balancer", ci, "vip", "192.0.2.10").await?;
+            set_value(c, "load_balancer", ci, "algorithm", "least_conn").await?;
+            // Inherited from network_device, which inherits from hardware: stored in network_device's table.
+            set_value(c, "network_device", ci, "device_role", "load_balancer").await?;
             let attrs: Vec<String> = sqlx::query_scalar(
                 "SELECT d.key FROM ci_class_lineage($1) l JOIN ci_attribute_definitions d ON d.class_id = l.class_id
                  ORDER BY l.depth, d.sort_order, d.key",
@@ -179,7 +244,8 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             let rack = new_ci(c, "location", "verify-rack").await?;
             link(c, "located_in", ci, rack).await?;
             Ok(format!(
-                "class load_balancer + 2 attributes inserted; effective attributes: {}; located_in rack accepted via inherited rule",
+                "type load_balancer + 2 fields inserted, table {table} built ({statements} statements); effective \
+                 fields: {}; located_in rack accepted via inherited rule",
                 attrs.join(", ")
             ))
         }
@@ -253,60 +319,42 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
         }
         7 => reject!(c, "configuration_items_class_concrete", new_ci(c, "hardware", "abstract-ci")),
         8 => {
-            let a = new_ci(c, "application", "attr-app").await?;
-            let def = attribute_id(c, "database", "engine_version").await?;
+            let table = type_table(c, "server").await?;
             reject!(
                 c,
-                "ci_attribute_values_attribute_in_class",
-                sqlx::query("INSERT INTO ci_attribute_values (ci_id, attribute_id, value_text) VALUES ($1, $2, '1.0')")
-                    .bind(a)
-                    .bind(def)
+                "_id_fkey",
+                sqlx::query(sqlx::AssertSqlSafe(format!("INSERT INTO {table} (id) VALUES (gen_random_uuid())")))
                     .execute(&mut *c)
             )
         }
         9 => {
             let s = new_ci(c, "server", "type-srv").await?;
-            let def = attribute_id(c, "server", "cpu_cores").await?;
+            let table = type_table(c, "server").await?;
             reject!(
                 c,
-                "ci_attribute_values_type_match",
-                sqlx::query(
-                    "INSERT INTO ci_attribute_values (ci_id, attribute_id, value_text) VALUES ($1, $2, 'lots')"
-                )
+                "invalid input syntax for type bigint",
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "UPDATE {table} SET cpu_cores = $2::text::bigint WHERE id = $1"
+                )))
                 .bind(s)
-                .bind(def)
+                .bind("lots")
                 .execute(&mut *c)
             )
         }
         10 => {
             let s = new_ci(c, "server", "enum-srv").await?;
             let def = attribute_id(c, "server", "os_family").await?;
-            reject!(
-                c,
-                "ci_attribute_values_enum",
-                sqlx::query(
-                    "INSERT INTO ci_attribute_values (ci_id, attribute_id, value_text) VALUES ($1, $2, 'amiga')"
-                )
-                .bind(s)
-                .bind(def)
-                .execute(&mut *c)
-            )
+            let check = format!("ck_{}", def.simple());
+            let update = set_value_sql(c, "server", s, "os_family", "amiga").await?;
+            reject!(c, &check, update.execute(&mut *c))
         }
         11 => {
             let a = new_ci(c, "application", "ref-app").await?;
-            let s = new_ci(c, "server", "ref-srv").await?;
             let def = attribute_id(c, "application", "primary_database").await?;
-            reject!(
-                c,
-                "ci_attribute_values_reference_class",
-                sqlx::query(
-                    "INSERT INTO ci_attribute_values (ci_id, attribute_id, value_ref_ci_id) VALUES ($1, $2, $3)"
-                )
-                .bind(a)
-                .bind(def)
-                .bind(s)
-                .execute(&mut *c)
-            )
+            let fk = format!("fk_{}", def.simple());
+            let missing = Uuid::new_v4().to_string();
+            let update = set_value_sql(c, "application", a, "primary_database", &missing).await?;
+            reject!(c, &fk, update.execute(&mut *c))
         }
         12 => {
             let hw = id_by_key(c, "ci_classes", "hardware").await?;
@@ -492,20 +540,18 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             .bind(contracts)
             .fetch_one(&mut *c)
             .await?;
+            let server = vec![server];
+            build_tables(c, server).await?;
             let ci = new_ci(c, "server", "verify-lookup").await?;
-            let store = |v: Uuid| {
-                sqlx::query(
-                    "INSERT INTO ci_attribute_values (ci_id, attribute_id, value_lookup_id) VALUES ($1, $2, $3)",
-                )
-                .bind(ci)
-                .bind(attr)
-                .bind(v)
-            };
-            let foreign = reject!(c, "ci_attribute_values_lookup_list", store(red).execute(&mut *c))?;
-            store(gold).execute(&mut *c).await?;
+            let fk = format!("fk_{}", attr.simple());
+            let _ = red;
+            let unknown = Uuid::new_v4().to_string();
+            let update = set_value_sql(c, "server", ci, "verify_contract", &unknown).await?;
+            let foreign = reject!(c, &fk, update.execute(&mut *c))?;
+            set_value(c, "server", ci, "verify_contract", &gold.to_string()).await?;
             let delete = reject!(
                 c,
-                "ci_attribute_values_value_lookup_id_fkey",
+                &fk,
                 sqlx::query("DELETE FROM lookup_list_values WHERE id = $1").bind(gold).execute(&mut *c)
             )?;
             let list_delete = reject!(
@@ -514,7 +560,8 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
                 sqlx::query("DELETE FROM lookup_lists WHERE id = $1").bind(contracts).execute(&mut *c)
             )?;
             Ok(format!(
-                "value of another list {foreign}; deleting a stored value {delete}; deleting a list in use {list_delete}"
+                "unknown value {foreign}; deleting a stored value {delete}; deleting a list in use {list_delete} \
+                 (that a value belongs to the field's list is checked by the API)"
             ))
         }
         21 => {
