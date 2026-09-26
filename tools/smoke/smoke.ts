@@ -397,6 +397,11 @@ async function main() {
     attributes: { url: 'https://smoke.example.com', criticality: 'high', primary_database: database.id },
   })).json;
   check(app.attributeReferences?.primary_database?.name === database.name, 'reference attribute resolves to the database name');
+  const listed = (await get(`/api/v1/configuration-items?classId=${appClass}&q=smoke-app-${RUN}`)).json;
+  const listedApp = listed.data.find((c: Json) => c.id === app.id);
+  check(listedApp?.attributes?.criticality === 'high' && listedApp?.attributes?.primary_database === database.id
+    && listedApp?.attributeReferences?.primary_database?.name === database.name && !('memory_gb' in listedApp.attributes),
+    'list items carry attribute values and reference names');
   await post('/api/v1/configuration-items', { classId: hardware, name: 'abstract', statusId: inService }, 400);
   await post('/api/v1/configuration-items', {
     classId: serverClass, name: 'bad', statusId: inService, hostname: '-bad-', ipAddress: '10.1.1.300',

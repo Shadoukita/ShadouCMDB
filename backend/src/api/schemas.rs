@@ -321,7 +321,7 @@ impl<T: ToSchema> PartialSchema for Page<T> {
 }
 
 impl<T: ToSchema> ToSchema for Page<T> {
-    /// `StatusList`, `RelationshipList`, ...; a page of `ConfigurationItemSummary`
+    /// `StatusList`, `RelationshipList`, ...; a page of `ConfigurationItem`
     /// is the `ConfigurationItemList`.
     fn name() -> Cow<'static, str> {
         Cow::Owned(format!("{}List", T::name().trim_end_matches("Summary")))
