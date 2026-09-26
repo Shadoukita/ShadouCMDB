@@ -31,6 +31,20 @@ use crate::schema::{self as engine, Purge, SchemaChange, Scope};
 /// a version 1 configuration file, or by the IT infrastructure template.
 pub const DEFAULT_AREA: (&str, &str) = ("infrastruktur", "Infrastruktur");
 
+/// The id of the default area, created (and audited) if it does not exist yet.
+pub async fn default_area(conn: &mut PgConnection, ctx: &RequestContext) -> Result<Uuid, AppError> {
+    let existing: Option<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.areas WHERE key = $1")
+        .bind(DEFAULT_AREA.0)
+        .fetch_optional(&mut *conn)
+        .await?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    let mut columns = ColumnSet::default();
+    columns.opt("key", Some(DEFAULT_AREA.0.to_owned())).opt("name", Some(DEFAULT_AREA.1.to_owned()));
+    Ok(simple::create_in::<Areas>(conn, ctx, columns).await?.id)
+}
+
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Area {

@@ -117,6 +117,16 @@ pub trait Resource: Send + Sync + 'static {
         Box::pin(async { Ok(()) })
     }
 
+    /// Runs in a create's transaction after `before_write`, before the insert, to
+    /// fill in columns that depend on other rows (e.g. a default parent).
+    fn prepare_create<'a>(
+        _conn: &'a mut PgConnection,
+        _ctx: &'a RequestContext,
+        _columns: &'a mut ColumnSet,
+    ) -> BoxFuture<'a, Result<(), AppError>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Runs inside the write transaction after insert/update; an error rolls back.
     fn after_write<'a>(
         _conn: &'a mut PgConnection,
@@ -191,10 +201,11 @@ pub async fn get<R: Resource>(pool: &PgPool, id: Uuid) -> Result<R::Dto, AppErro
 pub async fn create_in<R: Resource>(
     conn: &mut PgConnection,
     ctx: &RequestContext,
-    columns: ColumnSet,
+    mut columns: ColumnSet,
 ) -> Result<R::Dto, AppError> {
     R::validate(&columns, true)?;
     R::before_write(conn).await?;
+    R::prepare_create(conn, ctx, &mut columns).await?;
     let row: R::Dto = crud::insert_row(conn, R::TABLE, R::COLUMNS, columns).await?;
     R::after_write(conn, ctx, &row, None).await?;
     let entry = AuditEntry {

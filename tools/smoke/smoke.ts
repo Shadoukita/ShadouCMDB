@@ -846,6 +846,12 @@ async function realTables(x: Json) {
   check(createAudit.data[0]?.action === 'create' && createAudit.data[0].newValue.statements.length === created.statements.length, 'every schema change is in the audit log');
   const vm = (await post('/api/v1/ci-classes', { name: 'Virtuelle Maschinen', areaId: area.id })).json;
   check(vm.tableName === 'bestand.virtuelle_maschinen', 'type "Virtuelle Maschinen" is the table bestand.virtuelle_maschinen');
+  const vmChild = (await post('/api/v1/ci-classes', { key: `smoke_vm_child_${RUN}`, name: 'Smoke VM child', parentId: vm.id })).json;
+  const rootNoArea = (await post('/api/v1/ci-classes', { key: `smoke_root_${RUN}`, name: 'Smoke root without area' })).json;
+  check(vmChild.areaId === area.id && rootNoArea.areaId === infra && rootNoArea.tableName === `infrastruktur.smoke_root_${RUN}`,
+    'without areaId a type goes into its parent\'s area, a root type into "infrastruktur"');
+  await del(`/api/v1/ci-classes/${vmChild.id}`);
+  await post(`/api/v1/ci-classes/${vmChild.id}/purge`, { confirm: vmChild.key }, 200);
   check(code(await post('/api/v1/ci-classes', { name: 'Netzwerk', areaId: area.id }, 422)) === 'INVALID_NAME/name_taken', 'a taken type name is 422 INVALID_NAME');
   check(code(await post('/api/v1/ci-classes', { key: 'v_netzwerk', name: 'View', areaId: area.id }, 422)) === 'INVALID_NAME/reserved_prefix', 'v_ is reserved for reporting views');
   check(code(await post('/api/v1/ci-classes', { key: 'x"; DROP TABLE cmdb.ci_classes; --', name: 'X', areaId: area.id }, 422)) === 'INVALID_NAME/invalid_format', 'a type key with quotes and semicolons is refused');

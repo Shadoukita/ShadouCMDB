@@ -11,6 +11,7 @@ use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use super::areas;
 use super::schema_changes::{PurgeRequest, PurgeResult, check_purge};
 use super::simple_resource::{self as simple, BoxFuture, ListQuery, Resource, Usage, Writable, bool_filter, non_empty};
 use crate::api::context::RequestContext;
@@ -22,7 +23,7 @@ use crate::api::schemas::{
 use crate::api::validate;
 use crate::auth::permissions::GlobalPermission;
 use crate::data::classes as data;
-use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Where};
+use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Val, Where};
 use crate::data::items as items_data;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::paged;
@@ -87,8 +88,11 @@ pub struct CiClassCreate {
     #[schema(schema_with = name_schema)]
     #[serde(deserialize_with = "trimmed")]
     name: String,
-    /// The area the type's table is created in
-    area_id: Uuid,
+    /// The area the type's table is created in. Leave out to use the parent's area, or, for a root type, the
+    /// default area "infrastruktur" (created if missing).
+    #[schema(nullable = false)]
+    #[serde(default)]
+    area_id: Option<Uuid>,
     #[schema(schema_with = description_schema)]
     #[serde(default)]
     description: Option<String>,
@@ -147,7 +151,7 @@ impl Writable for CiClassCreate {
         let mut c = ColumnSet::default();
         c.opt("key", Some(self.technical_name()))
             .opt("name", Some(self.name.clone()))
-            .opt("area_id", Some(self.area_id))
+            .opt("area_id", self.area_id)
             .opt("description", self.description.clone().map(Some))
             .opt("parent_id", self.parent_id.map(Some))
             .opt("is_abstract", self.is_abstract)
@@ -320,6 +324,38 @@ impl Resource for CiClasses {
 
     fn before_write(conn: &mut PgConnection) -> BoxFuture<'_, Result<(), AppError>> {
         Box::pin(async move { Ok(engine::lock(conn).await?) })
+    }
+
+    fn prepare_create<'a>(
+        conn: &'a mut PgConnection,
+        ctx: &'a RequestContext,
+        columns: &'a mut ColumnSet,
+    ) -> BoxFuture<'a, Result<(), AppError>> {
+        Box::pin(async move {
+            if columns.0.iter().any(|(c, _)| *c == "area_id") {
+                return Ok(());
+            }
+            let parent = columns.0.iter().find_map(|(c, v)| match (c, v) {
+                (&"parent_id", Val::Uuid(Some(id))) => Some(*id),
+                _ => None,
+            });
+            let area_id = match parent {
+                // An unknown parent is reported by the insert's foreign key.
+                Some(parent) => {
+                    sqlx::query_scalar("SELECT area_id FROM cmdb.ci_classes WHERE id = $1")
+                        .bind(parent)
+                        .fetch_optional(&mut *conn)
+                        .await?
+                }
+                None => None,
+            };
+            let area_id = match area_id {
+                Some(id) => id,
+                None => areas::default_area(conn, ctx).await?,
+            };
+            columns.opt("area_id", Some(area_id));
+            Ok(())
+        })
     }
 
     fn after_write<'a>(

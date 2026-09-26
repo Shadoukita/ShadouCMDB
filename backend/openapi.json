@@ -3531,8 +3531,7 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "name",
-                  "areaId"
+                  "name"
                 ],
                 "properties": {
                   "key": {
@@ -3550,7 +3549,7 @@
                   "areaId": {
                     "type": "string",
                     "format": "uuid",
-                    "description": "The area the type's table is created in"
+                    "description": "The area the type's table is created in. Leave out to use the parent's area, or, for a root type, the\ndefault area \"infrastruktur\" (created if missing)."
                   },
                   "description": {
                     "anyOf": [

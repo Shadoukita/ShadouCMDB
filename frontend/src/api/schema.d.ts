@@ -5158,9 +5158,10 @@ export interface operations {
                     name: string;
                     /**
                      * Format: uuid
-                     * @description The area the type's table is created in
+                     * @description The area the type's table is created in. Leave out to use the parent's area, or, for a root type, the
+                     *     default area "infrastruktur" (created if missing).
                      */
-                    areaId: string;
+                    areaId?: string;
                     description?: string | null;
                     parentId?: string | null;
                     isAbstract?: boolean;

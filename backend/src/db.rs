@@ -260,7 +260,9 @@ pub mod scratch {
         let mut c = admin.connect().await.expect("connect to SHADOUCMDB_TEST_DATABASE_URL");
         c.execute(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}"))).await.expect("CREATE DATABASE");
         c.close().await.ok();
-        let pool = PgPoolOptions::new().max_connections(8).connect_with(admin.clone().database(&name)).await.unwrap();
+        // The same search_path as the application's pool (system tables live in `cmdb`).
+        let opts = admin.clone().database(&name).options([("search_path", super::SEARCH_PATH)]);
+        let pool = PgPoolOptions::new().max_connections(8).connect_with(opts).await.unwrap();
         super::MIGRATOR.run(&pool).await.expect("migrations");
         Some(Scratch { admin, name, pool })
     }
