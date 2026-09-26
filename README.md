@@ -20,11 +20,11 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 | `sql/` | Database artifacts: versioned migrations, bootstrap scripts, ER diagram. See [`sql/README.md`](sql/README.md). |
 | `frontend/` | Vue 3 + Vite + TanStack Query web UI. See [`frontend/README.md`](frontend/README.md). |
 | `docs/data-model.md` | Data model, integrity rules and soft-delete decisions. |
-| `.github/` | CI workflow and pull request template. |
+| `.github/` | CI and release workflows, pull request template. Releases: see [CONTRIBUTING.md](CONTRIBUTING.md#cutting-a-release). |
 | `docs/api.md` | API conventions, error envelope, endpoint overview, extension seams. |
 | `backend/openapi.json` | OpenAPI contract generated from the code (`shadoucmdb openapi --out backend/openapi.json`; CI fails if it is stale). |
 | `tools/` | `smoke/smoke.ts`: end-to-end check of every API operation against any API URL. `openapi-diff.mjs`: semantic diff of two specs. |
-| `Dockerfile`, `deploy/` | Multi-arch container image of `shadoucmdb`; sample systemd unit. See [docs/deployment.md](docs/deployment.md). |
+| `Dockerfile`, `deploy/` | Multi-arch container image of `shadoucmdb`; systemd unit; release Dockerfile and the READMEs shipped in the release archives. See [docs/deployment.md](docs/deployment.md). |
 
 ## Requirements
 

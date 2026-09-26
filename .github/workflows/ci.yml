@@ -1,5 +1,8 @@
 name: CI
 
+# Node workspaces: the frontend (lint, typecheck, API types, build). The Rust
+# checks are in rust.yml, the release dry run in release.yml.
+
 on:
   push:
     branches: [main]
@@ -18,6 +21,7 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - run: npm run lint --workspaces --if-present
       - run: npm run typecheck
       - name: frontend API types match backend/openapi.json
         run: npm run api:check -w frontend

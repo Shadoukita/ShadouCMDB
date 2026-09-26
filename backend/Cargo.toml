@@ -1,6 +1,6 @@
 [package]
 name = "shadoucmdb"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 edition = "2024"
 rust-version = "1.94"
 description = "ShadouCMDB server: REST API, migrations and the embedded web UI in one binary"
@@ -47,6 +47,11 @@ utoipa = { version = "6", features = ["uuid", "chrono", "preserve_order", "prese
 # Swagger UI assets are vendored into the binary: /docs works on air-gapped hosts.
 utoipa-swagger-ui = { version = "10", features = ["axum", "vendored"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+
+# musl's allocator serialises on one lock and scales poorly across threads; the
+# static release builds (x86_64/aarch64-unknown-linux-musl) use mimalloc instead.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
