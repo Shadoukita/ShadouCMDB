@@ -10,6 +10,11 @@
  * The API can run anywhere (a local binary, a container, a remote host); the
  * script only needs its URL. It only creates rows with a unique run suffix and
  * never deletes seed data (`shadoucmdb seed --demo` must have been run).
+ *
+ * Signing in: on a database without users the script completes first-run
+ * setup itself (as SMOKE_USERNAME, default "smoke-admin"). Otherwise set
+ * SMOKE_USERNAME and SMOKE_PASSWORD to an account holding the Administrator
+ * profile.
  */
 
 const BASE = (process.env.API_URL ?? '').replace(/\/$/, '');
@@ -19,6 +24,27 @@ if (!BASE) {
 }
 const RUN = Date.now().toString(36);
 const VERBOSE = process.argv.includes('--verbose');
+const ADMIN_USERNAME = process.env.SMOKE_USERNAME ?? 'smoke-admin';
+const ADMIN_PASSWORD = process.env.SMOKE_PASSWORD ?? `smoke-${RUN}-password`;
+
+/** A signed-in user: the session cookie and the CSRF token that goes with it. */
+interface Identity {
+  name: string;
+  cookie: string;
+  csrf: string;
+}
+let me: Identity | null = null;
+
+/** Runs `fn` as another identity (null: anonymous), then switches back. */
+async function as<T>(who: Identity | null, fn: () => Promise<T>): Promise<T> {
+  const previous = me;
+  me = who;
+  try {
+    return await fn();
+  } finally {
+    me = previous;
+  }
+}
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -26,6 +52,7 @@ interface Op {
   method: string;
   path: string;
   operationId: string;
+  description: string;
   regex: RegExp;
   responses: Record<string, Json>;
 }
@@ -91,11 +118,19 @@ function checkResponse(op: Op, status: number, json: unknown): void {
   }
 }
 
-async function call(method: string, url: string, body?: unknown, expect?: number, headers: Record<string, string> = {}): Promise<{ status: number; json: Json }> {
+async function call(
+  method: string,
+  url: string,
+  body?: unknown,
+  expect?: number,
+  headers: Record<string, string> = {},
+  opts: { cover?: boolean; accept?: number[] } = {},
+): Promise<{ status: number; json: Json; headers: Headers }> {
   const res = await fetch(BASE + url, {
     method,
     headers: {
-      'x-actor-name': 'smoke-test',
+      ...(me ? { cookie: me.cookie } : {}),
+      ...(me && method !== 'GET' ? { 'x-csrf-token': me.csrf } : {}),
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       ...headers,
     },
@@ -106,16 +141,32 @@ async function call(method: string, url: string, body?: unknown, expect?: number
   calls++;
   const op = operationFor(method, url);
   if (op) {
-    covered.add(op.operationId);
+    if (opts.cover !== false) covered.add(op.operationId);
     checkResponse(op, res.status, json);
   }
-  const ok = (expect === undefined ? res.status < 400 : res.status === expect) && res.status < 500;
+  const ok = (opts.accept ? opts.accept.includes(res.status) : expect === undefined ? res.status < 400 : res.status === expect) && res.status < 500;
   const summary = summarise(json);
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${method.padEnd(6)} ${url} -> ${res.status}${summary ? `  ${summary}` : ''}`);
   if (VERBOSE && json) console.log(JSON.stringify(json, null, 1).slice(0, 2000));
   if (!ok) failures.push(`${method} ${url}: expected ${expect ?? '2xx'}, got ${res.status} ${text.slice(0, 400)}`);
-  return { status: res.status, json };
+  return { status: res.status, json, headers: res.headers };
 }
+
+/** The session and CSRF cookies from a login or setup response. */
+function identityFrom(name: string, res: { headers: Headers; json: Json }): Identity {
+  const cookies = res.headers.getSetCookie().map((c) => c.split(';')[0]!);
+  const session = cookies.find((c) => c.startsWith('shadoucmdb_session='));
+  check(session && cookies.some((c) => c.startsWith('shadoucmdb_csrf=')), `${name}: session and CSRF cookies are set`);
+  check(res.headers.getSetCookie().some((c) => /shadoucmdb_session=.*HttpOnly/.test(c) && /SameSite=Lax/.test(c)), `${name}: session cookie is HttpOnly and SameSite=Lax`);
+  return { name, cookie: session ?? '', csrf: res.json?.csrfToken ?? '' };
+}
+
+async function login(username: string, password: string): Promise<Identity> {
+  const res = await as(null, () => post('/api/v1/auth/login', { username, password }, 200));
+  return identityFrom(username, res);
+}
+
+const loginFails = (username: string, password: string) => as(null, () => post('/api/v1/auth/login', { username, password }, 401));
 
 function summarise(j: Json): string {
   if (!j) return '';
@@ -158,6 +209,7 @@ async function main() {
       method: m.toUpperCase(),
       path,
       operationId: op.operationId as string,
+      description: (op.description ?? '') as string,
       regex: new RegExp(`^${path.replace(/\{[^}]+\}/g, '[^/]+')}$`),
       responses: op.responses ?? {},
     })),
@@ -167,6 +219,47 @@ async function main() {
   await get('/healthz');
   const ready = await get('/readyz');
   check(ready.json.migrations?.upToDate === true, 'readyz reports migrations up to date');
+
+  // --- Without a session, everything but health, login and setup is 401 ----------
+  console.log('\n# Unauthenticated');
+  const PUBLIC = ['getLiveness', 'getReadiness', 'getSetupStatus', 'completeSetup', 'login'];
+  const specPublic = Object.values(spec.paths as Record<string, Record<string, Json>>)
+    .flatMap((m) => Object.values(m))
+    .filter((op) => Array.isArray(op.security) && op.security.length === 0)
+    .map((op) => op.operationId)
+    .sort();
+  check(JSON.stringify(specPublic) === JSON.stringify([...PUBLIC].sort()), `only ${PUBLIC.join(', ')} are public in the spec (got ${specPublic.join(', ')})`);
+  const anyId = '00000000-0000-4000-8000-000000000000';
+  let sweep = 0;
+  for (const op of ops.filter((o) => !PUBLIC.includes(o.operationId))) {
+    const url = op.path.replace(/\{[^}]+\}/g, anyId);
+    const res = await call(op.method, url, op.method === 'GET' || op.method === 'DELETE' ? undefined : {}, 401, {}, { cover: false });
+    if (res.json?.error?.code !== 'UNAUTHENTICATED') failures.push(`${op.operationId}: expected UNAUTHENTICATED without a session`);
+    sweep++;
+  }
+  console.log(`# ${sweep} operations answered 401 without a session`);
+
+  // --- First-run setup or sign-in ---------------------------------------------------
+  console.log('\n# Setup / sign-in');
+  const setupStatus = (await get('/api/v1/setup')).json;
+  if (setupStatus.setupRequired) {
+    await post('/api/v1/setup', { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: 'too short' }, 400);
+    // Two at once: the advisory lock lets exactly one of them create the administrator.
+    const body = { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: ADMIN_PASSWORD };
+    const both = await Promise.all([0, 1].map(() => call('POST', '/api/v1/setup', body, undefined, {}, { accept: [201, 409] })));
+    check(both.map((r) => r.status).sort().join() === '201,409', 'two concurrent setups: exactly one 201 and one 409');
+    const res = both.find((r) => r.status === 201) ?? both[0]!;
+    check(res.json.user?.isAdministrator === true && res.json.permissions?.administrator === true, 'setup creates an administrator and signs them in');
+    me = identityFrom(ADMIN_USERNAME, res);
+    check((await get('/api/v1/setup')).json.setupRequired === false, 'setup is no longer required');
+  } else {
+    if (!process.env.SMOKE_PASSWORD) throw new Error('This API already has users: set SMOKE_USERNAME and SMOKE_PASSWORD (an Administrator account).');
+    me = await login(ADMIN_USERNAME, ADMIN_PASSWORD);
+  }
+  const admin = me;
+  await post('/api/v1/setup', { username: `late-${RUN}`, displayName: 'Too late', password: 'correct horse battery' }, 409);
+  const adminMe = (await get('/api/v1/auth/me')).json;
+  check(adminMe.user.username === ADMIN_USERNAME && adminMe.csrfToken === admin.csrf, '/auth/me returns the user and the CSRF token');
 
   // --- Lookups ------------------------------------------------------------------
   console.log('\n# Statuses / environments / locations / owners');
@@ -333,6 +426,8 @@ async function main() {
   await get(`/api/v1/configuration-items?q=smoke-&ownerId=${owner.id}`);
   await get('/api/v1/search', 400);
 
+  await permissions({ serverClass, appClass, dbClass, server, app, database, r1, inService, adminMe });
+
   // --- Deletes and history ------------------------------------------------------
   console.log('\n# Deletes, audit');
   await del(`/api/v1/relationships/${r2.id}`);
@@ -363,11 +458,20 @@ async function main() {
   check(
     history.data.map((e: Json) => e.action).join(',') === 'create,update,delete' &&
       history.data[1].oldValue.attributes.memory_gb === 64 && history.data[1].newValue.attributes.memory_gb === 128 &&
-      history.data.every((e: Json) => e.actorName === 'smoke-test' && e.requestId),
-    'audit log has create/update/delete with old/new values, actor and request id',
+      history.data.every((e: Json) => e.actorType === 'user' && e.actorId === adminMe.user.id && e.actorName === ADMIN_USERNAME && e.requestId),
+    'audit log has create/update/delete with old/new values, the signed-in user and request id',
   );
+  await get(`/api/v1/audit-log?actorId=${adminMe.user.id}&action=delete&limit=5`);
   await get('/api/v1/audit-log?actorName=smoke&action=delete&limit=5');
   await get('/api/v1/audit-log?from=not-a-date', 400);
+
+  // --- Sign-out ------------------------------------------------------------------
+  console.log('\n# Sign-out');
+  await call('POST', '/api/v1/auth/logout', undefined, 403, { 'x-csrf-token': 'wrong' });
+  const out = await post('/api/v1/auth/logout', undefined, 204);
+  check(out.headers.getSetCookie().some((c) => c.startsWith('shadoucmdb_session=;') && c.includes('Max-Age=0')), 'logout clears the session cookie');
+  await get('/api/v1/auth/me', 401);
+  me = await login(ADMIN_USERNAME, ADMIN_PASSWORD);
 
   // --- HTTP-level errors ---------------------------------------------------------
   console.log('\n# HTTP errors');
@@ -385,6 +489,164 @@ async function main() {
     process.exit(1);
   }
   console.log('ALL CHECKS PASSED');
+}
+
+/** Profiles, users, class-scoped and global permissions, CSRF, backoff, lockout protection. */
+async function permissions(x: Json) {
+  const { serverClass, appClass, server, app, database, r1, inService, adminMe } = x;
+  const put = (url: string, body: unknown, expect = 200) => call('PUT', url, body, expect);
+  const builtin = adminMe.user.profiles.find((p: Json) => p.isBuiltin);
+
+  console.log('\n# Permission profiles');
+  const profiles = (await get('/api/v1/admin/profiles?sort=name')).json;
+  check(profiles.data[0]?.isBuiltin && profiles.data[0].id === builtin.id, 'the built-in Administrator profile is listed first');
+  await get(`/api/v1/admin/profiles/${builtin.id}`);
+  await patch(`/api/v1/admin/profiles/${builtin.id}`, { name: 'Renamed' }, 409);
+  await del(`/api/v1/admin/profiles/${builtin.id}`, 409);
+  const readers = (await post('/api/v1/admin/profiles', {
+    name: `smoke-readers-${RUN}`,
+    classPermissions: [{ classId: serverClass, view: true, create: false, edit: false, delete: false }],
+  })).json;
+  await post('/api/v1/admin/profiles', { name: `SMOKE-READERS-${RUN}` }, 409); // names are unique regardless of case
+  await post('/api/v1/admin/profiles', { name: 'bad', globalPermissions: ['users.delete'] }, 400);
+  await post('/api/v1/admin/profiles', { name: 'bad', classPermissions: [{ classId: serverClass, view: true, create: false, edit: false, delete: false }, { classId: serverClass, view: true, create: true, edit: false, delete: false }] }, 400);
+  await post('/api/v1/admin/profiles', { name: 'bad', classPermissions: [{ classId: '00000000-0000-4000-8000-000000000000', view: true, create: false, edit: false, delete: false }] }, 400);
+  const editors = (await post('/api/v1/admin/profiles', {
+    name: `smoke-editors-${RUN}`,
+    description: 'Edit servers',
+    globalPermissions: ['audit.view'],
+    classPermissions: [{ classId: serverClass, view: false, create: true, edit: true, delete: false }],
+  })).json;
+  check(editors.classPermissions[0]?.view === true, 'write rights imply view');
+  await patch(`/api/v1/admin/profiles/${editors.id}`, { description: null, globalPermissions: [] });
+  const copy = (await post(`/api/v1/admin/profiles/${builtin.id}/clone`, { name: `smoke-admin-copy-${RUN}` })).json;
+  check(!copy.isBuiltin && copy.globalPermissions.length === 6 && copy.classPermissions[0]?.classId === null, 'cloning Administrator gives an editable profile with every permission');
+  await post(`/api/v1/admin/profiles/${readers.id}/clone`, { name: `smoke-readers-${RUN}` }, 409);
+  await get(`/api/v1/admin/profiles?q=smoke-&limit=5`);
+
+  console.log('\n# Users');
+  const password = `reader-${RUN}-password`;
+  const reader = (await post('/api/v1/admin/users', { username: `smoke-reader-${RUN}`, displayName: 'Smoke reader', email: `reader-${RUN}@example.com`, password, profileIds: [readers.id] })).json;
+  check(reader.profiles.length === 1 && !reader.isAdministrator && !('passwordHash' in reader), 'user has the profile and no password hash in the API');
+  await post('/api/v1/admin/users', { username: `SMOKE-READER-${RUN}`, displayName: 'dup', password }, 409);
+  await post('/api/v1/admin/users', { username: 'has space', displayName: 'x', password: 'short' }, 400);
+  await post('/api/v1/admin/users', { username: `x-${RUN}`, displayName: 'x', password, profileIds: ['00000000-0000-4000-8000-000000000000'] }, 400);
+  await get(`/api/v1/admin/users?q=smoke-reader-${RUN}&isActive=true&profileId=${readers.id}&sort=-createdAt`);
+  await get(`/api/v1/admin/users/${reader.id}`);
+  await get('/api/v1/admin/users/00000000-0000-4000-8000-000000000000', 404);
+  const nobody = (await post('/api/v1/admin/users', { username: `smoke-nobody-${RUN}`, displayName: 'No permissions', password })).json;
+
+  console.log('\n# Class permissions (reader: view servers only)');
+  const asReader = await login(reader.username.toUpperCase(), password); // usernames are case-insensitive
+  await as(asReader, async () => {
+    const mine = (await get('/api/v1/auth/me')).json;
+    check(!mine.permissions.administrator && mine.permissions.classes.length === 1 && mine.permissions.classes[0].classId === serverClass && mine.permissions.global.length === 0, 'reader sees their effective permissions');
+    const list = (await get('/api/v1/configuration-items?limit=200')).json;
+    check(list.data.length > 0 && list.data.every((c: Json) => c.classId === serverClass), 'inventory only lists classes the user may view');
+    await get(`/api/v1/configuration-items/${server.id}`);
+    await get(`/api/v1/configuration-items/${app.id}`, 403);
+    await post('/api/v1/configuration-items', { classId: serverClass, name: 'nope', statusId: inService }, 403);
+    await patch(`/api/v1/configuration-items/${server.id}`, { notes: 'nope' }, 403);
+    await del(`/api/v1/configuration-items/${server.id}`, 403);
+    const g = (await get(`/api/v1/configuration-items/${server.id}/graph?depth=2`)).json;
+    check(g.nodes.every((n: Json) => n.classId === serverClass) && g.edges.length === 0, 'graph leaves out classes the user may not view');
+    await get(`/api/v1/configuration-items/${app.id}/graph`, 403);
+    const found = (await get(`/api/v1/search?q=smoke-`)).json;
+    check(found.data.every((h: Json) => h.item.classId === serverClass), 'search only returns classes the user may view');
+    const edges = (await get(`/api/v1/relationships?ciId=${app.id}`)).json;
+    check(edges.page.total === 0, 'relationships to hidden classes are not listed');
+    await get(`/api/v1/relationships/${r1.id}`, 403);
+    await post('/api/v1/relationships', { relationshipTypeId: r1.relationshipTypeId, sourceCiId: app.id, targetCiId: database.id }, 403);
+    await get('/api/v1/statuses?limit=5'); // the data model and lookups are readable
+    await get(`/api/v1/ci-classes/${serverClass}/attributes`);
+    await post('/api/v1/statuses', { key: `nope_${RUN}`, name: 'Nope' }, 403);
+    await get('/api/v1/audit-log', 403);
+    await get('/api/v1/admin/users', 403);
+    await get('/api/v1/admin/profiles', 403);
+    await call('POST', '/api/v1/statuses', { key: `nope_${RUN}`, name: 'Nope' }, 403, { 'x-csrf-token': '' }).then((r) =>
+      check(r.json.error?.code === 'CSRF_TOKEN_INVALID', 'a write without the CSRF token is rejected before anything else'));
+    await put('/api/v1/auth/password', { currentPassword: 'wrong password!', newPassword: `${password}-2` }, 400);
+    await put('/api/v1/auth/password', { currentPassword: password, newPassword: `${password}-2` }, 204);
+    await get('/api/v1/auth/me'); // this session survives the change
+  });
+  await loginFails(reader.username, password); // the old password no longer works
+
+  console.log('\n# Global permissions (no profiles: 403 on every permission-guarded operation)');
+  const asNobody = await login(nobody.username, password);
+  await as(asNobody, async () => {
+    let guarded = 0;
+    for (const op of ops.filter((o) => /Requires `/.test(o.description))) {
+      const url = op.path.replace(/\{[^}]+\}/g, '00000000-0000-4000-8000-000000000000');
+      const res = await call(op.method, url, op.method === 'GET' || op.method === 'DELETE' ? undefined : {}, 403, {}, { cover: false });
+      if (res.json?.error?.code !== 'FORBIDDEN') failures.push(`${op.operationId}: expected FORBIDDEN without the permission`);
+      guarded++;
+    }
+    check(guarded >= 20, `every permission-guarded operation answers 403 (${guarded} checked)`);
+    check((await get('/api/v1/configuration-items')).json.page.total === 0, 'no class permissions: an empty inventory');
+  });
+
+  console.log('\n# Escalation guards (users.manage without other permissions)');
+  const userManagers = (await post('/api/v1/admin/profiles', { name: `smoke-user-managers-${RUN}`, globalPermissions: ['users.manage'] })).json;
+  await patch(`/api/v1/admin/users/${nobody.id}`, { profileIds: [userManagers.id] });
+  await as(asNobody, async () => {
+    await post('/api/v1/admin/users', { username: `smoke-escalate-${RUN}`, displayName: 'x', password, profileIds: [builtin.id] }, 403);
+    await post('/api/v1/admin/users', { username: `smoke-escalate-${RUN}`, displayName: 'x', password, profileIds: [readers.id] }, 403);
+    await patch(`/api/v1/admin/users/${adminMe.user.id}`, { displayName: 'pwned' }, 403);
+    await put(`/api/v1/admin/users/${adminMe.user.id}/password`, { password: 'correct horse battery' }, 403);
+    await patch(`/api/v1/admin/users/${reader.id}`, { profileIds: [] }, 403); // reader can view servers, the manager cannot
+    const plain = (await post('/api/v1/admin/users', { username: `smoke-plain-${RUN}`, displayName: 'Plain', password })).json;
+    await del(`/api/v1/admin/users/${plain.id}`);
+    await del(`/api/v1/admin/users/${nobody.id}`, 409); // not yourself
+  });
+
+  console.log('\n# Lockout protection');
+  await patch(`/api/v1/admin/users/${adminMe.user.id}`, { isActive: false }, 409);
+  await del(`/api/v1/admin/users/${adminMe.user.id}`, 409);
+  const activeAdmins = (await get(`/api/v1/admin/users?profileId=${builtin.id}&isActive=true`)).json.page.total;
+  if (activeAdmins === 1) {
+    const last = await patch(`/api/v1/admin/users/${adminMe.user.id}`, { profileIds: [] }, 409);
+    check(last.json.error?.code === 'LAST_ADMINISTRATOR', 'the last active Administrator cannot lose the profile');
+  }
+  const second = (await post('/api/v1/admin/users', { username: `smoke-admin2-${RUN}`, displayName: 'Second admin', password, profileIds: [builtin.id] })).json;
+  await patch(`/api/v1/admin/users/${second.id}`, { profileIds: [editors.id] }); // fine: another administrator remains
+  await del(`/api/v1/admin/users/${second.id}`);
+
+  console.log('\n# Disable, reset password');
+  const readerSession = await login(reader.username, `${password}-2`);
+  const disabled = (await patch(`/api/v1/admin/users/${reader.id}`, { isActive: false })).json;
+  check(disabled.isActive === false, 'user disabled');
+  await as(readerSession, () => get('/api/v1/auth/me', 401)); // disabling ends their sessions
+  await loginFails(reader.username, `${password}-2`);
+  await patch(`/api/v1/admin/users/${reader.id}`, { isActive: true, displayName: 'Smoke reader (back)', email: null });
+  const reset = (await put(`/api/v1/admin/users/${reader.id}/password`, { password: `${password}-3` })).json;
+  check(reset.passwordChangedAt > reader.passwordChangedAt, 'password reset recorded');
+  await put(`/api/v1/admin/users/${reader.id}/password`, { password: 'short' }, 400);
+  await login(reader.username, `${password}-3`);
+
+  console.log('\n# Login backoff');
+  const ghost = `smoke-ghost-${RUN}`;
+  for (let i = 0; i < 4; i++) await loginFails(ghost, 'wrong password');
+  // The 5th failure locks the name for 1 s, the 6th for 2 s, ...; a slow (debug) server may outlast the first lock.
+  let limited: Json = null;
+  for (let i = 0; i < 8 && !limited; i++) {
+    const res = await as(null, () => call('POST', '/api/v1/auth/login', { username: ghost, password: 'wrong password' }, undefined, {}, { accept: [401, 429] }));
+    if (res?.status === 429) limited = res;
+  }
+  check(limited?.json.error?.code === 'RATE_LIMITED' && Number(limited.headers.get('retry-after')) >= 1, 'repeated failures lock the username (429 with Retry-After)');
+  await as(null, () => post('/api/v1/auth/login', { username: ADMIN_USERNAME, password: '' }, 400));
+
+  console.log('\n# Audit of administration');
+  const trail = (await get(`/api/v1/audit-log?entityType=users&entityId=${reader.id}&sort=occurredAt`)).json;
+  check(trail.data.length >= 5 && trail.data[0].action === 'create' && trail.data.every((e: Json) => e.actorType === 'user' && typeof e.actorId === 'string') &&
+    trail.data.some((e: Json) => e.actorId === reader.id), 'user changes are audited with the acting user (including self-service)');
+  check(trail.data.every((e: Json) => !JSON.stringify(e).includes('argon2')), 'password hashes never reach the audit log');
+  await get(`/api/v1/audit-log?entityType=permission_profiles&entityId=${readers.id}`);
+
+  // Clean up what only this run uses.
+  await del(`/api/v1/admin/users/${reader.id}`);
+  await del(`/api/v1/admin/users/${nobody.id}`);
+  for (const p of [readers, editors, copy, userManagers]) await del(`/api/v1/admin/profiles/${p.id}`);
+  await del(`/api/v1/admin/profiles/${readers.id}`, 404);
 }
 
 main().catch((err) => {

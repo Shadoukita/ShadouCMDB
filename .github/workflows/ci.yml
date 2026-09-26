@@ -54,6 +54,9 @@ jobs:
       DATABASE_SSL: disable
       API_HOST: 127.0.0.1
       API_PORT: "3000"
+      # Throwaway administrator for the CI-only database; the e2e suite signs in as it.
+      E2E_USERNAME: e2e-admin
+      E2E_PASSWORD: e2e-ci-only-password
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,11 +89,12 @@ jobs:
         run: npx playwright install-deps chromium
         working-directory: frontend
 
-      - name: migrate, seed --demo, serve
+      - name: migrate, seed --demo, create-admin, serve
         run: |
           B=backend/target/release/shadoucmdb
           $B migrate
           $B seed --demo
+          printf '%s\n' "$E2E_PASSWORD" | $B create-admin --username "$E2E_USERNAME" --display-name "E2E admin" --password-stdin
           $B serve > serve.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/readyz && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/readyz | grep -q '"upToDate":true'

@@ -9,4 +9,5 @@ target/
 coverage/
 .claude/
 test-results/
+frontend/e2e/.auth/
 playwright-report/

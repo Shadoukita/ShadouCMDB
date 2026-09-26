@@ -92,6 +92,8 @@ pub struct ItemFilters {
     pub location_ids: Option<Vec<Uuid>>,
     pub ip_within: Option<String>,
     pub deleted: Option<Deleted>,
+    /// Classes the caller may view; `None` means every class.
+    pub visible_class_ids: Option<Vec<Uuid>>,
 }
 
 /// Words of a query turned into a prefix tsquery ("web prod" -> 'web:* & prod:*').
@@ -138,6 +140,7 @@ fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
     }
     for (column, ids) in [
         ("ci.class_id", &f.class_ids),
+        ("ci.class_id", &f.visible_class_ids),
         ("ci.status_id", &f.status_ids),
         ("ci.environment_id", &f.environment_ids),
         ("ci.owner_id", &f.owner_ids),
@@ -526,11 +529,13 @@ pub enum Direction {
 
 /// Live edges touching any of the given CIs, in the requested direction(s).
 /// Symmetric types (connected_to) are followed both ways whatever the direction.
+/// With `visible_class_ids`, only edges whose both endpoints are in those classes.
 pub async fn edges_touching(
     pool: &PgPool,
     ci_ids: &[Uuid],
     direction: Direction,
     type_ids: Option<&[Uuid]>,
+    visible_class_ids: Option<&[Uuid]>,
 ) -> sqlx::Result<Vec<EdgeRow>> {
     if ci_ids.is_empty() {
         return Ok(Vec::new());
@@ -564,6 +569,13 @@ pub async fn edges_touching(
     };
     if let Some(types) = type_ids {
         qb.push(" AND r.relationship_type_id = ANY(").push_bind(types.to_vec()).push(")");
+    }
+    if let Some(classes) = visible_class_ids {
+        qb.push(" AND (SELECT s.class_id FROM configuration_items s WHERE s.id = r.source_ci_id) = ANY(")
+            .push_bind(classes.to_vec())
+            .push(") AND (SELECT g.class_id FROM configuration_items g WHERE g.id = r.target_ci_id) = ANY(")
+            .push_bind(classes.to_vec())
+            .push(")");
     }
     qb.push(" ORDER BY r.created_at, r.id");
     qb.build_query_as::<EdgeRow>().fetch_all(pool).await

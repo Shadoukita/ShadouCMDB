@@ -12,6 +12,7 @@ use super::simple_resource::non_empty;
 use crate::api::context::RequestContext;
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{self, Deleted, Page, Paged, Sort, UuidList, description_schema, like_pattern, ts, ts_opt};
+use crate::auth::permissions::ClassOp;
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Where};
 use crate::data::relationships::{self as data, RelationshipRow};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
@@ -194,12 +195,38 @@ impl Check for RelationshipUpdate {
 // Service
 // ---------------------------------------------------------------------------
 
-async fn load(conn: &mut PgConnection, id: Uuid) -> Result<Relationship, AppError> {
-    data::get(conn, id).await?.map(Relationship::from).ok_or_else(|| AppError::missing("Relationship", id))
+async fn load_row(conn: &mut PgConnection, id: Uuid) -> Result<RelationshipRow, AppError> {
+    data::get(conn, id).await?.ok_or_else(|| AppError::missing("Relationship", id))
 }
 
-pub async fn list(pool: &PgPool, q: &RelationshipList) -> Result<Page<Relationship>, AppError> {
+async fn load(conn: &mut PgConnection, id: Uuid) -> Result<Relationship, AppError> {
+    load_row(conn, id).await.map(Relationship::from)
+}
+
+/// Relationships are read with view on both endpoints' classes and changed
+/// with edit on the source's class (plus view on the target's).
+fn require_endpoints(
+    ctx: &RequestContext,
+    source_class: Uuid,
+    target_class: Uuid,
+    op: ClassOp,
+) -> Result<(), AppError> {
+    ctx.require_class(source_class, op)?;
+    ctx.require_class(target_class, ClassOp::View)
+}
+
+/// Only edges whose both endpoints are in classes the caller may view.
+pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &RelationshipList) -> Result<Page<Relationship>, AppError> {
+    let visible = ctx.class_scope(ClassOp::View);
     let filter = |w: &mut Where<'_>| {
+        if let Some(classes) = &visible {
+            w.and()
+                .push("s.class_id = ANY(")
+                .push_bind(classes.clone())
+                .push(") AND g.class_id = ANY(")
+                .push_bind(classes.clone())
+                .push(")");
+        }
         if let Some(p) = q.deleted.predicate("r.deleted_at") {
             w.and_sql(&p);
         }
@@ -228,8 +255,10 @@ pub async fn list(pool: &PgPool, q: &RelationshipList) -> Result<Page<Relationsh
     Ok(Page { data: rows.into_iter().map(Relationship::from).collect(), page: q.page_meta(total) })
 }
 
-pub async fn get(pool: &PgPool, id: Uuid) -> Result<Relationship, AppError> {
-    load(&mut *pool.acquire().await?, id).await
+pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Relationship, AppError> {
+    let row = load_row(&mut *pool.acquire().await?, id).await?;
+    require_endpoints(ctx, row.source_class_id, row.target_class_id, ClassOp::View)?;
+    Ok(row.into())
 }
 
 pub async fn create(pool: &PgPool, ctx: &RequestContext, input: &RelationshipCreate) -> Result<Relationship, AppError> {
@@ -238,9 +267,10 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, input: &RelationshipCre
     // (duplicates, endpoint class rules, deleted CIs) is enforced by the
     // database and its errors map to field-level 400/409s.
     let found = data::existing_items(&mut tx, &[input.source_ci_id, input.target_ci_id]).await?;
+    let class_of = |ci: Uuid| found.iter().find(|(id, _)| *id == ci).map(|(_, class)| *class);
     let missing: Vec<FieldError> = [("sourceCiId", input.source_ci_id), ("targetCiId", input.target_ci_id)]
         .into_iter()
-        .filter(|(_, id)| !found.contains(id))
+        .filter(|(_, id)| class_of(*id).is_none())
         .map(|(field, _)| FieldError {
             location: FieldLocation::Body,
             field: field.into(),
@@ -248,6 +278,9 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, input: &RelationshipCre
             code: "not_found".into(),
         })
         .collect();
+    if let (Some(source_class), Some(target_class)) = (class_of(input.source_ci_id), class_of(input.target_ci_id)) {
+        require_endpoints(ctx, source_class, target_class, ClassOp::Edit)?;
+    }
     if !missing.is_empty() {
         return Err(AppError::validation(missing));
     }
@@ -284,7 +317,9 @@ pub async fn update(
         Some(Some(_)) => return Err(AppError::conflict("This relationship was removed and cannot be modified")),
         Some(None) => {}
     }
-    let before = load(&mut tx, id).await?;
+    let row = load_row(&mut tx, id).await?;
+    require_endpoints(ctx, row.source_class_id, row.target_class_id, ClassOp::Edit)?;
+    let before = Relationship::from(row);
     data::update(&mut tx, id, input.relationship_type_id, input.notes.as_ref().map(|n| n.as_deref())).await?;
     let dto = load(&mut tx, id).await?;
     let entry = AuditEntry {
@@ -304,7 +339,9 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     if !matches!(data::lock(&mut tx, id).await?, Some(None)) {
         return Err(AppError::missing("Relationship", id));
     }
-    let before = load(&mut tx, id).await?;
+    let row = load_row(&mut tx, id).await?;
+    require_endpoints(ctx, row.source_class_id, row.target_class_id, ClassOp::Edit)?;
+    let before = Relationship::from(row);
     data::soft_delete(&mut tx, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Delete,
@@ -331,39 +368,46 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, BASE, "listRelationships")
             .tag(TAG)
             .summary("List relationships (paginated, filterable by CI, direction and type)")
-            .description("`q` matches source/target CI name, type name and notes. Use `ciId` for all edges of a CI.")
+            .description("`q` matches source/target CI name, type name and notes. Use `ciId` for all edges of a CI. Only edges whose both CIs are in classes the caller may view.")
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<RelationshipList>, NoBody>| async move {
-                Ok(Json(list(&api.pool, &q).await?))
+                Ok(Json(list(&api.pool, &api.ctx, &q).await?))
             }),
         route(Method::GET, BY_ID, "getRelationship")
             .tag(TAG)
             .summary("Get one relationship")
+            .description("Needs view on both CIs' classes.")
             .errors(&[ErrorCode::NotFound])
+            .class_checked()
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(get(&api.pool, id).await?))
+                Ok(Json(get(&api.pool, &api.ctx, id).await?))
             }),
         route(Method::POST, BASE, "createRelationship")
             .tag(TAG)
             .summary("Create a typed, directional relationship between two CIs")
             .description(
-                "Rejected with 400 when the type does not allow these CI classes, when source equals target, or when a CI is deleted; 409 when the same live edge (or, for symmetric types, its reverse) exists.",
+                "Rejected with 400 when the type does not allow these CI classes, when source equals target, or when a CI is deleted; 409 when the same live edge (or, for symmetric types, its reverse) exists. Needs edit on the source CI's class and view on the target's.",
             )
             .status(StatusCode::CREATED)
             .errors(&[ErrorCode::Conflict])
+            .class_checked()
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<RelationshipCreate>>| async move {
                 Ok(Json(create(&api.pool, &api.ctx, &b).await?))
             }),
         route(Method::PATCH, BY_ID, "updateRelationship")
             .tag(TAG)
             .summary("Update notes or type of a relationship (endpoints are immutable)")
+            .description("Needs edit on the source CI's class and view on the target's.")
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .class_checked()
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<RelationshipUpdate>>| async move {
                 Ok(Json(update(&api.pool, &api.ctx, id, &b).await?))
             }),
         route(Method::DELETE, BY_ID, "deleteRelationship")
             .tag(TAG)
             .summary("Remove a relationship (soft delete; the same edge can be created again later)")
+            .description("Needs edit on the source CI's class and view on the target's.")
             .errors(&[ErrorCode::NotFound])
+            .class_checked()
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 remove(&api.pool, &api.ctx, id).await?;
                 Ok(NoContent)

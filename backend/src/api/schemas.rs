@@ -17,6 +17,7 @@ pub const KEY_PATTERN: &str = "^[a-z][a-z0-9_]{0,62}$";
 pub const HOSTNAME_PATTERN: &str = "^[A-Za-z0-9]([A-Za-z0-9._-]{0,252})$";
 /// At least one non-whitespace character; values are trimmed when read.
 pub const NOT_BLANK_PATTERN: &str = "\\S";
+pub const USERNAME_PATTERN: &str = "^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$";
 
 // ---------------------------------------------------------------------------
 // Timestamps: ISO 8601 in UTC with milliseconds, e.g. 2026-09-26T15:34:06.645Z

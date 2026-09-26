@@ -1,5 +1,6 @@
 //! A plain resource: one table, list/get/create/update/delete, an audit row
-//! per change. Lookups, classes, attribute definitions and relationship types
+//! per change. Any signed-in user may read (the UI needs the data model and
+//! lookups to render CIs); writes need `datamodel.manage`. Lookups, classes, attribute definitions and relationship types
 //! are all built from this; the configuration-item and relationship modules
 //! have their own services because they carry more rules.
 
@@ -17,6 +18,7 @@ use uuid::Uuid;
 use crate::api::context::RequestContext;
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{Page, Paged, Sort, like_pattern};
+use crate::auth::permissions::GlobalPermission;
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Where};
 use crate::http::error::{AppError, ErrorCode};
 
@@ -221,6 +223,7 @@ pub fn routes<R: Resource>() -> Vec<Route> {
         route(Method::POST, R::BASE_PATH, format!("create{}", cap(R::SINGULAR)))
             .tag(R::TAG)
             .summary(format!("Create a {label}"))
+            .requires(GlobalPermission::DatamodelManage)
             .status(StatusCode::CREATED)
             .errors(&[ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<R::Create>>| async move {
@@ -229,6 +232,7 @@ pub fn routes<R: Resource>() -> Vec<Route> {
         route(Method::PATCH, by_id.clone(), format!("update{}", cap(R::SINGULAR)))
             .tag(R::TAG)
             .summary(format!("Update a {label} (partial)"))
+            .requires(GlobalPermission::DatamodelManage)
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<R::Update>>| async move {
                 Ok(Json(update::<R>(&api.pool, &api.ctx, id, &b).await?))
@@ -236,6 +240,7 @@ pub fn routes<R: Resource>() -> Vec<Route> {
         route(Method::DELETE, by_id, format!("delete{}", cap(R::SINGULAR)))
             .tag(R::TAG)
             .summary(format!("Delete a {label}"))
+            .requires(GlobalPermission::DatamodelManage)
             .description(R::DELETE_DESCRIPTION)
             .errors(&[ErrorCode::NotFound, ErrorCode::InUse])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {

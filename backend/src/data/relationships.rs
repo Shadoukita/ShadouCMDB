@@ -24,10 +24,12 @@ pub struct RelationshipRow {
     pub reverse_label: String,
     pub is_directional: bool,
     pub source_name: String,
+    pub source_class_id: Uuid,
     pub source_class_key: String,
     pub source_class_name: String,
     pub source_deleted_at: Option<DateTime<Utc>>,
     pub target_name: String,
+    pub target_class_id: Uuid,
     pub target_class_key: String,
     pub target_class_name: String,
     pub target_deleted_at: Option<DateTime<Utc>>,
@@ -36,8 +38,8 @@ pub struct RelationshipRow {
 const COLUMNS: &str = "r.id, r.relationship_type_id, r.source_ci_id, r.target_ci_id, r.notes,
     r.created_at, r.updated_at, r.deleted_at,
     t.key AS type_key, t.name AS type_name, t.forward_label, t.reverse_label, t.is_directional,
-    s.name AS source_name, sc.key AS source_class_key, sc.name AS source_class_name, s.deleted_at AS source_deleted_at,
-    g.name AS target_name, gc.key AS target_class_key, gc.name AS target_class_name, g.deleted_at AS target_deleted_at";
+    s.name AS source_name, s.class_id AS source_class_id, sc.key AS source_class_key, sc.name AS source_class_name, s.deleted_at AS source_deleted_at,
+    g.name AS target_name, g.class_id AS target_class_id, gc.key AS target_class_key, gc.name AS target_class_name, g.deleted_at AS target_deleted_at";
 
 const FROM: &str = "ci_relationships r
     JOIN relationship_types t ON t.id = r.relationship_type_id
@@ -84,9 +86,9 @@ pub fn search(w: &mut Where<'_>, pattern: &str) {
     qb.push(" OR t.name ILIKE ").push_bind(pattern.to_owned()).push(")");
 }
 
-/// Of the given CI ids, the ones that exist (deleted or not).
-pub async fn existing_items(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<Vec<Uuid>> {
-    sqlx::query_scalar!("SELECT id FROM configuration_items WHERE id = ANY($1)", ids).fetch_all(conn).await
+/// Of the given CI ids, the ones that exist (deleted or not), with their class.
+pub async fn existing_items(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<Vec<(Uuid, Uuid)>> {
+    sqlx::query_as("SELECT id, class_id FROM configuration_items WHERE id = ANY($1)").bind(ids).fetch_all(conn).await
 }
 
 pub async fn insert(

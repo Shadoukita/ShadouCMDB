@@ -5,9 +5,10 @@
 use std::collections::BTreeMap;
 
 use axum::http::Method;
-use utoipa::openapi::path::{HttpMethod, OperationBuilder, Parameter, ParameterBuilder, ParameterIn, PathItem};
+use utoipa::openapi::path::{HttpMethod, OperationBuilder, Parameter, PathItem};
 use utoipa::openapi::request_body::RequestBodyBuilder;
-use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
+use utoipa::openapi::schema::Schema;
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityRequirement, SecurityScheme};
 use utoipa::openapi::tag::TagBuilder;
 use utoipa::openapi::{
     ComponentsBuilder, ContentBuilder, InfoBuilder, OpenApi, OpenApiBuilder, PathsBuilder, Ref, RefOr, Required,
@@ -15,13 +16,18 @@ use utoipa::openapi::{
 };
 use utoipa::{PartialSchema, ToSchema};
 
-use super::route::Route;
+use super::route::{Access, Route};
+use crate::auth::session::SESSION_COOKIE;
 use crate::http::error::ErrorCode;
 
 pub const API_VERSION: &str = "0.1.0";
 
 const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
     ("Health", "Liveness and readiness probes for orchestrators and load balancers."),
+    (
+        "Authentication",
+        "First-run setup, sign-in with a local username and password, sign-out, and the current user's permissions.",
+    ),
     ("Configuration items", "CIs: the tracked assets. Includes the relationship graph around a CI."),
     ("Search", "Global search across CIs and their attribute values."),
     ("Relationships", "Typed, directional edges between CIs. Removal is a soft delete."),
@@ -36,6 +42,11 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
     ("Locations", "Location hierarchy (region > site > room > rack)."),
     ("Owners", "People and teams accountable for CIs."),
     ("Audit log", "Read-only change history written in the same transaction as every change."),
+    ("Users", "Administration: local user accounts, passwords and the permission profiles they hold."),
+    (
+        "Permission profiles",
+        "Administration: named sets of global and per-CI-class permissions. Users can hold several; the built-in Administrator profile holds everything.",
+    ),
 ];
 
 const DESCRIPTION: &str = "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.
@@ -43,7 +54,10 @@ const DESCRIPTION: &str = "REST API for ShadouCMDB. This API is the only databas
 - Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`.
 - `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.
 - Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.
-- Writes are recorded in the audit log (`/api/v1/audit-log`). Send `X-Actor-Name` to label the actor until authentication exists.
+- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie. Every operation except the health probes, login and first-run setup answers 401 `UNAUTHENTICATED` without a live session.
+- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie); without it: 403 `CSRF_TOKEN_INVALID`.
+- Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.
+- Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.
 - Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.";
 
 // Documentation shape of the error envelope (see http/error.rs).
@@ -84,9 +98,19 @@ struct FieldErrorDoc {
 fn error_status(code: ErrorCode) -> (u16, &'static str) {
     match code {
         ErrorCode::ValidationError => (400, "Invalid input (code VALIDATION_ERROR) with per-field details"),
+        ErrorCode::Unauthenticated => {
+            (401, "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)")
+        }
+        ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid => {
+            (403, "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)")
+        }
         ErrorCode::NotFound => (404, "Not found (code NOT_FOUND)"),
-        ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict => {
-            (409, "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT")
+        ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => (
+            409,
+            "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+        ),
+        ErrorCode::RateLimited => {
+            (429, "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header")
         }
         ErrorCode::UnsupportedMediaType => (415, "Body is not application/json"),
         ErrorCode::PayloadTooLarge => (413, "Body too large"),
@@ -109,16 +133,20 @@ fn json_ref(name: &str) -> utoipa::openapi::Content {
     ContentBuilder::new().schema(Some(RefOr::Ref(Ref::from_schema_name(name)))).build()
 }
 
-fn actor_header() -> Parameter {
-    ParameterBuilder::new()
-        .name("X-Actor-Name")
-        .parameter_in(ParameterIn::Header)
-        .required(Required::False)
-        .description(Some(
-            "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-        ))
-        .schema(Some(ObjectBuilder::new().schema_type(Type::String).max_length(Some(200))))
-        .build()
+const SESSION_SCHEME: &str = "sessionCookie";
+const CSRF_SCHEME: &str = "csrfHeader";
+
+/// Who may call the operation, as OpenAPI security requirements.
+fn security(r: &Route) -> Vec<SecurityRequirement> {
+    match r.access {
+        Access::Public => Vec::new(),
+        _ if r.method == Method::GET || r.method == Method::HEAD => {
+            vec![SecurityRequirement::new(SESSION_SCHEME, Vec::<String>::new())]
+        }
+        _ => {
+            vec![SecurityRequirement::new(SESSION_SCHEME, Vec::<String>::new()).add(CSRF_SCHEME, Vec::<String>::new())]
+        }
+    }
 }
 
 /// Descriptions of query parameters built from a schema live on the schema;
@@ -180,6 +208,14 @@ pub fn document(routes: &[Route]) -> OpenApi {
         if !r.path_params.is_empty() || !r.query_params.is_empty() || r.body.is_some() {
             codes.push(ErrorCode::ValidationError);
         }
+        match r.access {
+            Access::Public => {}
+            Access::Authenticated => codes.push(ErrorCode::Unauthenticated),
+            Access::Permission(_) => codes.extend([ErrorCode::Unauthenticated, ErrorCode::Forbidden]),
+        }
+        if r.access != Access::Public && r.method != Method::GET {
+            codes.push(ErrorCode::CsrfTokenInvalid);
+        }
         codes.extend(r.errors.iter().copied());
         codes.push(ErrorCode::InternalError);
         if r.path.starts_with("/api/") {
@@ -200,15 +236,18 @@ pub fn document(routes: &[Route]) -> OpenApi {
 
         let mut parameters: Vec<Parameter> = r.path_params.clone();
         parameters.extend(r.query_params.iter().cloned().map(lift_description));
-        if r.method != Method::GET {
-            parameters.push(actor_header());
-        }
 
+        let description = match (r.access, &r.description) {
+            (Access::Permission(p), Some(d)) => Some(format!("Requires `{}`. {d}", p.as_str())),
+            (Access::Permission(p), None) => Some(format!("Requires `{}`.", p.as_str())),
+            (_, d) => d.clone(),
+        };
         let mut op = OperationBuilder::new()
             .operation_id(Some(r.operation_id.clone()))
             .tag(r.tag.clone())
             .summary(Some(r.summary.clone()))
-            .description(r.description.clone())
+            .description(description)
+            .securities(Some(security(r)))
             .parameters(Some(parameters))
             .responses(
                 responses
@@ -234,7 +273,21 @@ pub fn document(routes: &[Route]) -> OpenApi {
         paths = paths.path(path, item);
     }
 
-    let mut components = ComponentsBuilder::new();
+    let mut components = ComponentsBuilder::new()
+        .security_scheme(
+            SESSION_SCHEME,
+            SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::with_description(
+                SESSION_COOKIE,
+                "Session cookie set by POST /api/v1/auth/login (HttpOnly, SameSite=Lax)",
+            ))),
+        )
+        .security_scheme(
+            CSRF_SCHEME,
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
+                "X-CSRF-Token",
+                "The session's csrfToken; required on POST, PUT, PATCH and DELETE",
+            ))),
+        );
     let mut seen = std::collections::HashSet::new();
     for (name, schema) in schemas {
         if seen.insert(name.clone()) {
@@ -255,7 +308,7 @@ pub fn document(routes: &[Route]) -> OpenApi {
         .paths(paths.build())
         .components(Some(components.build()))
         .build();
-    // Milestone 1 has no authentication. An auth module adds securitySchemes here.
-    doc.security = Some(Vec::new());
+    // Default for every operation; each operation states its own requirement too.
+    doc.security = Some(vec![SecurityRequirement::new(SESSION_SCHEME, Vec::<String>::new())]);
     doc
 }

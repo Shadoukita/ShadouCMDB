@@ -28,7 +28,25 @@ const CHECKS: &[&str] = &[
     "Guard: audit_log is append-only",
     "Soft delete: removed edge can be re-created; deleted CI cannot be linked",
     "Indexes used by the UI queries",
+    "Guard: usernames are unique regardless of case",
+    "Guard: the built-in Administrator profile cannot be deleted or changed",
+    "Guard: the last active Administrator cannot be disabled or lose the profile",
 ];
+
+/// Placeholder that satisfies users_password_hash_argon2id; nobody can sign in with it.
+const NO_PASSWORD: &str = "$argon2id$v=19$verify-only";
+
+async fn new_user(c: &mut PgConnection, username: &str) -> sqlx::Result<Uuid> {
+    sqlx::query_scalar("INSERT INTO users (username, display_name, password_hash) VALUES ($1, $1, $2) RETURNING id")
+        .bind(username)
+        .bind(NO_PASSWORD)
+        .fetch_one(c)
+        .await
+}
+
+async fn builtin_profile(c: &mut PgConnection) -> sqlx::Result<Uuid> {
+    sqlx::query_scalar("SELECT id FROM permission_profiles WHERE is_builtin").fetch_one(c).await
+}
 
 async fn id_by_key(c: &mut PgConnection, table: &'static str, key: &str) -> anyhow::Result<Uuid> {
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table} WHERE key = $1")))
@@ -372,6 +390,69 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
                 hits.push(*hit);
             }
             Ok(hits.join(", "))
+        }
+        17 => {
+            new_user(c, "verify-Case").await?;
+            reject!(c, "users_username_uq", new_user(c, "VERIFY-case"))
+        }
+        18 => {
+            let admin = builtin_profile(c).await?;
+            let deleted = reject!(
+                c,
+                "permission_profiles_builtin_protected",
+                sqlx::query("DELETE FROM permission_profiles WHERE id = $1").bind(admin).execute(&mut *c)
+            )?;
+            reject!(
+                c,
+                "permission_profiles_builtin_protected",
+                sqlx::query("UPDATE permission_profiles SET name = 'Renamed' WHERE id = $1")
+                    .bind(admin)
+                    .execute(&mut *c)
+            )?;
+            reject!(
+                c,
+                "permission_profiles_builtin_protected",
+                sqlx::query("INSERT INTO permission_profile_global_permissions VALUES ($1, 'audit.view')")
+                    .bind(admin)
+                    .execute(&mut *c)
+            )?;
+            Ok(format!("delete, rename and permission rows {deleted}"))
+        }
+        19 => {
+            // The check is deferred to commit; SET CONSTRAINTS ... IMMEDIATE runs it now.
+            let admin = builtin_profile(c).await?;
+            let v = new_user(c, "verify-last-admin").await?;
+            sqlx::query("INSERT INTO user_permission_profiles (user_id, profile_id) VALUES ($1, $2)")
+                .bind(v)
+                .bind(admin)
+                .execute(&mut *c)
+                .await?;
+            // Make v the only active administrator (fine: v still holds the profile).
+            sqlx::query("UPDATE users SET is_active = false WHERE id <> $1").bind(v).execute(&mut *c).await?;
+            c.execute("SET CONSTRAINTS ALL IMMEDIATE").await?;
+            let result = async {
+                let removed = reject!(c, "users_last_administrator", async {
+                    sqlx::query("DELETE FROM user_permission_profiles WHERE user_id = $1")
+                        .bind(v)
+                        .execute(&mut *c)
+                        .await?;
+                    c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
+                })?;
+                let disabled = reject!(c, "users_last_administrator", async {
+                    sqlx::query("UPDATE users SET is_active = false WHERE id = $1").bind(v).execute(&mut *c).await?;
+                    c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
+                })?;
+                let deleted = reject!(c, "users_last_administrator", async {
+                    sqlx::query("DELETE FROM users WHERE id = $1").bind(v).execute(&mut *c).await?;
+                    c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
+                })?;
+                Ok::<_, anyhow::Error>(format!(
+                    "losing the profile {removed}; disabling {disabled}; deleting {deleted}"
+                ))
+            }
+            .await;
+            c.execute("SET CONSTRAINTS ALL DEFERRED").await?;
+            result
         }
         _ => unreachable!("unknown check {i}"),
     }

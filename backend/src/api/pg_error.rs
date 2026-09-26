@@ -32,6 +32,14 @@ const CONSTRAINT_FIELDS: &[(&str, &str)] = &[
     ("ci_relationships_live_endpoints", "sourceCiId"),
     ("ci_relationships_live_edge_uq", "targetCiId"),
     ("relationship_type_rules_uq", "targetClassId"),
+    ("users_username_uq", "username"),
+    ("users_username_format", "username"),
+    ("users_display_name_not_blank", "displayName"),
+    ("users_email_format", "email"),
+    ("permission_profiles_name_uq", "name"),
+    ("permission_profiles_name_not_blank", "name"),
+    ("permission_profile_class_permissions_class_id_fkey", "classPermissions"),
+    ("user_permission_profiles_profile_id_fkey", "profileIds"),
 ];
 
 fn snake_to_camel(s: &str) -> String {
@@ -92,6 +100,13 @@ fn pg_error(err: &sqlx::Error) -> Option<&PgDatabaseError> {
 pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
     let pg = pg_error(err)?;
     let field = field_prefix.map(str::to_owned).unwrap_or_else(|| field_for(pg));
+    match pg.constraint() {
+        Some("users_last_administrator") => {
+            return Some(AppError::new(ErrorCode::LastAdministrator, humanise(pg.message())));
+        }
+        Some("permission_profiles_builtin_protected") => return Some(AppError::conflict(humanise(pg.message()))),
+        _ => {}
+    }
     match pg.code() {
         "23505" => {
             Some(AppError::new(ErrorCode::Conflict, humanise(pg.detail().unwrap_or(pg.message()))).with_details(vec![

@@ -19,10 +19,20 @@ use super::request_id;
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
     ValidationError,
+    /// No valid session (or wrong credentials on login)
+    Unauthenticated,
+    /// Signed in, but a permission is missing
+    Forbidden,
+    /// State-changing request without the session's X-CSRF-Token
+    CsrfTokenInvalid,
     NotFound,
     Conflict,
     InUse,
     VersionConflict,
+    /// The change would leave no active user holding the Administrator profile
+    LastAdministrator,
+    /// Too many failed password attempts; retry after the Retry-After header
+    RateLimited,
     UnsupportedMediaType,
     PayloadTooLarge,
     DatabaseUnavailable,
@@ -33,8 +43,13 @@ impl ErrorCode {
     pub fn status(self) -> StatusCode {
         match self {
             ErrorCode::ValidationError => StatusCode::BAD_REQUEST,
+            ErrorCode::Unauthenticated => StatusCode::UNAUTHORIZED,
+            ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
-            ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict => StatusCode::CONFLICT,
+            ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => {
+                StatusCode::CONFLICT
+            }
+            ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorCode::DatabaseUnavailable => StatusCode::SERVICE_UNAVAILABLE,
@@ -71,11 +86,13 @@ pub struct AppError {
     pub code: ErrorCode,
     pub message: String,
     pub details: Option<Vec<FieldError>>,
+    /// Seconds, sent as Retry-After (RATE_LIMITED).
+    pub retry_after: Option<u64>,
 }
 
 impl AppError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        AppError { code, message: message.into(), details: None }
+        AppError { code, message: message.into(), details: None, retry_after: None }
     }
 
     pub fn validation(details: Vec<FieldError>) -> Self {
@@ -83,6 +100,7 @@ impl AppError {
             code: ErrorCode::ValidationError,
             message: "Request validation failed".into(),
             details: Some(details),
+            retry_after: None,
         }
     }
 
@@ -106,6 +124,7 @@ impl AppError {
                 message,
                 code: code.into(),
             }]),
+            retry_after: None,
         }
     }
 
@@ -149,7 +168,11 @@ impl IntoResponse for AppError {
                 request_id: request_id::current(),
             },
         };
-        (self.code.status(), Json(body)).into_response()
+        let mut res = (self.code.status(), Json(body)).into_response();
+        if let Some(secs) = self.retry_after {
+            res.headers_mut().insert(axum::http::header::RETRY_AFTER, secs.into());
+        }
+        res
     }
 }
 

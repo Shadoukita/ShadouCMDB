@@ -41,6 +41,101 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether first-run setup is needed (no users exist yet) */
+        get: operations["getSetupStatus"];
+        put?: never;
+        /**
+         * Create the first administrator and sign them in (only while no users exist)
+         * @description The new user holds the built-in Administrator profile. 409 once any user exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line.
+         */
+        post: operations["completeSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in with username and password
+         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429.
+         */
+        post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign out: end this session and clear its cookies */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signed-in user, their effective permissions and the CSRF token */
+        get: operations["getCurrentSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change your own password (ends your other sessions)
+         * @description 400 when `currentPassword` is wrong. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.
+         */
+        put: operations["changeOwnPassword"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/configuration-items": {
         parameters: {
             query?: never;
@@ -50,11 +145,14 @@ export interface paths {
         };
         /**
          * Inventory list: paginated, searchable, filterable, sortable
-         * @description Returns summaries (no attribute values). Soft-deleted CIs are hidden unless `deleted=include|only`.
+         * @description Returns summaries (no attribute values) of CIs in classes the caller may view. Soft-deleted CIs are hidden unless `deleted=include|only`.
          */
         get: operations["listConfigurationItems"];
         put?: never;
-        /** Create a CI, including its attribute values */
+        /**
+         * Create a CI, including its attribute values
+         * @description Needs create on the class.
+         */
         post: operations["createConfigurationItem"];
         delete?: never;
         options?: never;
@@ -71,19 +169,22 @@ export interface paths {
         };
         /**
          * Get a CI with its attribute values
-         * @description Deleted CIs are still returned (with `deletedAt` set) so history and old links resolve.
+         * @description Deleted CIs are still returned (with `deletedAt` set) so history and old links resolve. Needs view on the CI's class.
          */
         get: operations["getConfigurationItem"];
         put?: never;
         post?: never;
         /**
          * Delete a CI (soft delete)
-         * @description Sets `deletedAt` on the CI and soft-deletes its live relationships in the same transaction. Both stay readable for history.
+         * @description Sets `deletedAt` on the CI and soft-deletes its live relationships in the same transaction. Both stay readable for history. Needs delete on the CI's class.
          */
         delete: operations["deleteConfigurationItem"];
         options?: never;
         head?: never;
-        /** Update a CI (partial); attributes are merged, null clears one */
+        /**
+         * Update a CI (partial); attributes are merged, null clears one
+         * @description Needs edit on the CI's class (and create on the new class when `classId` changes).
+         */
         patch: operations["updateConfigurationItem"];
         trace?: never;
     };
@@ -96,7 +197,7 @@ export interface paths {
         };
         /**
          * Relationship graph around a CI in one call (nodes + edges)
-         * @description Breadth-first traversal of live relationships up to `depth` hops. For a Server -> Application -> Database view, ask from the application with `direction=outgoing`, or from the server with `direction=both&depth=2`.
+         * @description Breadth-first traversal of live relationships up to `depth` hops. For a Server -> Application -> Database view, ask from the application with `direction=outgoing`, or from the server with `direction=both&depth=2`. Needs view on the root's class; CIs of classes the caller may not view are left out (and not traversed).
          */
         get: operations["getConfigurationItemGraph"];
         put?: never;
@@ -116,7 +217,7 @@ export interface paths {
         };
         /**
          * Global search across CIs, ranked, with the fields that matched
-         * @description Matches name, hostname and serial number (substring), IP address (prefix, or containment when `q` is an IP or CIDR), notes (word prefix) and attribute values (text/enum substring, IP/CIDR prefix). Exact matches rank first, then name prefix, then trigram similarity.
+         * @description Matches name, hostname and serial number (substring), IP address (prefix, or containment when `q` is an IP or CIDR), notes (word prefix) and attribute values (text/enum substring, IP/CIDR prefix). Exact matches rank first, then name prefix, then trigram similarity. Only CIs in classes the caller may view.
          */
         get: operations["searchConfigurationItems"];
         put?: never;
@@ -136,13 +237,13 @@ export interface paths {
         };
         /**
          * List relationships (paginated, filterable by CI, direction and type)
-         * @description `q` matches source/target CI name, type name and notes. Use `ciId` for all edges of a CI.
+         * @description `q` matches source/target CI name, type name and notes. Use `ciId` for all edges of a CI. Only edges whose both CIs are in classes the caller may view.
          */
         get: operations["listRelationships"];
         put?: never;
         /**
          * Create a typed, directional relationship between two CIs
-         * @description Rejected with 400 when the type does not allow these CI classes, when source equals target, or when a CI is deleted; 409 when the same live edge (or, for symmetric types, its reverse) exists.
+         * @description Rejected with 400 when the type does not allow these CI classes, when source equals target, or when a CI is deleted; 409 when the same live edge (or, for symmetric types, its reverse) exists. Needs edit on the source CI's class and view on the target's.
          */
         post: operations["createRelationship"];
         delete?: never;
@@ -158,15 +259,24 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get one relationship */
+        /**
+         * Get one relationship
+         * @description Needs view on both CIs' classes.
+         */
         get: operations["getRelationship"];
         put?: never;
         post?: never;
-        /** Remove a relationship (soft delete; the same edge can be created again later) */
+        /**
+         * Remove a relationship (soft delete; the same edge can be created again later)
+         * @description Needs edit on the source CI's class and view on the target's.
+         */
         delete: operations["deleteRelationship"];
         options?: never;
         head?: never;
-        /** Update notes or type of a relationship (endpoints are immutable) */
+        /**
+         * Update notes or type of a relationship (endpoints are immutable)
+         * @description Needs edit on the source CI's class and view on the target's.
+         */
         patch: operations["updateRelationship"];
         trace?: never;
     };
@@ -183,7 +293,10 @@ export interface paths {
          */
         get: operations["listCiClasses"];
         put?: never;
-        /** Create a ci class */
+        /**
+         * Create a ci class
+         * @description Requires `datamodel.manage`.
+         */
         post: operations["createCiClass"];
         delete?: never;
         options?: never;
@@ -204,12 +317,15 @@ export interface paths {
         post?: never;
         /**
          * Delete a ci class
-         * @description Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteCiClass"];
         options?: never;
         head?: never;
-        /** Update a ci class (partial) */
+        /**
+         * Update a ci class (partial)
+         * @description Requires `datamodel.manage`.
+         */
         patch: operations["updateCiClass"];
         trace?: never;
     };
@@ -246,7 +362,10 @@ export interface paths {
          */
         get: operations["listAttributeDefinitions"];
         put?: never;
-        /** Create a attribute definition */
+        /**
+         * Create a attribute definition
+         * @description Requires `datamodel.manage`.
+         */
         post: operations["createAttributeDefinition"];
         delete?: never;
         options?: never;
@@ -267,12 +386,15 @@ export interface paths {
         post?: never;
         /**
          * Delete a attribute definition
-         * @description Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteAttributeDefinition"];
         options?: never;
         head?: never;
-        /** Update a attribute definition (partial) */
+        /**
+         * Update a attribute definition (partial)
+         * @description Requires `datamodel.manage`.
+         */
         patch: operations["updateAttributeDefinition"];
         trace?: never;
     };
@@ -289,7 +411,10 @@ export interface paths {
          */
         get: operations["listRelationshipTypes"];
         put?: never;
-        /** Create a relationship type */
+        /**
+         * Create a relationship type
+         * @description Requires `datamodel.manage`.
+         */
         post: operations["createRelationshipType"];
         delete?: never;
         options?: never;
@@ -310,12 +435,15 @@ export interface paths {
         post?: never;
         /**
          * Delete a relationship type
-         * @description Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteRelationshipType"];
         options?: never;
         head?: never;
-        /** Update a relationship type (partial) */
+        /**
+         * Update a relationship type (partial)
+         * @description Requires `datamodel.manage`.
+         */
         patch: operations["updateRelationshipType"];
         trace?: never;
     };
@@ -329,7 +457,10 @@ export interface paths {
         /** List relationship rule records (paginated, searchable, sortable) */
         get: operations["listRelationshipRules"];
         put?: never;
-        /** Create a relationship rule */
+        /**
+         * Create a relationship rule
+         * @description Requires `datamodel.manage`.
+         */
         post: operations["createRelationshipRule"];
         delete?: never;
         options?: never;
@@ -350,12 +481,15 @@ export interface paths {
         post?: never;
         /**
          * Delete a relationship rule
-         * @description Hard delete. Existing relationships stay; new ones need another matching rule.
+         * @description Requires `datamodel.manage`. Hard delete. Existing relationships stay; new ones need another matching rule.
          */
         delete: operations["deleteRelationshipRule"];
         options?: never;
         head?: never;
-        /** Update a relationship rule (partial) */
+        /**
+         * Update a relationship rule (partial)
+         * @description Requires `datamodel.manage`.
+         */
         patch: operations["updateRelationshipRule"];
         trace?: never;
     };
@@ -372,7 +506,10 @@ export interface paths {
          */
         get: operations["listStatuses"];
         put?: never;
-        /** Create a status */
+        /**
+         * Create a status
+         * @description Requires `datamodel.manage`.
+         */
         post: operations["createStatus"];
         delete?: never;
         options?: never;
@@ -393,12 +530,15 @@ export interface paths {
         post?: never;
         /**
          * Delete a status
-         * @description Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteStatus"];
         options?: never;
         head?: never;
-        /** Update a status (partial) */
+        /**
+         * Update a status (partial)
+         * @description Requires `datamodel.manage`.
+         */
         patch: operations["updateStatus"];
         trace?: never;
     };
@@ -415,7 +555,10 @@ export interface paths {
          */
         get: operations["listEnvironments"];
         put?: never;
-        /** Create a environment */
+        /**
+         * Create a environment
+         * @description Requires `datamodel.manage`.
+         */
         post: operations["createEnvironment"];
         delete?: never;
         options?: never;
@@ -436,12 +579,15 @@ export interface paths {
         post?: never;
         /**
          * Delete a environment
-         * @description Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteEnvironment"];
         options?: never;
         head?: never;
-        /** Update a environment (partial) */
+        /**
+         * Update a environment (partial)
+         * @description Requires `datamodel.manage`.
+         */
         patch: operations["updateEnvironment"];
         trace?: never;
     };
@@ -458,7 +604,10 @@ export interface paths {
          */
         get: operations["listLocations"];
         put?: never;
-        /** Create a location */
+        /**
+         * Create a location
+         * @description Requires `datamodel.manage`.
+         */
         post: operations["createLocation"];
         delete?: never;
         options?: never;
@@ -479,12 +628,15 @@ export interface paths {
         post?: never;
         /**
          * Delete a location
-         * @description Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteLocation"];
         options?: never;
         head?: never;
-        /** Update a location (partial) */
+        /**
+         * Update a location (partial)
+         * @description Requires `datamodel.manage`.
+         */
         patch: operations["updateLocation"];
         trace?: never;
     };
@@ -501,7 +653,10 @@ export interface paths {
          */
         get: operations["listOwners"];
         put?: never;
-        /** Create a owner */
+        /**
+         * Create a owner
+         * @description Requires `datamodel.manage`.
+         */
         post: operations["createOwner"];
         delete?: never;
         options?: never;
@@ -522,12 +677,15 @@ export interface paths {
         post?: never;
         /**
          * Delete a owner
-         * @description Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteOwner"];
         options?: never;
         head?: never;
-        /** Update a owner (partial) */
+        /**
+         * Update a owner (partial)
+         * @description Requires `datamodel.manage`.
+         */
         patch: operations["updateOwner"];
         trace?: never;
     };
@@ -538,10 +696,157 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Change history (read-only, paginated, newest first by default) */
+        /**
+         * Change history (read-only, paginated, newest first by default)
+         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username).
+         */
         get: operations["listAuditLog"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List users (paginated, searchable, filterable by active flag and profile)
+         * @description Requires `users.manage`.
+         */
+        get: operations["listUsers"];
+        put?: never;
+        /**
+         * Create a local user with a password and permission profiles
+         * @description Requires `users.manage`. 403 when assigning a profile that grants permissions the caller does not hold.
+         */
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one user with the profiles they hold
+         * @description Requires `users.manage`.
+         */
+        get: operations["getUser"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a user (prefer disabling; the audit log keeps their id and name)
+         * @description Requires `users.manage`. 409 when deleting yourself or the last active Administrator.
+         */
+        delete: operations["deleteUser"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a user (partial): rename, disable/enable, assign profiles
+         * @description Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.
+         */
+        patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/api/v1/admin/users/{id}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set a new password for a user and end their sessions
+         * @description Requires `users.manage`.
+         */
+        put: operations["resetUserPassword"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List permission profiles (paginated; the built-in Administrator profile first)
+         * @description `q` matches name and description. Requires `profiles.manage` or `users.manage` (to assign profiles).
+         */
+        get: operations["listPermissionProfiles"];
+        put?: never;
+        /**
+         * Create a permission profile
+         * @description Requires `profiles.manage`. A non-administrator can only grant permissions they hold themselves (403 otherwise).
+         */
+        post: operations["createPermissionProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/profiles/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one permission profile with its permissions
+         * @description Requires `profiles.manage` or `users.manage`.
+         */
+        get: operations["getPermissionProfile"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a permission profile (users holding it lose it)
+         * @description Requires `profiles.manage`. The built-in Administrator profile cannot be deleted (409).
+         */
+        delete: operations["deletePermissionProfile"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a permission profile (partial; permission lists replace the current ones)
+         * @description Requires `profiles.manage`. The built-in Administrator profile cannot be changed (409). Takes effect on the holders' next request.
+         */
+        patch: operations["updatePermissionProfile"];
+        trace?: never;
+    };
+    "/api/v1/admin/profiles/{id}/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy a profile (including the built-in one) into a new, editable profile
+         * @description Requires `profiles.manage`.
+         */
+        post: operations["clonePermissionProfile"];
         delete?: never;
         options?: never;
         head?: never;
@@ -635,6 +940,26 @@ export interface components {
         CiClassList: {
             data: components["schemas"]["CiClass"][];
             page: components["schemas"]["PageMeta"];
+        };
+        /** @description Rights on one CI class, or on every class when `classId` is null. */
+        ClassPermission: {
+            /**
+             * Format: uuid
+             * @description The class; null is the "all classes" wildcard (also covers classes created later)
+             */
+            classId: string | null;
+            /** @description See the CIs of this class (implied by the other three) */
+            view: boolean;
+            create: boolean;
+            edit: boolean;
+            delete: boolean;
+        };
+        /** @description What a grant allows on one class (or on every class). */
+        ClassRights: {
+            view: boolean;
+            create: boolean;
+            edit: boolean;
+            delete: boolean;
         };
         ConfigurationItem: {
             /** Format: uuid */
@@ -772,6 +1097,16 @@ export interface components {
         EffectiveAttributeList: {
             data: components["schemas"]["EffectiveAttribute"][];
         };
+        /** @description What the signed-in user may do (the union of their profiles). */
+        EffectivePermissions: {
+            /** @description Holds the built-in Administrator profile (everything below is then all-true) */
+            administrator: boolean;
+            global: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+            /** @description Rights on every class */
+            allClasses: components["schemas"]["ClassRights"];
+            /** @description Rights on individual classes, beyond allClasses */
+            classes: components["schemas"]["ClassPermission"][];
+        };
         Environment: {
             /** Format: uuid */
             id: string;
@@ -793,7 +1128,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "DATABASE_UNAVAILABLE" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "DATABASE_UNAVAILABLE" | "INTERNAL_ERROR";
                 message: string;
                 details?: {
                     /** @enum {string} */
@@ -901,6 +1236,36 @@ export interface components {
              * @description Total rows matching the filters
              */
             total: number;
+        };
+        PermissionProfile: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description: string | null;
+            /** @description The Administrator profile: every permission, read-only, cannot be deleted */
+            isBuiltin: boolean;
+            globalPermissions: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+            classPermissions: components["schemas"]["ClassPermission"][];
+            /**
+             * Format: int64
+             * @description Users holding this profile
+             */
+            userCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        PermissionProfileList: {
+            data: components["schemas"]["PermissionProfile"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description A profile a user holds */
+        ProfileRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            isBuiltin: boolean;
         };
         Readiness: {
             /** @enum {string} */
@@ -1075,6 +1440,20 @@ export interface components {
             }[];
             page: components["schemas"]["PageMeta"];
         };
+        /** @description The signed-in user, their permissions and the CSRF token to send back. */
+        Session: {
+            user: components["schemas"]["User"];
+            permissions: components["schemas"]["EffectivePermissions"];
+            /**
+             * @description Send as the X-CSRF-Token header on every POST, PUT, PATCH and DELETE
+             *     (also readable from the shadoucmdb_csrf cookie)
+             */
+            csrfToken: string;
+        };
+        SetupStatus: {
+            /** @description True while no user exists: the UI shows the first-run screen */
+            setupRequired: boolean;
+        };
         Status: {
             /** Format: uuid */
             id: string;
@@ -1093,6 +1472,31 @@ export interface components {
         };
         StatusList: {
             data: components["schemas"]["Status"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        User: {
+            /** Format: uuid */
+            id: string;
+            /** @description Sign-in name, unique regardless of case */
+            username: string;
+            displayName: string;
+            email: string | null;
+            /** @description Disabled users cannot sign in and their sessions end */
+            isActive: boolean;
+            /** @description Holds the built-in Administrator profile */
+            isAdministrator: boolean;
+            profiles: components["schemas"]["ProfileRef"][];
+            /** Format: date-time */
+            passwordChangedAt: string;
+            /** Format: date-time */
+            lastLoginAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        UserList: {
+            data: components["schemas"]["User"][];
             page: components["schemas"]["PageMeta"];
         };
     };
@@ -1171,6 +1575,390 @@ export interface operations {
             };
         };
     };
+    getSetupStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatus"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    completeSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    username: string;
+                    displayName: string;
+                    email?: string | null;
+                    /** @description At least 12 characters */
+                    password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    username: string;
+                    password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getCurrentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    changeOwnPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    currentPassword: string;
+                    /** @description At least 12 characters */
+                    newPassword: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listConfigurationItems: {
         parameters: {
             query?: {
@@ -1222,6 +2010,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -1245,10 +2042,7 @@ export interface operations {
     createConfigurationItem: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -1290,6 +2084,24 @@ export interface operations {
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1355,6 +2167,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -1387,10 +2217,7 @@ export interface operations {
     deleteConfigurationItem: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -1407,6 +2234,24 @@ export interface operations {
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1446,10 +2291,7 @@ export interface operations {
     updateConfigurationItem: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -1502,6 +2344,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -1511,7 +2371,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1580,6 +2440,24 @@ export interface operations {
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1665,6 +2543,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -1731,6 +2618,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -1754,10 +2650,7 @@ export interface operations {
     createRelationship: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -1796,7 +2689,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1863,6 +2774,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -1895,10 +2824,7 @@ export interface operations {
     deleteRelationship: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -1915,6 +2841,24 @@ export interface operations {
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1954,10 +2898,7 @@ export interface operations {
     updateRelationship: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -1991,6 +2932,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -2000,7 +2959,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2080,6 +3039,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -2103,10 +3071,7 @@ export interface operations {
     createCiClass: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -2143,7 +3108,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2210,6 +3193,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -2242,10 +3234,7 @@ export interface operations {
     deleteCiClass: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -2269,6 +3258,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -2278,7 +3285,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2310,10 +3317,7 @@ export interface operations {
     updateCiClass: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -2350,6 +3354,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -2359,7 +3381,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2422,6 +3444,15 @@ export interface operations {
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2501,6 +3532,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -2524,10 +3564,7 @@ export interface operations {
     createAttributeDefinition: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -2585,7 +3622,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2652,6 +3707,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -2684,10 +3748,7 @@ export interface operations {
     deleteAttributeDefinition: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -2711,6 +3772,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -2720,7 +3799,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2752,10 +3831,7 @@ export interface operations {
     updateAttributeDefinition: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -2808,6 +3884,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -2817,7 +3911,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2896,6 +3990,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -2919,10 +4022,7 @@ export interface operations {
     createRelationshipType: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -2960,7 +4060,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3027,6 +4145,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -3059,10 +4186,7 @@ export interface operations {
     deleteRelationshipType: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -3086,6 +4210,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -3095,7 +4237,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3127,10 +4269,7 @@ export interface operations {
     updateRelationshipType: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -3167,6 +4306,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -3176,7 +4333,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3254,6 +4411,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -3277,10 +4443,7 @@ export interface operations {
     createRelationshipRule: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -3315,7 +4478,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3382,6 +4563,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -3414,10 +4604,7 @@ export interface operations {
     deleteRelationshipRule: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -3441,6 +4628,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -3450,7 +4655,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3482,10 +4687,7 @@ export interface operations {
     updateRelationshipRule: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -3522,6 +4724,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -3531,7 +4751,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3607,6 +4827,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -3630,10 +4859,7 @@ export interface operations {
     createStatus: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -3669,7 +4895,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3736,6 +4980,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -3768,10 +5021,7 @@ export interface operations {
     deleteStatus: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -3795,6 +5045,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -3804,7 +5072,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3836,10 +5104,7 @@ export interface operations {
     updateStatus: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -3877,6 +5142,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -3886,7 +5169,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3961,6 +5244,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -3984,10 +5276,7 @@ export interface operations {
     createEnvironment: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -4022,7 +5311,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4089,6 +5396,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -4121,10 +5437,7 @@ export interface operations {
     deleteEnvironment: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -4148,6 +5461,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -4157,7 +5488,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4189,10 +5520,7 @@ export interface operations {
     updateEnvironment: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -4229,6 +5557,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -4238,7 +5584,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4316,6 +5662,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -4339,10 +5694,7 @@ export interface operations {
     createLocation: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -4381,7 +5733,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4448,6 +5818,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -4480,10 +5859,7 @@ export interface operations {
     deleteLocation: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -4507,6 +5883,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -4516,7 +5910,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4548,10 +5942,7 @@ export interface operations {
     updateLocation: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -4592,6 +5983,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -4601,7 +6010,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4679,6 +6088,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -4702,10 +6120,7 @@ export interface operations {
     createOwner: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -4740,7 +6155,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4807,6 +6240,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -4839,10 +6281,7 @@ export interface operations {
     deleteOwner: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -4866,6 +6305,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -4875,7 +6332,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4907,10 +6364,7 @@ export interface operations {
     updateOwner: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists. */
-                "X-Actor-Name"?: string;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -4947,6 +6401,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not found (code NOT_FOUND) */
             404: {
                 headers: {
@@ -4956,7 +6428,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5003,10 +6475,12 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles";
                 /** @description History of these entities */
                 entityId?: string;
                 action?: "create" | "update" | "delete" | "restore";
+                /** @description Changes made by this user (their id) */
+                actorId?: string;
                 /** @description Case-insensitive substring */
                 actorName?: string;
                 requestId?: string;
@@ -5032,6 +6506,1109 @@ export interface operations {
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Case-insensitive substring search */
+                q?: string;
+                /** @description Sort field; prefix with "-" for descending. One of: username, displayName, createdAt, lastLoginAt */
+                sort?: "username" | "-username" | "displayName" | "-displayName" | "createdAt" | "-createdAt" | "lastLoginAt" | "-lastLoginAt";
+                isActive?: "true" | "false";
+                /** @description One or more ids, comma-separated */
+                profileId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    username: string;
+                    displayName: string;
+                    email?: string | null;
+                    /** @description At least 12 characters */
+                    password: string;
+                    /** @description Default true */
+                    isActive?: boolean;
+                    /** @description Permission profiles the user holds (replaces the current set) */
+                    profileIds?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    username?: string;
+                    displayName?: string;
+                    email?: string | null;
+                    /** @description false disables the account and ends its sessions */
+                    isActive?: boolean;
+                    /** @description Permission profiles the user holds (replaces the current set) */
+                    profileIds?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    resetUserPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description At least 12 characters */
+                    password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listPermissionProfiles: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Case-insensitive substring search */
+                q?: string;
+                /** @description Sort field; prefix with "-" for descending. One of: name, createdAt, updatedAt */
+                sort?: "name" | "-name" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfileList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createPermissionProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    description?: string | null;
+                    /** @description Replaces all global permissions */
+                    globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+                    /** @description Replaces all class grants. Entries granting nothing are dropped; one entry per class. */
+                    classPermissions?: {
+                        /**
+                         * Format: uuid
+                         * @description The class; null is the "all classes" wildcard (also covers classes created later)
+                         */
+                        classId: string | null;
+                        /** @description See the CIs of this class (implied by the other three) */
+                        view: boolean;
+                        create: boolean;
+                        edit: boolean;
+                        delete: boolean;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfile"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getPermissionProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfile"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deletePermissionProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updatePermissionProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    description?: string | null;
+                    /** @description Replaces all global permissions */
+                    globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+                    /** @description Replaces all class grants. Entries granting nothing are dropped; one entry per class. */
+                    classPermissions?: {
+                        /**
+                         * Format: uuid
+                         * @description The class; null is the "all classes" wildcard (also covers classes created later)
+                         */
+                        classId: string | null;
+                        /** @description See the CIs of this class (implied by the other three) */
+                        view: boolean;
+                        create: boolean;
+                        edit: boolean;
+                        delete: boolean;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfile"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    clonePermissionProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfile"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

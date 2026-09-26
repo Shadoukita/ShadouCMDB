@@ -183,3 +183,53 @@ async fn adopt_drizzle_history(pool: &PgPool) -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// Throwaway databases for tests that need a real PostgreSQL.
+///
+/// Opt-in: set `SHADOUCMDB_TEST_DATABASE_URL` to a connection string whose
+/// user may `CREATE DATABASE` (CI does). Each test gets its own freshly
+/// migrated database, dropped again by [`Scratch::drop`]. Without the
+/// variable the tests print a notice and pass, except in CI (`CI` set), where
+/// a silent skip would mean the regression coverage quietly stopped running:
+/// there they fail unless `SHADOUCMDB_SKIP_DB_TESTS=1` opts out explicitly.
+#[cfg(test)]
+pub mod scratch {
+    use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
+    use sqlx::{ConnectOptions, Connection, Executor};
+    use std::str::FromStr;
+
+    pub struct Scratch {
+        admin: PgConnectOptions,
+        name: String,
+        pub pool: PgPool,
+    }
+
+    pub async fn database(test: &str) -> Option<Scratch> {
+        let Ok(url) = std::env::var("SHADOUCMDB_TEST_DATABASE_URL") else {
+            let opted_out = std::env::var("SHADOUCMDB_SKIP_DB_TESTS").is_ok_and(|v| v == "1");
+            if std::env::var_os("CI").is_some() && !opted_out {
+                panic!(
+                    "{test}: SHADOUCMDB_TEST_DATABASE_URL is not set in CI (set SHADOUCMDB_SKIP_DB_TESTS=1 to skip)"
+                );
+            }
+            eprintln!("{test}: skipped, SHADOUCMDB_TEST_DATABASE_URL is not set");
+            return None;
+        };
+        let admin = PgConnectOptions::from_str(&url).expect("SHADOUCMDB_TEST_DATABASE_URL");
+        let name = format!("shadoucmdb_test_{}", uuid::Uuid::new_v4().simple());
+        let mut c = admin.connect().await.expect("connect to SHADOUCMDB_TEST_DATABASE_URL");
+        c.execute(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}"))).await.expect("CREATE DATABASE");
+        c.close().await.ok();
+        let pool = PgPoolOptions::new().max_connections(8).connect_with(admin.clone().database(&name)).await.unwrap();
+        super::MIGRATOR.run(&pool).await.expect("migrations");
+        Some(Scratch { admin, name, pool })
+    }
+
+    impl Scratch {
+        pub async fn drop(self) {
+            self.pool.close().await;
+            let mut c = self.admin.connect().await.unwrap();
+            c.execute(sqlx::AssertSqlSafe(format!("DROP DATABASE {} WITH (FORCE)", self.name))).await.unwrap();
+        }
+    }
+}

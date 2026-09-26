@@ -64,12 +64,14 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, "/healthz", "getLiveness")
             .tag("Health")
             .summary("Liveness: the process is up (does not touch the database)")
+            .public()
             .handle(|_, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async {
                 Ok(Json(Liveness { status: LiveStatus::Ok }))
             }),
         route(Method::GET, "/readyz", "getReadiness")
             .tag("Health")
             .summary("Readiness: database reachable and all migrations applied")
+            .public()
             .description(
                 "Returns 200 with status \"ready\" only when the database answers and every migration in this build is applied; otherwise 503 with the same body shape.",
             )

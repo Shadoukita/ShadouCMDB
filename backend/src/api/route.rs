@@ -2,13 +2,21 @@
 //! response. The same declaration drives request validation (api/validate.rs),
 //! the axum handler, and the OpenAPI document (api/openapi.rs), so the spec
 //! cannot drift from the code and a route cannot exist without a spec entry.
+//!
+//! Access control is part of the declaration too: every route needs a signed-in
+//! user unless it is marked [`RouteBuilder::public`], and may require a global
+//! permission ([`RouteBuilder::requires`]). The session is resolved, CSRF is
+//! checked for state-changing methods and the permission is checked before the
+//! request is validated, so an unauthenticated caller learns nothing about a
+//! route beyond 401.
 
 use std::future::Future;
+use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
 use axum::extract::{RawPathParams, RawQuery, State};
-use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodFilter, MethodRouter, on};
 use serde::Serialize;
@@ -20,9 +28,11 @@ use utoipa::openapi::{RefOr, Required, schema::Schema};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use super::context::RequestContext;
+use super::context::{RequestContext, forbidden, unauthenticated};
 use super::schemas;
 use super::validate::{self, QueryParam};
+use crate::auth::permissions::GlobalPermission;
+use crate::auth::{self, AuthState};
 use crate::http::AppState;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::http::request_id;
@@ -31,6 +41,20 @@ use crate::http::request_id;
 pub struct Api {
     pub pool: PgPool,
     pub ctx: RequestContext,
+    pub auth: Arc<AuthState>,
+    /// Request headers (the auth routes read User-Agent and the forwarded protocol).
+    pub headers: HeaderMap,
+}
+
+/// Who may call a route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    /// No session needed (health, login, first-run setup).
+    Public,
+    /// Any signed-in user; the service may still check class permissions.
+    Authenticated,
+    /// A signed-in user holding this global permission.
+    Permission(GlobalPermission),
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +297,22 @@ impl<T: ToSchema + Serialize + Send + 'static> Output for WithStatus<T> {
     }
 }
 
+/// Another output plus Set-Cookie headers (login, logout, first-run setup).
+pub struct WithCookies<R>(pub R, pub Vec<HeaderValue>);
+
+impl<R: Output> Output for WithCookies<R> {
+    fn doc() -> Option<ResponseDoc> {
+        R::doc()
+    }
+    fn respond(self, status: StatusCode) -> Response {
+        let mut res = self.0.respond(status);
+        for c in self.1 {
+            res.headers_mut().append(header::SET_COOKIE, c);
+        }
+        res
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Route
 // ---------------------------------------------------------------------------
@@ -286,7 +326,9 @@ pub struct Route {
     pub summary: String,
     pub description: Option<String>,
     pub status: StatusCode,
-    /// Error codes beyond VALIDATION_ERROR / INTERNAL_ERROR / DATABASE_UNAVAILABLE.
+    pub access: Access,
+    /// Error codes beyond VALIDATION_ERROR / INTERNAL_ERROR / DATABASE_UNAVAILABLE
+    /// (and the 401/403 implied by `access`).
     pub errors: Vec<ErrorCode>,
     /// Other statuses that return the success schema.
     pub also_returns: Vec<(StatusCode, String)>,
@@ -305,6 +347,7 @@ pub struct RouteBuilder {
     summary: String,
     description: Option<String>,
     status: Option<StatusCode>,
+    access: Access,
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
 }
@@ -318,6 +361,7 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         summary: String::new(),
         description: None,
         status: None,
+        access: Access::Authenticated,
         errors: Vec::new(),
         also_returns: Vec::new(),
     }
@@ -344,8 +388,26 @@ impl RouteBuilder {
         self.status = Some(status);
         self
     }
+    /// Callable without a session.
+    pub fn public(mut self) -> Self {
+        self.access = Access::Public;
+        self
+    }
+    /// Requires this global permission (403 FORBIDDEN without it).
+    pub fn requires(mut self, permission: GlobalPermission) -> Self {
+        self.access = Access::Permission(permission);
+        self
+    }
+    /// The service checks per-class permissions, so the route can answer 403.
+    pub fn class_checked(self) -> Self {
+        self.errors(&[ErrorCode::Forbidden])
+    }
     pub fn errors(mut self, errors: &[ErrorCode]) -> Self {
-        self.errors = errors.to_vec();
+        for e in errors {
+            if !self.errors.contains(e) {
+                self.errors.push(*e);
+            }
+        }
         self
     }
     pub fn also_returns(mut self, status: StatusCode, description: impl Into<String>) -> Self {
@@ -365,6 +427,8 @@ impl RouteBuilder {
         let response = R::doc();
         let status = self.status.unwrap_or(if response.is_some() { StatusCode::OK } else { StatusCode::NO_CONTENT });
         let filter = MethodFilter::try_from(self.method.clone()).expect("supported HTTP method");
+        let access = self.access;
+        let safe_method = self.method == Method::GET || self.method == Method::HEAD;
 
         let handler = move |State(state): State<AppState>,
                             raw_path: RawPathParams,
@@ -374,11 +438,10 @@ impl RouteBuilder {
             let f = f.clone();
             async move {
                 let run = async move {
+                    let ctx = authorise(&state, &headers, access, safe_method).await?;
                     let body = read_body(&headers, body)?;
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
-                    let actor = state.actors.resolve(&headers).await?;
-                    let api =
-                        Api { pool: state.pool, ctx: RequestContext { actor, request_id: request_id::current() } };
+                    let api = Api { pool: state.pool, ctx, auth: state.auth, headers };
                     Ok::<_, AppError>(f(api, input).await?.respond(status))
                 };
                 run.await.unwrap_or_else(IntoResponse::into_response)
@@ -393,6 +456,7 @@ impl RouteBuilder {
             summary: self.summary,
             description: self.description,
             status,
+            access,
             errors: self.errors,
             also_returns: self.also_returns,
             path_params: P::params(),
@@ -402,6 +466,36 @@ impl RouteBuilder {
             handler: on(filter, handler),
         }
     }
+}
+
+/// Resolves the caller and enforces the route's access rule: 401 without a
+/// live session, 403 CSRF_TOKEN_INVALID for a state-changing request without
+/// the session's token, 403 FORBIDDEN without the required permission.
+async fn authorise(
+    state: &AppState,
+    headers: &HeaderMap,
+    access: Access,
+    safe_method: bool,
+) -> Result<RequestContext, AppError> {
+    let request_id = request_id::current();
+    if access == Access::Public {
+        return Ok(RequestContext::anonymous(request_id));
+    }
+    let Some(principal) = auth::authenticate(&state.pool, &state.auth.config, headers).await? else {
+        return Err(unauthenticated());
+    };
+    if !safe_method && !auth::csrf_ok(&principal, headers) {
+        return Err(AppError::new(
+            ErrorCode::CsrfTokenInvalid,
+            "Missing or wrong X-CSRF-Token header (send the csrfToken from /api/v1/auth/me)",
+        ));
+    }
+    if let Access::Permission(p) = access
+        && !principal.permissions.has(p)
+    {
+        return Err(forbidden(format!("This requires the {} permission", p.as_str())));
+    }
+    Ok(RequestContext::user(Arc::new(principal), request_id))
 }
 
 /// JSON is the only accepted body type. An empty body counts as no body

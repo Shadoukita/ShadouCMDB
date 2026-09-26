@@ -17,6 +17,8 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
   migrate [--adopt-drizzle] Apply pending migrations; re-running is a no-op
   seed [--demo]             Load reference data (idempotent); --demo adds a sample inventory
   verify                    Schema acceptance checks in a rolled-back transaction
+  create-admin --username U [--display-name N] [--email E] [--password-stdin]
+                            Create a user holding the built-in Administrator profile
   openapi [--out F|--check F]  Print the OpenAPI document, write it, or fail if F is stale
   service install|uninstall|run   Windows Service management (Windows only)
 ```
@@ -41,6 +43,89 @@ shadoucmdb seed            # add --demo for sample CIs
 shadoucmdb verify          # optional, writes nothing
 shadoucmdb serve           # http://<host>:3000/readyz
 ```
+
+Then open the web UI and create the first administrator, or run `create-admin` (below).
+
+## The first administrator
+
+Every page and API call except the health probes needs a signed-in user. On a new
+installation there are no users yet, and there are two ways to create the first one:
+
+- **In the browser:** while no user exists, the UI offers first-run setup
+  (`GET /api/v1/setup` reports `setupRequired: true`; `POST /api/v1/setup` creates the
+  account and signs it in). It only works while the user table is empty.
+- **On the command line**, from any machine that can reach the database:
+
+  ```sh
+  shadoucmdb create-admin --username admin --display-name "Jane Admin"          # prompts twice for the password
+  printf '%s\n' "$ADMIN_PASSWORD" | shadoucmdb create-admin --username admin --password-stdin   # scripts
+  ```
+
+`create-admin` works at any time, not only on an empty database: it is also the way back in
+if every administrator is locked out or has forgotten their password (create a second
+administrator, sign in, reset the other account). It needs the database fully migrated and
+records `actor_type = system` in the audit log. Passwords need at least 12 characters and are
+stored as argon2id hashes.
+
+Further users, and the permission profiles that decide what they may do, are managed under
+Administration in the UI (`/api/v1/admin/users`, `/api/v1/admin/profiles`). See
+[api.md](api.md#authentication-and-permissions).
+
+## HTTPS and session cookies
+
+`shadoucmdb` serves plain HTTP; put a TLS-terminating reverse proxy (nginx, Caddy, Traefik,
+a cloud load balancer) in front of it for anything beyond a lab. Sessions are cookies:
+
+- The proxy must pass `X-Forwarded-Proto: https` (or `Forwarded: proto=https`). The server
+  then marks the cookies `Secure`, so a browser never sends them over plain HTTP. If the proxy
+  cannot send that header, set `COOKIE_SECURE=always`. With the default `COOKIE_SECURE=auto`,
+  the first session cookie issued without `Secure` logs a one-time warning naming this fix;
+  `COOKIE_SECURE=never` is taken as deliberate and is not warned about.
+- Serve the UI and the API from the same origin (the embedded UI does this). A UI on another
+  origin needs that origin in `CORS_ORIGINS`, spelled exactly as the browser sends it
+  (`https://cmdb.example.com`: no path, no trailing slash); those origins may send the session
+  cookie. `*` and anything that is not an origin stop the server at startup.
+- `SESSION_IDLE_TIMEOUT_MINUTES` (default 12 h) and `SESSION_MAX_AGE_HOURS` (default 7 days)
+  bound how long a session lives. Sessions are stored in PostgreSQL, so they survive restarts
+  and work across several instances. The login backoff counters are per process.
+
+The server sets these security headers itself, on every response it sends (the web UI, the
+API and Swagger UI at `/docs`). Do not add them again at the proxy: two
+`Content-Security-Policy` headers are two independently enforced policies, and duplicate values
+of the others are confusing at best. In particular, a proxy cannot bolt violation reporting
+onto our policy: a second header containing only `report-uri`/`report-to` is a separate policy
+that blocks nothing and so reports nothing, while violations of ours still go nowhere. The
+proxy's only alternative is to strip our header and serve a complete policy of its own, which
+drifts from ours with every release. Use `CSP_REPORT_URI` instead (below). Headers the server
+does not set (for example `Permissions-Policy`) are the proxy's to add.
+
+| Header | Value | Sent on |
+| --- | --- | --- |
+| `X-Content-Type-Options` | `nosniff` | every response |
+| `Referrer-Policy` | `no-referrer` | every response |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | only requests that arrived over HTTPS (`X-Forwarded-Proto: https` or `Forwarded: proto=https`); never over plain HTTP, so a lab or LAN install is not locked onto a scheme it cannot serve |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'` | HTML documents only (the web UI and `/docs`), not JSON |
+
+`includeSubDomains` tells browsers to use HTTPS for every subdomain of the host name the
+server is reached by, for a year. If that name has subdomains that cannot serve HTTPS, have the
+proxy strip or override the header. Because of `frame-ancestors 'none'` the UI cannot be
+embedded in a frame on any site, including your own. `connect-src 'self'` means the embedded
+UI can only call the API on its own origin. If you point the UI at another origin
+(`VITE_API_BASE_URL` at build time, or `apiBaseUrl` in `config.js`), serve that UI from your
+own web server and set its CSP there.
+
+`CSP_REPORT_URI` (default unset: no reporting) makes browsers report CSP violations, so a policy
+break in production shows up somewhere other than a browser console nobody watches. Point it at
+an absolute `http`/`https` URL or at a path on this server (`/csp-reports`) where your own
+collector listens; reports go only there, the ShadouCMDB project never receives them. Setting it
+appends `; report-uri <uri>` to the policy. When the request arrived over HTTPS and the URI is
+`https:` or a path, it also appends `; report-to csp` and sends `Reporting-Endpoints: csp="<uri>"`.
+Chromium and Firefox ignore `report-uri` whenever `report-to` is present, and drop Reporting API
+endpoints that are not HTTPS, so on plain HTTP or with an `http:` collector `report-uri` is sent
+alone, since it is the one that still delivers. A collector on another origin needs no change to
+`connect-src`: reports are not subject to the page's policy. Whitespace, `;`, `,`, `"`, a scheme
+other than `http`/`https` and `user:password@` are rejected at startup, because the value becomes
+part of the policy.
 
 ## Release downloads
 
@@ -123,6 +208,7 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin shadoucmdb
 sudo install -d -m 0750 -o root -g shadoucmdb /etc/shadoucmdb
 sudo install -m 0640 -o root -g shadoucmdb .env /etc/shadoucmdb/shadoucmdb.env   # your settings
 sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin   # or use first-run setup in the UI
 sudo cp deploy/systemd/shadoucmdb.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
 curl -s http://127.0.0.1:3000/readyz
@@ -193,6 +279,7 @@ docker build -t shadoucmdb .                                                 # c
 
 docker run --rm --env-file .env shadoucmdb migrate
 docker run --rm --env-file .env shadoucmdb seed
+docker run --rm -it --env-file .env shadoucmdb create-admin --username admin   # or use first-run setup in the UI
 docker run -d --name shadoucmdb --env-file .env -p 3000:3000 shadoucmdb    # CMD is `serve`
 ```
 

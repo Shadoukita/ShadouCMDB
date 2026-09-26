@@ -25,6 +25,9 @@ fn pattern_message(pattern: &str) -> Option<&'static str> {
         super::schemas::KEY_PATTERN => "Must be lower_snake_case: a letter, then letters, digits or _ (max 63)",
         super::schemas::HOSTNAME_PATTERN => "Letters, digits, \".\", \"_\" and \"-\", starting with a letter or digit",
         super::schemas::NOT_BLANK_PATTERN => "Must not be blank",
+        super::schemas::USERNAME_PATTERN => {
+            "Letters, digits, \".\", \"_\", \"@\" and \"-\", starting with a letter or digit (max 64)"
+        }
         _ => return None,
     })
 }

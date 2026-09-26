@@ -26,6 +26,8 @@ Install as a systemd service
   sudoedit /etc/shadoucmdb/shadoucmdb.env     # set DATABASE_URL, or PGHOST/PGUSER/PGPASSWORD/...
   sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
   sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env seed
+  # First administrator (or skip this and use first-run setup in the web UI):
+  sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin
   sudo install -m 0644 shadoucmdb.service /etc/systemd/system/
   sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
   curl -s http://127.0.0.1:3000/readyz
