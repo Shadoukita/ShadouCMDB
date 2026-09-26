@@ -22,6 +22,8 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 | `frontend/` | React + Vite + TanStack Query UI (stub for now). |
 | `docs/data-model.md` | Data model, integrity rules and soft-delete decisions. |
 | `.github/` | CI workflow and pull request template. |
+| `docs/api.md` | API conventions, error envelope, endpoint overview, extension seams. |
+| `backend/openapi.json` | Generated OpenAPI contract (`npm run openapi -w backend`). |
 
 ## Requirements
 
@@ -103,8 +105,18 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    npm run db:verify -w backend
    ```
 
-6. **Start the backend:** `npm run dev:backend`. `GET /healthz` reports liveness.
-   `GET /readyz` returns 200 only when the database is reachable and all migrations are applied.
+6. **Start the backend:** `npm run dev:backend`, or `npm run build -w backend && npm start -w backend`.
+   `GET /healthz` reports liveness. `GET /readyz` returns 200 only when the database is reachable and
+   all migrations are applied, and 503 otherwise.
+
+7. **Use the API.** It lives under `/api/v1`. The OpenAPI 3.1 contract is served at `/openapi.json`, and
+   there is a browsable UI at `/docs`. The same contract is committed as
+   [`backend/openapi.json`](backend/openapi.json). See [docs/api.md](docs/api.md) for conventions
+   (pagination, errors, attributes) and extension points. To check a deployment end to end:
+
+   ```sh
+   API_URL=http://localhost:3000 npm run smoke -w backend
+   ```
 
 ### With Docker Compose
 
