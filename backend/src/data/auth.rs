@@ -1,8 +1,10 @@
 //! SQL for users, sessions and permission profiles.
 
+use std::net::IpAddr;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use ipnetwork::IpNetwork;
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
@@ -32,16 +34,18 @@ pub async fn create_session(
     csrf_token: &str,
     max_age: Duration,
     user_agent: Option<&str>,
+    ip_address: Option<IpAddr>,
 ) -> sqlx::Result<Uuid> {
     sqlx::query_scalar(
-        "INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at, user_agent)
-         VALUES ($1, $2, $3, now() + $4::interval, $5) RETURNING id",
+        "INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at, user_agent, ip_address)
+         VALUES ($1, $2, $3, now() + $4::interval, $5, $6) RETURNING id",
     )
     .bind(user_id)
     .bind(token_hash)
     .bind(csrf_token)
     .bind(interval(max_age))
     .bind(user_agent)
+    .bind(ip_address.map(IpNetwork::from))
     .fetch_one(conn)
     .await
 }
@@ -70,19 +74,45 @@ pub async fn touch_session(pool: &PgPool, id: Uuid) -> sqlx::Result<()> {
     Ok(())
 }
 
-pub async fn delete_session(pool: &PgPool, id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM sessions WHERE id = $1").bind(id).execute(pool).await?;
-    Ok(())
+/// A session that was just ended, for its audit row (never the token or its hash).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct EndedSession {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub username: String,
+    pub ip_address: Option<IpNetwork>,
+    pub user_agent: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+const ENDED: &str = "DELETE FROM sessions s USING users u WHERE u.id = s.user_id AND";
+const ENDED_COLUMNS: &str = "RETURNING s.id, s.user_id, u.username, s.ip_address, s.user_agent, s.created_at";
+
+pub async fn delete_session(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<EndedSession>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!("{ENDED} s.id = $1 {ENDED_COLUMNS}")))
+        .bind(id)
+        .fetch_optional(conn)
+        .await
+}
+
+pub async fn delete_session_by_token(conn: &mut PgConnection, token_hash: &[u8]) -> sqlx::Result<Option<EndedSession>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!("{ENDED} s.token_hash = $1 {ENDED_COLUMNS}")))
+        .bind(token_hash)
+        .fetch_optional(conn)
+        .await
 }
 
 /// Signs a user out everywhere, optionally keeping one session (the caller's own).
-pub async fn delete_user_sessions(conn: &mut PgConnection, user_id: Uuid, keep: Option<Uuid>) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND id IS DISTINCT FROM $2")
+pub async fn delete_user_sessions(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    keep: Option<Uuid>,
+) -> sqlx::Result<Vec<EndedSession>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!("{ENDED} s.user_id = $1 AND s.id IS DISTINCT FROM $2 {ENDED_COLUMNS}")))
         .bind(user_id)
         .bind(keep)
-        .execute(conn)
-        .await?;
-    Ok(())
+        .fetch_all(conn)
+        .await
 }
 
 /// Expired and idle sessions; called on login so the table stays small.

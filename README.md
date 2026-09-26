@@ -82,12 +82,15 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
    ```
    Connected to database "shadoucmdb" (PostgreSQL 18.1), ssl=verify-full
-   Migrations: 4 in binary, 0 applied, 4 pending
+   Migrations: 7 in binary, 0 applied, 7 pending
      applied 0000_extensions
      applied 0001_core_schema
      applied 0002_integrity_triggers
      applied 0003_users_and_permission_profiles
-   Database is at migration 4/4
+     applied 0004_data_model_admin
+     applied 0005_ui_settings
+     applied 0006_auth_audit
+   Database is at migration 7/7
    ```
 
    Re-running is safe; it reports `nothing to do`. Applied migrations are tracked in `_sqlx_migrations`.

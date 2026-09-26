@@ -253,6 +253,20 @@ pub enum AuditAction {
     Delete,
     // Reserved: undelete is not an API operation yet.
     Restore,
+    // Authentication events (entity type `sessions`); details in new_value.
+    #[serde(rename = "login.success")]
+    #[sqlx(rename = "login.success")]
+    LoginSuccess,
+    #[serde(rename = "login.failure")]
+    #[sqlx(rename = "login.failure")]
+    LoginFailure,
+    #[serde(rename = "login.locked")]
+    #[sqlx(rename = "login.locked")]
+    LoginLocked,
+    Logout,
+    #[serde(rename = "session.revoke")]
+    #[sqlx(rename = "session.revoke")]
+    SessionRevoke,
 }
 
 impl AuditAction {
@@ -262,6 +276,11 @@ impl AuditAction {
             AuditAction::Update => "update",
             AuditAction::Delete => "delete",
             AuditAction::Restore => "restore",
+            AuditAction::LoginSuccess => "login.success",
+            AuditAction::LoginFailure => "login.failure",
+            AuditAction::LoginLocked => "login.locked",
+            AuditAction::Logout => "logout",
+            AuditAction::SessionRevoke => "session.revoke",
         }
     }
 }

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::http::{HeaderMap, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::ToSchema;
@@ -15,6 +15,7 @@ use super::users::{self, User, UserCreate, password_problem, password_schema, us
 use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, WithCookies, route};
 use crate::api::schemas::{name_schema, trimmed};
+use crate::auth::events::{self, LoginMethod, RevokeReason};
 use crate::auth::permissions::{ClassRights, GlobalPermission, Permissions};
 use crate::auth::throttle::{GLOBAL_PENALTY, Gate, LoginThrottle, SLOW_LANE_WAITERS};
 use crate::auth::{AuthState, Principal, password, session};
@@ -139,34 +140,38 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, csrf_token: String) -> Result
     Ok(Session { user, permissions: EffectivePermissions::from(&permissions), csrf_token })
 }
 
-fn user_agent(headers: &HeaderMap) -> Option<String> {
-    headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).map(|s| s.chars().take(400).collect())
-}
-
-/// Opens a session for the user; returns the session and its cookies.
+/// Opens a session for the user and records `login.success`; returns the session and its cookies.
 async fn start_session(
     pool: &PgPool,
     auth: &AuthState,
     headers: &HeaderMap,
+    ctx: &RequestContext,
     user_id: Uuid,
+    username: &str,
+    method: LoginMethod,
 ) -> Result<WithCookies<Json<Session>>, AppError> {
-    // A cookie from an earlier session in this browser is replaced, not kept alive.
-    if let Some(old) = session::cookie(headers, session::SESSION_COOKIE) {
-        sqlx::query("DELETE FROM sessions WHERE token_hash = $1").bind(session::token_hash(old)).execute(pool).await?;
-    }
+    let ctx = ctx.acting_as_user(user_id, username);
     let token = session::new_token();
     let csrf = session::new_token();
-    let mut conn = pool.acquire().await?;
-    data::create_session(
-        &mut conn,
+    let mut tx = pool.begin().await?;
+    // A cookie from an earlier session in this browser is replaced, not kept alive.
+    if let Some(old) = session::cookie(headers, session::SESSION_COOKIE)
+        && let Some(ended) = data::delete_session_by_token(&mut tx, &session::token_hash(old)).await?
+    {
+        events::revoked(&mut tx, &ctx, &[ended], RevokeReason::Replaced).await?;
+    }
+    let session_id = data::create_session(
+        &mut tx,
         user_id,
         &session::token_hash(&token),
         &csrf,
         auth.config.session_max_age,
-        user_agent(headers).as_deref(),
+        ctx.client.user_agent.as_deref(),
+        ctx.client.ip,
     )
     .await?;
-    drop(conn);
+    events::login_success(&mut tx, &ctx, session_id, user_id, username, method).await?;
+    tx.commit().await?;
     let cookies = session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &token, &csrf);
     Ok(WithCookies(Json(session_dto(pool, user_id, csrf).await?), cookies))
 }
@@ -180,9 +185,10 @@ async fn setup(
     pool: &PgPool,
     auth: &AuthState,
     headers: &HeaderMap,
+    request: &RequestContext,
     b: SetupBody,
 ) -> Result<WithCookies<Json<Session>>, AppError> {
-    let ctx = RequestContext::system("first-run setup", crate::http::request_id::current());
+    let ctx = RequestContext::system("first-run setup", request.request_id.clone()).with_client(request.client.clone());
     // Anonymous and unthrottled: an installed system must answer without taking any lock.
     if !setup_required(pool).await? {
         return Err(setup_done());
@@ -205,7 +211,7 @@ async fn setup(
     tx.commit().await?;
     tracing::info!(user = %user.username, "first-run setup created the first administrator");
     data::record_login(pool, user.id).await?;
-    start_session(pool, auth, headers, user.id).await
+    start_session(pool, auth, headers, request, user.id, &user.username, LoginMethod::Setup).await
 }
 
 fn setup_done() -> AppError {
@@ -245,28 +251,61 @@ fn invalid_credentials() -> AppError {
     AppError::new(ErrorCode::Unauthenticated, "Invalid username or password")
 }
 
+/// Records `login.failure`, and `login.locked` when this failure set a lock.
+async fn record_failure(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    username: &str,
+    locked: Option<Duration>,
+) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    let attempt = events::login_failure(&mut tx, ctx, username).await?;
+    if let Some(lock) = locked {
+        events::login_locked(&mut tx, ctx, attempt, username, lock).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 async fn login(
     pool: &PgPool,
     auth: &AuthState,
     headers: &HeaderMap,
+    ctx: &RequestContext,
     b: LoginBody,
 ) -> Result<WithCookies<Json<Session>>, AppError> {
     throttle_gate(&auth.throttle, &b.username, "sign-ins for this username").await?;
     let row = data::find_for_login(pool, &b.username).await?;
     if !password::verify(&b.password, row.as_ref().map(|r| r.password_hash.as_str())).await? {
         let locked = auth.throttle.failure(&b.username);
-        tracing::warn!(username = %b.username.chars().take(64).collect::<String>(), locked_secs = locked.map(|d| d.as_secs()), "sign-in failed");
+        tracing::warn!(username = %b.username.chars().take(64).collect::<String>(), ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in failed");
+        record_failure(pool, ctx, &b.username, locked).await?;
         return Err(invalid_credentials());
     }
     let Some(user) = row else { return Err(invalid_credentials()) };
     if !user.is_active {
+        // Treated exactly like a wrong password: same throttle, same rows, same
+        // lock. Otherwise the right password for a disabled account would be
+        // an unthrottled way to grow audit_log, and its rows would stand out.
+        let locked = auth.throttle.failure(&b.username);
+        tracing::warn!(username = %user.username, ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in to a disabled account");
+        record_failure(pool, ctx, &b.username, locked).await?;
         return Err(AppError::new(ErrorCode::Unauthenticated, "This account is disabled"));
     }
     auth.throttle.success(&b.username);
     let purged = data::purge_sessions(pool, auth.config.session_idle).await?;
     data::record_login(pool, user.id).await?;
-    tracing::info!(user = %user.username, purged_sessions = purged, "signed in");
-    start_session(pool, auth, headers, user.id).await
+    tracing::info!(user = %user.username, ip = ?ctx.client.ip, purged_sessions = purged, "signed in");
+    start_session(pool, auth, headers, ctx, user.id, &user.username, LoginMethod::Password).await
+}
+
+async fn logout(pool: &PgPool, ctx: &RequestContext) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    if let Some(ended) = data::delete_session(&mut tx, principal(ctx)?.session_id).await? {
+        events::logout(&mut tx, ctx, &ended).await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 fn principal(ctx: &RequestContext) -> Result<&Principal, AppError> {
@@ -320,7 +359,7 @@ pub fn routes() -> Vec<Route> {
             .status(StatusCode::CREATED)
             .errors(&[ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<SetupBody>>| async move {
-                setup(&api.pool, &api.auth, &api.headers, b).await
+                setup(&api.pool, &api.auth, &api.headers, &api.ctx, b).await
             }),
         route(Method::POST, "/api/v1/auth/login", "login")
             .tag(TAG)
@@ -331,13 +370,13 @@ pub fn routes() -> Vec<Route> {
             .public()
             .errors(&[ErrorCode::Unauthenticated, ErrorCode::RateLimited])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<LoginBody>>| async move {
-                login(&api.pool, &api.auth, &api.headers, b).await
+                login(&api.pool, &api.auth, &api.headers, &api.ctx, b).await
             }),
         route(Method::POST, "/api/v1/auth/logout", "logout")
             .tag(TAG)
             .summary("Sign out: end this session and clear its cookies")
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
-                data::delete_session(&api.pool, principal(&api.ctx)?.session_id).await?;
+                logout(&api.pool, &api.ctx).await?;
                 let secure = session::secure_cookies(&api.auth.config, &api.headers);
                 Ok(WithCookies(NoContent, session::logout_cookies(secure)))
             }),
@@ -378,6 +417,10 @@ mod tests {
         })
     }
 
+    fn anon() -> RequestContext {
+        RequestContext::anonymous(String::new())
+    }
+
     fn body(username: &str) -> SetupBody {
         SetupBody {
             username: username.into(),
@@ -396,12 +439,12 @@ mod tests {
         };
         let (pool, auth) = (&db.pool, auth_state());
         let headers = HeaderMap::new();
-        setup(pool, &auth, &headers, body("first")).await.expect("first setup");
+        setup(pool, &auth, &headers, &anon(), body("first")).await.expect("first setup");
 
         // A writer holding ROW EXCLUSIVE on users, as a sign-in does mid-transaction.
         let mut writer = pool.begin().await.unwrap();
         writer.execute("UPDATE users SET last_login_at = last_login_at WHERE false").await.unwrap();
-        let late = tokio::time::timeout(Duration::from_secs(5), setup(pool, &auth, &headers, body("late")))
+        let late = tokio::time::timeout(Duration::from_secs(5), setup(pool, &auth, &headers, &anon(), body("late")))
             .await
             .expect("setup waited on a lock held by a users writer");
         assert_eq!(late.err().map(|e| e.code), Some(ErrorCode::Conflict));
@@ -415,10 +458,10 @@ mod tests {
         let Some(db) = scratch::database("concurrent_setups_create_exactly_one_administrator").await else { return };
         let (pool, auth) = (&db.pool, auth_state());
         for round in 0..5 {
-            let headers = HeaderMap::new();
+            let (headers, ctx) = (HeaderMap::new(), anon());
             let (a, b) = tokio::join!(
-                setup(pool, &auth, &headers, body(&format!("a{round}"))),
-                setup(pool, &auth, &headers, body(&format!("b{round}"))),
+                setup(pool, &auth, &headers, &ctx, body(&format!("a{round}"))),
+                setup(pool, &auth, &headers, &ctx, body(&format!("b{round}"))),
             );
             let codes = [a.err().map(|e| e.code), b.err().map(|e| e.code)];
             assert!(codes.contains(&None) && codes.contains(&Some(ErrorCode::Conflict)), "round {round}: {codes:?}");
@@ -443,17 +486,17 @@ mod tests {
             return;
         };
         let (pool, auth) = (&db.pool, auth_state());
-        setup(pool, &auth, &HeaderMap::new(), body("admin")).await.expect("setup");
+        setup(pool, &auth, &HeaderMap::new(), &anon(), body("admin")).await.expect("setup");
         for i in 0..crate::auth::throttle::GLOBAL_BUDGET {
             auth.throttle.failure(&format!("junk-{i}"));
         }
         assert_eq!(auth.throttle.check("admin"), Gate::Slow);
         let started = std::time::Instant::now();
         let login_as = |password: &str| LoginBody { username: "admin".into(), password: password.into() };
-        let signed_in = login(pool, &auth, &HeaderMap::new(), login_as("correct horse battery")).await;
+        let signed_in = login(pool, &auth, &HeaderMap::new(), &anon(), login_as("correct horse battery")).await;
         assert!(signed_in.is_ok(), "refused: {:?}", signed_in.err().map(|e| e.code));
         assert!(started.elapsed() >= GLOBAL_PENALTY, "through the slow lane");
-        let wrong = login(pool, &auth, &HeaderMap::new(), login_as("wrong guess")).await;
+        let wrong = login(pool, &auth, &HeaderMap::new(), &anon(), login_as("wrong guess")).await;
         assert_eq!(wrong.err().map(|e| e.code), Some(ErrorCode::Unauthenticated), "slowed, then checked");
         db.drop().await;
     }
@@ -463,7 +506,7 @@ mod tests {
     async fn guessing_the_current_password_is_throttled() {
         let Some(db) = scratch::database("guessing_the_current_password_is_throttled").await else { return };
         let (pool, auth) = (&db.pool, auth_state());
-        setup(pool, &auth, &HeaderMap::new(), body("owner")).await.expect("setup");
+        setup(pool, &auth, &HeaderMap::new(), &anon(), body("owner")).await.expect("setup");
         let user_id: Uuid = sqlx::query_scalar("SELECT id FROM users").fetch_one(pool).await.unwrap();
         let permissions = data::load_permissions(&mut pool.acquire().await.unwrap(), user_id).await.unwrap();
         let principal = Principal {
@@ -487,6 +530,224 @@ mod tests {
         assert_eq!(e.retry_after, Some(1));
         let hash = data::password_hash(&mut pool.acquire().await.unwrap(), user_id).await.unwrap();
         assert!(password::verify("correct horse battery", hash.as_deref()).await.unwrap(), "password unchanged");
+        db.drop().await;
+    }
+
+    /// A request straight from `ip`, no proxy.
+    fn from(ip: &str) -> RequestContext {
+        via(ip, ip)
+    }
+
+    /// A request whose forwarded headers say `ip`, from TCP peer `peer`.
+    fn via(ip: &str, peer: &str) -> RequestContext {
+        let client = crate::api::context::ClientInfo {
+            ip: Some(ip.parse().unwrap()),
+            peer_ip: Some(peer.parse().unwrap()),
+            user_agent: Some("audit-test".into()),
+        };
+        anon().with_client(client)
+    }
+
+    fn login_body(username: &str, password: &str) -> LoginBody {
+        LoginBody { username: username.into(), password: password.into() }
+    }
+
+    type Row = (String, Option<String>, Uuid, serde_json::Value);
+
+    async fn auth_rows(pool: &PgPool, action: &str) -> Vec<Row> {
+        sqlx::query_as(
+            "SELECT actor_type, actor_id, entity_id, new_value FROM audit_log
+             WHERE entity_type = 'sessions' AND action = $1 AND old_value IS NULL ORDER BY id",
+        )
+        .bind(action)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Sign-in success, failure, the lock and a revocation by disabling each
+    /// write an audit row with the actor and client IP, and nothing secret.
+    #[tokio::test]
+    async fn authentication_events_are_audited() {
+        let Some(db) = scratch::database("authentication_events_are_audited").await else { return };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        let WithCookies(Json(owner), _) =
+            setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+
+        // A second user signs in from 203.0.113.5.
+        let system = RequestContext::system("test", "test");
+        let input = UserCreate {
+            username: "alice".into(),
+            display_name: "Alice".into(),
+            email: None,
+            password: "alice correct horse".into(),
+            is_active: Some(true),
+            profile_ids: vec![],
+        };
+        let alice = users::create(pool, &system, &input).await.unwrap();
+        login(pool, &auth, &headers, &from("203.0.113.5"), login_body("ALICE", "alice correct horse")).await.unwrap();
+        let success = auth_rows(pool, "login.success").await;
+        let (actor_type, actor_id, session_id, v) = success.last().unwrap();
+        assert_eq!((actor_type.as_str(), actor_id.as_deref()), ("user", Some(alice.id.to_string().as_str())));
+        assert_eq!((v["ipAddress"].as_str(), v["userAgent"].as_str()), (Some("203.0.113.5"), Some("audit-test")));
+        assert_eq!((v["username"].as_str(), v["method"].as_str()), (Some("alice"), Some("password")));
+        let ip: Option<String> = sqlx::query_scalar("SELECT host(ip_address) FROM sessions WHERE id = $1")
+            .bind(session_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(ip.as_deref(), Some("203.0.113.5"), "the session keeps the client IP");
+        assert_eq!(success[0].3["method"], "setup");
+
+        // Failures: no actor id; a real and an unknown name leave identically shaped rows.
+        login(pool, &auth, &headers, &from("198.51.100.7"), login_body("alice", "wrong password 1"))
+            .await
+            .err()
+            .expect("sign-in refused");
+        login(pool, &auth, &headers, &from("198.51.100.7"), login_body("nobody", "wrong password 1"))
+            .await
+            .err()
+            .expect("sign-in refused");
+        let failures = auth_rows(pool, "login.failure").await;
+        assert_eq!(failures.len(), 2);
+        for ((actor_type, actor_id, _, v), name) in failures.iter().zip(["alice", "nobody"]) {
+            assert_eq!((actor_type.as_str(), actor_id.as_deref()), ("api_client", None));
+            assert_eq!(
+                v,
+                &serde_json::json!({ "attemptedUsername": name, "ipAddress": "198.51.100.7", "userAgent": "audit-test" })
+            );
+        }
+
+        // The failure that sets the lock also writes login.locked, for the same attempt.
+        for _ in 1..crate::auth::throttle::FREE_FAILURES {
+            login(pool, &auth, &headers, &from("198.51.100.7"), login_body("nobody", "wrong password 2"))
+                .await
+                .err()
+                .expect("sign-in refused");
+        }
+        let locked = auth_rows(pool, "login.locked").await;
+        assert_eq!(locked.len(), 1);
+        let (_, actor_id, attempt, v) = &locked[0];
+        assert_eq!(
+            (actor_id, v["attemptedUsername"].as_str(), v["lockedForSeconds"].as_u64()),
+            (&None, Some("nobody"), Some(1))
+        );
+        assert_eq!(auth_rows(pool, "login.failure").await.last().unwrap().2, *attempt);
+
+        // Disabling alice ends her session: session.revoke, the administrator as actor.
+        let (tokens, csrf): (Vec<Vec<u8>>, Vec<String>) =
+            sqlx::query_as::<_, (Vec<u8>, String)>("SELECT token_hash, csrf_token FROM sessions")
+                .fetch_all(pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .unzip();
+        let permissions = data::load_permissions(&mut pool.acquire().await.unwrap(), owner.user.id).await.unwrap();
+        let principal = Principal {
+            user_id: owner.user.id,
+            username: "owner".into(),
+            session_id: Uuid::nil(),
+            csrf_token: String::new(),
+            permissions,
+        };
+        let admin =
+            RequestContext::user(std::sync::Arc::new(principal), "req-1".into()).with_client(from("192.0.2.1").client);
+        let update: users::UserUpdate = serde_json::from_value(serde_json::json!({ "isActive": false })).unwrap();
+        users::update(pool, &admin, alice.id, &update).await.unwrap();
+        let revoked = auth_rows(pool, "session.revoke").await;
+        assert_eq!(revoked.len(), 1);
+        let (_, actor_id, entity_id, v) = &revoked[0];
+        assert_eq!((actor_id.as_deref(), entity_id), (Some(owner.user.id.to_string().as_str()), session_id));
+        assert_eq!(
+            (v["reason"].as_str(), v["userId"].as_str()),
+            (Some("user_disabled"), Some(alice.id.to_string().as_str()))
+        );
+        assert_eq!(
+            (v["ipAddress"].as_str(), v["session"]["ipAddress"].as_str()),
+            (Some("192.0.2.1"), Some("203.0.113.5"))
+        );
+
+        // Nothing secret in any authentication row.
+        let all: Vec<String> =
+            sqlx::query_scalar("SELECT new_value::text FROM audit_log WHERE entity_type = 'sessions'")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        let mut secrets: Vec<String> =
+            ["correct horse battery", "alice correct horse", "wrong password", "argon2"].map(String::from).to_vec();
+        secrets.extend(tokens.iter().map(hex::encode).chain(csrf).chain([owner.csrf_token.clone()]));
+        for row in &all {
+            for secret in &secrets {
+                assert!(!row.contains(secret.as_str()), "{row} contains secret material");
+            }
+        }
+        db.drop().await;
+    }
+    /// The right password for a disabled account counts as a failure for the
+    /// throttle: it locks the name like a wrong one, and the rows look the same.
+    #[tokio::test]
+    async fn a_disabled_account_is_throttled_like_a_wrong_password() {
+        let Some(db) = scratch::database("a_disabled_account_is_throttled_like_a_wrong_password").await else { return };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        let input = UserCreate {
+            username: "gone".into(),
+            display_name: "Gone".into(),
+            email: None,
+            password: "gone correct horse".into(),
+            is_active: Some(false),
+            profile_ids: vec![],
+        };
+        users::create(pool, &RequestContext::system("test", "test"), &input).await.unwrap();
+        for _ in 0..crate::auth::throttle::FREE_FAILURES {
+            let e = login(pool, &auth, &headers, &from("198.51.100.8"), login_body("gone", "gone correct horse"))
+                .await
+                .err()
+                .expect("disabled");
+            assert_eq!(e.code, ErrorCode::Unauthenticated);
+        }
+        let locked = auth_rows(pool, "login.locked").await;
+        assert_eq!(locked.len(), 1, "the disabled account's name is locked");
+        assert_eq!(locked[0].3["attemptedUsername"], "gone");
+        let failures = auth_rows(pool, "login.failure").await;
+        assert_eq!(failures.len() as u32, crate::auth::throttle::FREE_FAILURES);
+        assert_eq!(
+            failures[0].3,
+            serde_json::json!({ "attemptedUsername": "gone", "ipAddress": "198.51.100.8", "userAgent": "audit-test" })
+        );
+        let e = login(pool, &auth, &headers, &from("198.51.100.8"), login_body("gone", "gone correct horse"))
+            .await
+            .err()
+            .expect("locked");
+        assert_eq!(e.code, ErrorCode::RateLimited);
+        assert_eq!(auth_rows(pool, "login.failure").await.len(), failures.len(), "a 429 writes no row");
+        db.drop().await;
+    }
+
+    /// When the forwarded address is not the TCP peer, the row keeps both.
+    #[tokio::test]
+    async fn the_peer_address_is_kept_when_forwarded_headers_differ() {
+        let Some(db) = scratch::database("the_peer_address_is_kept_when_forwarded_headers_differ").await else {
+            return;
+        };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        login(pool, &auth, &headers, &via("198.51.100.9", "10.0.0.2"), login_body("owner", "correct horse battery"))
+            .await
+            .unwrap();
+        login(pool, &auth, &headers, &via("198.51.100.9", "10.0.0.2"), login_body("owner", "wrong"))
+            .await
+            .err()
+            .expect("refused");
+        let success = auth_rows(pool, "login.success").await;
+        let failure = auth_rows(pool, "login.failure").await;
+        for v in [&success[1].3, &failure[0].3] {
+            assert_eq!(
+                (v["ipAddress"].as_str(), v["peerIpAddress"].as_str()),
+                (Some("198.51.100.9"), Some("10.0.0.2"))
+            );
+        }
+        assert!(success[0].3.get("peerIpAddress").is_none(), "no peerIpAddress when it equals ipAddress");
         db.drop().await;
     }
 }

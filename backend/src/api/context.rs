@@ -8,6 +8,7 @@
 //! [`RequestContext::class_scope`], because only they know a CI's class.
 //! Imports and discovery run as [`Caller::System`] and are not restricted.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -57,12 +58,25 @@ pub enum Caller {
     System,
 }
 
+/// Where an HTTP request came from; recorded with authentication events.
+/// Evidence only: the IP may come from client-controlled headers (see
+/// [`crate::auth::session::client_ip`]), so never base an access decision on it.
+#[derive(Debug, Clone, Default)]
+pub struct ClientInfo {
+    pub ip: Option<IpAddr>,
+    /// The TCP peer: the one hop the client cannot forge (the proxy, if there is one).
+    pub peer_ip: Option<IpAddr>,
+    pub user_agent: Option<String>,
+}
+
 /// Per-request context handed to services: the caller, the audit actor and a request id.
 #[derive(Debug, Clone)]
 pub struct RequestContext {
     pub caller: Caller,
     pub actor: Actor,
     pub request_id: String,
+    /// Empty outside HTTP (CLI, imports).
+    pub client: ClientInfo,
 }
 
 pub fn unauthenticated() -> AppError {
@@ -80,7 +94,7 @@ impl RequestContext {
             id: Some(principal.user_id.to_string()),
             name: Some(principal.username.clone()),
         };
-        RequestContext { caller: Caller::User(principal), actor, request_id }
+        RequestContext { caller: Caller::User(principal), actor, request_id, client: ClientInfo::default() }
     }
 
     pub fn anonymous(request_id: String) -> Self {
@@ -88,6 +102,7 @@ impl RequestContext {
             caller: Caller::Anonymous,
             actor: Actor { actor_type: ActorType::ApiClient, id: None, name: None },
             request_id,
+            client: ClientInfo::default(),
         }
     }
 
@@ -97,6 +112,7 @@ impl RequestContext {
             caller: Caller::System,
             actor: Actor { actor_type: ActorType::System, id: None, name: Some(name.into()) },
             request_id: request_id.into(),
+            client: ClientInfo::default(),
         }
     }
 
@@ -108,7 +124,20 @@ impl RequestContext {
             caller: Caller::System,
             actor: Actor { actor_type: ActorType::Import, id: None, name: Some(source.into()) },
             request_id: run_id.into(),
+            client: ClientInfo::default(),
         }
+    }
+
+    pub fn with_client(mut self, client: ClientInfo) -> Self {
+        self.client = client;
+        self
+    }
+
+    /// The same request, audited as this user (sign-in, before a session exists).
+    pub fn acting_as_user(&self, user_id: Uuid, username: &str) -> Self {
+        let actor =
+            Actor { actor_type: ActorType::User, id: Some(user_id.to_string()), name: Some(username.to_owned()) };
+        RequestContext { actor, ..self.clone() }
     }
 
     pub fn principal(&self) -> Option<&Principal> {
