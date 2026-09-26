@@ -4,7 +4,7 @@
 
 | Path | What |
 | --- | --- |
-| `backend/` | Node + Fastify + Drizzle API (TypeScript). The only database client. |
+| `backend/` | The only database client: the Rust server `shadoucmdb` (`Cargo.toml`, `rust/`) and, until SHAA-9, the Node API (`package.json`, `src/`). |
 | `frontend/` | React + Vite + TanStack Query web UI. Talks to the API only. |
 | `sql/` | Database artifacts: migrations, bootstrap scripts, ER diagram. |
 | `docs/` | Architecture and data-model documentation. |

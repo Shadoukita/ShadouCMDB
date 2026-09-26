@@ -16,18 +16,20 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
 | Path | What |
 | --- | --- |
-| `backend/` | Node + Fastify + Drizzle (TypeScript). Owns the schema, migrations and API. |
-| `backend/src/db/schema/` | Drizzle table definitions (source of truth for generated migrations). |
+| `backend/` | The backend. `Cargo.toml` + `rust/`: the Rust server `shadoucmdb` (Axum + sqlx), which runs migrations, seed, verify, health checks and the embedded UI. `package.json` + `src/`: the Node API that serves `/api/v1` until the port to Rust (SHAA-9). |
+| `backend/src/db/schema/` | Drizzle table definitions used by the Node API (kept in sync with `sql/migrations/` by hand). |
 | `sql/` | Database artifacts: versioned migrations, bootstrap scripts, ER diagram. See [`sql/README.md`](sql/README.md). |
 | `frontend/` | React + Vite + TanStack Query UI (stub for now). |
 | `docs/data-model.md` | Data model, integrity rules and soft-delete decisions. |
 | `.github/` | CI workflow and pull request template. |
 | `docs/api.md` | API conventions, error envelope, endpoint overview, extension seams. |
 | `backend/openapi.json` | Generated OpenAPI contract (`npm run openapi -w backend`). |
+| `Dockerfile`, `deploy/` | Multi-arch container image of `shadoucmdb`; sample systemd unit. See [docs/deployment.md](docs/deployment.md). |
 
 ## Requirements
 
-- Node.js 22.9+ (or Docker)
+- The `shadoucmdb` binary (Linux x64/ARM64, Windows x64), built with stable Rust 1.94+ or taken from a
+  release, or Docker. Node.js 22.9+ is needed for the Node API and the frontend tooling.
 - A reachable PostgreSQL **14 or newer**, anywhere: a managed service (RDS,
   Cloud SQL, Azure), another host on your network, or a local install.
 
@@ -69,45 +71,49 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    There is no default host. If nothing is configured, the backend exits with an error naming
    the missing variable. Every variable is documented in [`.env.example`](.env.example).
 
-3. **Run the migrations.**
+3. **Run the migrations** with the `shadoucmdb` binary (build it with `cargo build --release` in
+   `backend/`; see [docs/deployment.md](docs/deployment.md)). The migrations are embedded in the binary:
 
    ```sh
-   npm install
-   npm run db:migrate
+   shadoucmdb migrate
    ```
 
    Expected output on an empty database:
 
    ```
    Connected to database "shadoucmdb" (PostgreSQL 18.1), ssl=verify-full
-   Migrations: 3 in repo, 0 applied, 3 pending
+   Migrations: 3 in binary, 0 applied, 3 pending
      applied 0000_extensions
      applied 0001_core_schema
      applied 0002_integrity_triggers
    Database is at migration 3/3
    ```
 
-   Re-running is safe; it reports `nothing to do`. Applied migrations are tracked in
-   `drizzle.__drizzle_migrations`, and all pending migrations run in one transaction.
+   Re-running is safe; it reports `nothing to do`. Applied migrations are tracked in `_sqlx_migrations`.
+   A dev database that was migrated by the old Node runner needs a one-time
+   `shadoucmdb migrate --adopt-drizzle` (or a reset); see
+   [docs/deployment.md](docs/deployment.md#moving-a-dev-database-off-the-nodedrizzle-migration-runner).
 
 4. **Load reference data** (CI classes, attributes, statuses, environments, locations,
    relationship types). This step is idempotent and never overwrites rows you have edited:
 
    ```sh
-   npm run db:seed                     # reference data only
-   npm run db:seed -w backend -- --demo  # plus a small sample inventory (only into an empty CI table)
+   shadoucmdb seed          # reference data only
+   shadoucmdb seed --demo   # plus a small sample inventory (only into an empty CI table)
    ```
 
 5. **Check the schema** (optional). This runs the acceptance checks inside a transaction that
    is rolled back, so it writes nothing:
 
    ```sh
-   npm run db:verify -w backend
+   shadoucmdb verify
    ```
 
-6. **Start the backend:** `npm run dev:backend`, or `npm run build -w backend && npm start -w backend`.
+6. **Start the backend.** `shadoucmdb serve` serves `/healthz`, `/readyz` and the embedded web UI.
    `GET /healthz` reports liveness. `GET /readyz` returns 200 only when the database is reachable and
-   all migrations are applied, and 503 otherwise.
+   all migrations are applied, and 503 otherwise. Until the API port (SHAA-9) lands, `/api/v1` comes from
+   the Node API: `npm install && npm run dev:backend`, or `npm run build -w backend && npm start -w backend`.
+   To run as a systemd service, a Windows Service or a container, see [docs/deployment.md](docs/deployment.md).
 
 7. **Use the API.** It lives under `/api/v1`. The OpenAPI 3.1 contract is served at `/openapi.json`, and
    there is a browsable UI at `/docs`. The same contract is committed as
@@ -118,9 +124,13 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    API_URL=http://localhost:3000 npm run smoke -w backend
    ```
 
-### With Docker Compose
+### With Docker
 
-`docker-compose.yml` builds the backend and reads `.env`. It contains **no** database service.
+The root `Dockerfile` builds a small multi-arch (amd64/arm64), non-root image of `shadoucmdb`:
+`docker run --rm --env-file .env shadoucmdb migrate`, then `docker run -d --env-file .env -p 3000:3000 shadoucmdb`.
+See [docs/deployment.md](docs/deployment.md#docker).
+
+`docker-compose.yml` builds the Node API (until SHAA-9) and reads `.env`. It contains **no** database service.
 
 ```sh
 cp .env.example .env                     # point it at your PostgreSQL
@@ -136,12 +146,11 @@ For a PostgreSQL running on the Docker host itself, set `PGHOST=host.docker.inte
 
 Every schema change is a migration. No hand-applied DDL.
 
-1. Edit the Drizzle tables in `backend/src/db/schema/`.
-2. `npm run db:generate -w backend -- --name=<what_changed>` writes the next SQL file into
-   `sql/migrations/`. Review it.
-3. For triggers, functions or data fixes that Drizzle cannot express, create an empty migration
-   with `npx drizzle-kit generate --custom --name=<what>` (from `backend/`) and write the SQL.
-4. `npm run db:migrate`, then commit the schema change and the migration together.
+1. Write the next migration by hand as `sql/migrations/<NNNN>_<what_changed>.sql` (next number, four digits).
+2. Until the Node API is retired (SHAA-9): mirror the change in the Drizzle tables in
+   `backend/src/db/schema/` and append the migration to `sql/migrations/meta/_journal.json`.
+3. Rebuild and run `shadoucmdb migrate`, then `shadoucmdb verify`. Commit the migration, the schema change and
+   any ERD update together. See [`sql/README.md`](sql/README.md).
 
 Adding a CI class, attribute or relationship type is **data**, not a schema change. See
 [docs/data-model.md](docs/data-model.md#extending-the-model-without-migrations).
