@@ -947,7 +947,7 @@
                   },
                   "attributes": {
                     "type": "object",
-                    "description": "Values by attribute key (see GET /api/v1/ci-classes/{id}/attributes). Required attributes must be present.",
+                    "description": "Values by attribute key (see GET /api/v1/ci-classes/{id}/attributes). Required attributes must be present; attributes left out get their defaultValue.",
                     "additionalProperties": {
                       "anyOf": [
                         {
@@ -956,7 +956,7 @@
                             "number",
                             "boolean"
                           ],
-                          "description": "text/enum/date (YYYY-MM-DD)/datetime (ISO 8601)/ip/cidr/reference (CI id) are strings; number/integer are numbers; boolean is a boolean"
+                          "description": "text/enum/date (YYYY-MM-DD)/datetime (ISO 8601)/ip/cidr/reference (CI id)/lookup (lookup list value id) are strings; number/integer are numbers; boolean is a boolean"
                         },
                         {
                           "type": "null"
@@ -1376,7 +1376,7 @@
                             "number",
                             "boolean"
                           ],
-                          "description": "text/enum/date (YYYY-MM-DD)/datetime (ISO 8601)/ip/cidr/reference (CI id) are strings; number/integer are numbers; boolean is a boolean"
+                          "description": "text/enum/date (YYYY-MM-DD)/datetime (ISO 8601)/ip/cidr/reference (CI id)/lookup (lookup list value id) are strings; number/integer are numbers; boolean is a boolean"
                         },
                         {
                           "type": "null"
@@ -2541,7 +2541,7 @@
           {
             "name": "sort",
             "in": "query",
-            "description": "Sort field; prefix with \"-\" for descending. One of: name, key, createdAt, updatedAt",
+            "description": "Sort field; prefix with \"-\" for descending. One of: name, key, sortOrder, createdAt, updatedAt",
             "required": false,
             "schema": {
               "type": "string",
@@ -2551,6 +2551,8 @@
                 "-name",
                 "key",
                 "-key",
+                "sortOrder",
+                "-sortOrder",
                 "createdAt",
                 "-createdAt",
                 "updatedAt",
@@ -2735,6 +2737,23 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "color": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "description": "Hex colour, e.g. \"#1f6feb\"",
+                        "pattern": "^#[0-9a-fA-F]{6}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": -1000000
                   },
                   "isActive": {
                     "type": "boolean"
@@ -2927,7 +2946,7 @@
           "CI classes"
         ],
         "summary": "Delete a ci class",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only for a class nothing refers to: no CIs (deleted ones included), subclasses, attribute definitions, reference attributes or relationship rules. Otherwise 409 IN_USE lists them; archive the class with `PATCH {\"isActive\": false}` instead, which keeps its CIs and blocks new ones.",
         "operationId": "deleteCiClass",
         "parameters": [
           {
@@ -3088,6 +3107,23 @@
                       }
                     ]
                   },
+                  "color": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "description": "Hex colour, e.g. \"#1f6feb\"",
+                        "pattern": "^#[0-9a-fA-F]{6}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": -1000000
+                  },
                   "isActive": {
                     "type": "boolean"
                   }
@@ -3193,6 +3229,94 @@
         "security": [
           {
             "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/ci-classes/{id}/usage": {
+      "get": {
+        "tags": [
+          "CI classes"
+        ],
+        "summary": "What still refers to a ci class",
+        "description": "Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "operationId": "getCiClassUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
             "sessionCookie": []
           }
         ]
@@ -3402,7 +3526,8 @@
                 "datetime",
                 "ip",
                 "cidr",
-                "reference"
+                "reference",
+                "lookup"
               ]
             }
           },
@@ -3530,10 +3655,22 @@
                       "datetime",
                       "ip",
                       "cidr",
-                      "reference"
+                      "reference",
+                      "lookup"
                     ]
                   },
                   "referenceClassId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lookupListId": {
                     "anyOf": [
                       {
                         "type": "string",
@@ -3631,6 +3768,35 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "helpText": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "defaultValue": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). Not allowed for \"reference\" attributes."
                   },
                   "sortOrder": {
                     "type": "integer",
@@ -3828,7 +3994,7 @@
           "Attribute definitions"
         ],
         "summary": "Delete a attribute definition",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while no CI stores a value for the attribute (409 IN_USE with the count otherwise). Retire it with `PATCH {\"isActive\": false}` instead: stored values stay readable and no new ones are accepted.",
         "operationId": "deleteAttributeDefinition",
         "parameters": [
           {
@@ -4035,6 +4201,35 @@
                       }
                     ]
                   },
+                  "helpText": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "defaultValue": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). Not allowed for \"reference\" attributes."
+                  },
                   "sortOrder": {
                     "type": "integer",
                     "maximum": 1000000,
@@ -4145,6 +4340,94 @@
         "security": [
           {
             "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/attribute-definitions/{id}/usage": {
+      "get": {
+        "tags": [
+          "Attribute definitions"
+        ],
+        "summary": "What still refers to a attribute definition",
+        "description": "Counts of attributeValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "operationId": "getAttributeDefinitionUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
             "sessionCookie": []
           }
         ]
@@ -4562,7 +4845,7 @@
           "Relationship types"
         ],
         "summary": "Delete a relationship type",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteRelationshipType",
         "parameters": [
           {
@@ -4820,6 +5103,94 @@
         "security": [
           {
             "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/relationship-types/{id}/usage": {
+      "get": {
+        "tags": [
+          "Relationship types"
+        ],
+        "summary": "What still refers to a relationship type",
+        "description": "Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "operationId": "getRelationshipTypeUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
             "sessionCookie": []
           }
         ]
@@ -5420,6 +5791,94 @@
         ]
       }
     },
+    "/api/v1/relationship-rules/{id}/usage": {
+      "get": {
+        "tags": [
+          "Relationship types"
+        ],
+        "summary": "What still refers to a relationship rule",
+        "description": "Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "operationId": "getRelationshipRuleUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/statuses": {
       "get": {
         "tags": [
@@ -5810,7 +6269,7 @@
           "Statuses"
         ],
         "summary": "Delete a status",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteStatus",
         "parameters": [
           {
@@ -6064,6 +6523,94 @@
         "security": [
           {
             "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/statuses/{id}/usage": {
+      "get": {
+        "tags": [
+          "Statuses"
+        ],
+        "summary": "What still refers to a status",
+        "description": "Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "operationId": "getStatusUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
             "sessionCookie": []
           }
         ]
@@ -6444,7 +6991,7 @@
           "Environments"
         ],
         "summary": "Delete a environment",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteEnvironment",
         "parameters": [
           {
@@ -6695,6 +7242,94 @@
         "security": [
           {
             "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/environments/{id}/usage": {
+      "get": {
+        "tags": [
+          "Environments"
+        ],
+        "summary": "What still refers to a environment",
+        "description": "Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "operationId": "getEnvironmentUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
             "sessionCookie": []
           }
         ]
@@ -7149,7 +7784,7 @@
           "Locations"
         ],
         "summary": "Delete a location",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteLocation",
         "parameters": [
           {
@@ -7435,6 +8070,94 @@
         "security": [
           {
             "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/locations/{id}/usage": {
+      "get": {
+        "tags": [
+          "Locations"
+        ],
+        "summary": "What still refers to a location",
+        "description": "Counts of configurationItems, deletedConfigurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "operationId": "getLocationUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
             "sessionCookie": []
           }
         ]
@@ -7847,7 +8570,7 @@
           "Owners"
         ],
         "summary": "Delete a owner",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteOwner",
         "parameters": [
           {
@@ -8077,6 +8800,1738 @@
           },
           "415": {
             "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/owners/{id}/usage": {
+      "get": {
+        "tags": [
+          "Owners"
+        ],
+        "summary": "What still refers to a owner",
+        "description": "Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "operationId": "getOwnerUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lookup-lists": {
+      "get": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "List lookup list records (paginated, searchable, sortable)",
+        "description": "`q` matches key, name, description (case-insensitive substring).",
+        "operationId": "listLookupLists",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: sortOrder, name, key, createdAt, updatedAt",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "sortOrder",
+              "enum": [
+                "sortOrder",
+                "-sortOrder",
+                "name",
+                "-name",
+                "key",
+                "-key",
+                "createdAt",
+                "-createdAt",
+                "updatedAt",
+                "-updatedAt"
+              ]
+            }
+          },
+          {
+            "name": "isActive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupListList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "Create a lookup list",
+        "description": "Requires `datamodel.manage`.",
+        "operationId": "createLookupList",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "key",
+                  "name"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "Stable machine key, lower_snake_case",
+                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": -1000000
+                  },
+                  "isActive": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lookup-lists/{id}": {
+      "get": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "Get one lookup list",
+        "operationId": "getLookupList",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "Delete a lookup list",
+        "description": "Requires `datamodel.manage`. Hard delete of the list and its values, allowed only while no attribute definition uses the list (409 IN_USE otherwise). Retire it with `PATCH {\"isActive\": false}` instead.",
+        "operationId": "deleteLookupList",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "Update a lookup list (partial)",
+        "description": "Requires `datamodel.manage`.",
+        "operationId": "updateLookupList",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "Stable machine key, lower_snake_case",
+                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": -1000000
+                  },
+                  "isActive": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lookup-lists/{id}/usage": {
+      "get": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "What still refers to a lookup list",
+        "description": "Counts of attributeDefinitions, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "operationId": "getLookupListUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lookup-list-values": {
+      "get": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "List lookup list value records (paginated, searchable, sortable)",
+        "description": "`q` matches key, name, description (case-insensitive substring).",
+        "operationId": "listLookupListValues",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: sortOrder, name, key, createdAt, updatedAt",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "sortOrder",
+              "enum": [
+                "sortOrder",
+                "-sortOrder",
+                "name",
+                "-name",
+                "key",
+                "-key",
+                "createdAt",
+                "-createdAt",
+                "updatedAt",
+                "-updatedAt"
+              ]
+            }
+          },
+          {
+            "name": "listId",
+            "in": "query",
+            "description": "Values of these lists (comma-separated ids)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "isActive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupListValueList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "Create a lookup list value",
+        "description": "Requires `datamodel.manage`.",
+        "operationId": "createLookupListValue",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "listId",
+                  "key",
+                  "name"
+                ],
+                "properties": {
+                  "listId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "Stable machine key, lower_snake_case",
+                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "description": "Hex colour, e.g. \"#1f6feb\"",
+                        "pattern": "^#[0-9a-fA-F]{6}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": -1000000
+                  },
+                  "isActive": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupListValue"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lookup-list-values/{id}": {
+      "get": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "Get one lookup list value",
+        "operationId": "getLookupListValue",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupListValue"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "Delete a lookup list value",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "operationId": "deleteLookupListValue",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "Update a lookup list value (partial)",
+        "description": "Requires `datamodel.manage`.",
+        "operationId": "updateLookupListValue",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "Stable machine key, lower_snake_case",
+                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "description": "Hex colour, e.g. \"#1f6feb\"",
+                        "pattern": "^#[0-9a-fA-F]{6}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": -1000000
+                  },
+                  "isActive": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupListValue"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lookup-list-values/{id}/usage": {
+      "get": {
+        "tags": [
+          "Lookup lists"
+        ],
+        "summary": "What still refers to a lookup list value",
+        "description": "Counts of attributeValues, attributeDefaults. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "operationId": "getLookupListValueUsage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/templates": {
+      "get": {
+        "tags": [
+          "Templates"
+        ],
+        "summary": "List starter templates and whether each is installed",
+        "description": "Requires `datamodel.manage`.",
+        "operationId": "listTemplates",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StarterTemplateList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/templates/{key}/install": {
+      "post": {
+        "tags": [
+          "Templates"
+        ],
+        "summary": "Install a starter template (idempotent)",
+        "description": "Requires `datamodel.manage`. Adds every class, attribute, relationship type and rule, status, environment and location of the template whose key does not exist yet, in one transaction. Existing rows are left unchanged, so installing again is a no-op and renamed or archived rows stay as they are. Each created row is written to the audit log.",
+        "operationId": "installTemplate",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Stable machine key, lower_snake_case",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateInstallResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10016,8 +12471,11 @@
           "isRequired",
           "enumValues",
           "referenceClassId",
+          "lookupListId",
           "validation",
           "groupName",
+          "helpText",
+          "defaultValue",
           "sortOrder",
           "isActive",
           "createdAt",
@@ -10056,7 +12514,8 @@
               "datetime",
               "ip",
               "cidr",
-              "reference"
+              "reference",
+              "lookup"
             ]
           },
           "isRequired": {
@@ -10080,6 +12539,14 @@
             "format": "uuid",
             "description": "When dataType is \"reference\": the class (or ancestor) the referenced CI must belong to"
           },
+          "lookupListId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "When dataType is \"lookup\": the admin-defined list its values come from"
+          },
           "validation": {
             "type": [
               "object",
@@ -10095,14 +12562,26 @@
               "string",
               "null"
             ],
-            "description": "UI grouping, e.g. \"Hardware\""
+            "description": "Form section the field is shown in, e.g. \"Hardware\""
+          },
+          "helpText": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shown under the field on CI forms"
+          },
+          "defaultValue": {
+            "description": "Pre-filled on new CIs and stored when a CI is created without a value (same shape as the value)"
           },
           "sortOrder": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Order within the form section"
           },
           "isActive": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Retired attributes keep their stored values but accept no new ones"
           },
           "createdAt": {
             "type": "string",
@@ -10240,6 +12719,8 @@
           "parentId",
           "isAbstract",
           "icon",
+          "color",
+          "sortOrder",
           "isActive",
           "createdAt",
           "updatedAt"
@@ -10279,8 +12760,21 @@
               "null"
             ]
           },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hex colour for badges and charts, e.g. \"#1f6feb\""
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position in menus and pickers (ascending)"
+          },
           "isActive": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Archived classes keep their CIs but accept no new ones"
           },
           "createdAt": {
             "type": "string",
@@ -10525,7 +13019,7 @@
                 "number",
                 "boolean"
               ],
-              "description": "text/enum/date (YYYY-MM-DD)/datetime (ISO 8601)/ip/cidr/reference (CI id) are strings; number/integer are numbers; boolean is a boolean"
+              "description": "text/enum/date (YYYY-MM-DD)/datetime (ISO 8601)/ip/cidr/reference (CI id)/lookup (lookup list value id) are strings; number/integer are numbers; boolean is a boolean"
             }
           },
           "attributeReferences": {
@@ -10732,8 +13226,11 @@
           "isRequired",
           "enumValues",
           "referenceClassId",
+          "lookupListId",
           "validation",
           "groupName",
+          "helpText",
+          "defaultValue",
           "sortOrder",
           "isActive",
           "createdAt",
@@ -10774,7 +13271,8 @@
               "datetime",
               "ip",
               "cidr",
-              "reference"
+              "reference",
+              "lookup"
             ]
           },
           "isRequired": {
@@ -10798,6 +13296,14 @@
             "format": "uuid",
             "description": "When dataType is \"reference\": the class (or ancestor) the referenced CI must belong to"
           },
+          "lookupListId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "When dataType is \"lookup\": the admin-defined list its values come from"
+          },
           "validation": {
             "type": [
               "object",
@@ -10813,14 +13319,26 @@
               "string",
               "null"
             ],
-            "description": "UI grouping, e.g. \"Hardware\""
+            "description": "Form section the field is shown in, e.g. \"Hardware\""
+          },
+          "helpText": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shown under the field on CI forms"
+          },
+          "defaultValue": {
+            "description": "Pre-filled on new CIs and stored when a CI is created without a value (same shape as the value)"
           },
           "sortOrder": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Order within the form section"
           },
           "isActive": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Retired attributes keep their stored values but accept no new ones"
           },
           "createdAt": {
             "type": "string",
@@ -11231,6 +13749,152 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Location"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LookupList": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "name",
+          "description",
+          "sortOrder",
+          "isActive",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LookupListList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LookupList"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LookupListValue": {
+        "type": "object",
+        "required": [
+          "id",
+          "listId",
+          "key",
+          "name",
+          "description",
+          "color",
+          "sortOrder",
+          "isActive",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "listId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Badge colour in the UI"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "Retired values stay on the CIs that hold them but cannot be chosen again"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LookupListValueList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LookupListValue"
             }
           },
           "page": {
@@ -12127,6 +14791,187 @@
         },
         "additionalProperties": false
       },
+      "StarterTemplate": {
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "description",
+          "contents",
+          "present",
+          "status",
+          "classes"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "contents": {
+            "allOf": [
+              {
+                "type": "object",
+                "description": "Rows per kind",
+                "required": [
+                  "classes",
+                  "attributeDefinitions",
+                  "relationshipTypes",
+                  "relationshipRules",
+                  "statuses",
+                  "environments",
+                  "locations"
+                ],
+                "properties": {
+                  "classes": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "attributeDefinitions": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "relationshipTypes": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "relationshipRules": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "statuses": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "environments": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "locations": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "description": "What the template brings"
+              }
+            ]
+          },
+          "present": {
+            "allOf": [
+              {
+                "type": "object",
+                "description": "Rows per kind",
+                "required": [
+                  "classes",
+                  "attributeDefinitions",
+                  "relationshipTypes",
+                  "relationshipRules",
+                  "statuses",
+                  "environments",
+                  "locations"
+                ],
+                "properties": {
+                  "classes": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "attributeDefinitions": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "relationshipTypes": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "relationshipRules": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "statuses": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "environments": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "locations": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "description": "How many of those rows already exist (matched by key)"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_installed",
+              "partial",
+              "installed"
+            ]
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "name",
+                "isAbstract",
+                "attributeCount"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "isAbstract": {
+                  "type": "boolean"
+                },
+                "attributeCount": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Attributes defined directly on the class"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StarterTemplateList": {
+        "type": "object",
+        "description": "Every starter template (not paginated: they ship with the server)",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StarterTemplate"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "Status": {
         "type": "object",
         "required": [
@@ -12194,6 +15039,180 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TemplateInstallResult": {
+        "type": "object",
+        "required": [
+          "template",
+          "created",
+          "existing",
+          "skipped"
+        ],
+        "properties": {
+          "template": {
+            "type": "string"
+          },
+          "created": {
+            "allOf": [
+              {
+                "type": "object",
+                "description": "Rows per kind",
+                "required": [
+                  "classes",
+                  "attributeDefinitions",
+                  "relationshipTypes",
+                  "relationshipRules",
+                  "statuses",
+                  "environments",
+                  "locations"
+                ],
+                "properties": {
+                  "classes": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "attributeDefinitions": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "relationshipTypes": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "relationshipRules": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "statuses": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "environments": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "locations": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "description": "Rows added by this install (each has an audit entry)"
+              }
+            ]
+          },
+          "existing": {
+            "allOf": [
+              {
+                "type": "object",
+                "description": "Rows per kind",
+                "required": [
+                  "classes",
+                  "attributeDefinitions",
+                  "relationshipTypes",
+                  "relationshipRules",
+                  "statuses",
+                  "environments",
+                  "locations"
+                ],
+                "properties": {
+                  "classes": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "attributeDefinitions": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "relationshipTypes": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "relationshipRules": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "statuses": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "environments": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "locations": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "description": "Rows that already existed and were left as they are"
+              }
+            ]
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Rows not installed because they would clash with the current data model"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UsageCount": {
+        "type": "object",
+        "description": "How many records of one kind refer to the row.",
+        "required": [
+          "kind",
+          "label",
+          "count",
+          "blocking"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "blocking": {
+            "type": "boolean",
+            "description": "A non-zero count prevents deleting the row; retire it with isActive=false instead"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UsageReport": {
+        "type": "object",
+        "description": "What still refers to a record, so the UI can warn before a destructive change",
+        "required": [
+          "inUse",
+          "data"
+        ],
+        "properties": {
+          "inUse": {
+            "type": "boolean",
+            "description": "True when a blocking count is non-zero: DELETE would return 409 IN_USE"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageCount"
+            }
           }
         },
         "additionalProperties": false
@@ -12330,7 +15349,7 @@
     },
     {
       "name": "CI classes",
-      "description": "CI types in an inheritance tree. Adding a class is data entry, not a migration."
+      "description": "CI types in an inheritance tree. Adding a class is data entry, not a migration. Changing the data model needs datamodel.manage."
     },
     {
       "name": "Attribute definitions",
@@ -12355,6 +15374,14 @@
     {
       "name": "Owners",
       "description": "People and teams accountable for CIs."
+    },
+    {
+      "name": "Lookup lists",
+      "description": "Lists an administrator defines (e.g. \"Support contract\") whose values \"lookup\" attributes store."
+    },
+    {
+      "name": "Templates",
+      "description": "Administration: starter data models (classes, attributes, relationship rules and lookups) installed on a bare database."
     },
     {
       "name": "Audit log",

@@ -23,7 +23,7 @@ psql "<admin connection string>" -v app_password='<strong password>' \
 # 2. Point the backend at it (DATABASE_URL or PG* variables)
 cp .env.example .env
 
-# 3. Apply migrations and load reference data
+# 3. Apply migrations and check the system rows (add --template it_infrastructure for a starter data model)
 shadoucmdb migrate
 shadoucmdb seed
 ```
@@ -50,4 +50,4 @@ hashes against the files here and records them in `_sqlx_migrations` without re-
 anything. Resetting the database is the alternative. See
 [`docs/deployment.md`](../docs/deployment.md#moving-a-dev-database-off-the-nodedrizzle-migration-runner).
 - Adding CI classes, attributes or relationship types is data, not schema: do it through the API
-  or the seed, not a migration.
+  or a starter template (`backend/src/modules/templates/`), not a migration.

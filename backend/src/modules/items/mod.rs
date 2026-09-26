@@ -3,6 +3,8 @@
 pub mod schemas;
 pub mod service;
 
+pub use service::value_schema;
+
 use axum::http::{Method, StatusCode};
 
 use crate::api::route::{Body, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};

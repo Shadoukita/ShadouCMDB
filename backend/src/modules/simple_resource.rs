@@ -20,9 +20,40 @@ use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath
 use crate::api::schemas::{Page, Paged, Sort, like_pattern};
 use crate::auth::permissions::GlobalPermission;
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Where};
-use crate::http::error::{AppError, ErrorCode};
+use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// One kind of record that can refer to a row; `sql` counts them for `$1` (the row id).
+pub struct Usage {
+    /// Machine name, camelCase (e.g. "configurationItems").
+    pub kind: &'static str,
+    /// Plural noun for messages (e.g. "configuration items").
+    pub label: &'static str,
+    pub sql: &'static str,
+    /// Blocks a hard delete. Non-blocking references are removed with the row (cascade).
+    pub blocking: bool,
+}
+
+/// How many records of one kind refer to the row.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageCount {
+    pub kind: String,
+    pub label: String,
+    pub count: i64,
+    /// A non-zero count prevents deleting the row; retire it with isActive=false instead
+    pub blocking: bool,
+}
+
+/// What still refers to a record, so the UI can warn before a destructive change
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageReport {
+    /// True when a blocking count is non-zero: DELETE would return 409 IN_USE
+    pub in_use: bool,
+    pub data: Vec<UsageCount>,
+}
 
 /// A list query: pagination, optional search, sort and resource-specific filters.
 pub trait ListQuery: Paged + Send + Sync + 'static {
@@ -57,7 +88,10 @@ pub trait Resource: Send + Sync + 'static {
     /// SELECT list producing a `Dto` row.
     const COLUMNS: &'static str;
     const SEARCH_COLUMNS: &'static [&'static str];
-    const DELETE_DESCRIPTION: &'static str = "Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.";
+    const DELETE_DESCRIPTION: &'static str = "Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.";
+
+    /// References reported by `GET {BASE_PATH}/{id}/usage` and checked before a delete.
+    const USAGE: &'static [Usage] = &[];
 
     fn id(row: &Self::Dto) -> Uuid;
 
@@ -170,11 +204,53 @@ pub async fn update<R: Resource>(
     Ok(row)
 }
 
+async fn usage_counts<R: Resource>(conn: &mut PgConnection, id: Uuid) -> Result<UsageReport, AppError> {
+    let mut data = Vec::with_capacity(R::USAGE.len());
+    for u in R::USAGE {
+        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(u.sql)).bind(id).fetch_one(&mut *conn).await?;
+        data.push(UsageCount { kind: u.kind.into(), label: u.label.into(), count, blocking: u.blocking });
+    }
+    Ok(UsageReport { in_use: data.iter().any(|u| u.blocking && u.count > 0), data })
+}
+
+pub async fn usage<R: Resource>(pool: &PgPool, id: Uuid) -> Result<UsageReport, AppError> {
+    let mut conn = pool.acquire().await?;
+    if crud::select_by_id::<R::Dto>(&mut conn, R::TABLE, R::COLUMNS, id, false).await?.is_none() {
+        return Err(AppError::missing(R::LABEL, id));
+    }
+    usage_counts::<R>(&mut conn, id).await
+}
+
+/// 409 IN_USE naming every blocking reference, or Ok when the row can go.
+fn refuse_if_used(label: &str, report: &UsageReport) -> Result<(), AppError> {
+    if !report.in_use {
+        return Ok(());
+    }
+    let blocking: Vec<&UsageCount> = report.data.iter().filter(|u| u.blocking && u.count > 0).collect();
+    let summary = blocking.iter().map(|u| format!("{} {}", u.count, u.label)).collect::<Vec<_>>().join(", ");
+    Err(AppError::new(
+        ErrorCode::InUse,
+        format!("{label} is still used by {summary}. Retire it with isActive=false instead of deleting it."),
+    )
+    .with_details(
+        blocking
+            .into_iter()
+            .map(|u| FieldError {
+                location: FieldLocation::Params,
+                field: u.kind.clone(),
+                message: format!("{} {}", u.count, u.label),
+                code: "in_use".into(),
+            })
+            .collect(),
+    ))
+}
+
 pub async fn remove<R: Resource>(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
     let before: R::Dto = crud::select_by_id(&mut tx, R::TABLE, R::COLUMNS, id, true)
         .await?
         .ok_or_else(|| AppError::missing(R::LABEL, id))?;
+    refuse_if_used(R::LABEL, &usage_counts::<R>(&mut tx, id).await?)?;
     crud::delete_row(&mut tx, R::TABLE, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Delete,
@@ -209,7 +285,7 @@ pub fn routes<R: Resource>() -> Vec<Route> {
             .description(format!("`q` matches {} (case-insensitive substring).", R::SEARCH_COLUMNS.join(", ")));
     }
 
-    vec![
+    let mut routes = vec![
         list_route.handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<R::List>, NoBody>| async move {
             Ok(Json(list::<R>(&api.pool, &q).await?))
         }),
@@ -247,7 +323,24 @@ pub fn routes<R: Resource>() -> Vec<Route> {
                 remove::<R>(&api.pool, &api.ctx, id).await?;
                 Ok(NoContent)
             }),
-    ]
+    ];
+    if !R::USAGE.is_empty() {
+        let kinds: Vec<&str> = R::USAGE.iter().map(|u| u.kind).collect();
+        routes.push(
+            route(Method::GET, format!("{}/{{id}}/usage", R::BASE_PATH), format!("get{}Usage", cap(R::SINGULAR)))
+                .tag(R::TAG)
+                .summary(format!("What still refers to a {label}"))
+                .description(format!(
+                    "Counts of {}. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+                    kinds.join(", ")
+                ))
+                .errors(&[ErrorCode::NotFound])
+                .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                    Ok(Json(usage::<R>(&api.pool, id).await?))
+                }),
+        );
+    }
+    routes
 }
 
 /// `isActive=true|false` and similar boolean column filters.

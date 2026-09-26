@@ -1,7 +1,8 @@
 # Entity-relationship diagram
 
 Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_schema.sql) and
-[`../migrations/0003_users_and_permission_profiles.sql`](../migrations/0003_users_and_permission_profiles.sql).
+[`../migrations/0003_users_and_permission_profiles.sql`](../migrations/0003_users_and_permission_profiles.sql) and
+[`../migrations/0004_data_model_admin.sql`](../migrations/0004_data_model_admin.sql).
 Update this diagram in the same pull request as any migration that adds, removes or re-links a table.
 Column-level rules and triggers are described in [`docs/data-model.md`](../../docs/data-model.md).
 
@@ -17,6 +18,9 @@ erDiagram
     configuration_items ||--o{ ci_attribute_values : "ci_id"
     ci_attribute_definitions ||--o{ ci_attribute_values : "attribute_id"
     configuration_items |o--o{ ci_attribute_values : "value_ref_ci_id"
+    lookup_lists |o--o{ ci_attribute_definitions : "lookup_list_id"
+    lookup_lists ||--o{ lookup_list_values : "list_id"
+    lookup_list_values |o--o{ ci_attribute_values : "value_lookup_id"
 
     relationship_types ||--o{ relationship_type_rules : "relationship_type_id"
     relationship_types ||--o{ ci_relationships : "relationship_type_id"
@@ -42,6 +46,8 @@ erDiagram
         text name
         uuid parent_id FK
         boolean is_abstract
+        text color
+        integer sort_order
         boolean is_active
     }
     ci_attribute_definitions {
@@ -52,6 +58,24 @@ erDiagram
         boolean is_required
         jsonb enum_values
         uuid reference_class_id FK
+        uuid lookup_list_id FK
+        text group_name
+        text help_text
+        jsonb default_value
+    }
+    lookup_lists {
+        uuid id PK
+        text key UK
+        text name
+        boolean is_active
+    }
+    lookup_list_values {
+        uuid id PK
+        uuid list_id FK
+        text key
+        text name
+        text color
+        boolean is_active
     }
     configuration_items {
         uuid id PK
@@ -80,6 +104,7 @@ erDiagram
         inet value_ip
         cidr value_cidr
         uuid value_ref_ci_id FK
+        uuid value_lookup_id FK
     }
     relationship_types {
         uuid id PK

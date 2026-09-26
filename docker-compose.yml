@@ -5,8 +5,9 @@
 #
 #   cp .env.example .env                        # then edit the connection settings
 #   docker compose run --rm migrate             # apply migrations
-#   docker compose run --rm seed                # load reference data
-#   docker compose run --rm seed seed --demo    # ... plus a small demo inventory
+#   docker compose run --rm seed                # check system rows (the data model starts empty)
+#   docker compose run --rm seed seed --template it_infrastructure   # starter data model
+#   docker compose run --rm seed seed --demo    # the starter data model plus a small demo inventory
 #   docker compose up api
 #
 # If your database runs on this machine outside Docker, use

@@ -297,6 +297,32 @@ async function main() {
   await patch(`/api/v1/owners/${owner.id}`, { email: 'not-an-email' }, 400);
   await patch(`/api/v1/owners/${owner.id}`, { externalRef: `hr-${RUN}` });
 
+  // --- Starter templates ----------------------------------------------------------
+  console.log('\n# Templates');
+  const templates = (await get('/api/v1/admin/templates')).json;
+  const itTemplate = templates.data.find((t: Json) => t.key === 'it_infrastructure');
+  check(itTemplate?.status === 'installed' && itTemplate.contents.classes === 8 && itTemplate.contents.attributeDefinitions === 35,
+    'the IT infrastructure template is listed as installed (seed --demo installs it)');
+  const reinstall = (await post('/api/v1/admin/templates/it_infrastructure/install', undefined, 200)).json;
+  check(Object.values(reinstall.created as Record<string, number>).every((n) => n === 0) && reinstall.existing.classes === 8,
+    'installing the template again changes nothing');
+  await post('/api/v1/admin/templates/no_such_template/install', undefined, 404);
+  await post('/api/v1/admin/templates/Not-A-Key/install', undefined, 400);
+
+  // --- Admin-defined lookup lists ----------------------------------------------------
+  console.log('\n# Lookup lists');
+  const contracts = (await post('/api/v1/lookup-lists', { key: `smoke_contract_${RUN}`, name: 'Support contract' })).json;
+  await get(`/api/v1/lookup-lists?q=smoke_contract_${RUN}&sort=name`);
+  await get(`/api/v1/lookup-lists/${contracts.id}`);
+  await patch(`/api/v1/lookup-lists/${contracts.id}`, { description: 'Vendor support level' });
+  const gold = (await post('/api/v1/lookup-list-values', { listId: contracts.id, key: 'gold', name: 'Gold', color: '#d4a72c', sortOrder: 10 })).json;
+  const silver = (await post('/api/v1/lookup-list-values', { listId: contracts.id, key: 'silver', name: 'Silver', sortOrder: 20 })).json;
+  await post('/api/v1/lookup-list-values', { listId: contracts.id, key: 'gold', name: 'Gold again' }, 409);
+  await post('/api/v1/lookup-list-values', { listId: contracts.id, key: 'bronze', name: 'Bronze', color: 'brown' }, 400);
+  await get(`/api/v1/lookup-list-values?listId=${contracts.id}&sort=sortOrder`);
+  await get(`/api/v1/lookup-list-values/${gold.id}`);
+  await patch(`/api/v1/lookup-list-values/${silver.id}`, { name: 'Silver (8x5)' });
+
   // --- Classes and attribute definitions ----------------------------------------
   console.log('\n# CI classes / attribute definitions');
   const hardware = await idByKey('ci-classes', 'hardware');
@@ -307,13 +333,23 @@ async function main() {
   await get(`/api/v1/ci-classes?descendantOf=${hardware}`);
   const lb = (await post('/api/v1/ci-classes', { key: `smoke_lb_${RUN}`, name: 'Smoke load balancer', parentId: networkDevice })).json;
   await get(`/api/v1/ci-classes/${lb.id}`);
-  await patch(`/api/v1/ci-classes/${lb.id}`, { description: 'LB for smoke test', icon: 'scale' });
+  await patch(`/api/v1/ci-classes/${lb.id}`, { description: 'LB for smoke test', icon: 'scale', color: '#0a7ea4', sortOrder: 25 });
+  await patch(`/api/v1/ci-classes/${lb.id}`, { color: 'teal' }, 400);
   await patch(`/api/v1/ci-classes/${hardware}`, { parentId: lb.id }, 400); // cycle
   await patch(`/api/v1/ci-classes/${lb.id}`, { key: 'renamed' }, 400); // key immutable
   const algo = (await post('/api/v1/attribute-definitions', {
     classId: lb.id, key: 'algorithm', label: 'Algorithm', dataType: 'enum', enumValues: ['round_robin', 'least_conn'], isRequired: true,
   })).json;
   const vip = (await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'vip', label: 'Virtual IP', dataType: 'ip' })).json;
+  const support = (await post('/api/v1/attribute-definitions', {
+    classId: lb.id, key: 'support', label: 'Support contract', dataType: 'lookup', lookupListId: contracts.id,
+    defaultValue: silver.id, helpText: 'Vendor support level', groupName: 'Contract',
+  })).json;
+  check(support.lookupListId === contracts.id && support.defaultValue === silver.id && support.helpText === 'Vendor support level',
+    'lookup attribute with a default and help text');
+  await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'tier', label: 'Tier', dataType: 'lookup' }, 400); // no list
+  await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'tier', label: 'Tier', dataType: 'enum', enumValues: ['a'], defaultValue: 'b' }, 400);
+  await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'peer', label: 'Peer', dataType: 'reference', referenceClassId: lb.id, defaultValue: 'x' }, 400);
   await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'model', label: 'Model again', dataType: 'text' }, 409); // defined on hardware
   await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'mode', label: 'Mode', dataType: 'enum' }, 400); // enum w/o values
   await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'w', label: 'W', dataType: 'text', validation: { min: 1 } }, 400);
@@ -372,6 +408,13 @@ async function main() {
   })).json;
   await post('/api/v1/configuration-items', { classId: lb.id, name: 'bad-cidr', statusId: inService, attributes: { device_role: 'load_balancer', algorithm: 'least_conn', management_subnet: '10.77.5.1/24' } }, 400); // host bits set
   await patch(`/api/v1/attribute-definitions/${algo.id}`, { enumValues: ['least_conn'] }, 400); // round_robin in use
+  check(lbItem.attributes.support === silver.id, 'a CI created without a value gets the attribute default');
+  const lbUpd = (await patch(`/api/v1/configuration-items/${lbItem.id}`, { version: lbItem.version, attributes: { support: gold.id } })).json;
+  check(lbUpd.attributes.support === gold.id, 'lookup value stored by id');
+  await patch(`/api/v1/configuration-items/${lbItem.id}`, { version: lbUpd.version, attributes: { support: anyId } }, 400); // not in the list
+  const slaRef = (await post('/api/v1/attribute-definitions', { classId: lb.id, key: 'sla_ref', label: 'SLA reference', dataType: 'text' })).json;
+  const required = await patch(`/api/v1/attribute-definitions/${slaRef.id}`, { isRequired: true }, 409);
+  check(required.json.error.details?.[0]?.code === 'values_missing', 'an attribute cannot become required while CIs lack a value');
 
   await get(`/api/v1/configuration-items/${server.id}`);
   const upd = (await patch(`/api/v1/configuration-items/${server.id}`, { version: server.version, notes: 'Updated by smoke test', attributes: { memory_gb: 128, os_version: null } })).json;
@@ -447,12 +490,39 @@ async function main() {
   await post('/api/v1/relationships', { relationshipTypeId: runsOn, sourceCiId: app.id, targetCiId: server.id }, 400); // deleted endpoint
   await del(`/api/v1/owners/${owner.id}`, 409); // still owns the (deleted) server
   await patch(`/api/v1/owners/${owner.id}`, { isActive: false });
+  await get(`/api/v1/relationship-rules/${rule.id}/usage`);
   await del(`/api/v1/relationship-rules/${rule.id}`);
+  const rtUsage = (await get(`/api/v1/relationship-types/${rt.id}/usage`)).json;
+  check(!rtUsage.inUse, 'an unused relationship type is not in use');
   await del(`/api/v1/relationship-types/${rt.id}`);
+  const runsOnUsage = (await get(`/api/v1/relationship-types/${runsOn}/usage`)).json;
+  check(runsOnUsage.inUse && runsOnUsage.data.some((u: Json) => u.kind === 'relationships' && u.count > 0), 'runs_on usage counts live relationships');
+  const vipUsage = (await get(`/api/v1/attribute-definitions/${vip.id}/usage`)).json;
+  check(vipUsage.inUse && vipUsage.data[0].kind === 'attributeValues' && vipUsage.data[0].count === 1, 'attribute usage counts stored values');
   await del(`/api/v1/attribute-definitions/${vip.id}`, 409); // lb item stored a vip value
+  await del(`/api/v1/attribute-definitions/${slaRef.id}`); // no values: deletable
   await patch(`/api/v1/ci-classes/${lb.id}`, { isActive: false });
-  await del(`/api/v1/ci-classes/${lb.id}`, 409);
+  const lbUsage = (await get(`/api/v1/ci-classes/${lb.id}/usage`)).json;
+  check(lbUsage.inUse && lbUsage.data.some((u: Json) => u.kind === 'deletedConfigurationItems' && u.count === 1), 'class usage counts deleted CIs');
+  const lbDelete = await del(`/api/v1/ci-classes/${lb.id}`, 409);
+  check(lbDelete.json.error.code === 'IN_USE' && lbDelete.json.error.details.some((d: Json) => d.field === 'attributeDefinitions'),
+    'deleting a class in use names what refers to it');
+  await post('/api/v1/configuration-items', { classId: lb.id, name: 'archived-class', statusId: inService, attributes: { device_role: 'other', algorithm: 'least_conn' } }, 400);
+  await get(`/api/v1/locations/${room.id}/usage`);
   await del(`/api/v1/locations/${room.id}`, 409);
+  await get(`/api/v1/statuses/${inService}/usage`);
+  await get(`/api/v1/environments/${production}/usage`);
+  await get(`/api/v1/owners/${owner.id}/usage`);
+  const silverUsage = (await get(`/api/v1/lookup-list-values/${silver.id}/usage`)).json;
+  check(silverUsage.inUse && silverUsage.data.some((u: Json) => u.kind === 'attributeDefaults' && u.count === 1), 'a list value used as default is in use');
+  await del(`/api/v1/lookup-list-values/${gold.id}`, 409); // stored on the (deleted) LB item
+  await patch(`/api/v1/lookup-list-values/${gold.id}`, { isActive: false });
+  await get(`/api/v1/lookup-lists/${contracts.id}/usage`);
+  await del(`/api/v1/lookup-lists/${contracts.id}`, 409);
+  await patch(`/api/v1/lookup-lists/${contracts.id}`, { isActive: false });
+  const scratch = (await post('/api/v1/lookup-lists', { key: `smoke_scratch_${RUN}`, name: 'Scratch' })).json;
+  await post('/api/v1/lookup-list-values', { listId: scratch.id, key: 'a', name: 'A' });
+  await del(`/api/v1/lookup-lists/${scratch.id}`); // unused list goes with its values
 
   const history = (await get(`/api/v1/audit-log?entityType=configuration_items&entityId=${server.id}&sort=occurredAt`)).json;
   check(

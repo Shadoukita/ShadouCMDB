@@ -15,7 +15,9 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
 
   serve                     Run the HTTP server (/api/v1, /openapi.json, /docs, /healthz, /readyz, web UI)
   migrate [--adopt-drizzle] Apply pending migrations; re-running is a no-op
-  seed [--demo]             Load reference data (idempotent); --demo adds a sample inventory
+  seed [--template KEY]... [--demo]
+                            Check system rows; install a starter template (it_infrastructure);
+                            --demo installs it and adds a sample inventory. Idempotent
   verify                    Schema acceptance checks in a rolled-back transaction
   create-admin --username U [--display-name N] [--email E] [--password-stdin]
                             Create a user holding the built-in Administrator profile
@@ -39,7 +41,7 @@ Typical first run against a new database:
 
 ```sh
 shadoucmdb migrate
-shadoucmdb seed            # add --demo for sample CIs
+shadoucmdb seed            # bare data model; --template it_infrastructure or --demo for a starter set
 shadoucmdb verify          # optional, writes nothing
 shadoucmdb serve           # http://<host>:3000/readyz
 ```

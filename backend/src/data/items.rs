@@ -398,6 +398,7 @@ pub struct StoredValueRow {
     pub value_ip: Option<String>,
     pub value_cidr: Option<String>,
     pub value_ref_ci_id: Option<Uuid>,
+    pub value_lookup_id: Option<Uuid>,
     pub ref_name: Option<String>,
     pub ref_deleted: Option<bool>,
 }
@@ -411,7 +412,7 @@ pub async fn attribute_values(conn: &mut PgConnection, ci_ids: &[Uuid]) -> sqlx:
         r#"SELECT v.ci_id, v.attribute_id, d.key, d.label,
                   v.value_text, v.value_number::float8 AS value_number, v.value_boolean,
                   v.value_date::text AS value_date, v.value_datetime,
-                  host(v.value_ip) AS value_ip, v.value_cidr::text AS value_cidr, v.value_ref_ci_id,
+                  host(v.value_ip) AS value_ip, v.value_cidr::text AS value_cidr, v.value_ref_ci_id, v.value_lookup_id,
                   r.name AS "ref_name?", (r.deleted_at IS NOT NULL) AS ref_deleted
            FROM ci_attribute_values v
            JOIN ci_attribute_definitions d ON d.id = v.attribute_id
@@ -435,6 +436,7 @@ pub enum StoredValue {
     Ip(String),
     Cidr(String),
     Reference(Uuid),
+    Lookup(Uuid),
 }
 
 pub async fn upsert_attribute_value(
@@ -443,8 +445,8 @@ pub async fn upsert_attribute_value(
     attribute_id: Uuid,
     value: &StoredValue,
 ) -> sqlx::Result<()> {
-    let (mut text, mut number, mut boolean, mut date, mut datetime, mut ip, mut cidr, mut reference) =
-        (None, None, None, None, None, None, None, None);
+    let (mut text, mut number, mut boolean, mut date, mut datetime, mut ip, mut cidr, mut reference, mut lookup) =
+        (None, None, None, None, None, None, None, None, None);
     match value {
         StoredValue::Text(v) => text = Some(v.as_str()),
         StoredValue::Number(v) => number = Some(v.to_string()),
@@ -454,18 +456,20 @@ pub async fn upsert_attribute_value(
         StoredValue::Ip(v) => ip = Some(v.as_str()),
         StoredValue::Cidr(v) => cidr = Some(v.as_str()),
         StoredValue::Reference(v) => reference = Some(*v),
+        StoredValue::Lookup(v) => lookup = Some(*v),
     }
     sqlx::query!(
         "INSERT INTO ci_attribute_values
            (ci_id, attribute_id, value_text, value_number, value_boolean, value_date, value_datetime,
-            value_ip, value_cidr, value_ref_ci_id)
+            value_ip, value_cidr, value_ref_ci_id, value_lookup_id)
          VALUES ($1, $2, $3, $4::text::numeric, $5, $6::text::date, $7::text::timestamptz,
-                 $8::text::inet, $9::text::cidr, $10)
+                 $8::text::inet, $9::text::cidr, $10, $11)
          ON CONFLICT (ci_id, attribute_id) DO UPDATE SET
            value_text = EXCLUDED.value_text, value_number = EXCLUDED.value_number,
            value_boolean = EXCLUDED.value_boolean, value_date = EXCLUDED.value_date,
            value_datetime = EXCLUDED.value_datetime, value_ip = EXCLUDED.value_ip,
-           value_cidr = EXCLUDED.value_cidr, value_ref_ci_id = EXCLUDED.value_ref_ci_id",
+           value_cidr = EXCLUDED.value_cidr, value_ref_ci_id = EXCLUDED.value_ref_ci_id,
+           value_lookup_id = EXCLUDED.value_lookup_id",
         ci_id,
         attribute_id,
         text,
@@ -475,7 +479,8 @@ pub async fn upsert_attribute_value(
         datetime,
         ip,
         cidr,
-        reference
+        reference,
+        lookup
     )
     .execute(conn)
     .await?;

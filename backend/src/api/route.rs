@@ -106,6 +106,34 @@ impl PathInput for IdPath {
     }
 }
 
+/// `{key}`: a stable machine key (lower_snake_case).
+pub struct KeyPath(pub String);
+
+impl PathInput for KeyPath {
+    fn params() -> Vec<Parameter> {
+        vec![
+            ParameterBuilder::new()
+                .name("key")
+                .parameter_in(ParameterIn::Path)
+                .required(Required::True)
+                .schema(Some(schemas::key_schema()))
+                .build(),
+        ]
+    }
+    fn parse(raw: &RawPathParams) -> Result<Self, AppError> {
+        let value = raw.iter().find(|(k, _)| *k == "key").map(|(_, v)| v).unwrap_or_default();
+        match validate::cached_regex(schemas::KEY_PATTERN) {
+            Some(re) if re.is_match(value) => Ok(KeyPath(value.to_owned())),
+            _ => Err(AppError::validation(vec![FieldError {
+                location: FieldLocation::Params,
+                field: "key".into(),
+                message: "Invalid key".into(),
+                code: "invalid_format".into(),
+            }])),
+        }
+    }
+}
+
 pub trait QueryInput: Sized + Send + 'static {
     fn params() -> Vec<Parameter>;
     fn parse(raw: Option<&str>) -> Result<Self, AppError>;

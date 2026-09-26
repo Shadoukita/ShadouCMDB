@@ -113,7 +113,7 @@ fn attribute_value_schema() -> ObjectBuilder {
     ObjectBuilder::new()
         .schema_type(SchemaType::from_iter([Type::String, Type::Number, Type::Boolean]))
         .description(Some(
-            "text/enum/date (YYYY-MM-DD)/datetime (ISO 8601)/ip/cidr/reference (CI id) are strings; number/integer are numbers; boolean is a boolean",
+            "text/enum/date (YYYY-MM-DD)/datetime (ISO 8601)/ip/cidr/reference (CI id)/lookup (lookup list value id) are strings; number/integer are numbers; boolean is a boolean",
         ))
 }
 
@@ -270,7 +270,7 @@ fn attributes_schema(description: &str) -> Schema {
 
 fn create_attributes_schema() -> Schema {
     attributes_schema(
-        "Values by attribute key (see GET /api/v1/ci-classes/{id}/attributes). Required attributes must be present.",
+        "Values by attribute key (see GET /api/v1/ci-classes/{id}/attributes). Required attributes must be present; attributes left out get their defaultValue.",
     )
 }
 

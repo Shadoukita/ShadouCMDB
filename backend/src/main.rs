@@ -50,9 +50,12 @@ enum Command {
         #[arg(long)]
         adopt_drizzle: bool,
     },
-    /// Load reference data (idempotent).
+    /// Check the system rows; optionally install a starter template or a demo inventory (idempotent).
     Seed {
-        /// Also load a small demo inventory into a database without CIs.
+        /// Install this starter template (repeatable), e.g. it_infrastructure.
+        #[arg(long = "template", value_name = "KEY")]
+        templates: Vec<String>,
+        /// Install the it_infrastructure template and load a small demo inventory into a database without CIs.
         #[arg(long)]
         demo: bool,
     },
@@ -136,9 +139,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             let cfg = Config::from_env()?;
             runtime()?.block_on(db::migrate(&cfg.database, adopt_drizzle))
         }
-        Command::Seed { demo } => {
+        Command::Seed { templates, demo } => {
             let cfg = Config::from_env()?;
-            runtime()?.block_on(seed::run(&cfg.database, demo))
+            runtime()?.block_on(seed::run(&cfg.database, &templates, demo))
         }
         Command::Verify => {
             let cfg = Config::from_env()?;

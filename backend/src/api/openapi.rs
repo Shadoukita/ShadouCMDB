@@ -31,7 +31,10 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
     ("Configuration items", "CIs: the tracked assets. Includes the relationship graph around a CI."),
     ("Search", "Global search across CIs and their attribute values."),
     ("Relationships", "Typed, directional edges between CIs. Removal is a soft delete."),
-    ("CI classes", "CI types in an inheritance tree. Adding a class is data entry, not a migration."),
+    (
+        "CI classes",
+        "CI types in an inheritance tree. Adding a class is data entry, not a migration. Changing the data model needs datamodel.manage.",
+    ),
     ("Attribute definitions", "Typed custom fields per class, inherited by subclasses."),
     (
         "Relationship types",
@@ -41,6 +44,14 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
     ("Environments", "Deployment environments."),
     ("Locations", "Location hierarchy (region > site > room > rack)."),
     ("Owners", "People and teams accountable for CIs."),
+    (
+        "Lookup lists",
+        "Lists an administrator defines (e.g. \"Support contract\") whose values \"lookup\" attributes store.",
+    ),
+    (
+        "Templates",
+        "Administration: starter data models (classes, attributes, relationship rules and lookups) installed on a bare database.",
+    ),
     ("Audit log", "Read-only change history written in the same transaction as every change."),
     ("Users", "Administration: local user accounts, passwords and the permission profiles they hold."),
     (

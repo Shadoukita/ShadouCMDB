@@ -9,4 +9,5 @@ pub mod lookups;
 pub mod profiles;
 pub mod relationships;
 pub mod simple_resource;
+pub mod templates;
 pub mod users;

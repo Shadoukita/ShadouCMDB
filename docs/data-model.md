@@ -7,14 +7,16 @@ migration and no code change. Integrity is enforced in PostgreSQL itself
 that need to look at other rows), not only in the API.
 
 Migrations: [`sql/migrations/`](../sql/migrations/)
-(`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`).
+(`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`,
+`0003_users_and_permission_profiles`, `0004_data_model_admin`).
 SQL that reads and writes them: `backend/src/data/`.
 
 ## Tables
 
 ```
 ci_classes ─┬─< ci_attribute_definitions >─── (reference_class_id) ─> ci_classes
-  (parent)  │
+  (parent)  │         └── (lookup_list_id) ─> lookup_lists ─< lookup_list_values
+            │                                                      ^ (value_lookup_id)
             └─< configuration_items ─┬─< ci_attribute_values >── ci_attribute_definitions
                   │ │ │ │            │        (value_ref_ci_id) ──> configuration_items
    statuses ──────┘ │ │ │            └─< ci_relationships (source / target)
@@ -30,10 +32,12 @@ users ─< user_permission_profiles >─ permission_profiles ─┬─< permissi
 
 | Table | Purpose | Key constraints |
 | --- | --- | --- |
-| `ci_classes` | CI types in a single-inheritance tree (`parent_id`). `is_abstract` classes group attributes and rules but hold no CIs. | unique `key`; key format check; no self-parent; **no cycles** (trigger) |
-| `ci_attribute_definitions` | Typed attribute per class, inherited by descendant classes. Types: `text`, `number`, `integer`, `boolean`, `enum`, `date`, `datetime`, `ip`, `cidr`, `reference`. | unique (`class_id`, `key`); `enum_values` required iff enum; `reference_class_id` required iff reference |
+| `ci_classes` | CI types in a single-inheritance tree (`parent_id`). `is_abstract` classes group attributes and rules but hold no CIs. `icon`, `color` (`#rrggbb`) and `sort_order` drive menus and badges. | unique `key`; key format check; colour format; no self-parent; **no cycles** (trigger) |
+| `ci_attribute_definitions` | Typed attribute per class, inherited by descendant classes. Types: `text`, `number`, `integer`, `boolean`, `enum`, `date`, `datetime`, `ip`, `cidr`, `reference`, `lookup`. `group_name` is the form section, `sort_order` the order within it; `help_text` is shown on forms; `default_value` (jsonb, same shape as an API value) is applied to new CIs. | unique (`class_id`, `key`); `enum_values` required iff enum; `reference_class_id` required iff reference; `lookup_list_id` required iff lookup (FK, RESTRICT); a default is never JSON null and never on a reference |
+| `lookup_lists` | Lists an administrator defines, e.g. "Support contract". | unique `key`; key format; non-blank name |
+| `lookup_list_values` | The values of a list (`key`, `name`, `color`, `sort_order`, `is_active`). | unique (`list_id`, `key`); cascades with the list; cannot move to another list (trigger) |
 | `configuration_items` | CI instances with the common core: name, class, status, owner, location, environment, hostname, `ip_address inet`, serial, notes, plus `version` for optimistic locking. | FKs to class and every lookup; class must be concrete and active (trigger); non-blank name; hostname format |
-| `ci_attribute_values` | One row per CI and attribute, with a typed column per data type (`value_text`, `value_number`, `value_boolean`, `value_date`, `value_datetime`, `value_ip`, `value_cidr`, `value_ref_ci_id`). | unique (`ci_id`, `attribute_id`); exactly one value column set; trigger checks the attribute belongs to the CI's class lineage, the column matches `data_type`, integers are whole, enum values are allowed, and references point at the right class |
+| `ci_attribute_values` | One row per CI and attribute, with a typed column per data type (`value_text`, `value_number`, `value_boolean`, `value_date`, `value_datetime`, `value_ip`, `value_cidr`, `value_ref_ci_id`, `value_lookup_id`). | unique (`ci_id`, `attribute_id`); exactly one value column set; `value_lookup_id` FK (RESTRICT); trigger checks the attribute belongs to the CI's class lineage, the column matches `data_type`, integers are whole, enum values are allowed, references point at the right class, and lookup values come from the attribute's list |
 | `relationship_types` | `runs_on`, `depends_on`, `located_in`, `connected_to`, …, with `forward_label` / `reverse_label` and `is_directional`. | unique `key` |
 | `relationship_type_rules` | Legal (source class, target class) pairs per type. A rule matches the named class **and all its descendants**. | unique triple |
 | `ci_relationships` | Typed, directional edge `source_ci_id → target_ci_id`. | **no self-edges** (check); **no duplicate live edges** (partial unique index); for non-directional types the reverse edge also counts as a duplicate (trigger + advisory lock); endpoints must satisfy a rule and must not be soft-deleted (trigger) |
@@ -62,7 +66,17 @@ All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which 
   A Location-class CI sets its core `location_id` to the matching `locations` row, which ties the
   relationship graph to the lookup hierarchy used for filtering.
 
-### Seeded reference data (`shadoucmdb seed`)
+### Bare start and the IT infrastructure starter template
+
+`shadoucmdb seed` loads only system rows (today it checks the built-in Administrator profile that
+migration 0003 creates). A fresh install therefore has no classes, attributes, relationship types or
+lookups. What `seed` loaded before SHAA-31 is now the **`it_infrastructure` starter template**
+(`backend/src/modules/templates/`), installed through `POST /api/v1/admin/templates/it_infrastructure/install`
+or `shadoucmdb seed --template it_infrastructure`. Installing matches rows by key, adds only what is
+missing, never changes existing rows and audits every row it creates, so it is idempotent. Databases
+seeded before migration 0004 keep all their rows; the template then reports `installed`.
+
+The template contains:
 
 - Classes: `hardware` (abstract) › `server`, `network_device`; `virtual_machine`, `application`,
   `database`, `service`, `location`. There are 35 attribute definitions across them, including an
@@ -70,9 +84,10 @@ All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which 
 - Relationship rules: `runs_on` (app→server/VM, db→server/VM, VM→server), `depends_on`
   (app→db/app, service→app/service), `located_in` (hardware→location, location→location),
   `connected_to` (hardware↔hardware).
-- Statuses, environments, a small location tree (EMEA › FRA1 › room › rack, Americas › NYC1,
-  AWS eu-central-1), and three owner teams.
-- `--demo` adds 8 CIs, 24 attribute values and 8 relationships (a CRM service down to its rack).
+- Statuses, environments and a small location tree (EMEA › FRA1 › room › rack, Americas › NYC1,
+  AWS eu-central-1).
+- `seed --demo` installs the template, then adds three owner teams, 8 CIs, 24 attribute values and
+  8 relationships (a CRM service down to its rack).
 
 ## Soft-delete decisions
 
@@ -81,7 +96,7 @@ All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which 
 | `configuration_items` | **Soft delete** (`deleted_at`) | A decommissioned server must still resolve in last quarter's report, in audit entries, and in historic relationships. All live-inventory indexes are partial on `deleted_at IS NULL`. |
 | `ci_relationships` | **Soft delete** (`deleted_at`) | Answers "what did this app run on before the migration?" Uniqueness applies only to live edges, so a removed edge can be re-created. When the API soft-deletes a CI, it also soft-deletes that CI's live relationships in the same transaction. |
 | `ci_attribute_values` | **Hard delete** | A value is part of the CI's current state. Clearing a field deletes the row, and the old value is kept in `audit_log`. Rows cascade if a CI is ever purged. |
-| `ci_classes`, `ci_attribute_definitions`, `relationship_types`, `statuses`, `environments`, `locations`, `owners` | **Retire, don't delete** (`is_active = false`) | These are referenced by history. FKs are `ON DELETE RESTRICT`, so a referenced row cannot be hard-deleted; inactive rows keep resolving for old CIs and are hidden from pickers. Inactive classes cannot receive new CIs, and inactive relationship types cannot receive new edges. |
+| `ci_classes`, `ci_attribute_definitions`, `relationship_types`, `statuses`, `environments`, `locations`, `owners`, `lookup_lists`, `lookup_list_values` | **Retire, don't delete** (`is_active = false`) | These are referenced by history. FKs are `ON DELETE RESTRICT`, so a referenced row cannot be hard-deleted (the API checks first and answers `409 IN_USE` with the counts, see `GET …/{id}/usage`); inactive rows keep resolving for old CIs and are hidden from pickers. Inactive classes cannot receive new CIs, inactive attributes and lookup values cannot receive new values, and inactive relationship types cannot receive new edges. An unused lookup list is deleted together with its values. |
 | `relationship_type_rules` | **Hard delete** | Pure configuration. Removing a rule blocks new edges and leaves existing edges alone. |
 | `audit_log` | **Never deleted** | Append-only by trigger. Retention/archival is an operator decision for a later milestone. |
 | `users` | **Disable** (`is_active = false`), hard delete allowed | Disabling is the normal way to remove access and ends the user's sessions. A hard delete is allowed because nothing references a user by foreign key: `audit_log` keeps `actor_id` and `actor_name` as text, so history still names them. |
@@ -95,7 +110,8 @@ the API knows the actor and the request. Database triggers are not used for audi
 they cannot see the actor, and would log raw row images instead of API-level changes.
 Changes made through the API record the signed-in user (`actor_type = 'user'`, `actor_id` =
 the user's id, `actor_name` = their username). First-run setup, `create-admin` and `seed`
-record `actor_type = 'system'`. Users and permission profiles are audited like everything
+record `actor_type = 'system'`; a starter template install records the installing user (or `system` / `seed`
+from the CLI), one `create` row per created row, sharing one `request_id`. Users and permission profiles are audited like everything
 else (`entity_type` `users` / `permission_profiles`); password hashes never appear in it.
 
 ## Indexes for UI queries
@@ -136,11 +152,12 @@ the `located_in` / `connected_to` rules. `shadoucmdb verify` exercises exactly t
 ## Known limits, deliberately deferred
 
 - An attribute key redefined on a child class that already exists on an ancestor is not
-  rejected by the database. The API should reject it when definitions are managed.
-- `is_required` and `validation` (min/max/pattern) are enforced by the API at write time, not
-  by the database: requiredness depends on the whole CI payload, not a single row.
-- Re-parenting a class that already has CIs is allowed. The API should check that existing
-  attribute values stay within the new lineage.
+  rejected by the database; the API rejects it (`409`).
+- `is_required`, `validation` (min/max/pattern) and `default_value` are enforced by the API at
+  write time, not by the database: requiredness depends on the whole CI payload, not a single row.
+  The API refuses to make an attribute required while live CIs lack a value.
+- Re-parenting a class that already has CIs is checked by the API: values of attributes outside
+  the new lineage are refused.
 - Reserved seams, not built: SSO/LDAP/OIDC sign-in (a new login route that starts the same
   kind of session), linking `owners` to `users` (via `owners.external_ref`), discovery/import
   (`audit_log.actor_type = 'import'`), integrations and reporting.

@@ -95,13 +95,20 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    `shadoucmdb migrate --adopt-drizzle` (or a reset); see
    [docs/deployment.md](docs/deployment.md#moving-a-dev-database-off-the-nodedrizzle-migration-runner).
 
-4. **Load reference data** (CI classes, attributes, statuses, environments, locations,
-   relationship types). This step is idempotent and never overwrites rows you have edited:
+4. **Seed.** A fresh install starts bare: no CI classes, attributes, relationship types or
+   lookups. You build the data model under *Administration*, or install the **IT infrastructure**
+   starter template (servers, VMs, network devices, applications, databases, services and
+   locations, with their attributes, relationship rules, statuses, environments and a sample
+   location tree). Seeding is idempotent and never overwrites rows you have edited:
 
    ```sh
-   shadoucmdb seed          # reference data only
-   shadoucmdb seed --demo   # plus a small sample inventory (only into an empty CI table)
+   shadoucmdb seed                                # system rows only (the data model stays empty)
+   shadoucmdb seed --template it_infrastructure   # install the starter template (or: Administration > Templates)
+   shadoucmdb seed --demo                         # the template plus a small sample inventory (only into an empty CI table)
    ```
+
+   Upgrading an existing install keeps its data: the classes and lookups it was seeded with stay,
+   and the template reports itself as installed.
 
 5. **Check the schema** (optional). This runs the acceptance checks inside a transaction that
    is rolled back, so it writes nothing:
@@ -147,7 +154,7 @@ See [docs/deployment.md](docs/deployment.md#docker).
 ```sh
 cp .env.example .env                     # point it at your PostgreSQL
 docker compose run --rm migrate          # apply migrations
-docker compose run --rm seed             # reference data (`seed seed --demo` adds sample CIs)
+docker compose run --rm seed             # system rows (`seed seed --demo` adds the IT template and sample CIs)
 docker compose up api                    # http://localhost:3000/readyz
 ```
 
