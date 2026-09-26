@@ -1,0 +1,389 @@
+name: Release
+
+# A tag `v<version>` (matching backend/Cargo.toml) builds the web UI once, embeds
+# it in the Linux x64/ARM64 (static musl) and Windows x64 binaries, tests each
+# binary against PostgreSQL, pushes the multi-arch image to GHCR and publishes a
+# GitHub Release with the archives and SHA256SUMS. See CONTRIBUTING.md.
+#
+# Pull requests that touch the pipeline run everything except the two publish
+# steps (image push and GitHub Release), so a broken pipeline is caught before
+# a tag is cut.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/scripts/**
+      - deploy/**
+      - backend/Cargo.toml
+      - backend/Cargo.lock
+      - backend/.cargo/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE: ghcr.io/shadoukita/shadoucmdb
+  ZIG_VERSION: 0.14.1
+  # Throwaway credentials for the CI-only PostgreSQL service containers.
+  PGHOST: 127.0.0.1
+  PGPORT: "5432"
+  PGDATABASE: shadoucmdb
+  PGUSER: ci
+  PGPASSWORD: ci-only-password
+  DATABASE_SSL: disable
+
+jobs:
+  meta:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' backend/Cargo.toml | head -1)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version=${GITHUB_REF_NAME#v}
+            if [ "$version" != "$crate" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match backend/Cargo.toml version $crate. Bump the version in a PR first (CONTRIBUTING.md)."
+              exit 1
+            fi
+            publish=true
+          else
+            version="$crate-dev.${GITHUB_SHA::7}"
+            publish=false
+          fi
+          [[ "$version" == *-* ]] && prerelease=true || prerelease=false
+          echo "version=$version publish=$publish prerelease=$prerelease" | tee -a "$GITHUB_STEP_SUMMARY"
+          { echo "version=$version"; echo "publish=$publish"; echo "prerelease=$prerelease"; } >> "$GITHUB_OUTPUT"
+
+  ui:
+    name: Web UI (built once)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --workspace frontend --include-workspace-root --no-audit --no-fund
+      - run: npm run build --workspace frontend
+      - run: test -f frontend/dist/index.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-ui
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    name: Linux ${{ matrix.arch }} (static musl)
+    needs: [meta, ui]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            docker_arch: amd64
+            target: x86_64-unknown-linux-musl
+            run: ""
+          - arch: arm64
+            docker_arch: arm64
+            target: aarch64-unknown-linux-musl
+            run: qemu-aarch64-static
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: shadoucmdb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PKG: shadoucmdb-${{ needs.meta.outputs.version }}-linux-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-ui
+          path: frontend/dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      # zig is the C compiler and linker for ring and mimalloc, and brings the
+      # musl libc for both architectures, so neither target needs a sysroot.
+      - name: cargo zigbuild --release --target ${{ matrix.target }}
+        working-directory: backend
+        run: cargo zigbuild --release --locked --target ${{ matrix.target }}
+
+      - name: Inspect the binary
+        run: |
+          B=backend/target/${{ matrix.target }}/release/shadoucmdb
+          file "$B"
+          file "$B" | grep -q 'statically linked'
+          ls -l "$B"
+
+      - if: matrix.run != ''
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static
+
+      - name: migrate, serve, /healthz, /readyz, UI (${{ matrix.run == '' && 'native' || 'under QEMU' }})
+        run: |
+          B="${{ matrix.run }} backend/target/${{ matrix.target }}/release/shadoucmdb"
+          $B --version
+          $B migrate
+          $B seed --demo
+          API_HOST=127.0.0.1 API_PORT=3000 .github/scripts/smoke.sh 3000 $B serve
+
+      - name: Package
+        run: |
+          mkdir -p "dist/$PKG" dist/docker/linux-${{ matrix.docker_arch }}
+          install -m 0755 backend/target/${{ matrix.target }}/release/shadoucmdb "dist/$PKG/shadoucmdb"
+          cp deploy/linux/README.txt "dist/$PKG/"
+          cp deploy/systemd/shadoucmdb.service "dist/$PKG/"
+          cp .env.example "dist/$PKG/shadoucmdb.env.example"
+          tar -C dist -czf "dist/$PKG.tar.gz" --owner=0 --group=0 "$PKG"
+          tar -tvzf "dist/$PKG.tar.gz"
+          cp "dist/$PKG/shadoucmdb" dist/docker/linux-${{ matrix.docker_arch }}/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: dist/${{ env.PKG }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-linux-${{ matrix.docker_arch }}
+          path: dist/docker
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows x64
+    needs: [meta, ui]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PKG: shadoucmdb-${{ needs.meta.outputs.version }}-windows-x64
+      # The preinstalled PostgreSQL on the Windows runner.
+      PGUSER: postgres
+      PGPASSWORD: root
+      PGDATABASE: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-ui
+          path: frontend/dist
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: release
+      # backend/.cargo/config.toml links the C runtime statically (+crt-static).
+      - run: cargo build --release --locked
+        working-directory: backend
+
+      - name: No DLLs beyond the Windows system set
+        run: |
+          $dumpbin = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -find 'VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+          $deps = & $dumpbin /nologo /dependents backend\target\release\shadoucmdb.exe | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
+          $deps
+          $bad = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|ucrtbase)' }
+          if ($bad) { throw "links the dynamic C runtime: $bad" }
+
+      - name: Start the preinstalled PostgreSQL
+        run: |
+          $pg = Get-Service -Name postgresql*
+          Set-Service -InputObject $pg -StartupType Manual
+          Start-Service -InputObject $pg
+
+      - name: migrate, serve, /healthz, /readyz, UI (native)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path backend\target\release\shadoucmdb.exe).Path
+          & $exe --version
+          & $exe migrate; if ($LASTEXITCODE) { throw 'migrate failed' }
+          & $exe seed --demo; if ($LASTEXITCODE) { throw 'seed failed' }
+          $env:API_HOST = '127.0.0.1'; $env:API_PORT = '3000'
+          $p = Start-Process -FilePath $exe -ArgumentList serve -PassThru -NoNewWindow -RedirectStandardOutput serve.log
+          try {
+            $live = $null
+            for ($i = 0; $i -lt 60 -and -not $live; $i++) {
+              try { $live = Invoke-RestMethod http://127.0.0.1:3000/healthz } catch { Start-Sleep 1 }
+            }
+            "GET /healthz -> $($live | ConvertTo-Json -Compress)"
+            if ($live.status -ne 'ok') { throw '/healthz did not answer' }
+            $ready = Invoke-RestMethod http://127.0.0.1:3000/readyz
+            "GET /readyz  -> $($ready | ConvertTo-Json -Compress)"
+            if (-not $ready.migrations.upToDate) { throw 'not ready' }
+            $ui = Invoke-WebRequest http://127.0.0.1:3000/
+            if ($ui.Content -notmatch '(?i)<!doctype html>') { throw 'no embedded UI' }
+            "GET /        -> embedded web UI (index.html)"
+            "Working set: $([math]::Round((Get-Process -Id $p.Id).WorkingSet64 / 1MB, 1)) MiB"
+          } finally {
+            Stop-Process -Id $p.Id -Force
+            Get-Content serve.log -Tail 5
+          }
+
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force "dist\$env:PKG" | Out-Null
+          Copy-Item backend\target\release\shadoucmdb.exe "dist\$env:PKG\"
+          Copy-Item deploy\windows\README.txt "dist\$env:PKG\"
+          Copy-Item .env.example "dist\$env:PKG\shadoucmdb.env.example"
+          Compress-Archive -Path "dist\$env:PKG" -DestinationPath "dist\$env:PKG.zip"
+          Get-ChildItem "dist\$env:PKG" | Format-Table Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x64
+          path: dist/${{ env.PKG }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  docker:
+    name: Docker image (linux/amd64 + linux/arm64)
+    needs: [meta, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: shadoucmdb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: docker-linux-*
+          path: dist/docker
+          merge-multiple: true
+      - run: find dist/docker -type f -exec ls -l {} +
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Test each platform's image against PostgreSQL
+        run: |
+          E="-e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e DATABASE_SSL"
+          for arch in amd64 arm64; do
+            docker buildx build --load --platform linux/$arch -f deploy/docker/Dockerfile.release -t shadoucmdb:$arch dist/docker
+            docker image inspect shadoucmdb:$arch --format "$arch: os/arch={{.Os}}/{{.Architecture}} user={{.Config.User}} size={{.Size}}"
+            docker run --rm --network host $E shadoucmdb:$arch migrate
+            .github/scripts/smoke.sh 3000 docker run --rm --init --network host $E shadoucmdb:$arch
+          done
+
+      - if: needs.meta.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # 1.2.3 -> 1.2.3, 1.2, 1 (not for 0.x) and latest. A pre-release such as
+      # 1.2.3-rc.1 gets only its own tag, never latest.
+      - id: tags
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            type=ref,event=pr
+          labels: |
+            org.opencontainers.image.title=ShadouCMDB
+            org.opencontainers.image.description=Self-hosted CMDB: REST API and web UI in one binary. PostgreSQL is external.
+      - name: Build both platforms${{ needs.meta.outputs.publish == 'true' && ' and push' || '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: dist/docker
+          file: deploy/docker/Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: ${{ needs.meta.outputs.publish == 'true' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+          provenance: false
+
+      - name: Pull and run the pushed image on both platforms
+        if: needs.meta.outputs.publish == 'true'
+        run: |
+          ref="$IMAGE:${{ needs.meta.outputs.version }}"
+          docker buildx imagetools inspect "$ref"
+          for arch in amd64 arm64; do
+            docker rmi -f "$ref" >/dev/null 2>&1 || true
+            docker pull --platform linux/$arch "$ref"
+            docker run --rm --platform linux/$arch "$ref" --version
+          done
+
+  release:
+    name: GitHub Release
+    needs: [meta, linux, windows, docker]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum shadoucmdb-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          flags=()
+          [ "${{ needs.meta.outputs.prerelease }}" = true ] && flags+=(--prerelease) || flags+=(--latest)
+          cat > notes.md <<EOF
+          | Platform | Download |
+          | --- | --- |
+          | Linux x64 (static, any distribution) | \`shadoucmdb-$VERSION-linux-x64.tar.gz\` |
+          | Linux ARM64 (static, any distribution) | \`shadoucmdb-$VERSION-linux-arm64.tar.gz\` |
+          | Windows Server x64 | \`shadoucmdb-$VERSION-windows-x64.zip\` |
+          | Docker (linux/amd64, linux/arm64) | \`docker pull $IMAGE:$VERSION\` |
+
+          Check downloads with \`sha256sum --ignore-missing -c SHA256SUMS\`. Each archive has a README.txt with install steps; see also [docs/deployment.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/docs/deployment.md).
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "ShadouCMDB $VERSION" --notes-file notes.md --generate-notes "${flags[@]}"
