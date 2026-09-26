@@ -54,7 +54,7 @@ Every non-2xx response has this shape:
 | 403 | `CSRF_TOKEN_INVALID` | A write without the session's `X-CSRF-Token` header. |
 | 404 | `NOT_FOUND` | The id does not exist, or the route does not exist. |
 | 409 | `CONFLICT` | A duplicate (unique key or live edge), or a write to a soft-deleted CI or relationship. |
-| 409 | `IN_USE` | A hard delete of a row that is still referenced. Retire it with `PATCH {"isActive": false}` instead. |
+| 409 | `IN_USE` | A hard delete of a row that is still referenced. `details[]` names each kind of reference and its count (`field` is the kind, e.g. `configurationItems`; `code` is `in_use`). Retire the row with `PATCH {"isActive": false}` instead. |
 | 409 | `VERSION_CONFLICT` | A stale `version` on a CI `PATCH`. |
 | 409 | `LAST_ADMINISTRATOR` | The change would leave no active user holding the Administrator profile. |
 | 429 | `RATE_LIMITED` | Too many failed sign-ins for this username; wait for `Retry-After` seconds. |
@@ -70,11 +70,13 @@ Every non-2xx response has this shape:
 | Graph | `GET /configuration-items/{id}/graph?depth=1..6&direction=both\|outgoing\|incoming&relationshipTypeId=&maxNodes=` | Returns `{ nodes[], edges[], truncated }` in one call. `nodes[].depth` is the number of hops from the root. Each edge embeds its type and labels. |
 | Search | `GET /search?q=` | Results are ranked, each with `matches[]` naming the field that hit (`hostname`, `attributes.url`, …). It takes the same filters as the CI list. |
 | Relationships | `GET/POST /relationships`, `GET/PATCH/DELETE /relationships/{id}` | Filters: `ciId` (either end), `sourceCiId`, `targetCiId`, `relationshipTypeId`, `deleted`. Each edge embeds `type`, `source` and `target`. PATCH changes only `notes` or `relationshipTypeId`. DELETE is a soft delete. |
-| CI classes | `GET/POST /ci-classes`, `GET/PATCH/DELETE /ci-classes/{id}`, `GET /ci-classes/{id}/attributes` | `/attributes` returns every attribute a CI of this class can carry, inherited ones included, so the UI can render the CI form from it. Filters: `parentId` (`none` for roots), `descendantOf`, `isAbstract`, `isActive`. |
-| Attribute definitions | `GET/POST /attribute-definitions`, `GET/PATCH/DELETE /attribute-definitions/{id}` | Filters: `classId`, `effectiveForClassId`, `dataType`. `classId`, `key` and `dataType` cannot change after creation. |
-| Relationship types | `GET/POST /relationship-types`, `GET/PATCH/DELETE /relationship-types/{id}` | `?sourceClassId=&targetClassId=` returns only the types legal between two classes, which is what the "add relationship" picker needs. |
-| Relationship rules | `GET/POST /relationship-rules`, `GET/PATCH/DELETE /relationship-rules/{id}` | Define which classes each type may connect. A rule also covers the subclasses of its classes. |
-| Statuses, environments, locations, owners | `GET/POST /{statuses\|environments\|locations\|owners}`, `GET/PATCH/DELETE /…/{id}` | Filters include `isActive`, `isOperational` (statuses), `parentId` and `locationType` (locations), and `kind` (owners). |
+| CI classes | `GET/POST /ci-classes`, `GET/PATCH/DELETE /ci-classes/{id}`, `GET /ci-classes/{id}/attributes`, `GET /ci-classes/{id}/usage` | `/attributes` returns every attribute a CI of this class can carry, inherited ones included, so the UI can render the CI form from it. A class has `name`, `parentId`, `isAbstract`, `icon`, `color` (`#rrggbb`), `sortOrder` and `isActive` (archive). `key` is immutable. Filters: `parentId` (`none` for roots), `descendantOf`, `isAbstract`, `isActive`; `sort=sortOrder` for menus. |
+| Attribute definitions | `GET/POST /attribute-definitions`, `GET/PATCH/DELETE /attribute-definitions/{id}`, `GET /attribute-definitions/{id}/usage` | Filters: `classId`, `effectiveForClassId`, `dataType`. A definition carries `label`, `isRequired`, `enumValues`, `validation`, `groupName` (the form section), `sortOrder` (order within the section), `helpText` and `defaultValue`. `classId`, `key`, `dataType`, `referenceClassId` and `lookupListId` cannot change after creation. |
+| Relationship types | `GET/POST /relationship-types`, `GET/PATCH/DELETE /relationship-types/{id}`, `GET /relationship-types/{id}/usage` | `?sourceClassId=&targetClassId=` returns only the types legal between two classes, which is what the "add relationship" picker needs. |
+| Relationship rules | `GET/POST /relationship-rules`, `GET/PATCH/DELETE /relationship-rules/{id}`, `GET /relationship-rules/{id}/usage` | Define which classes each type may connect. A rule also covers the subclasses of its classes. Deleting a rule keeps existing relationships; its usage counts them. |
+| Statuses, environments, locations, owners | `GET/POST /{statuses\|environments\|locations\|owners}`, `GET/PATCH/DELETE /…/{id}`, `GET /…/{id}/usage` | Filters include `isActive`, `isOperational` (statuses), `parentId` and `locationType` (locations), and `kind` (owners). |
+| Lookup lists | `GET/POST /lookup-lists`, `GET/PATCH/DELETE /lookup-lists/{id}`, `GET/POST /lookup-list-values`, `GET/PATCH/DELETE /lookup-list-values/{id}`, `GET /…/{id}/usage` | Lists an administrator defines (e.g. "Support contract": Gold, Silver). Values have `key`, `name`, `color`, `sortOrder`, `isActive`; filter values by `listId`. A `lookup` attribute stores one value by id. A list can be deleted with its values only while no attribute uses it. |
+| Templates | `GET /admin/templates`, `POST /admin/templates/{key}/install` | Needs `datamodel.manage`. Lists the starter templates (today `it_infrastructure`) with what each brings, how much of it exists already and a `status` (`not_installed`, `partial`, `installed`). Install adds every missing row in one transaction and leaves existing ones alone, so it is idempotent; the response counts `created` and `existing` rows. Every created row is audited with the installing user. |
 | Audit log | `GET /audit-log` | Read-only, needs `audit.view`. Filters: `entityType`, `entityId`, `action`, `actorId`, `actorName`, `requestId`, `from`, `to`. |
 | Setup | `GET /setup`, `POST /setup` | `setupRequired` is true while no user exists. `POST` creates the first user with the Administrator profile and signs them in; `409` once any user exists. |
 | Authentication | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` | `login` and `me` return `{ user, permissions, csrfToken }`. `permissions` is the union of the user's profiles: `administrator`, `global[]`, `allClasses` and per-class `classes[]`. Changing your own password needs `currentPassword` and ends your other sessions. |
@@ -118,7 +120,7 @@ several; their effective permissions are the union.
 | --- | --- |
 | `users.manage` | `/admin/users`: create, edit, disable, delete users, reset passwords, assign profiles |
 | `profiles.manage` | `/admin/profiles`: create, edit, clone, delete profiles |
-| `datamodel.manage` | Writes to CI classes, attribute definitions, relationship types and rules, statuses, environments, locations and owners |
+| `datamodel.manage` | Writes to CI classes, attribute definitions, relationship types and rules, statuses, environments, locations, owners and lookup lists; `/admin/templates` |
 | `customization.manage` | Branding, navigation, dashboard and layouts (phase 3) |
 | `config.export_import` | Configuration export and import (phase 3) |
 | `audit.view` | `GET /audit-log` |
@@ -152,9 +154,34 @@ Attribute values are sent and returned as JSON scalars, keyed by attribute key:
 | `date` / `datetime` | `"2025-03-01"` / ISO 8601 with offset |
 | `ip` / `cidr` | `"10.0.0.5"` / `"10.0.0.0/24"` (host bits must be zero) |
 | `reference` | the id of a live CI of `referenceClassId` (or one of its subclasses) |
+| `lookup` | the id of an active value of the attribute's `lookupListId` |
 
 In `PATCH`, `attributes` is merged into the stored values, and `null` clears a value. Required attributes are
 checked against the final state. An error on one value is reported at `attributes.<key>`.
+
+On create, every active attribute the body leaves out gets its `defaultValue`, if it has one. A default is
+validated like a value when the definition is written; `reference` attributes cannot have one.
+
+## Changing the data model safely
+
+A fresh install has no classes, attributes, relationship types or lookups (`shadoucmdb seed` loads system rows
+only). An administrator builds the model through the endpoints above or installs a starter template.
+
+Changes that would orphan or invalidate CI data are refused, and archiving is the way out:
+
+- **Delete** is allowed only while nothing refers to the row. Every data model and lookup resource has
+  `GET …/{id}/usage`, which returns `{ inUse, data: [{ kind, label, count, blocking }] }`. A blocking count makes
+  `DELETE` answer `409 IN_USE` with the same counts in `details[]`; non-blocking ones (e.g. a relationship type's
+  rules, a class's permission grants) are removed with the row. Deleted CIs and relationships count too: they are
+  kept for history.
+- **Archive** with `PATCH {"isActive": false}`. An archived class keeps its CIs but accepts no new ones; an
+  archived attribute keeps its stored values and accepts no new ones; an archived lookup value stays on the CIs
+  that hold it and cannot be chosen again.
+- **Tightening** an attribute is checked against stored data: removing an enum value that CIs hold is `400
+  enum_value_in_use`; making an attribute required (or reactivating a required one) while live CIs of the class
+  have no value is `409 CONFLICT` with `code: values_missing`; re-parenting a class whose CIs hold values of
+  attributes the new lineage does not provide is `400 attributes_outside_lineage`.
+- Keys and data types are immutable once created, because imports, reports and stored values depend on them.
 
 ## Layers and extension seams
 
