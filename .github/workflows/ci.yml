@@ -1,7 +1,8 @@
 name: CI
 
-# Node workspaces: the frontend (lint, typecheck, API types, build). The Rust
-# checks are in rust.yml, the release dry run in release.yml.
+# Node workspaces: the frontend (lint, typecheck, API types, build), and the
+# Playwright walk of the UI served by the release binary against PostgreSQL.
+# The Rust checks are in rust.yml, the release dry run in release.yml.
 
 on:
   push:
@@ -26,3 +27,93 @@ jobs:
       - name: frontend API types match backend/openapi.json
         run: npm run api:check -w frontend
       - run: npm run build --workspaces --if-present
+
+  e2e:
+    name: Playwright e2e (UI embedded in the release binary)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: shadoucmdb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CARGO_TERM_COLOR: always
+      # sqlx checks its compile-time queries against backend/.sqlx, not a live database.
+      SQLX_OFFLINE: "true"
+      # Throwaway credentials for the CI-only PostgreSQL service container.
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGDATABASE: shadoucmdb
+      PGUSER: ci
+      PGPASSWORD: ci-only-password
+      DATABASE_SSL: disable
+      API_HOST: 127.0.0.1
+      API_PORT: "3000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --workspace frontend --include-workspace-root --no-audit --no-fund
+      # Built before cargo: rust-embed puts frontend/dist into the binary.
+      - run: npm run build --workspace frontend
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: cargo build --release --locked
+        working-directory: backend
+
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(node -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-chromium
+      - if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps --only-shell chromium
+        working-directory: frontend
+      - if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+        working-directory: frontend
+
+      - name: migrate, seed --demo, serve
+        run: |
+          B=backend/target/release/shadoucmdb
+          $B migrate
+          $B seed --demo
+          $B serve > serve.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/readyz && break; sleep 1; done
+          curl -sf http://127.0.0.1:3000/readyz | grep -q '"upToDate":true'
+
+      - name: npx playwright test
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://127.0.0.1:3000
+        run: npx playwright test
+
+      - name: No error-level server log lines
+        run: |
+          errors=$(grep -c '"level":"ERROR"' serve.log || true)
+          echo "error-level log lines: $errors"
+          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log; exit 1; fi
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+            serve.log
+          if-no-files-found: ignore
+          retention-days: 14
