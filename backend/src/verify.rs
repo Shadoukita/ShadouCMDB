@@ -156,10 +156,7 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             .fetch_all(&mut *c)
             .await?;
             // Inherited relationship rules apply too: a load balancer is hardware, so it can be located_in a location.
-            let rack: Uuid = sqlx::query_scalar("SELECT id FROM configuration_items WHERE name = 'FRA1 Rack A01'")
-                .fetch_one(&mut *c)
-                .await
-                .context("demo CI 'FRA1 Rack A01' not found; run `seed --demo` first")?;
+            let rack = new_ci(c, "location", "verify-rack").await?;
             link(c, "located_in", ci, rack).await?;
             Ok(format!(
                 "class load_balancer + 2 attributes inserted; effective attributes: {}; located_in rack accepted via inherited rule",
@@ -309,11 +306,21 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             )
             .execute(&mut *c)
         ),
-        14 => reject!(
-            c,
-            "audit_log is append-only",
-            sqlx::query("UPDATE audit_log SET actor_name = 'tampered'").execute(&mut *c)
-        ),
+        14 => {
+            // The trigger is row-level, so an UPDATE of an empty audit_log would succeed vacuously:
+            // write one row first so the check does not depend on `seed --demo`.
+            sqlx::query(
+                "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, new_value)
+                 VALUES ('system', 'create', 'verify', gen_random_uuid(), '{}')",
+            )
+            .execute(&mut *c)
+            .await?;
+            reject!(
+                c,
+                "audit_log is append-only",
+                sqlx::query("UPDATE audit_log SET actor_name = 'tampered'").execute(&mut *c)
+            )
+        }
         15 => {
             let a = new_ci(c, "application", "soft-app").await?;
             let d = new_ci(c, "database", "soft-db").await?;

@@ -56,12 +56,14 @@ jobs:
       - name: backend/openapi.json matches the code
         run: ./target/release/shadoucmdb openapi --check openapi.json
 
-      - name: migrate, migrate (no-op), seed --demo, verify
+      - name: migrate, migrate (no-op), seed, verify, seed --demo, verify
         run: |
           B=./target/release/shadoucmdb
           $B migrate
           $B migrate | tee second.txt
           grep -q "nothing to do" second.txt
+          $B seed
+          $B verify
           $B seed --demo
           $B verify
 
