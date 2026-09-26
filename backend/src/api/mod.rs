@@ -15,7 +15,7 @@ pub mod validate;
 
 use axum::Router;
 use axum::routing::MethodRouter;
-use utoipa_swagger_ui::SwaggerUi;
+use utoipa_swagger_ui::{Config, SwaggerUi};
 
 use crate::http::AppState;
 use crate::modules;
@@ -66,5 +66,8 @@ pub fn router() -> Router<AppState> {
     for (path, handler) in by_path {
         router = router.route(&path, handler);
     }
-    router.merge(SwaggerUi::new("/docs").url("/openapi.json", doc))
+    // BaseLayout drops the top bar (logo and spec-URL box). Its logo SVG
+    // injects an inline <style> that the CSP on /docs would block (see
+    // `CSP` in http/mod.rs); the bar has nothing to offer with one document.
+    router.merge(SwaggerUi::new("/docs").url("/openapi.json", doc).config(Config::default().use_base_layout()))
 }

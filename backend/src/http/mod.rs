@@ -71,7 +71,9 @@ fn panic_response(_: Box<dyn Any + Send + 'static>) -> Response {
 /// Both load only same-origin files (the UI: `/config.js` and `/assets/*`;
 /// Swagger UI: its vendored bundle and `swagger-initializer.js`) and have no
 /// inline `<script>` or `<style>`, so neither `'unsafe-inline'` nor a nonce is
-/// needed. `img-src data:` covers the UI's favicon and Swagger UI's icons.
+/// needed. Swagger UI runs with `BaseLayout` because the standalone top bar's
+/// logo injects an inline `<style>`. `img-src data:` covers the UI's favicon
+/// and Swagger UI's icons.
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
     connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'";
 
@@ -280,5 +282,12 @@ mod tests {
         assert!(header(&res, header::CONTENT_TYPE).unwrap().starts_with("text/html"));
         assert_eq!(header(&res, header::CONTENT_SECURITY_POLICY), Some(CSP));
         assert_eq!(header(&res, header::STRICT_TRANSPORT_SECURITY), None);
+
+        // StandaloneLayout's top-bar logo injects an inline <style> that this CSP blocks.
+        let res = get(app(), "/docs/swagger-initializer.js", &[]).await;
+        assert_eq!(res.status(), 200);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let js = String::from_utf8(body.to_vec()).unwrap();
+        assert!(js.contains(r#""layout": "BaseLayout""#), "{js}");
     }
 }
