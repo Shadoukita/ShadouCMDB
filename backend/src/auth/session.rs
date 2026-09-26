@@ -77,8 +77,10 @@ pub fn request_is_https(headers: &HeaderMap) -> bool {
 ///
 /// Trusted-proxy assumption, as for [`request_is_https`]: the reverse proxy in
 /// front of the API overwrites (not appends to) these headers. Without such a
-/// proxy a client can put any address there, so the value is evidence for an
-/// investigator, never an input to an access decision.
+/// proxy a client can put any address there (as it can behind a proxy that
+/// appends), so the value is evidence for an investigator, never an input to an
+/// access decision. The audit trail therefore also keeps the TCP peer when it
+/// differs (`ClientInfo::peer_ip`).
 pub fn client_ip(headers: &HeaderMap, peer: Option<IpAddr>) -> Option<IpAddr> {
     let x_forwarded_for = || {
         let first = headers.get("x-forwarded-for")?.to_str().ok()?.split(',').next()?;

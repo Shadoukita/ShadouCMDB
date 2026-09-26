@@ -6,6 +6,9 @@
 -- entity_type = 'sessions'. They carry no old value: new_value holds the
 -- event's details (user, IP address, user agent, reason). No password, session
 -- token, token hash or CSRF token is ever written.
+--
+-- Not reversible once an authentication row exists: audit_log is append-only,
+-- and restoring the old audit_log_action_valid check would fail against those rows.
 
 -- ---------------------------------------------------------------------------
 -- sessions.ip_address
