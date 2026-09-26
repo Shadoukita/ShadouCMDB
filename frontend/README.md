@@ -95,9 +95,12 @@ use it without a frontend change, and check the empty, not-found and API-unreach
 warning fails the test.
 
 The tests expect the demo inventory (`shadoucmdb seed --demo`) and create their own uniquely named records.
+They run signed in: `e2e/global-setup.ts` completes first-run setup on a database without users, or signs in as
+`E2E_USERNAME` / `E2E_PASSWORD` (an Administrator account, e.g. from `shadoucmdb create-admin`).
 
 ```sh
 npx playwright install chromium                                           # once
+export E2E_USERNAME=admin E2E_PASSWORD=...                                # unless the database has no users yet
 API_PROXY_TARGET=http://<api-host>:3000 npm run test:e2e -w frontend      # starts a dev server on :5199
 E2E_BASE_URL=http://localhost:4173 npm run test:e2e -w frontend           # or test an already-served build
 ```

@@ -82,11 +82,12 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
    ```
    Connected to database "shadoucmdb" (PostgreSQL 18.1), ssl=verify-full
-   Migrations: 3 in binary, 0 applied, 3 pending
+   Migrations: 4 in binary, 0 applied, 4 pending
      applied 0000_extensions
      applied 0001_core_schema
      applied 0002_integrity_triggers
-   Database is at migration 3/3
+     applied 0003_users_and_permission_profiles
+   Database is at migration 4/4
    ```
 
    Re-running is safe; it reports `nothing to do`. Applied migrations are tracked in `_sqlx_migrations`.
@@ -115,13 +116,24 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    `cargo run -- serve` in `backend/` does the same. To run as a systemd service, a Windows Service or a
    container, see [docs/deployment.md](docs/deployment.md).
 
-7. **Use the API.** It lives under `/api/v1`. The OpenAPI 3.1 contract is served at `/openapi.json`, and
+7. **Create the first administrator.** Every page and API call except the health probes needs a signed-in
+   user. Open the web UI, which offers first-run setup while no user exists, or run:
+
+   ```sh
+   shadoucmdb create-admin --username admin --display-name "Jane Admin"   # prompts for the password
+   ```
+
+   Further users and their permission profiles are managed under Administration. Behind a TLS proxy, let it
+   send `X-Forwarded-Proto` so session cookies are marked `Secure`
+   (see [docs/deployment.md](docs/deployment.md#https-and-session-cookies)).
+
+8. **Use the API.** It lives under `/api/v1`. The OpenAPI 3.1 contract is served at `/openapi.json`, and
    there is a browsable UI at `/docs`. The same contract is committed as
    [`backend/openapi.json`](backend/openapi.json). See [docs/api.md](docs/api.md) for conventions
    (pagination, errors, attributes) and extension points. To check a deployment end to end:
 
    ```sh
-   API_URL=http://localhost:3000 node tools/smoke/smoke.ts   # needs `shadoucmdb seed --demo` data
+   API_URL=http://localhost:3000 SMOKE_USERNAME=admin SMOKE_PASSWORD=... node tools/smoke/smoke.ts   # needs `seed --demo` data
    ```
 
 ### With Docker

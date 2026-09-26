@@ -47,7 +47,8 @@ fn read_password(from_stdin: bool) -> anyhow::Result<String> {
 }
 
 pub async fn create_admin(cfg: &DatabaseConfig, args: CreateAdminArgs) -> anyhow::Result<()> {
-    let username_ok = regex::Regex::new(crate::api::schemas::USERNAME_PATTERN).is_ok_and(|re| re.is_match(&args.username));
+    let username_ok =
+        regex::Regex::new(crate::api::schemas::USERNAME_PATTERN).is_ok_and(|re| re.is_match(&args.username));
     if !username_ok {
         bail!(
             "--username: letters, digits, \".\", \"_\", \"@\" and \"-\", starting with a letter or digit (max 64 characters)"

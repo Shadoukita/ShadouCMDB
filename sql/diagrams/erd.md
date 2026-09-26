@@ -1,6 +1,7 @@
 # Entity-relationship diagram
 
-Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_schema.sql).
+Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_schema.sql) and
+[`../migrations/0003_users_and_permission_profiles.sql`](../migrations/0003_users_and_permission_profiles.sql).
 Update this diagram in the same pull request as any migration that adds, removes or re-links a table.
 Column-level rules and triggers are described in [`docs/data-model.md`](../../docs/data-model.md).
 
@@ -27,6 +28,13 @@ erDiagram
     owners |o--o{ configuration_items : "owner_id"
     locations |o--o{ configuration_items : "location_id"
     locations |o--o{ locations : "parent_id"
+
+    users ||--o{ user_permission_profiles : "user_id"
+    permission_profiles ||--o{ user_permission_profiles : "profile_id"
+    permission_profiles ||--o{ permission_profile_global_permissions : "profile_id"
+    permission_profiles ||--o{ permission_profile_class_permissions : "profile_id"
+    ci_classes |o--o{ permission_profile_class_permissions : "class_id (NULL = all classes)"
+    users ||--o{ sessions : "user_id"
 
     ci_classes {
         uuid id PK
@@ -125,7 +133,47 @@ erDiagram
         jsonb old_value
         jsonb new_value
     }
+    users {
+        uuid id PK
+        text username UK "unique lower(username)"
+        text display_name
+        text email
+        text password_hash "argon2id"
+        boolean is_active
+        timestamptz last_login_at
+    }
+    permission_profiles {
+        uuid id PK
+        text name UK "unique lower(name)"
+        boolean is_builtin "Administrator"
+    }
+    permission_profile_global_permissions {
+        uuid profile_id PK,FK
+        text permission PK
+    }
+    permission_profile_class_permissions {
+        uuid id PK
+        uuid profile_id FK
+        uuid class_id FK "NULL = all classes"
+        boolean can_view
+        boolean can_create
+        boolean can_edit
+        boolean can_delete
+    }
+    user_permission_profiles {
+        uuid user_id PK,FK
+        uuid profile_id PK,FK
+    }
+    sessions {
+        uuid id PK
+        bytea token_hash UK "sha256 of the cookie"
+        uuid user_id FK
+        text csrf_token
+        timestamptz last_seen_at
+        timestamptz expires_at
+    }
 ```
 
 `audit_log` has no foreign keys by design: `entity_type` + `entity_id` point at a row in any table,
-and the log is append-only (UPDATE and DELETE are rejected by a trigger).
+and the log is append-only (UPDATE and DELETE are rejected by a trigger). `actor_id` holds the acting
+user's id as text, without a foreign key, so deleting a user never touches history.

@@ -17,6 +17,8 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
   migrate [--adopt-drizzle] Apply pending migrations; re-running is a no-op
   seed [--demo]             Load reference data (idempotent); --demo adds a sample inventory
   verify                    Schema acceptance checks in a rolled-back transaction
+  create-admin --username U [--display-name N] [--email E] [--password-stdin]
+                            Create a user holding the built-in Administrator profile
   openapi [--out F|--check F]  Print the OpenAPI document, write it, or fail if F is stale
   service install|uninstall|run   Windows Service management (Windows only)
 ```
@@ -41,6 +43,47 @@ shadoucmdb seed            # add --demo for sample CIs
 shadoucmdb verify          # optional, writes nothing
 shadoucmdb serve           # http://<host>:3000/readyz
 ```
+
+Then open the web UI and create the first administrator, or run `create-admin` (below).
+
+## The first administrator
+
+Every page and API call except the health probes needs a signed-in user. On a new
+installation there are no users yet, and there are two ways to create the first one:
+
+- **In the browser:** while no user exists, the UI offers first-run setup
+  (`GET /api/v1/setup` reports `setupRequired: true`; `POST /api/v1/setup` creates the
+  account and signs it in). It only works while the user table is empty.
+- **On the command line**, from any machine that can reach the database:
+
+  ```sh
+  shadoucmdb create-admin --username admin --display-name "Jane Admin"          # prompts twice for the password
+  printf '%s\n' "$ADMIN_PASSWORD" | shadoucmdb create-admin --username admin --password-stdin   # scripts
+  ```
+
+`create-admin` works at any time, not only on an empty database: it is also the way back in
+if every administrator is locked out or has forgotten their password (create a second
+administrator, sign in, reset the other account). It needs the database fully migrated and
+records `actor_type = system` in the audit log. Passwords need at least 12 characters and are
+stored as argon2id hashes.
+
+Further users, and the permission profiles that decide what they may do, are managed under
+Administration in the UI (`/api/v1/admin/users`, `/api/v1/admin/profiles`). See
+[api.md](api.md#authentication-and-permissions).
+
+## HTTPS and session cookies
+
+`shadoucmdb` serves plain HTTP; put a TLS-terminating reverse proxy (nginx, Caddy, Traefik,
+a cloud load balancer) in front of it for anything beyond a lab. Sessions are cookies:
+
+- The proxy must pass `X-Forwarded-Proto: https` (or `Forwarded: proto=https`). The server
+  then marks the cookies `Secure`, so a browser never sends them over plain HTTP. If the proxy
+  cannot send that header, set `COOKIE_SECURE=always`.
+- Serve the UI and the API from the same origin (the embedded UI does this). A UI on another
+  origin needs that origin in `CORS_ORIGINS`; those origins may send the session cookie.
+- `SESSION_IDLE_TIMEOUT_MINUTES` (default 12 h) and `SESSION_MAX_AGE_HOURS` (default 7 days)
+  bound how long a session lives. Sessions are stored in PostgreSQL, so they survive restarts
+  and work across several instances. The login backoff counters are per process.
 
 ## Release downloads
 
@@ -123,6 +166,7 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin shadoucmdb
 sudo install -d -m 0750 -o root -g shadoucmdb /etc/shadoucmdb
 sudo install -m 0640 -o root -g shadoucmdb .env /etc/shadoucmdb/shadoucmdb.env   # your settings
 sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin   # or use first-run setup in the UI
 sudo cp deploy/systemd/shadoucmdb.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
 curl -s http://127.0.0.1:3000/readyz
@@ -193,6 +237,7 @@ docker build -t shadoucmdb .                                                 # c
 
 docker run --rm --env-file .env shadoucmdb migrate
 docker run --rm --env-file .env shadoucmdb seed
+docker run --rm -it --env-file .env shadoucmdb create-admin --username admin   # or use first-run setup in the UI
 docker run -d --name shadoucmdb --env-file .env -p 3000:3000 shadoucmdb    # CMD is `serve`
 ```
 

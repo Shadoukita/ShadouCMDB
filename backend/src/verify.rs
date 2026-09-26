@@ -405,7 +405,9 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             reject!(
                 c,
                 "permission_profiles_builtin_protected",
-                sqlx::query("UPDATE permission_profiles SET name = 'Renamed' WHERE id = $1").bind(admin).execute(&mut *c)
+                sqlx::query("UPDATE permission_profiles SET name = 'Renamed' WHERE id = $1")
+                    .bind(admin)
+                    .execute(&mut *c)
             )?;
             reject!(
                 c,
@@ -429,31 +431,24 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             sqlx::query("UPDATE users SET is_active = false WHERE id <> $1").bind(v).execute(&mut *c).await?;
             c.execute("SET CONSTRAINTS ALL IMMEDIATE").await?;
             let result = async {
-                let removed = reject!(
-                    c,
-                    "users_last_administrator",
-                    async {
-                        sqlx::query("DELETE FROM user_permission_profiles WHERE user_id = $1").bind(v).execute(&mut *c).await?;
-                        c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
-                    }
-                )?;
-                let disabled = reject!(
-                    c,
-                    "users_last_administrator",
-                    async {
-                        sqlx::query("UPDATE users SET is_active = false WHERE id = $1").bind(v).execute(&mut *c).await?;
-                        c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
-                    }
-                )?;
-                let deleted = reject!(
-                    c,
-                    "users_last_administrator",
-                    async {
-                        sqlx::query("DELETE FROM users WHERE id = $1").bind(v).execute(&mut *c).await?;
-                        c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
-                    }
-                )?;
-                Ok::<_, anyhow::Error>(format!("losing the profile {removed}; disabling {disabled}; deleting {deleted}"))
+                let removed = reject!(c, "users_last_administrator", async {
+                    sqlx::query("DELETE FROM user_permission_profiles WHERE user_id = $1")
+                        .bind(v)
+                        .execute(&mut *c)
+                        .await?;
+                    c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
+                })?;
+                let disabled = reject!(c, "users_last_administrator", async {
+                    sqlx::query("UPDATE users SET is_active = false WHERE id = $1").bind(v).execute(&mut *c).await?;
+                    c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
+                })?;
+                let deleted = reject!(c, "users_last_administrator", async {
+                    sqlx::query("DELETE FROM users WHERE id = $1").bind(v).execute(&mut *c).await?;
+                    c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
+                })?;
+                Ok::<_, anyhow::Error>(format!(
+                    "losing the profile {removed}; disabling {disabled}; deleting {deleted}"
+                ))
             }
             .await;
             c.execute("SET CONSTRAINTS ALL DEFERRED").await?;

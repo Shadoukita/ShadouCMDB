@@ -22,6 +22,10 @@ ci_classes ─┬─< ci_attribute_definitions >─── (reference_class_id) �
    owners ────────────┘ │           relationship_types ─< relationship_type_rules >─ ci_classes (source / target)
    locations (parent) ──┘
 audit_log (append-only; entity_type + entity_id point at any row)
+
+users ─< user_permission_profiles >─ permission_profiles ─┬─< permission_profile_global_permissions
+  │                                                        └─< permission_profile_class_permissions >─ ci_classes (NULL = all)
+  └─< sessions
 ```
 
 | Table | Purpose | Key constraints |
@@ -36,7 +40,13 @@ audit_log (append-only; entity_type + entity_id point at any row)
 | `statuses` | CI lifecycle (`planned`, `in_service`, `maintenance`, `retired`, `disposed`). `is_operational` flags "live" statuses for reporting. | unique `key` |
 | `environments` | `production`, `staging`, `test`, `development`, `disaster_recovery`. | unique `key` |
 | `locations` | Location hierarchy (region › site › building › floor › room › rack, plus `cloud_region`). | unique `key`; `location_type` check; no cycles (trigger) |
-| `owners` | Accountable people or teams (`kind` = `person` / `team`). This is not a login table: authentication is out of scope for Milestone 1. `external_ref` is the seam for a later directory/IdP link. | `kind` check; unique `external_ref`; email format |
+| `owners` | Accountable people or teams (`kind` = `person` / `team`). This is not a login table (see `users`). `external_ref` is the seam for a later directory/IdP link. | `kind` check; unique `external_ref`; email format |
+| `users` | Local accounts: `username`, `display_name`, `email`, `is_active`, argon2id `password_hash` (PHC string, never returned by the API), `password_changed_at`, `last_login_at`. | unique `lower(username)`; username format; `password_hash LIKE '$argon2id$%'`; email format |
+| `permission_profiles` | Named sets of permissions. `is_builtin` marks the one Administrator profile (created by the migration), which holds every permission implicitly. | unique `lower(name)`; at most one built-in; built-in cannot be updated or deleted (trigger) |
+| `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
+| `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
+| `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
+| `sessions` | Server-side login sessions: SHA-256 of the cookie token, `csrf_token`, `last_seen_at` (idle timeout), `expires_at` (absolute lifetime), `user_agent`. | unique `token_hash` (32 bytes); cascades with the user |
 | `audit_log` | actor (`actor_type`, `actor_id`, `actor_name`), `action`, `entity_type`, `entity_id`, `occurred_at`, `old_value`, `new_value` (jsonb), `request_id`. | action/actor checks; old/new presence per action; **UPDATE/DELETE rejected** (trigger) |
 
 All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which is a
@@ -74,14 +84,19 @@ All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which 
 | `ci_classes`, `ci_attribute_definitions`, `relationship_types`, `statuses`, `environments`, `locations`, `owners` | **Retire, don't delete** (`is_active = false`) | These are referenced by history. FKs are `ON DELETE RESTRICT`, so a referenced row cannot be hard-deleted; inactive rows keep resolving for old CIs and are hidden from pickers. Inactive classes cannot receive new CIs, and inactive relationship types cannot receive new edges. |
 | `relationship_type_rules` | **Hard delete** | Pure configuration. Removing a rule blocks new edges and leaves existing edges alone. |
 | `audit_log` | **Never deleted** | Append-only by trigger. Retention/archival is an operator decision for a later milestone. |
+| `users` | **Disable** (`is_active = false`), hard delete allowed | Disabling is the normal way to remove access and ends the user's sessions. A hard delete is allowed because nothing references a user by foreign key: `audit_log` keeps `actor_id` and `actor_name` as text, so history still names them. |
+| `permission_profiles` and their permission rows, `user_permission_profiles` | **Hard delete** | Pure configuration; every change is in `audit_log` (a profile's before/after includes its permissions, a user's includes their profiles). Deleting a profile removes it from its holders. |
+| `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login. |
 
 ## Auditing
 
 The API writes `audit_log` rows **in the same transaction** as the change, because only
 the API knows the actor and the request. Database triggers are not used for auditing:
 they cannot see the actor, and would log raw row images instead of API-level changes.
-Until authentication exists, `actor_type`/`actor_name` identify the caller, and a later
-auth milestone fills `actor_id` without a schema change.
+Changes made through the API record the signed-in user (`actor_type = 'user'`, `actor_id` =
+the user's id, `actor_name` = their username). First-run setup, `create-admin` and `seed`
+record `actor_type = 'system'`. Users and permission profiles are audited like everything
+else (`entity_type` `users` / `permission_profiles`); password hashes never appear in it.
 
 ## Indexes for UI queries
 
@@ -126,6 +141,8 @@ the `located_in` / `connected_to` rules. `shadoucmdb verify` exercises exactly t
   by the database: requiredness depends on the whole CI payload, not a single row.
 - Re-parenting a class that already has CIs is allowed. The API should check that existing
   attribute values stay within the new lineage.
-- Reserved seams, not built: an auth `users` table (link via `owners.external_ref` /
-  `audit_log.actor_id`), RBAC, discovery/import (`audit_log.actor_type = 'import'`),
-  integrations and reporting.
+- Reserved seams, not built: SSO/LDAP/OIDC sign-in (a new login route that starts the same
+  kind of session), linking `owners` to `users` (via `owners.external_ref`), discovery/import
+  (`audit_log.actor_type = 'import'`), integrations and reporting.
+- Class permissions do not inherit down the class tree: a grant on `hardware` does not cover
+  `server`. Use the wildcard or grant each class.

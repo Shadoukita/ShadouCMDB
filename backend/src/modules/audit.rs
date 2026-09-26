@@ -187,7 +187,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, "/api/v1/audit-log", "listAuditLog")
             .tag("Audit log")
             .summary("Change history (read-only, paginated, newest first by default)")
-            .description("Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username).")
+            .description("Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username).")
             .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<AuditQuery>, NoBody>| async move {
                 Ok(Json(list(&api.pool, &q).await?))

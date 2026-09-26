@@ -32,6 +32,8 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
 
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" migrate
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" seed
+  # First administrator (or skip this and use first-run setup in the web UI):
+  & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" create-admin --username admin
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
   Start-Service ShadouCMDB
   Invoke-RestMethod http://127.0.0.1:3000/readyz
