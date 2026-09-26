@@ -1,0 +1,213 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Throwaway credentials for the CI-only PostgreSQL service container.
+  PGHOST: 127.0.0.1
+  PGPORT: "5432"
+  PGDATABASE: shadoucmdb
+  PGUSER: ci
+  PGPASSWORD: ci-only-password
+  DATABASE_SSL: disable
+
+jobs:
+  linux:
+    name: Linux x64 + arm64 (PostgreSQL integration, systemd)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: shadoucmdb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo build --release --locked
+
+      - name: migrate, migrate (no-op), seed --demo, verify
+        run: |
+          B=./target/release/shadoucmdb
+          $B migrate
+          $B migrate | tee second.txt
+          grep -q "nothing to do" second.txt
+          $B seed --demo
+          $B verify
+
+      - name: serve, /healthz, /readyz, graceful shutdown
+        run: |
+          API_HOST=127.0.0.1 API_PORT=3000 ./target/release/shadoucmdb serve > serve.log &
+          PID=$!
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/healthz && break; sleep 1; done
+          curl -sf http://127.0.0.1:3000/readyz | tee readyz.json
+          grep -q '"upToDate":true' readyz.json
+          echo "idle RSS: $(grep VmRSS /proc/$PID/status)"
+          kill -TERM $PID && wait $PID
+          grep -q "server stopped" serve.log
+
+      - name: systemd unit (deploy/systemd/shadoucmdb.service)
+        run: |
+          sudo install -m 0755 target/release/shadoucmdb /usr/local/bin/shadoucmdb
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin shadoucmdb
+          sudo install -d -m 0750 -o root -g shadoucmdb /etc/shadoucmdb
+          printf 'PGHOST=%s\nPGPORT=%s\nPGDATABASE=%s\nPGUSER=%s\nPGPASSWORD=%s\nDATABASE_SSL=disable\nAPI_HOST=127.0.0.1\nAPI_PORT=3001\n' \
+            "$PGHOST" "$PGPORT" "$PGDATABASE" "$PGUSER" "$PGPASSWORD" | sudo install -m 0640 -o root -g shadoucmdb /dev/stdin /etc/shadoucmdb/shadoucmdb.env
+          sudo cp ../deploy/systemd/shadoucmdb.service /etc/systemd/system/
+          sudo systemctl daemon-reload
+          sudo systemctl start shadoucmdb
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3001/readyz && break; sleep 1; done
+          curl -sf http://127.0.0.1:3001/readyz | grep -q '"upToDate":true'
+          sudo systemctl stop shadoucmdb
+          sudo journalctl -u shadoucmdb --no-pager | tail -20
+          sudo journalctl -u shadoucmdb --no-pager | grep -q "server stopped"
+
+      - name: aarch64-unknown-linux-gnu (cross-build, run verify under QEMU)
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+          cargo build --release --locked --target aarch64-unknown-linux-gnu
+          file target/aarch64-unknown-linux-gnu/release/shadoucmdb
+          qemu-aarch64 -L /usr/aarch64-linux-gnu target/aarch64-unknown-linux-gnu/release/shadoucmdb verify
+
+  windows:
+    name: Windows x64 (MSVC, Windows Service)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: cargo build --release --locked
+        working-directory: backend
+
+      - name: Start the preinstalled PostgreSQL
+        run: |
+          $pg = Get-Service -Name postgresql*
+          Set-Service -InputObject $pg -StartupType Manual
+          Start-Service -InputObject $pg
+          "PostgreSQL service: $($pg.Name)"
+
+      - name: Install, run and remove the Windows Service
+        env:
+          PGUSER: postgres
+          PGPASSWORD: root
+          PGDATABASE: postgres
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = 'C:\Program Files\ShadouCMDB'
+          $data = 'C:\ProgramData\ShadouCMDB'
+          New-Item -ItemType Directory -Force $bin, $data | Out-Null
+          Copy-Item backend\target\release\shadoucmdb.exe $bin
+          $exe = Join-Path $bin 'shadoucmdb.exe'
+          & $exe --version
+          & $exe migrate; if ($LASTEXITCODE) { throw 'migrate failed' }
+          & $exe seed --demo; if ($LASTEXITCODE) { throw 'seed failed' }
+          & $exe verify; if ($LASTEXITCODE) { throw 'verify failed' }
+
+          @(
+            "PGHOST=$env:PGHOST", "PGPORT=$env:PGPORT", "PGDATABASE=$env:PGDATABASE",
+            "PGUSER=$env:PGUSER", "PGPASSWORD=$env:PGPASSWORD", 'DATABASE_SSL=disable',
+            'API_HOST=127.0.0.1', 'API_PORT=3000'
+          ) | Set-Content -Encoding ascii "$data\shadoucmdb.env"
+          icacls $data /grant 'NT AUTHORITY\LocalService:(OI)(CI)M' | Out-Null
+
+          & $exe --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
+          if ($LASTEXITCODE) { throw 'service install failed' }
+          Start-Service ShadouCMDB
+          Get-Service ShadouCMDB | Format-List Name, Status, StartType
+          $ready = $null
+          for ($i = 0; $i -lt 30 -and -not $ready; $i++) {
+            try { $ready = Invoke-RestMethod http://127.0.0.1:3000/readyz } catch { Start-Sleep 1 }
+          }
+          $ready | ConvertTo-Json -Compress
+          if (-not $ready.migrations.upToDate) { throw 'service is not ready' }
+
+          Stop-Service ShadouCMDB
+          Get-Content "$data\logs\shadoucmdb.log" -Tail 5
+          if (-not (Select-String -Quiet -Path "$data\logs\shadoucmdb.log" -Pattern 'stop requested by the Service Control Manager')) { throw 'no graceful stop in log' }
+          & $exe service uninstall
+          if (Get-Service ShadouCMDB -ErrorAction SilentlyContinue) { throw 'service still registered' }
+
+  docker:
+    name: Docker image (linux/amd64 + linux/arm64)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: shadoucmdb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build both platforms
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Load amd64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: shadoucmdb:amd64
+          cache-from: type=gha
+      - name: Load arm64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          tags: shadoucmdb:arm64
+          cache-from: type=gha
+      - name: Run the image against PostgreSQL
+        run: |
+          docker image ls shadoucmdb
+          docker image inspect shadoucmdb:amd64 --format 'user={{.Config.User}} entrypoint={{.Config.Entrypoint}} cmd={{.Config.Cmd}}'
+          E="-e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e DATABASE_SSL"
+          docker run --rm --network host $E shadoucmdb:amd64 migrate
+          docker run --rm --network host $E shadoucmdb:amd64 seed --demo
+          docker run --rm --network host --platform linux/arm64 $E shadoucmdb:arm64 verify
+          docker run -d --name cmdb --network host $E shadoucmdb:amd64
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/readyz && break; sleep 1; done
+          curl -sf http://127.0.0.1:3000/readyz | grep -q '"upToDate":true'
+          docker exec cmdb /usr/local/bin/shadoucmdb --version || true
+          docker stats --no-stream cmdb
+          docker stop cmdb
+          docker logs cmdb | tail -3
+          docker logs cmdb | grep -q "server stopped"

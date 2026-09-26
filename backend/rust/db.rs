@@ -1,0 +1,185 @@
+//! Connection pool and migrations. This binary is the only database client.
+
+use std::collections::HashSet;
+use std::str::FromStr;
+
+use anyhow::{Context, bail};
+use sha2::{Digest, Sha256};
+use sqlx::migrate::Migrator;
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgSslMode};
+
+use crate::config::{DatabaseConfig, SslMode};
+
+/// `sql/migrations/*.sql`, embedded at compile time. The folder is the single
+/// source of truth for the schema; build.rs makes cargo rebuild when it changes.
+pub static MIGRATOR: Migrator = sqlx::migrate!("../sql/migrations");
+
+/// Where sqlx records applied migrations (its default table name).
+const MIGRATIONS_TABLE: &str = "_sqlx_migrations";
+/// Where the Node/Drizzle runner recorded them before this binary existed.
+const DRIZZLE_TABLE: &str = "drizzle.__drizzle_migrations";
+
+pub fn connect_options(cfg: &DatabaseConfig) -> anyhow::Result<PgConnectOptions> {
+    let mut opts = match &cfg.url {
+        Some(url) => {
+            PgConnectOptions::from_str(url).context("DATABASE_URL is not a valid PostgreSQL connection string")?
+        }
+        None => {
+            // Config validation guarantees host, database and user are present here.
+            let mut o = PgConnectOptions::new()
+                .host(cfg.host.as_deref().unwrap_or_default())
+                .port(cfg.port)
+                .database(cfg.database.as_deref().unwrap_or_default())
+                .username(cfg.user.as_deref().unwrap_or_default());
+            if let Some(pw) = &cfg.password {
+                o = o.password(pw);
+            }
+            o
+        }
+    };
+
+    // DATABASE_SSL is the single source of truth: any sslmode in the URL is overridden.
+    opts = opts.ssl_mode(match cfg.ssl {
+        SslMode::Disable => PgSslMode::Disable,
+        SslMode::Require => PgSslMode::Require,
+        SslMode::VerifyFull => PgSslMode::VerifyFull,
+    });
+    if let Some(ca) = &cfg.ssl_ca_file {
+        opts = opts.ssl_root_cert(ca);
+    }
+
+    opts = opts.application_name("shadoucmdb");
+    if !cfg.statement_timeout.is_zero() {
+        opts = opts.options([("statement_timeout", cfg.statement_timeout.as_millis().to_string())]);
+    }
+    Ok(opts)
+}
+
+fn pool_options(cfg: &DatabaseConfig) -> PgPoolOptions {
+    PgPoolOptions::new()
+        .max_connections(cfg.pool_max)
+        .min_connections(0)
+        // Fail fast instead of hanging requests (and /readyz) when the database is unreachable.
+        .acquire_timeout(cfg.connect_timeout)
+}
+
+/// Pool that connects on first use, so the server starts (and reports
+/// not-ready) while the database is still unreachable.
+pub fn lazy_pool(cfg: &DatabaseConfig) -> anyhow::Result<PgPool> {
+    Ok(pool_options(cfg).connect_lazy_with(connect_options(cfg)?))
+}
+
+/// Pool with one connection established up front, for the CLI commands.
+pub async fn connect(cfg: &DatabaseConfig) -> anyhow::Result<PgPool> {
+    pool_options(cfg).connect_with(connect_options(cfg)?).await.context("could not connect to PostgreSQL")
+}
+
+async fn table_exists(pool: &PgPool, name: &str) -> sqlx::Result<bool> {
+    sqlx::query_scalar::<_, bool>("SELECT to_regclass($1) IS NOT NULL").bind(name).fetch_one(pool).await
+}
+
+/// Versions recorded as successfully applied (empty on a fresh database).
+pub async fn applied_versions(pool: &PgPool) -> sqlx::Result<HashSet<i64>> {
+    if !table_exists(pool, MIGRATIONS_TABLE).await? {
+        return Ok(HashSet::new());
+    }
+    let rows: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success").fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Number of migrations shipped with this build.
+pub fn expected_count() -> usize {
+    MIGRATOR.iter().filter(|m| m.migration_type.is_up_migration()).count()
+}
+
+/// Number of this build's migrations that are applied.
+pub async fn applied_count(pool: &PgPool) -> sqlx::Result<usize> {
+    let applied = applied_versions(pool).await?;
+    Ok(MIGRATOR.iter().filter(|m| applied.contains(&m.version)).count())
+}
+
+fn label(m: &sqlx::migrate::Migration) -> String {
+    format!("{:04}_{}", m.version, m.description.replace(' ', "_"))
+}
+
+pub async fn migrate(cfg: &DatabaseConfig, adopt_drizzle: bool) -> anyhow::Result<()> {
+    let pool = connect(cfg).await?;
+    let result = migrate_with(&pool, cfg, adopt_drizzle).await;
+    pool.close().await;
+    result
+}
+
+async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) -> anyhow::Result<()> {
+    let (db, version): (String, String) =
+        sqlx::query_as("SELECT current_database(), current_setting('server_version')").fetch_one(pool).await?;
+    println!("Connected to database \"{db}\" (PostgreSQL {version}), ssl={}", cfg.ssl.as_str());
+
+    let mut applied = applied_versions(pool).await?;
+    if applied.is_empty() && table_exists(pool, DRIZZLE_TABLE).await? {
+        if !adopt_drizzle {
+            bail!(
+                "this database was migrated by the old Node/Drizzle runner ({DRIZZLE_TABLE} exists) and has no \
+                 {MIGRATIONS_TABLE} table yet.\nRun `shadoucmdb migrate --adopt-drizzle` once to record those \
+                 migrations for this binary, or migrate an empty database. See sql/README.md."
+            );
+        }
+        adopt_drizzle_history(pool).await?;
+        applied = applied_versions(pool).await?;
+    }
+
+    let expected = expected_count();
+    let pending: Vec<_> =
+        MIGRATOR.iter().filter(|m| m.migration_type.is_up_migration() && !applied.contains(&m.version)).collect();
+    println!("Migrations: {expected} in binary, {} applied, {} pending", expected - pending.len(), pending.len());
+
+    // Each pending migration runs in its own transaction together with its
+    // bookkeeping row, under an advisory lock; re-running is a no-op.
+    MIGRATOR.run(pool).await.context("migration failed")?;
+
+    for m in &pending {
+        println!("  applied {}", label(m));
+    }
+    let after = applied_count(pool).await?;
+    println!("Database is at migration {after}/{expected}{}", if pending.is_empty() { " (nothing to do)" } else { "" });
+    Ok(())
+}
+
+/// One-time hand-over from the Node/Drizzle runner: checks that every row in
+/// drizzle.__drizzle_migrations is the SHA-256 of the matching embedded
+/// migration (same order), then records those migrations as applied without
+/// running them. Leaves the drizzle schema in place.
+async fn adopt_drizzle_history(pool: &PgPool) -> anyhow::Result<()> {
+    let hashes: Vec<String> =
+        sqlx::query_scalar("SELECT hash FROM drizzle.__drizzle_migrations ORDER BY created_at, id")
+            .fetch_all(pool)
+            .await?;
+    let ours: Vec<_> = MIGRATOR.iter().filter(|m| m.migration_type.is_up_migration()).collect();
+    if hashes.len() > ours.len() {
+        bail!(
+            "{DRIZZLE_TABLE} lists {} migrations but this binary only knows {}; use a newer binary",
+            hashes.len(),
+            ours.len()
+        );
+    }
+    for (i, (hash, m)) in hashes.iter().zip(&ours).enumerate() {
+        let sha = hex::encode(Sha256::digest(m.sql.as_str().as_bytes()));
+        if *hash != sha {
+            bail!(
+                "drizzle migration #{i} does not match {} (hash {hash} vs {sha}); reset the database instead",
+                label(m)
+            );
+        }
+    }
+    let Some(last) = hashes.len().checked_sub(1).map(|i| ours[i].version) else {
+        println!("Drizzle history is empty; nothing to adopt");
+        return Ok(());
+    };
+    MIGRATOR.skip(pool, Some(last)).await.context("recording adopted migrations failed")?;
+    println!(
+        "Adopted {} migrations from {DRIZZLE_TABLE} (up to {}); the drizzle schema can be dropped later",
+        hashes.len(),
+        label(ours[hashes.len() - 1])
+    );
+    Ok(())
+}
