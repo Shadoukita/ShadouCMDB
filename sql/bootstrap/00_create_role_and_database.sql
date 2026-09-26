@@ -14,7 +14,7 @@
 --                           only INSERT into audit_log, cannot prune it.
 --   shadoucmdb_maintenance  `shadoucmdb prune-audit` (MAINTENANCE_DATABASE_URL):
 --                           may only execute prune_audit_log().
--- The grants themselves are made by migration 0005, which runs as the owner.
+-- The grants themselves are made by migration 0007, which runs as the owner.
 -- Installs created with the older single-role version of this script are split
 -- with 10_split_roles.sql.
 

@@ -7,7 +7,7 @@
 --
 -- Order:
 --   1. Install the new binary and run `shadoucmdb migrate` as before (as
---      shadoucmdb_app), so migration 0005 is applied.
+--      shadoucmdb_app), so migration 0007 is applied.
 --   2. Stop the server. Run this script as an administrator, connected to the
 --      ShadouCMDB database:
 --        psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
@@ -24,7 +24,7 @@ BEGIN;
 DO $$
 BEGIN
   IF to_regprocedure('prune_audit_log(interval, text, boolean, text)') IS NULL THEN
-    RAISE EXCEPTION 'migration 0005 is not applied: run `shadoucmdb migrate` first';
+    RAISE EXCEPTION 'migration 0007 is not applied: run `shadoucmdb migrate` first';
   END IF;
 END;
 $$;
@@ -82,7 +82,7 @@ GRANT CREATE ON SCHEMA public TO shadoucmdb_owner;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 SELECT format('GRANT CONNECT ON DATABASE %I TO shadoucmdb_app, shadoucmdb_maintenance', current_database()) \gexec
 
--- Same grants as migration 0005 makes on a fresh three-role install.
+-- Same grants as migration 0007 makes on a fresh three-role install.
 GRANT EXECUTE ON FUNCTION prune_audit_log(interval, text, boolean, text) TO shadoucmdb_maintenance;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO shadoucmdb_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO shadoucmdb_app;

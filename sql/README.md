@@ -43,7 +43,7 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   (see [`docs/api.md`](../docs/api.md#layers-and-extension-seams)).
 - Commit the migration, the code change and any ERD update in the same pull request.
 - Migrations run as `shadoucmdb_owner`. Tables they create get `SELECT, INSERT, UPDATE, DELETE` for
-  `shadoucmdb_app` automatically (default privileges set by `0005`). A table the API must not
+  `shadoucmdb_app` automatically (default privileges set by `0007`). A table the API must not
   change, like `audit_log`, revokes those rights explicitly in its migration.
 
 ## Databases migrated by the retired Node runner
