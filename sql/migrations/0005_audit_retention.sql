@@ -44,9 +44,12 @@ ALTER TABLE audit_log ADD CONSTRAINT audit_log_values_present CHECK (
 -- A DELETE passes only while prune_audit_log() runs: it sets
 -- shadoucmdb.audit_purge for its own transaction and runs as the table owner.
 -- Any other role that sets the variable is still rejected, and audit.purge
--- rows are never deleted. UPDATE is always rejected.
+-- rows are never deleted. UPDATE is always rejected. The fixed search_path keeps
+-- the lookups below on pg_catalog whoever fires the trigger.
 CREATE OR REPLACE FUNCTION audit_log_append_only() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $$
 BEGIN
   IF TG_OP = 'DELETE' AND current_setting('shadoucmdb.audit_purge', true) = 'on' THEN
     IF OLD.action <> 'audit.purge' AND current_user = (
@@ -79,11 +82,18 @@ CREATE TRIGGER audit_log_no_truncate
 -- p_operator is who the caller says they are; the audit.purge row also keeps
 -- the database login (session_user) and client address, which the caller
 -- cannot choose.
+--
+-- It runs as the schema owner, so nothing it calls may resolve in a schema
+-- another role can write to: the search_path is pg_catalog then pg_temp (never
+-- public, where a planted function or aggregate with a closer type match than
+-- the built-in would run with the owner's rights), and tables are qualified.
+-- The 30-day floor is checked on the resulting cutoff, so '1 month' or
+-- '0 years 30 days' cannot shorten it.
 CREATE FUNCTION prune_audit_log(p_older_than interval, p_scope text, p_dry_run boolean, p_operator text DEFAULT NULL)
 RETURNS TABLE (category text, total bigint)
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
   cutoff timestamptz := now() - p_older_than;
@@ -92,7 +102,7 @@ DECLARE
   counts jsonb;
   sessions_count bigint := 0;
 BEGIN
-  IF p_older_than IS NULL OR p_older_than < interval '30 days' THEN
+  IF p_older_than IS NULL OR cutoff > now() - interval '30 days' THEN
     RAISE EXCEPTION 'prune_audit_log: the window must be at least 30 days (got %)', p_older_than
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
@@ -107,25 +117,25 @@ BEGIN
 
   IF p_dry_run THEN
     SELECT coalesce(jsonb_object_agg(a.action, a.n), '{}') INTO counts
-    FROM (SELECT l.action, count(*) AS n FROM audit_log l
+    FROM (SELECT l.action, count(*) AS n FROM public.audit_log l
           WHERE l.action = ANY (actions) AND l.occurred_at < cutoff GROUP BY l.action) a;
     IF p_scope = 'auth' THEN
-      SELECT count(*) INTO sessions_count FROM sessions s WHERE s.expires_at < session_cutoff;
+      SELECT count(*) INTO sessions_count FROM public.sessions s WHERE s.expires_at < session_cutoff;
     END IF;
   ELSE
     PERFORM set_config('shadoucmdb.audit_purge', 'on', true);
     WITH gone AS (
-      DELETE FROM audit_log l WHERE l.action = ANY (actions) AND l.occurred_at < cutoff RETURNING l.action
+      DELETE FROM public.audit_log l WHERE l.action = ANY (actions) AND l.occurred_at < cutoff RETURNING l.action
     )
     SELECT coalesce(jsonb_object_agg(g.action, g.n), '{}') INTO counts
     FROM (SELECT gone.action, count(*) AS n FROM gone GROUP BY gone.action) g;
     PERFORM set_config('shadoucmdb.audit_purge', '', true);
     IF p_scope = 'auth' THEN
-      DELETE FROM sessions s WHERE s.expires_at < session_cutoff;
+      DELETE FROM public.sessions s WHERE s.expires_at < session_cutoff;
       GET DIAGNOSTICS sessions_count = ROW_COUNT;
     END IF;
 
-    INSERT INTO audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+    INSERT INTO public.audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
     VALUES ('system', session_user, 'audit.purge', 'audit_log', gen_random_uuid(), jsonb_build_object(
       'scope', p_scope,
       'olderThan', p_older_than::text,
@@ -147,6 +157,23 @@ END;
 $$;
 --> statement-breakpoint
 REVOKE ALL ON FUNCTION prune_audit_log(interval, text, boolean, text) FROM PUBLIC;
+--> statement-breakpoint
+
+-- ---------------------------------------------------------------------------
+-- No role but the owner creates objects in public
+-- ---------------------------------------------------------------------------
+-- PostgreSQL 14 and older grant CREATE on public to every role. The bootstrap
+-- scripts revoke it; this covers installs made before them. Only the schema
+-- owner can revoke, so a migration role that is not the owner leaves a warning.
+DO $$
+BEGIN
+  IF pg_has_role(current_user, (SELECT nspowner FROM pg_namespace WHERE nspname = 'public'), 'USAGE') THEN
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+  ELSIF has_schema_privilege('public', 'public', 'CREATE') THEN
+    RAISE WARNING 'every role may create objects in schema public; as its owner run: REVOKE CREATE ON SCHEMA public FROM PUBLIC';
+  END IF;
+END;
+$$;
 --> statement-breakpoint
 
 -- ---------------------------------------------------------------------------

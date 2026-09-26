@@ -26,6 +26,12 @@ REVOKE ALL ON DATABASE shadoucmdb FROM PUBLIC;
 GRANT CONNECT ON DATABASE shadoucmdb TO shadoucmdb_app, shadoucmdb_maintenance;
 
 \connect shadoucmdb
+-- Only shadoucmdb_owner creates objects. PostgreSQL 14 lets every role create
+-- in schema public, which would let the API role plant a function that the
+-- owner-privileged prune_audit_log() or a migration then runs (15+ already
+-- withholds it; the REVOKE is then a no-op).
+GRANT CREATE ON SCHEMA public TO shadoucmdb_owner;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 -- Only needed if your provider does not let the database owner create trusted
 -- extensions; harmless otherwise.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;

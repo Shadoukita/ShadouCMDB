@@ -76,6 +76,10 @@ END;
 $$;
 
 SELECT format('REVOKE ALL ON DATABASE %I FROM PUBLIC', current_database()) \gexec
+-- Only shadoucmdb_owner creates objects: PostgreSQL 14 grants CREATE on public
+-- to every role, the API role included (see 00_create_role_and_database.sql).
+GRANT CREATE ON SCHEMA public TO shadoucmdb_owner;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 SELECT format('GRANT CONNECT ON DATABASE %I TO shadoucmdb_app, shadoucmdb_maintenance', current_database()) \gexec
 
 -- Same grants as migration 0005 makes on a fresh three-role install.

@@ -160,6 +160,12 @@ creates three roles. None is a superuser.
 | `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log`; no `EXECUTE` on the purge. |
 | `shadoucmdb_maintenance` | `shadoucmdb prune-audit` | `MAINTENANCE_DATABASE_URL` | Execute `prune_audit_log()`, nothing else. |
 
+Only `shadoucmdb_owner` may create objects in schema `public`. PostgreSQL 14 lets every role
+do so by default, which would let the API role plant a function that owner-privileged code
+then runs; both bootstrap scripts revoke it, and `migrate` warns if it finds it still open
+and cannot revoke it itself (run `REVOKE CREATE ON SCHEMA public FROM PUBLIC` as the schema's
+owner). PostgreSQL 15 and later withhold it already.
+
 The owner can change anything, including the audit log's trigger, so keep its connection
 string out of the running server's environment. For example, pass it only to the command
 that needs it (variables already set win over the env file):

@@ -167,7 +167,9 @@ mod tests {
         let mut c = sqlx::postgres::PgConnection::connect_with(&opts).await.unwrap();
         for role in ["shadoucmdb_app", "shadoucmdb_maintenance"] {
             c.execute(sqlx::AssertSqlSafe(format!(
-                "DO $$ BEGIN CREATE ROLE {role} NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$"
+                // unique_violation: another test created it concurrently.
+                "DO $$ BEGIN CREATE ROLE {role} NOLOGIN;
+                 EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$"
             )))
             .await
             .unwrap();
@@ -280,6 +282,74 @@ mod tests {
         let r = c.execute("UPDATE audit_log SET actor_name = 'tampered'").await;
         assert_eq!(sqlstate(&mut c, r).await, "42501", "UPDATE is never allowed");
         c.execute("ROLLBACK").await.unwrap();
+
+        drop(c);
+        db.drop().await;
+    }
+
+    #[tokio::test]
+    async fn a_function_planted_in_public_does_not_run_with_the_owners_rights() {
+        const TEST: &str = "a_function_planted_in_public_does_not_run_with_the_owners_rights";
+        if !ensure_roles().await {
+            scratch::database(TEST).await;
+            return;
+        }
+        let Some(db) = scratch::database(TEST).await else { return };
+        let mut c = db.pool.acquire().await.unwrap();
+        let privilege = |sql: &'static str| sqlx::query_scalar::<_, bool>(sql);
+
+        let open = privilege(
+            "SELECT has_schema_privilege('public', 'public', 'CREATE')
+                 OR has_schema_privilege('shadoucmdb_app', 'public', 'CREATE')",
+        );
+        assert!(!open.fetch_one(&mut *c).await.unwrap(), "only the owner may create objects in public");
+
+        // Reopen public as PostgreSQL 14 ships it. The API role plants a jsonb_object_agg(text, bigint)
+        // aggregate, a closer match than pg_catalog's ("any", "any"); if prune_audit_log() resolved it,
+        // its state function would run as the schema owner and grant the API role DELETE on audit_log.
+        c.execute(
+            "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, new_value, occurred_at)
+               VALUES ('system', 'login.failure', 'sessions', gen_random_uuid(), '{}', now() - interval '200 days');
+             GRANT CREATE ON SCHEMA public TO shadoucmdb_app;
+             SET ROLE shadoucmdb_app;
+             CREATE FUNCTION public.hijack(jsonb, text, bigint) RETURNS jsonb LANGUAGE plpgsql AS $$
+               BEGIN GRANT UPDATE, DELETE ON public.audit_log TO shadoucmdb_app; RETURN $1; END $$;
+             CREATE AGGREGATE public.jsonb_object_agg(text, bigint) (sfunc = public.hijack, stype = jsonb);
+             SET ROLE shadoucmdb_maintenance;",
+        )
+        .await
+        .unwrap();
+        let dry = prune(&mut c, 180, Scope::Auth, true, None).await.unwrap();
+        let done = prune(&mut c, 180, Scope::Auth, false, None).await.unwrap();
+        c.execute("RESET ROLE").await.unwrap();
+
+        let gained = privilege(
+            "SELECT has_table_privilege('shadoucmdb_app', 'public.audit_log', 'UPDATE')
+                 OR has_table_privilege('shadoucmdb_app', 'public.audit_log', 'DELETE')",
+        );
+        assert!(!gained.fetch_one(&mut *c).await.unwrap(), "the planted aggregate ran as the owner");
+        assert_eq!(dry, vec![("login.failure".into(), 1), ("sessions".into(), 0)]);
+        assert_eq!(done, dry, "the built-in aggregate counted the rows");
+
+        // The 30-day floor holds for month and year intervals too: it is checked on the resulting
+        // cutoff, so '1 month' is refused exactly when the previous month was shorter than 30 days.
+        let short = privilege("SELECT now() - interval '1 month' > now() - interval '30 days'");
+        let month_is_short = short.fetch_one(&mut *c).await.unwrap();
+        c.execute("SET ROLE shadoucmdb_maintenance").await.unwrap();
+        for (window, refused) in [("1 month", month_is_short), ("1 year -340 days", true), ("29 days 23:59", true)] {
+            c.execute("BEGIN; SAVEPOINT sp").await.unwrap();
+            let r = sqlx::query("SELECT * FROM prune_audit_log($1::interval, 'auth', true)")
+                .bind(window)
+                .execute(&mut *c)
+                .await;
+            if refused {
+                assert_eq!(sqlstate(&mut c, r).await, "22023", "window {window}");
+            } else {
+                r.unwrap();
+            }
+            c.execute("ROLLBACK").await.unwrap();
+        }
+        c.execute("RESET ROLE").await.unwrap();
 
         drop(c);
         db.drop().await;

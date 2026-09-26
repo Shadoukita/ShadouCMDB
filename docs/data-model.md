@@ -175,12 +175,17 @@ Nothing is deleted automatically: no timer, no setting. The operator schedules t
 **How the purge stays safe.** `prune_audit_log()` is a `SECURITY DEFINER` function owned by
 the schema owner. Only `shadoucmdb_maintenance` may execute it; the API role cannot, and has
 no UPDATE, DELETE or TRUNCATE on `audit_log`. The function deletes by age only (no other
-filter), refuses a window under **30 days**, so recent evidence of an attack cannot be
+filter), refuses a window whose cutoff is under **30 days** ago (checked on the cutoff, so a
+`1 month` window counts as the calendar month it is), so recent evidence of an attack cannot be
 removed through it, and writes an `audit.purge` row in the same transaction: `scope`,
 `olderThan`, `cutoff`, `deleted` (rows per action), `sessionsDeleted`, `databaseUser` and
 `clientAddress` (from the connection) and `operator` (the OS user the command reports). The
 append-only trigger lets a DELETE through only while the function runs as the table owner,
-and never for an `audit.purge` row. The schema owner remains able to change anything, which
+and never for an `audit.purge` row. Because the function runs with the owner's rights, its
+`search_path` is `pg_catalog, pg_temp` and it names its tables by schema: a function or
+aggregate another role planted in `public` can never be resolved in its place. For the same
+reason no role but the owner may create objects in `public` (PostgreSQL 14 allows it by
+default; the bootstrap scripts and migration 0005 revoke it). The schema owner remains able to change anything, which
 is why its credentials belong to migrations only, not to the running server.
 
 **Erasure for one person (GDPR Art. 17) is not supported.** It conflicts with an append-only
