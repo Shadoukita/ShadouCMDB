@@ -280,6 +280,75 @@ export interface paths {
         patch: operations["updateRelationship"];
         trace?: never;
     };
+    "/api/v1/areas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List area records (paginated, searchable, sortable)
+         * @description `q` matches key, name, description (case-insensitive substring).
+         */
+        get: operations["listAreas"];
+        put?: never;
+        /**
+         * Create a area
+         * @description Requires `datamodel.manage`.
+         */
+        post: operations["createArea"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/areas/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one area */
+        get: operations["getArea"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a area
+         * @description Requires `datamodel.manage`. Archives the area (`isActive=false`): its schema, tables and data stay, the UI hides it. `PATCH {"isActive": true}` restores it. To drop the schema, purge the area.
+         */
+        delete: operations["deleteArea"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a area (partial)
+         * @description Requires `datamodel.manage`.
+         */
+        patch: operations["updateArea"];
+        trace?: never;
+    };
+    "/api/v1/areas/{id}/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purge an archived area: drop its schema
+         * @description Requires `datamodel.manage`. Irreversible. The area must be archived and hold no types (purge those first), and `confirm` must repeat its technical name. Returns the schema change that ran.
+         */
+        post: operations["purgeArea"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ci-classes": {
         parameters: {
             query?: never;
@@ -317,7 +386,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a ci class
-         * @description Requires `datamodel.manage`. Hard delete, allowed only for a class nothing refers to: no CIs (deleted ones included), subclasses, attribute definitions, reference attributes or relationship rules. Otherwise 409 IN_USE lists them; archive the class with `PATCH {"isActive": false}` instead, which keeps its CIs and blocks new ones.
+         * @description Requires `datamodel.manage`. Archives the type (`isActive=false`): its table, CIs and values stay and stay readable, no new CIs can be created, and the UI hides it. `PATCH {"isActive": true}` restores it. To drop the table and delete its CIs, purge the type (`POST /api/v1/ci-classes/{id}/purge`).
          */
         delete: operations["deleteCiClass"];
         options?: never;
@@ -369,6 +438,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ci-classes/{id}/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purge an archived type: drop its table and delete its CIs
+         * @description Requires `datamodel.manage`. Irreversible. The type must be archived (DELETE) and `confirm` must repeat its technical name. Deletes its CIs (deleted ones included) with their relationships, its fields and relationship rules, and drops its table and reporting view. Refused (409 IN_USE) while it has subtypes or other types have reference fields pointing at it. Returns the schema change that ran.
+         */
+        post: operations["purgeCiClass"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attribute-definitions": {
         parameters: {
             query?: never;
@@ -406,14 +495,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a attribute definition
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while no CI stores a value for the attribute (409 IN_USE with the count otherwise). Retire it with `PATCH {"isActive": false}` instead: stored values stay readable and no new ones are accepted.
+         * @description Requires `datamodel.manage`. Archives the field (`isActive=false`): its column and stored values stay readable, no new values are accepted, and forms hide it. `PATCH {"isActive": true}` restores it. To drop the column and its values, purge the field (`POST /api/v1/attribute-definitions/{id}/purge`).
          */
         delete: operations["deleteAttributeDefinition"];
         options?: never;
         head?: never;
         /**
          * Update a attribute definition (partial)
-         * @description Requires `datamodel.manage`.
+         * @description Requires `datamodel.manage`. `dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert. Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. Preview any change with `POST /api/v1/schema-changes/preview`.
          */
         patch: operations["updateAttributeDefinition"];
         trace?: never;
@@ -432,6 +521,26 @@ export interface paths {
         get: operations["getAttributeDefinitionUsage"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attribute-definitions/{id}/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purge an archived field: drop its column and values
+         * @description Requires `datamodel.manage`. Irreversible. The field must be archived (DELETE) and `confirm` must repeat its technical name. Drops the column (and every stored value) from the type's table and rebuilds the reporting views. Returns the schema change that ran.
+         */
+        post: operations["purgeAttributeDefinition"];
         delete?: never;
         options?: never;
         head?: never;
@@ -565,6 +674,106 @@ export interface paths {
          * @description Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getRelationshipRuleUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schema-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * History of the DDL the data model administration ran (newest first)
+         * @description Requires `datamodel.manage`.
+         */
+        get: operations["listSchemaChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schema-changes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One schema change
+         * @description Requires `datamodel.manage`.
+         */
+        get: operations["getSchemaChange"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schema-changes/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview a data model change: its DDL and its impact on stored data
+         * @description Requires `datamodel.manage`. Runs the operation exactly as its endpoint would, including every check and guard, inside a transaction that is always rolled back, and returns the DDL it would run. A refused change returns the same error the endpoint would (e.g. 422 SCHEMA_CHANGE_REFUSED when a type change would not convert every stored value). Nothing is changed.
+         */
+        post: operations["previewSchemaChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schema-changes/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bring every area schema, type table and reporting view in line with the data model
+         * @description Requires `datamodel.manage`. Creates what is missing (e.g. grants for a cmdb_reporting role created after the areas) and rebuilds stale reporting views. Never drops anything. `shadoucmdb migrate` runs the same after migrating.
+         */
+        post: operations["reconcileSchema"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/technical-names": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Derive a technical name from a display name, or check a typed one
+         * @description Requires `datamodel.manage`. "Virtuelle Maschinen" -> virtuelle_maschinen, "Größe" -> groesse. Reports whether the name can be used (format, reserved words and prefixes, names already taken) so the UI can show it before anything is created.
+         */
+        get: operations["suggestTechnicalName"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1018,7 +1227,7 @@ export interface paths {
         put?: never;
         /**
          * Install a starter template (idempotent)
-         * @description Requires `datamodel.manage`. Adds every class, attribute, relationship type and rule, status, environment and location of the template whose key does not exist yet, in one transaction. Existing rows are left unchanged, so installing again is a no-op and renamed or archived rows stay as they are. Each created row is written to the audit log.
+         * @description Requires `datamodel.manage`. Adds the template's area (a PostgreSQL schema), every class (a table in it), attribute (a column), relationship type and rule, status, environment and location of the template whose key does not exist yet, in one transaction. Existing rows are left unchanged, so installing again is a no-op and renamed or archived rows stay as they are. Each created row is written to the audit log.
          */
         post: operations["installTemplate"];
         delete?: never;
@@ -1168,7 +1377,7 @@ export interface paths {
         };
         /**
          * Change history (read-only, paginated, newest first by default)
-         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. Passwords, session tokens and CSRF tokens are never recorded. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned.
+         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username).
          */
         get: operations["listAuditLog"];
         put?: never;
@@ -1367,6 +1576,37 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        Area: {
+            /** Format: uuid */
+            id: string;
+            /** @description Technical name: the PostgreSQL schema holding the area's tables. Immutable. */
+            key: string;
+            name: string;
+            description: string | null;
+            icon: string | null;
+            /** @description Hex colour for the menu tab, e.g. "#1f6feb" */
+            color: string | null;
+            /**
+             * Format: int32
+             * @description Position of the tab (ascending)
+             */
+            sortOrder: number;
+            /** @description Archived areas keep their schema and data; the UI hides them */
+            isActive: boolean;
+            /**
+             * Format: int64
+             * @description Types in the area (archived ones included)
+             */
+            typeCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AreaList: {
+            data: components["schemas"]["Area"][];
+            page: components["schemas"]["PageMeta"];
+        };
         /** @description An image, base64-encoded */
         AssetData: {
             /**
@@ -1434,14 +1674,14 @@ export interface components {
             actorId: string | null;
             actorName: string | null;
             /** @enum {string} */
-            action: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge";
-            /** @description Table of the changed entity, e.g. configuration_items (sessions for authentication events) */
+            action: "create" | "update" | "delete" | "restore";
+            /** @description Table of the changed entity, e.g. configuration_items */
             entityType: string;
             /** Format: uuid */
             entityId: string;
             /** @description API representation before the change (null for create) */
             oldValue: unknown;
-            /** @description API representation after the change (null for delete); the details of an authentication event */
+            /** @description API representation after the change (null for delete) */
             newValue: unknown;
             requestId: string | null;
         };
@@ -1452,8 +1692,18 @@ export interface components {
         CiClass: {
             /** Format: uuid */
             id: string;
+            /** @description Technical name: the type's table in its area's schema. Immutable. */
             key: string;
             name: string;
+            /**
+             * Format: uuid
+             * @description The area (menu tab and PostgreSQL schema) the type belongs to. Immutable.
+             */
+            areaId: string;
+            /** @description The type's table, e.g. "bestand.netzwerk" */
+            tableName: string;
+            /** @description Read-only reporting view: registry columns plus every field, e.g. "bestand.v_netzwerk" */
+            viewName: string;
             description: string | null;
             /**
              * Format: uuid
@@ -1510,7 +1760,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server reads version 1
+             * @description File format version; this server writes version 2 and reads 1 and 2
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -1624,11 +1874,22 @@ export interface components {
              */
             deletedAt: string | null;
         };
-        /** @description Classes (parents before children is not required), attributes, relationship types and rules */
+        /** @description Areas, classes (parents before children is not required), attributes, relationship types and rules */
         DataModelSection: {
+            areas?: {
+                /** @description Stable machine key, lower_snake_case */
+                key: string;
+                name: string;
+                description?: string | null;
+                icon?: string | null;
+                color?: string | null;
+                sortOrder?: number;
+                isActive?: boolean;
+            }[];
             classes?: {
                 /** @description Stable machine key, lower_snake_case */
                 key: string;
+                area?: string | null;
                 name: string;
                 description?: string | null;
                 parent?: string | null;
@@ -1780,7 +2041,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "DATABASE_UNAVAILABLE" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "DATABASE_UNAVAILABLE" | "INTERNAL_ERROR";
                 message: string;
                 details?: {
                     /** @enum {string} */
@@ -1821,6 +2082,19 @@ export interface components {
             targetCiId: string;
             notes: string | null;
         };
+        /** @description What a statement does to data that already exists */
+        Impact: {
+            /** @description Index into `statements` this applies to; null for the plan as a whole */
+            statement: number | null;
+            /** @description create, add_column, rewrite, not_null, drop_column, drop_table, drop_schema, warning, data_moved, ... */
+            kind: string;
+            /**
+             * Format: int64
+             * @description Rows (assets) concerned, when known
+             */
+            rows: number | null;
+            message: string;
+        };
         ImportChange: {
             /** @description e.g. classes, attributes, lookupListValues, permissionProfiles, uiSettings */
             section: string;
@@ -1836,6 +2110,8 @@ export interface components {
             mode: "dry_run" | "apply";
             /** @description True only for mode=apply (a dry run never changes anything) */
             applied: boolean;
+            /** @description The DDL the import runs (would run, for a dry run): new schemas, tables, columns and changed columns */
+            schemaChanges: components["schemas"]["SchemaChange"][];
             /** @description Per section, in import order */
             summary: components["schemas"]["SectionSummary"][];
             /** @description Every create, update and delete (unchanged rows are only counted) */
@@ -2071,6 +2347,10 @@ export interface components {
             logo: components["schemas"]["UiAsset"] | null;
             favicon: components["schemas"]["UiAsset"] | null;
         };
+        /** @description What a purge dropped */
+        PurgeResult: {
+            schemaChange: components["schemas"]["SchemaChange"] | null;
+        };
         Readiness: {
             /** @enum {string} */
             status: "ready" | "not_ready";
@@ -2083,6 +2363,10 @@ export interface components {
                 expected: number;
                 upToDate?: boolean;
             };
+        };
+        /** @description The result of a reconcile */
+        ReconcileResult: {
+            schemaChange: components["schemas"]["SchemaChange"] | null;
         };
         Relationship: {
             /** Format: uuid */
@@ -2232,6 +2516,35 @@ export interface components {
             data: components["schemas"]["RelationshipType"][];
             page: components["schemas"]["PageMeta"];
         };
+        /** @description One applied schema change: the exact DDL, in order, and its impact */
+        SchemaChange: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            occurredAt: string;
+            actorType: string;
+            actorId: string | null;
+            actorName: string | null;
+            requestId: string | null;
+            summary: string;
+            statements: string[];
+            impact: components["schemas"]["Impact"][];
+        };
+        SchemaChangeList: {
+            data: components["schemas"]["SchemaChange"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description What an operation would do, computed by running it in a transaction that is rolled back */
+        SchemaChangePreview: {
+            /** @description One line per schema change it would make */
+            summaries: string[];
+            /** @description The DDL, in the order it would run (empty: the change touches no table) */
+            statements: string[];
+            /** @description Effect on existing data; statement indexes refer to `statements` */
+            impact: components["schemas"]["Impact"][];
+            /** @description What the endpoint would return (the created or updated record); null for delete and purge */
+            result: Record<string, never> | null;
+        };
         SearchResults: {
             data: {
                 item: components["schemas"]["ConfigurationItemSummary"];
@@ -2281,6 +2594,8 @@ export interface components {
             description: string;
             contents: {
                 /** Format: int64 */
+                areas: number;
+                /** Format: int64 */
                 classes: number;
                 /** Format: int64 */
                 attributeDefinitions: number;
@@ -2296,6 +2611,8 @@ export interface components {
                 locations: number;
             } & Record<string, never>;
             present: {
+                /** Format: int64 */
+                areas: number;
                 /** Format: int64 */
                 classes: number;
                 /** Format: int64 */
@@ -2348,9 +2665,24 @@ export interface components {
             data: components["schemas"]["Status"][];
             page: components["schemas"]["PageMeta"];
         };
+        /** @description A suggested (or typed) technical name and whether it can be used */
+        TechnicalName: {
+            /** @description The name that would be used: `key` when given, otherwise derived from `name` */
+            technicalName: string;
+            /** @description Derived from the display name (not typed) */
+            derived: boolean;
+            valid: boolean;
+            /** @description Why it cannot be used: empty, invalid_format, too_long, reserved_word, reserved_name, reserved_prefix, name_taken */
+            code: string | null;
+            message: string | null;
+            /** @description Where it would live, e.g. "bestand.virtuelle_maschinen" (types with areaId, fields with classId) */
+            qualifiedName: string | null;
+        };
         TemplateInstallResult: {
             template: string;
             created: {
+                /** Format: int64 */
+                areas: number;
                 /** Format: int64 */
                 classes: number;
                 /** Format: int64 */
@@ -2368,6 +2700,8 @@ export interface components {
             } & Record<string, never>;
             existing: {
                 /** Format: int64 */
+                areas: number;
+                /** Format: int64 */
                 classes: number;
                 /** Format: int64 */
                 attributeDefinitions: number;
@@ -2384,6 +2718,7 @@ export interface components {
             } & Record<string, never>;
             /** @description Rows not installed because they would clash with the current data model */
             skipped: string[];
+            schemaChange: components["schemas"]["SchemaChange"] | null;
         };
         /** @description An uploaded image */
         UiAsset: {
@@ -4198,6 +4533,543 @@ export interface operations {
             };
         };
     };
+    listAreas: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Case-insensitive substring search */
+                q?: string;
+                /** @description Sort field; prefix with "-" for descending. One of: sortOrder, name, key, createdAt, updatedAt */
+                sort?: "sortOrder" | "-sortOrder" | "name" | "-name" | "key" | "-key" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
+                isActive?: "true" | "false";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AreaList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createArea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Technical name (PostgreSQL identifier): lower-case a-z, digits and "_", starting with a letter, at most 63 characters (61 for types). Derived from the display name when left out ("Größe" -> "groesse"); cannot be changed later. Reserved SQL keywords, names starting with "pg_" and names the system uses are rejected with 422 INVALID_NAME. */
+                    key?: string;
+                    name: string;
+                    description?: string | null;
+                    icon?: string | null;
+                    color?: string | null;
+                    sortOrder?: number;
+                    isActive?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Area"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getArea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Area"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteArea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateArea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    description?: string | null;
+                    icon?: string | null;
+                    color?: string | null;
+                    sortOrder?: number;
+                    /** @description false archives the area, true restores it */
+                    isActive?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Area"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    purgeArea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The technical name of what is purged, typed by the administrator */
+                    confirm: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgeResult"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listCiClasses: {
         parameters: {
             query?: {
@@ -4215,6 +5087,8 @@ export interface operations {
                 parentId?: "none" | string;
                 /** @description This class and every class below it */
                 descendantOf?: string;
+                /** @description One or more ids, comma-separated */
+                areaId?: string;
             };
             header?: never;
             path?: never;
@@ -4279,9 +5153,14 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Stable machine key, lower_snake_case */
-                    key: string;
+                    /** @description Technical name (PostgreSQL identifier): lower-case a-z, digits and "_", starting with a letter, at most 63 characters (61 for types). Derived from the display name when left out ("Größe" -> "groesse"); cannot be changed later. Reserved SQL keywords, names starting with "pg_" and names the system uses are rejected with 422 INVALID_NAME. */
+                    key?: string;
                     name: string;
+                    /**
+                     * Format: uuid
+                     * @description The area the type's table is created in
+                     */
+                    areaId: string;
                     description?: string | null;
                     parentId?: string | null;
                     isAbstract?: boolean;
@@ -4340,6 +5219,15 @@ export interface operations {
             };
             /** @description Body is not application/json */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4488,8 +5376,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4597,6 +5485,15 @@ export interface operations {
             };
             /** @description Body is not application/json */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4761,6 +5658,107 @@ export interface operations {
             };
         };
     };
+    purgeCiClass: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The technical name of what is purged, typed by the administrator */
+                    confirm: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgeResult"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listAttributeDefinitions: {
         parameters: {
             query?: {
@@ -4845,8 +5843,8 @@ export interface operations {
                 "application/json": {
                     /** Format: uuid */
                     classId: string;
-                    /** @description Stable machine key, lower_snake_case */
-                    key: string;
+                    /** @description Technical name (PostgreSQL identifier): lower-case a-z, digits and "_", starting with a letter, at most 63 characters (61 for types). Derived from the display name when left out ("Größe" -> "groesse"); cannot be changed later. Reserved SQL keywords, names starting with "pg_" and names the system uses are rejected with 422 INVALID_NAME. */
+                    key?: string;
                     /** @enum {string} */
                     dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
                     referenceClassId?: string | null;
@@ -4927,6 +5925,15 @@ export interface operations {
             };
             /** @description Body is not application/json */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5075,8 +6082,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5116,6 +6123,8 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /** @enum {string} */
+                    dataType?: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
                     label?: string;
                     description?: string | null;
                     isRequired?: boolean;
@@ -5208,6 +6217,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -5268,6 +6286,107 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    purgeAttributeDefinition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The technical name of what is purged, typed by the administrator */
+                    confirm: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgeResult"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6242,6 +7361,411 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listSchemaChanges: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Case-insensitive substring search */
+                q?: string;
+                /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
+                sort?: "occurredAt" | "-occurredAt";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchemaChangeList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getSchemaChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchemaChange"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    previewSchemaChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description The data model operation to preview (the endpoint it stands for in brackets)
+                     * @enum {string}
+                     */
+                    operation: "createArea" | "updateArea" | "deleteArea" | "purgeArea" | "createType" | "updateType" | "deleteType" | "purgeType" | "createField" | "updateField" | "deleteField" | "purgeField";
+                    id?: string | null;
+                    /** @description The body the operation's endpoint takes (create, update, purge) */
+                    body?: Record<string, never> | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchemaChangePreview"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    reconcileSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconcileResult"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the change would lose or break stored data); details name the field and the reason */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    suggestTechnicalName: {
+        parameters: {
+            query: {
+                /** @description What a technical name is for; each has its own reserved names and length. */
+                kind: "area" | "type" | "field";
+                /** @description The display name ("Virtuelle Maschinen") */
+                name: string;
+                /** @description The technical name the administrator typed instead, to check it */
+                key?: string;
+                /** @description kind=type: the area the type goes into (for the table name shown) */
+                areaId?: string;
+                /** @description kind=field: the type the field goes into (checked for names taken in its lineage) */
+                classId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TechnicalName"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9983,10 +11507,10 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "areas" | "schema_changes";
                 /** @description History of these entities */
                 entityId?: string;
-                action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge";
+                action?: "create" | "update" | "delete" | "restore";
                 /** @description Changes made by this user (their id) */
                 actorId?: string;
                 /** @description Case-insensitive substring */
@@ -11220,7 +12744,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server reads version 1
+                     * @description File format version; this server writes version 2 and reads 1 and 2
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
