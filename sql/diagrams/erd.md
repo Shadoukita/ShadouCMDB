@@ -3,7 +3,8 @@
 Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_schema.sql) and
 [`../migrations/0003_users_and_permission_profiles.sql`](../migrations/0003_users_and_permission_profiles.sql) and
 [`../migrations/0004_data_model_admin.sql`](../migrations/0004_data_model_admin.sql) and
-[`../migrations/0005_ui_settings.sql`](../migrations/0005_ui_settings.sql).
+[`../migrations/0005_ui_settings.sql`](../migrations/0005_ui_settings.sql)
+(`sessions.ip_address` from [`../migrations/0006_auth_audit.sql`](../migrations/0006_auth_audit.sql)).
 Update this diagram in the same pull request as any migration that adds, removes or re-links a table.
 Column-level rules and triggers are described in [`docs/data-model.md`](../../docs/data-model.md).
 
@@ -198,6 +199,7 @@ erDiagram
         text csrf_token
         timestamptz last_seen_at
         timestamptz expires_at
+        inet ip_address "client address at sign-in"
     }
     ui_settings {
         uuid id PK

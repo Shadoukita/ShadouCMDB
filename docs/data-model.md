@@ -53,7 +53,7 @@ ui_assets (logo, favicon)
 | `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
 | `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
-| `sessions` | Server-side login sessions: SHA-256 of the cookie token, `csrf_token`, `last_seen_at` (idle timeout), `expires_at` (absolute lifetime), `user_agent`. | unique `token_hash` (32 bytes); cascades with the user |
+| `sessions` | Server-side login sessions: SHA-256 of the cookie token, `csrf_token`, `last_seen_at` (idle timeout), `expires_at` (absolute lifetime), `user_agent`, `ip_address` (`inet`, client address at sign-in; evidence only). | unique `token_hash` (32 bytes); cascades with the user |
 | `ui_settings` | The one current UI settings document (`settings` jsonb, validated by the API against `UiSettingsDocument`), its `version`, and who saved it. Classes, attributes and lookups are referenced by key inside the document, not by FK, so it survives export/import; the API reports references that do not resolve. | exactly one row (`singleton` check + unique); `settings` is an object; `version` must exist in `ui_settings_versions` (deferred FK) |
 | `ui_settings_versions` | Every saved version of the document with actor, time and an optional comment. | PK `version`; **UPDATE/DELETE rejected** (trigger); comment at most 500 characters |
 | `ui_assets` | Logo and favicon bytes with `content_type` and `sha256` (ETag). Stored in the database so no shared file storage is needed and backups include them. | unique `kind` (`logo`, `favicon`); content type allowlist; size 1 byte to 512 KiB (logo) / 128 KiB (favicon); `sha256` format |
@@ -111,7 +111,7 @@ The template contains:
 | `permission_profiles` and their permission rows, `user_permission_profiles` | **Hard delete** | Pure configuration; every change is in `audit_log` (a profile's before/after includes its permissions, a user's includes their profiles). Deleting a profile removes it from its holders. |
 | `ui_settings`, `ui_settings_versions` | **Replaced, never deleted** | Saving creates a new version; history is append-only, so any earlier layout can be looked at and restored. |
 | `ui_assets` | **Hard delete** | An image is current state only; the audit log keeps its metadata (type, size, hash). |
-| `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login. |
+| `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login. Every session the API ends (not expiry) leaves a `logout` or `session.revoke` row in `audit_log`. |
 
 ## Auditing
 
@@ -126,6 +126,25 @@ else (`entity_type` `users` / `permission_profiles`); password hashes never appe
 audited as `ui_settings` updates (old and new version with their documents), logo and favicon changes as
 `ui_assets` (metadata only, not the bytes). A configuration import writes one row per created or updated row with
 the importing user as the actor; a dry run writes none.
+
+Authentication events are audit rows too, with `entity_type = 'sessions'`, `old_value` NULL
+and the details in `new_value` (every one also has `ipAddress` and `userAgent` of the request):
+
+| `action` | Actor | `entity_id` | `new_value` |
+| --- | --- | --- | --- |
+| `login.success` | the user | the new session | `userId`, `username`, `method` (`password` or `setup`) |
+| `login.failure` | anonymous (`api_client`, no id) | a fresh id for the attempt | `attemptedUsername` (first 64 characters, as typed) |
+| `login.locked` | anonymous | the failed attempt that set the lock | `attemptedUsername`, `lockedForSeconds` |
+| `logout` | the user | the session | `userId`, `username`, `session` (`createdAt`, `ipAddress`, `userAgent`) |
+| `session.revoke` | whoever caused it (an administrator, the user, `system`) | the ended session | as for `logout`, plus `reason`: `user_disabled`, `user_deleted`, `password_reset`, `password_changed` or `replaced` (a new sign-in in the same browser) |
+
+A failed sign-in never says whether the username exists (a wrong password, an unknown name
+and a disabled account look the same), so reading the audit log does not reveal account
+names. Sign-ins refused with 429 while a name is locked are not recorded: they cost the
+server nothing, and recording them would let an anonymous client grow `audit_log` at will.
+Passwords, session tokens, token hashes and CSRF tokens are never written. The IP address is
+evidence, not an access control: see [deployment](deployment.md#https-and-session-cookies)
+for the proxy it assumes. Nothing alerts on these rows yet.
 
 ## Indexes for UI queries
 
