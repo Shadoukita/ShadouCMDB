@@ -171,6 +171,8 @@ test("list views: a class's columns, default sort, filter and page size apply to
   await expect(page.locator("#f-status")).not.toHaveValue("");
   await expect(page.getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Owner" })).toHaveCount(0);
+  // Attribute columns show the values the list API returns with each CI.
+  await expect(page.getByRole("row").filter({ hasText: "fra1-esx-01" }).getByRole("cell").last()).toHaveText("32");
   await expect(page.getByRole("columnheader", { name: /Updated/ })).toHaveAttribute("aria-sort", "descending");
   await expect(page.locator(".pagination select")).toHaveValue("25");
   // Clearing the filter sticks: a reload and Back show the URL as the operator left it.

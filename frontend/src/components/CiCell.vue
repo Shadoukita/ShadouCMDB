@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
-import type { CiSummary, EffectiveAttribute } from "../api/queries";
+import type { Ci, EffectiveAttribute } from "../api/queries";
 import { formatDateTime, formatRelative } from "../lib/format";
 import { attributeKey } from "../lib/uiSettings";
 import AttributeValue from "../pages/detail/AttributeValue.vue";
@@ -11,14 +11,11 @@ import StatusBadge from "./StatusBadge.vue";
  * One inventory cell: a built-in field or `attributes.<key>`, as chosen by the
  * class's list view (Administration › Customization › List views).
  */
-const props = defineProps<{ ci: CiSummary; field: string; defs: readonly EffectiveAttribute[] }>();
+const props = defineProps<{ ci: Ci; field: string; defs: readonly EffectiveAttribute[] }>();
 const attr = computed(() => attributeKey(props.field));
 const def = computed(() => (attr.value ? props.defs.find((d) => d.key === attr.value) : undefined));
-/** List rows carry attribute values once the API includes them; until then the cell stays empty. */
-const values = computed(() => (props.ci as CiSummary & { attributes?: Record<string, unknown> }).attributes);
-const refs = computed(
-  () => (props.ci as CiSummary & { attributeReferences?: Record<string, { id: string; name: string; deleted?: boolean }> }).attributeReferences,
-);
+const values = computed(() => props.ci.attributes as Record<string, unknown>);
+const refs = computed(() => props.ci.attributeReferences as Record<string, { id: string; name: string; deleted?: boolean } | undefined>);
 const self = computed(() => ({ id: props.ci.id, name: props.ci.name }));
 </script>
 

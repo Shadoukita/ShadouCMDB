@@ -6,7 +6,6 @@ import CiCell from "../../../components/CiCell.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import {
-  attributeKey,
   ATTRIBUTE_PREFIX,
 
   BUILTIN_FIELDS,
@@ -64,10 +63,6 @@ const previewQuery = computed<CiListQuery>(() => ({
 }));
 const preview = useCiList(previewQuery);
 const columns = computed(() => (view.value?.columns?.length ? view.value.columns : DEFAULT_COLUMNS));
-/** The list API may not return attribute values (older servers); say so rather than show silently empty columns. */
-const attributesMissing = computed(
-  () => columns.value.some((c) => attributeKey(c) !== null) && (preview.data.value?.data ?? []).some((ci) => !("attributes" in ci)),
-);
 </script>
 
 <template>
@@ -144,8 +139,5 @@ const attributesMissing = computed(
         </tbody>
       </table>
     </div>
-    <p v-if="attributesMissing" class="alert alert-warn">
-      This server's inventory list does not return attribute values yet, so attribute columns stay empty until it does.
-    </p>
   </section>
 </template>

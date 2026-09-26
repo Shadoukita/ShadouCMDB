@@ -109,7 +109,7 @@ One settings document (`GET /ui-settings`, see `docs/api.md`) applies to every u
 - **List views** (`InventoryPage.vue`): per class, the columns (built-in fields or `attributes.<key>`), default sort
   and page size, and default filters. Default filters are written into the URL when the operator navigates to the
   class list without filters (menu, links); a reload or Back keeps the URL as it is, so a cleared filter stays
-  cleared. Attribute columns show values once the list API returns them (SHAA-61).
+  cleared. Attribute columns read the values the list API returns with each CI.
 - **Detail and form layout** (`detail/LayoutPanels.vue`, `form/CiForm.vue`): per class, panels of fields in
   order (collapsed ones start closed), hidden fields, and fields read-only on the form. Fields no panel places
   follow in a General panel and their attribute groups. Required fields stay editable on a new CI whatever the
