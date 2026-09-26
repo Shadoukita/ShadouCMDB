@@ -244,7 +244,11 @@ async function main() {
   const setupStatus = (await get('/api/v1/setup')).json;
   if (setupStatus.setupRequired) {
     await post('/api/v1/setup', { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: 'too short' }, 400);
-    const res = await post('/api/v1/setup', { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: ADMIN_PASSWORD });
+    // Two at once: the advisory lock lets exactly one of them create the administrator.
+    const body = { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: ADMIN_PASSWORD };
+    const both = await Promise.all([0, 1].map(() => call('POST', '/api/v1/setup', body, undefined, {}, { accept: [201, 409] })));
+    check(both.map((r) => r.status).sort().join() === '201,409', 'two concurrent setups: exactly one 201 and one 409');
+    const res = both.find((r) => r.status === 201) ?? both[0]!;
     check(res.json.user?.isAdministrator === true && res.json.permissions?.administrator === true, 'setup creates an administrator and signs them in');
     me = identityFrom(ADMIN_USERNAME, res);
     check((await get('/api/v1/setup')).json.setupRequired === false, 'setup is no longer required');

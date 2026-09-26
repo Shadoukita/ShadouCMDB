@@ -109,7 +109,9 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             409,
             "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
         ),
-        ErrorCode::RateLimited => (429, "Too many failed sign-ins (code RATE_LIMITED); see the Retry-After header"),
+        ErrorCode::RateLimited => {
+            (429, "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header")
+        }
         ErrorCode::UnsupportedMediaType => (415, "Body is not application/json"),
         ErrorCode::PayloadTooLarge => (413, "Body too large"),
         ErrorCode::DatabaseUnavailable => (503, "Database unreachable (code DATABASE_UNAVAILABLE)"),

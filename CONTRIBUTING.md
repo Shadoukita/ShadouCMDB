@@ -49,6 +49,14 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
+A few tests need a real PostgreSQL (first-run setup races, locks). They create and drop their
+own `shadoucmdb_test_*` database, so they only run when you point them at a server where your
+user may `CREATE DATABASE`; otherwise they print a notice and pass:
+
+```sh
+SHADOUCMDB_TEST_DATABASE_URL=postgres://user:password@host:5432/postgres cargo test --locked
+```
+
 ## Cutting a release
 
 Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml) when a tag

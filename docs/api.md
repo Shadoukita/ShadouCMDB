@@ -57,7 +57,7 @@ Every non-2xx response has this shape:
 | 409 | `IN_USE` | A hard delete of a row that is still referenced. Retire it with `PATCH {"isActive": false}` instead. |
 | 409 | `VERSION_CONFLICT` | A stale `version` on a CI `PATCH`. |
 | 409 | `LAST_ADMINISTRATOR` | The change would leave no active user holding the Administrator profile. |
-| 429 | `RATE_LIMITED` | Too many failed sign-ins for this username; wait for `Retry-After` seconds. |
+| 429 | `RATE_LIMITED` | Too many failed sign-ins (for this username, or on the whole server), or too many wrong current passwords on `PUT /auth/password`; wait for `Retry-After` seconds. |
 | 413 / 415 | `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE` | The body is over 1 MiB, or is not JSON. |
 | 503 | `DATABASE_UNAVAILABLE` | PostgreSQL is unreachable. |
 | 500 | `INTERNAL_ERROR` | A bug. The message is generic and the log carries `requestId`. |
@@ -104,8 +104,17 @@ or `Forwarded: proto=https`); `COOKIE_SECURE=always|never` overrides that.
 **Login backoff.** After 5 failed sign-ins for a username, each further failure locks that username for 1 s, 2 s,
 4 s, … up to 15 min. While locked, login answers `429 RATE_LIMITED` with `Retry-After`, without checking the
 password. A success resets the counter. Unknown usernames are throttled the same way and cost the same argon2
-work, so neither the answer nor its timing reveals which usernames exist. The counters live in memory (per
-process, reset on restart).
+work, so neither the answer nor its timing reveals which usernames exist.
+
+On top of that, the server allows at most 300 failed sign-ins in any 10 minutes, for all usernames together.
+Beyond that budget every sign-in answers `429` until the oldest failure leaves the window. This caps password
+spraying (a guess or two for each of many usernames), which the per-username lock does not see. The trade-off:
+someone who keeps failing sign-ins on purpose can keep sign-in locked for everyone. Sessions that already exist
+keep working, and `shadoucmdb create-admin` works regardless.
+
+`PUT /api/v1/auth/password` has the same per-user backoff for wrong `currentPassword` values (5 free, then 1 s,
+2 s, … up to 15 min), so a stolen session cannot be turned into the password by guessing. The counters live in
+memory (per process, reset on restart).
 
 **First run.** While there are no users, `GET /api/v1/setup` returns `{"setupRequired": true}` and
 `POST /api/v1/setup` creates the first administrator and signs them in. `shadoucmdb create-admin` does the same

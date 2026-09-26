@@ -264,9 +264,11 @@ pub async fn count_users(conn: &mut PgConnection) -> sqlx::Result<i64> {
     sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(conn).await
 }
 
-/// Serialises first-run setup: two concurrent requests cannot both see zero users.
-pub async fn lock_users_table(conn: &mut PgConnection) -> sqlx::Result<()> {
-    sqlx::query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE").execute(conn).await?;
+/// Serialises first-run setup: two concurrent requests cannot both see zero
+/// users. A transaction-scoped advisory lock, so it blocks nothing but another
+/// setup (a table lock would block every write to `users`, sign-in included).
+pub async fn lock_setup(conn: &mut PgConnection) -> sqlx::Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('shadoucmdb.setup'))").execute(conn).await?;
     Ok(())
 }
 

@@ -73,7 +73,7 @@ export interface paths {
         put?: never;
         /**
          * Sign in with username and password
-         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.
+         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. More than 300 failures in 10 min for all usernames together lock sign-in for everyone (429) until the window has room again.
          */
         post: operations["login"];
         delete?: never;
@@ -124,7 +124,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Change your own password (ends your other sessions) */
+        /**
+         * Change your own password (ends your other sessions)
+         * @description 400 when `currentPassword` is wrong. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.
+         */
         put: operations["changeOwnPassword"];
         post?: never;
         delete?: never;
@@ -1737,7 +1740,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Too many failed sign-ins (code RATE_LIMITED); see the Retry-After header */
+            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -1920,6 +1923,15 @@ export interface operations {
             };
             /** @description Body is not application/json */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

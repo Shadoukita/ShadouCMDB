@@ -31,7 +31,7 @@ pub enum ErrorCode {
     VersionConflict,
     /// The change would leave no active user holding the Administrator profile
     LastAdministrator,
-    /// Too many failed logins for this username; retry after the Retry-After header
+    /// Too many failed password attempts; retry after the Retry-After header
     RateLimited,
     UnsupportedMediaType,
     PayloadTooLarge,

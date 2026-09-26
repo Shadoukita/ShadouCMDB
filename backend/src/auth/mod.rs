@@ -35,12 +35,15 @@ pub struct Principal {
 /// Process-wide authentication state, shared by every request.
 pub struct AuthState {
     pub config: AuthConfig,
+    /// Login, keyed by username.
     pub throttle: LoginThrottle,
+    /// Changing one's own password, keyed by user id.
+    pub password_throttle: LoginThrottle,
 }
 
 impl AuthState {
     pub fn new(config: AuthConfig) -> Self {
-        AuthState { config, throttle: LoginThrottle::default() }
+        AuthState { config, throttle: LoginThrottle::default(), password_throttle: LoginThrottle::per_key() }
     }
 }
 
