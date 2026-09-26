@@ -20,6 +20,4 @@ function normaliseBaseUrl(value: string | undefined): string {
 export const config = {
   /** Backend base URL without /api/v1. Empty string means "same origin as the UI". */
   apiBaseUrl: normaliseBaseUrl(runtime.apiBaseUrl || import.meta.env.VITE_API_BASE_URL),
-  /** Label written to the audit log until authentication exists. */
-  actorName: "web-ui",
 };

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ShadouCMDB API",
-    "description": "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.\n\n- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`.\n- `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.\n- Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.\n- Writes are recorded in the audit log (`/api/v1/audit-log`). Send `X-Actor-Name` to label the actor until authentication exists.\n- Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.",
+    "description": "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.\n\n- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`.\n- `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.\n- Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.\n- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie. Every operation except the health probes, login and first-run setup answers 401 `UNAUTHENTICATED` without a live session.\n- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie); without it: 403 `CSRF_TOKEN_INVALID`.\n- Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.\n- Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.\n- Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.",
     "version": "0.1.0"
   },
   "servers": [
@@ -41,7 +41,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     },
     "/readyz": {
@@ -84,7 +85,507 @@
               }
             }
           }
-        }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/setup": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Whether first-run setup is needed (no users exist yet)",
+        "operationId": "getSetupStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      },
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Create the first administrator and sign them in (only while no users exist)",
+        "description": "The new user holds the built-in Administrator profile. 409 once any user exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line.",
+        "operationId": "completeSetup",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "displayName",
+                  "password"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$"
+                  },
+                  "displayName": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "email": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "email",
+                        "maxLength": 320
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "password": {
+                    "type": "string",
+                    "description": "At least 12 characters",
+                    "maxLength": 256,
+                    "minLength": 12
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Sign in with username and password",
+        "description": "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
+        "operationId": "login",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 1
+                  },
+                  "password": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed sign-ins (code RATE_LIMITED); see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Sign out: end this session and clear its cookies",
+        "operationId": "logout",
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "The signed-in user, their effective permissions and the CSRF token",
+        "operationId": "getCurrentSession",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/password": {
+      "put": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Change your own password (ends your other sessions)",
+        "operationId": "changeOwnPassword",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "currentPassword",
+                  "newPassword"
+                ],
+                "properties": {
+                  "currentPassword": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 1
+                  },
+                  "newPassword": {
+                    "type": "string",
+                    "description": "At least 12 characters",
+                    "maxLength": 256,
+                    "minLength": 12
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/configuration-items": {
@@ -93,7 +594,7 @@
           "Configuration items"
         ],
         "summary": "Inventory list: paginated, searchable, filterable, sortable",
-        "description": "Returns summaries (no attribute values). Soft-deleted CIs are hidden unless `deleted=include|only`.",
+        "description": "Returns summaries (no attribute values) of CIs in classes the caller may view. Soft-deleted CIs are hidden unless `deleted=include|only`.",
         "operationId": "listConfigurationItems",
         "parameters": [
           {
@@ -274,6 +775,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -294,26 +805,21 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
           "Configuration items"
         ],
         "summary": "Create a CI, including its attribute values",
+        "description": "Needs create on the class.",
         "operationId": "createConfigurationItem",
-        "parameters": [
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
@@ -475,6 +981,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "415": {
             "description": "Body is not application/json",
             "content": {
@@ -505,7 +1031,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/configuration-items/{id}": {
@@ -514,7 +1046,7 @@
           "Configuration items"
         ],
         "summary": "Get a CI with its attribute values",
-        "description": "Deleted CIs are still returned (with `deletedAt` set) so history and old links resolve.",
+        "description": "Deleted CIs are still returned (with `deletedAt` set) so history and old links resolve. Needs view on the CI's class.",
         "operationId": "getConfigurationItem",
         "parameters": [
           {
@@ -548,6 +1080,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -578,14 +1130,19 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "delete": {
         "tags": [
           "Configuration items"
         ],
         "summary": "Delete a CI (soft delete)",
-        "description": "Sets `deletedAt` on the CI and soft-deletes its live relationships in the same transaction. Both stay readable for history.",
+        "description": "Sets `deletedAt` on the CI and soft-deletes its live relationships in the same transaction. Both stay readable for history. Needs delete on the CI's class.",
         "operationId": "deleteConfigurationItem",
         "parameters": [
           {
@@ -595,16 +1152,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -622,6 +1169,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -652,13 +1219,20 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Configuration items"
         ],
         "summary": "Update a CI (partial); attributes are merged, null clears one",
+        "description": "Needs edit on the CI's class (and create on the new class when `classId` changes).",
         "operationId": "updateConfigurationItem",
         "parameters": [
           {
@@ -668,16 +1242,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -842,6 +1406,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -853,7 +1437,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -892,7 +1476,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/configuration-items/{id}/graph": {
@@ -901,7 +1491,7 @@
           "Configuration items"
         ],
         "summary": "Relationship graph around a CI in one call (nodes + edges)",
-        "description": "Breadth-first traversal of live relationships up to `depth` hops. For a Server -> Application -> Database view, ask from the application with `direction=outgoing`, or from the server with `direction=both&depth=2`.",
+        "description": "Breadth-first traversal of live relationships up to `depth` hops. For a Server -> Application -> Database view, ask from the application with `direction=outgoing`, or from the server with `direction=both&depth=2`. Needs view on the root's class; CIs of classes the caller may not view are left out (and not traversed).",
         "operationId": "getConfigurationItemGraph",
         "parameters": [
           {
@@ -985,6 +1575,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -1015,7 +1625,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/search": {
@@ -1024,7 +1639,7 @@
           "Search"
         ],
         "summary": "Global search across CIs, ranked, with the fields that matched",
-        "description": "Matches name, hostname and serial number (substring), IP address (prefix, or containment when `q` is an IP or CIDR), notes (word prefix) and attribute values (text/enum substring, IP/CIDR prefix). Exact matches rank first, then name prefix, then trigram similarity.",
+        "description": "Matches name, hostname and serial number (substring), IP address (prefix, or containment when `q` is an IP or CIDR), notes (word prefix) and attribute values (text/enum substring, IP/CIDR prefix). Exact matches rank first, then name prefix, then trigram similarity. Only CIs in classes the caller may view.",
         "operationId": "searchConfigurationItems",
         "parameters": [
           {
@@ -1177,6 +1792,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -1197,7 +1822,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/relationships": {
@@ -1206,7 +1836,7 @@
           "Relationships"
         ],
         "summary": "List relationships (paginated, filterable by CI, direction and type)",
-        "description": "`q` matches source/target CI name, type name and notes. Use `ciId` for all edges of a CI.",
+        "description": "`q` matches source/target CI name, type name and notes. Use `ciId` for all edges of a CI. Only edges whose both CIs are in classes the caller may view.",
         "operationId": "listRelationships",
         "parameters": [
           {
@@ -1341,6 +1971,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -1361,27 +2001,21 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
           "Relationships"
         ],
         "summary": "Create a typed, directional relationship between two CIs",
-        "description": "Rejected with 400 when the type does not allow these CI classes, when source equals target, or when a CI is deleted; 409 when the same live edge (or, for symmetric types, its reverse) exists.",
+        "description": "Rejected with 400 when the type does not allow these CI classes, when source equals target, or when a CI is deleted; 409 when the same live edge (or, for symmetric types, its reverse) exists. Needs edit on the source CI's class and view on the target's.",
         "operationId": "createRelationship",
-        "parameters": [
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1445,8 +2079,28 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -1485,7 +2139,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/relationships/{id}": {
@@ -1494,6 +2154,7 @@
           "Relationships"
         ],
         "summary": "Get one relationship",
+        "description": "Needs view on both CIs' classes.",
         "operationId": "getRelationship",
         "parameters": [
           {
@@ -1527,6 +2188,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -1557,13 +2238,19 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "delete": {
         "tags": [
           "Relationships"
         ],
         "summary": "Remove a relationship (soft delete; the same edge can be created again later)",
+        "description": "Needs edit on the source CI's class and view on the target's.",
         "operationId": "deleteRelationship",
         "parameters": [
           {
@@ -1573,16 +2260,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -1600,6 +2277,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -1630,13 +2327,20 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Relationships"
         ],
         "summary": "Update notes or type of a relationship (endpoints are immutable)",
+        "description": "Needs edit on the source CI's class and view on the target's.",
         "operationId": "updateRelationship",
         "parameters": [
           {
@@ -1646,16 +2350,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -1708,6 +2402,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -1719,7 +2433,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -1758,7 +2472,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/ci-classes": {
@@ -1903,6 +2623,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -1923,26 +2653,21 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
           "CI classes"
         ],
         "summary": "Create a ci class",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "createCiClass",
-        "parameters": [
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2031,8 +2756,28 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -2071,7 +2816,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/ci-classes/{id}": {
@@ -2113,6 +2864,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -2143,14 +2904,19 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "delete": {
         "tags": [
           "CI classes"
         ],
         "summary": "Delete a ci class",
-        "description": "Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteCiClass",
         "parameters": [
           {
@@ -2161,16 +2927,6 @@
               "type": "string",
               "format": "uuid"
             }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
           }
         ],
         "responses": {
@@ -2179,6 +2935,26 @@
           },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2198,7 +2974,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -2227,13 +3003,20 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "CI classes"
         ],
         "summary": "Update a ci class (partial)",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "updateCiClass",
         "parameters": [
           {
@@ -2243,16 +3026,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -2335,6 +3108,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -2346,7 +3139,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -2385,7 +3178,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/ci-classes/{id}/attributes": {
@@ -2441,6 +3240,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -2471,7 +3280,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/attribute-definitions": {
@@ -2627,6 +3441,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -2647,26 +3471,21 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
           "Attribute definitions"
         ],
         "summary": "Create a attribute definition",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "createAttributeDefinition",
-        "parameters": [
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2838,8 +3657,28 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -2878,7 +3717,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/attribute-definitions/{id}": {
@@ -2920,6 +3765,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -2950,14 +3805,19 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "delete": {
         "tags": [
           "Attribute definitions"
         ],
         "summary": "Delete a attribute definition",
-        "description": "Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteAttributeDefinition",
         "parameters": [
           {
@@ -2968,16 +3828,6 @@
               "type": "string",
               "format": "uuid"
             }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
           }
         ],
         "responses": {
@@ -2986,6 +3836,26 @@
           },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3005,7 +3875,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -3034,13 +3904,20 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Attribute definitions"
         ],
         "summary": "Update a attribute definition (partial)",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "updateAttributeDefinition",
         "parameters": [
           {
@@ -3050,16 +3927,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -3193,6 +4060,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -3204,7 +4091,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -3243,7 +4130,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/relationship-types": {
@@ -3368,6 +4261,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -3388,26 +4291,21 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
           "Relationship types"
         ],
         "summary": "Create a relationship type",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "createRelationshipType",
-        "parameters": [
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3493,8 +4391,28 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -3533,7 +4451,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/relationship-types/{id}": {
@@ -3575,6 +4499,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -3605,14 +4539,19 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "delete": {
         "tags": [
           "Relationship types"
         ],
         "summary": "Delete a relationship type",
-        "description": "Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteRelationshipType",
         "parameters": [
           {
@@ -3623,16 +4562,6 @@
               "type": "string",
               "format": "uuid"
             }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
           }
         ],
         "responses": {
@@ -3641,6 +4570,26 @@
           },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3660,7 +4609,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -3689,13 +4638,20 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Relationship types"
         ],
         "summary": "Update a relationship type (partial)",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "updateRelationshipType",
         "parameters": [
           {
@@ -3705,16 +4661,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -3789,6 +4735,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -3800,7 +4766,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -3839,7 +4805,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/relationship-rules": {
@@ -3943,6 +4915,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -3963,26 +4945,21 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
           "Relationship types"
         ],
         "summary": "Create a relationship rule",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "createRelationshipRule",
-        "parameters": [
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
@@ -4034,8 +5011,28 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -4074,7 +5071,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/relationship-rules/{id}": {
@@ -4116,6 +5119,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -4146,14 +5159,19 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "delete": {
         "tags": [
           "Relationship types"
         ],
         "summary": "Delete a relationship rule",
-        "description": "Hard delete. Existing relationships stay; new ones need another matching rule.",
+        "description": "Requires `datamodel.manage`. Hard delete. Existing relationships stay; new ones need another matching rule.",
         "operationId": "deleteRelationshipRule",
         "parameters": [
           {
@@ -4164,16 +5182,6 @@
               "type": "string",
               "format": "uuid"
             }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
           }
         ],
         "responses": {
@@ -4182,6 +5190,26 @@
           },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4201,7 +5229,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -4230,13 +5258,20 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Relationship types"
         ],
         "summary": "Update a relationship rule (partial)",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "updateRelationshipRule",
         "parameters": [
           {
@@ -4246,16 +5281,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -4305,6 +5330,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -4316,7 +5361,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -4355,7 +5400,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/statuses": {
@@ -4472,6 +5523,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -4492,26 +5553,21 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
           "Statuses"
         ],
         "summary": "Create a status",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "createStatus",
-        "parameters": [
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
@@ -4583,8 +5639,28 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -4623,7 +5699,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/statuses/{id}": {
@@ -4665,6 +5747,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -4695,14 +5787,19 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "delete": {
         "tags": [
           "Statuses"
         ],
         "summary": "Delete a status",
-        "description": "Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteStatus",
         "parameters": [
           {
@@ -4713,16 +5810,6 @@
               "type": "string",
               "format": "uuid"
             }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
           }
         ],
         "responses": {
@@ -4731,6 +5818,26 @@
           },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4750,7 +5857,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -4779,13 +5886,20 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Statuses"
         ],
         "summary": "Update a status (partial)",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "updateStatus",
         "parameters": [
           {
@@ -4795,16 +5909,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -4875,6 +5979,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -4886,7 +6010,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -4925,7 +6049,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/environments": {
@@ -5030,6 +6160,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -5050,26 +6190,21 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
           "Environments"
         ],
         "summary": "Create a environment",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "createEnvironment",
-        "parameters": [
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5138,8 +6273,28 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -5178,7 +6333,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/environments/{id}": {
@@ -5220,6 +6381,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -5250,14 +6421,19 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "delete": {
         "tags": [
           "Environments"
         ],
         "summary": "Delete a environment",
-        "description": "Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteEnvironment",
         "parameters": [
           {
@@ -5268,16 +6444,6 @@
               "type": "string",
               "format": "uuid"
             }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
           }
         ],
         "responses": {
@@ -5286,6 +6452,26 @@
           },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5305,7 +6491,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -5334,13 +6520,20 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Environments"
         ],
         "summary": "Update a environment (partial)",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "updateEnvironment",
         "parameters": [
           {
@@ -5350,16 +6543,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -5427,6 +6610,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -5438,7 +6641,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -5477,7 +6680,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/locations": {
@@ -5620,6 +6829,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -5640,26 +6859,21 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
           "Locations"
         ],
         "summary": "Create a location",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "createLocation",
-        "parameters": [
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5764,8 +6978,28 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -5804,7 +7038,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/locations/{id}": {
@@ -5846,6 +7086,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -5876,14 +7126,19 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "delete": {
         "tags": [
           "Locations"
         ],
         "summary": "Delete a location",
-        "description": "Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteLocation",
         "parameters": [
           {
@@ -5894,16 +7149,6 @@
               "type": "string",
               "format": "uuid"
             }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
           }
         ],
         "responses": {
@@ -5912,6 +7157,26 @@
           },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5931,7 +7196,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -5960,13 +7225,20 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Locations"
         ],
         "summary": "Update a location (partial)",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "updateLocation",
         "parameters": [
           {
@@ -5976,16 +7248,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -6088,6 +7350,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -6099,7 +7381,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -6138,7 +7420,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/owners": {
@@ -6264,6 +7552,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -6284,26 +7582,21 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "post": {
         "tags": [
           "Owners"
         ],
         "summary": "Create a owner",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "createOwner",
-        "parameters": [
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6383,8 +7676,28 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -6423,7 +7736,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/owners/{id}": {
@@ -6465,6 +7784,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -6495,14 +7824,19 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "delete": {
         "tags": [
           "Owners"
         ],
         "summary": "Delete a owner",
-        "description": "Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE; retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteOwner",
         "parameters": [
           {
@@ -6513,16 +7847,6 @@
               "type": "string",
               "format": "uuid"
             }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
-            }
           }
         ],
         "responses": {
@@ -6531,6 +7855,26 @@
           },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6550,7 +7894,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -6579,13 +7923,20 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Owners"
         ],
         "summary": "Update a owner (partial)",
+        "description": "Requires `datamodel.manage`.",
         "operationId": "updateOwner",
         "parameters": [
           {
@@ -6595,16 +7946,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "X-Actor-Name",
-            "in": "header",
-            "description": "Optional display name recorded as the actor in audit_log. Unauthenticated in Milestone 1; replaced by the authenticated user once auth exists.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 200
             }
           }
         ],
@@ -6683,6 +8024,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -6694,7 +8055,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate), IN_USE or VERSION_CONFLICT",
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -6733,7 +8094,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/audit-log": {
@@ -6742,6 +8109,7 @@
           "Audit log"
         ],
         "summary": "Change history (read-only, paginated, newest first by default)",
+        "description": "Requires `audit.view`. Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username).",
         "operationId": "listAuditLog",
         "parameters": [
           {
@@ -6800,7 +8168,9 @@
                 "statuses",
                 "environments",
                 "locations",
-                "owners"
+                "owners",
+                "users",
+                "permission_profiles"
               ]
             }
           },
@@ -6825,6 +8195,16 @@
                 "delete",
                 "restore"
               ]
+            }
+          },
+          {
+            "name": "actorId",
+            "in": "query",
+            "description": "Changes made by this user (their id)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
             }
           },
           {
@@ -6889,6 +8269,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -6909,7 +8309,1685 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/users": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "List users (paginated, searchable, filterable by active flag and profile)",
+        "description": "Requires `users.manage`.",
+        "operationId": "listUsers",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: username, displayName, createdAt, lastLoginAt",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "username",
+              "enum": [
+                "username",
+                "-username",
+                "displayName",
+                "-displayName",
+                "createdAt",
+                "-createdAt",
+                "lastLoginAt",
+                "-lastLoginAt"
+              ]
+            }
+          },
+          {
+            "name": "isActive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "profileId",
+            "in": "query",
+            "description": "One or more ids, comma-separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Create a local user with a password and permission profiles",
+        "description": "Requires `users.manage`. 403 when assigning a profile that grants permissions the caller does not hold.",
+        "operationId": "createUser",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "displayName",
+                  "password"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$"
+                  },
+                  "displayName": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "email": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "email",
+                        "maxLength": 320
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "password": {
+                    "type": "string",
+                    "description": "At least 12 characters",
+                    "maxLength": 256,
+                    "minLength": 12
+                  },
+                  "isActive": {
+                    "type": "boolean",
+                    "description": "Default true"
+                  },
+                  "profileIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "Permission profiles the user holds (replaces the current set)",
+                    "maxItems": 100,
+                    "uniqueItems": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Get one user with the profiles they hold",
+        "description": "Requires `users.manage`.",
+        "operationId": "getUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Delete a user (prefer disabling; the audit log keeps their id and name)",
+        "description": "Requires `users.manage`. 409 when deleting yourself or the last active Administrator.",
+        "operationId": "deleteUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Update a user (partial): rename, disable/enable, assign profiles",
+        "description": "Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.",
+        "operationId": "updateUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$"
+                  },
+                  "displayName": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "email": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "email",
+                        "maxLength": 320
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "isActive": {
+                    "type": "boolean",
+                    "description": "false disables the account and ends its sessions"
+                  },
+                  "profileIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "Permission profiles the user holds (replaces the current set)",
+                    "maxItems": 100,
+                    "uniqueItems": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/password": {
+      "put": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Set a new password for a user and end their sessions",
+        "description": "Requires `users.manage`.",
+        "operationId": "resetUserPassword",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "password"
+                ],
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "description": "At least 12 characters",
+                    "maxLength": 256,
+                    "minLength": 12
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/profiles": {
+      "get": {
+        "tags": [
+          "Permission profiles"
+        ],
+        "summary": "List permission profiles (paginated; the built-in Administrator profile first)",
+        "description": "`q` matches name and description. Requires `profiles.manage` or `users.manage` (to assign profiles).",
+        "operationId": "listPermissionProfiles",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: name, createdAt, updatedAt",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "name",
+              "enum": [
+                "name",
+                "-name",
+                "createdAt",
+                "-createdAt",
+                "updatedAt",
+                "-updatedAt"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionProfileList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Permission profiles"
+        ],
+        "summary": "Create a permission profile",
+        "description": "Requires `profiles.manage`. A non-administrator can only grant permissions they hold themselves (403 otherwise).",
+        "operationId": "createPermissionProfile",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "globalPermissions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "description": "Rights that are not tied to a CI class.",
+                      "enum": [
+                        "users.manage",
+                        "profiles.manage",
+                        "datamodel.manage",
+                        "customization.manage",
+                        "config.export_import",
+                        "audit.view"
+                      ]
+                    },
+                    "description": "Replaces all global permissions",
+                    "uniqueItems": true
+                  },
+                  "classPermissions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Rights on one CI class, or on every class when `classId` is null.",
+                      "required": [
+                        "classId",
+                        "view",
+                        "create",
+                        "edit",
+                        "delete"
+                      ],
+                      "properties": {
+                        "classId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "uuid",
+                          "description": "The class; null is the \"all classes\" wildcard (also covers classes created later)"
+                        },
+                        "view": {
+                          "type": "boolean",
+                          "description": "See the CIs of this class (implied by the other three)"
+                        },
+                        "create": {
+                          "type": "boolean"
+                        },
+                        "edit": {
+                          "type": "boolean"
+                        },
+                        "delete": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "description": "Replaces all class grants. Entries granting nothing are dropped; one entry per class.",
+                    "maxItems": 1000
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionProfile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/profiles/{id}": {
+      "get": {
+        "tags": [
+          "Permission profiles"
+        ],
+        "summary": "Get one permission profile with its permissions",
+        "description": "Requires `profiles.manage` or `users.manage`.",
+        "operationId": "getPermissionProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionProfile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Permission profiles"
+        ],
+        "summary": "Delete a permission profile (users holding it lose it)",
+        "description": "Requires `profiles.manage`. The built-in Administrator profile cannot be deleted (409).",
+        "operationId": "deletePermissionProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Permission profiles"
+        ],
+        "summary": "Update a permission profile (partial; permission lists replace the current ones)",
+        "description": "Requires `profiles.manage`. The built-in Administrator profile cannot be changed (409). Takes effect on the holders' next request.",
+        "operationId": "updatePermissionProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "globalPermissions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "description": "Rights that are not tied to a CI class.",
+                      "enum": [
+                        "users.manage",
+                        "profiles.manage",
+                        "datamodel.manage",
+                        "customization.manage",
+                        "config.export_import",
+                        "audit.view"
+                      ]
+                    },
+                    "description": "Replaces all global permissions",
+                    "uniqueItems": true
+                  },
+                  "classPermissions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Rights on one CI class, or on every class when `classId` is null.",
+                      "required": [
+                        "classId",
+                        "view",
+                        "create",
+                        "edit",
+                        "delete"
+                      ],
+                      "properties": {
+                        "classId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "uuid",
+                          "description": "The class; null is the \"all classes\" wildcard (also covers classes created later)"
+                        },
+                        "view": {
+                          "type": "boolean",
+                          "description": "See the CIs of this class (implied by the other three)"
+                        },
+                        "create": {
+                          "type": "boolean"
+                        },
+                        "edit": {
+                          "type": "boolean"
+                        },
+                        "delete": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "description": "Replaces all class grants. Entries granting nothing are dropped; one entry per class.",
+                    "maxItems": 1000
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionProfile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/profiles/{id}/clone": {
+      "post": {
+        "tags": [
+          "Permission profiles"
+        ],
+        "summary": "Copy a profile (including the built-in one) into a new, editable profile",
+        "description": "Requires `profiles.manage`.",
+        "operationId": "clonePermissionProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionProfile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
       }
     }
   },
@@ -7219,6 +10297,66 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClassPermission": {
+        "type": "object",
+        "description": "Rights on one CI class, or on every class when `classId` is null.",
+        "required": [
+          "classId",
+          "view",
+          "create",
+          "edit",
+          "delete"
+        ],
+        "properties": {
+          "classId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The class; null is the \"all classes\" wildcard (also covers classes created later)"
+          },
+          "view": {
+            "type": "boolean",
+            "description": "See the CIs of this class (implied by the other three)"
+          },
+          "create": {
+            "type": "boolean"
+          },
+          "edit": {
+            "type": "boolean"
+          },
+          "delete": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClassRights": {
+        "type": "object",
+        "description": "What a grant allows on one class (or on every class).",
+        "required": [
+          "view",
+          "create",
+          "edit",
+          "delete"
+        ],
+        "properties": {
+          "view": {
+            "type": "boolean"
+          },
+          "create": {
+            "type": "boolean"
+          },
+          "edit": {
+            "type": "boolean"
+          },
+          "delete": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -7725,6 +10863,49 @@
         },
         "additionalProperties": false
       },
+      "EffectivePermissions": {
+        "type": "object",
+        "description": "What the signed-in user may do (the union of their profiles).",
+        "required": [
+          "administrator",
+          "global",
+          "allClasses",
+          "classes"
+        ],
+        "properties": {
+          "administrator": {
+            "type": "boolean",
+            "description": "Holds the built-in Administrator profile (everything below is then all-true)"
+          },
+          "global": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Rights that are not tied to a CI class.",
+              "enum": [
+                "users.manage",
+                "profiles.manage",
+                "datamodel.manage",
+                "customization.manage",
+                "config.export_import",
+                "audit.view"
+              ]
+            }
+          },
+          "allClasses": {
+            "$ref": "#/components/schemas/ClassRights",
+            "description": "Rights on every class"
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClassPermission"
+            },
+            "description": "Rights on individual classes, beyond allClasses"
+          }
+        },
+        "additionalProperties": false
+      },
       "Environment": {
         "type": "object",
         "required": [
@@ -7809,10 +10990,15 @@
                 "type": "string",
                 "enum": [
                   "VALIDATION_ERROR",
+                  "UNAUTHENTICATED",
+                  "FORBIDDEN",
+                  "CSRF_TOKEN_INVALID",
                   "NOT_FOUND",
                   "CONFLICT",
                   "IN_USE",
                   "VERSION_CONFLICT",
+                  "LAST_ADMINISTRATOR",
+                  "RATE_LIMITED",
                   "UNSUPPORTED_MEDIA_TYPE",
                   "PAYLOAD_TOO_LARGE",
                   "DATABASE_UNAVAILABLE",
@@ -8182,6 +11368,115 @@
             "type": "integer",
             "format": "int64",
             "description": "Total rows matching the filters"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PermissionProfile": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "isBuiltin",
+          "globalPermissions",
+          "classPermissions",
+          "userCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isBuiltin": {
+            "type": "boolean",
+            "description": "The Administrator profile: every permission, read-only, cannot be deleted"
+          },
+          "globalPermissions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Rights that are not tied to a CI class.",
+              "enum": [
+                "users.manage",
+                "profiles.manage",
+                "datamodel.manage",
+                "customization.manage",
+                "config.export_import",
+                "audit.view"
+              ]
+            }
+          },
+          "classPermissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClassPermission"
+            }
+          },
+          "userCount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Users holding this profile"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PermissionProfileList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionProfile"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProfileRef": {
+        "type": "object",
+        "description": "A profile a user holds",
+        "required": [
+          "id",
+          "name",
+          "isBuiltin"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "isBuiltin": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -8786,6 +12081,41 @@
         },
         "additionalProperties": false
       },
+      "Session": {
+        "type": "object",
+        "description": "The signed-in user, their permissions and the CSRF token to send back.",
+        "required": [
+          "user",
+          "permissions",
+          "csrfToken"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/EffectivePermissions"
+          },
+          "csrfToken": {
+            "type": "string",
+            "description": "Send as the X-CSRF-Token header on every POST, PUT, PATCH and DELETE\n(also readable from the shadoucmdb_csrf cookie)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SetupStatus": {
+        "type": "object",
+        "required": [
+          "setupRequired"
+        ],
+        "properties": {
+          "setupRequired": {
+            "type": "boolean",
+            "description": "True while no user exists: the UI shows the first-run screen"
+          }
+        },
+        "additionalProperties": false
+      },
       "Status": {
         "type": "object",
         "required": [
@@ -8856,14 +12186,124 @@
           }
         },
         "additionalProperties": false
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "displayName",
+          "email",
+          "isActive",
+          "isAdministrator",
+          "profiles",
+          "passwordChangedAt",
+          "lastLoginAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "username": {
+            "type": "string",
+            "description": "Sign-in name, unique regardless of case"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "Disabled users cannot sign in and their sessions end"
+          },
+          "isAdministrator": {
+            "type": "boolean",
+            "description": "Holds the built-in Administrator profile"
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileRef"
+            }
+          },
+          "passwordChangedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastLoginAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UserList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/User"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "csrfHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-CSRF-Token",
+        "description": "The session's csrfToken; required on POST, PUT, PATCH and DELETE"
+      },
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "shadoucmdb_session",
+        "description": "Session cookie set by POST /api/v1/auth/login (HttpOnly, SameSite=Lax)"
       }
     }
   },
-  "security": [],
+  "security": [
+    {
+      "sessionCookie": []
+    }
+  ],
   "tags": [
     {
       "name": "Health",
       "description": "Liveness and readiness probes for orchestrators and load balancers."
+    },
+    {
+      "name": "Authentication",
+      "description": "First-run setup, sign-in with a local username and password, sign-out, and the current user's permissions."
     },
     {
       "name": "Configuration items",
@@ -8908,6 +12348,14 @@
     {
       "name": "Audit log",
       "description": "Read-only change history written in the same transaction as every change."
+    },
+    {
+      "name": "Users",
+      "description": "Administration: local user accounts, passwords and the permission profiles they hold."
+    },
+    {
+      "name": "Permission profiles",
+      "description": "Administration: named sets of global and per-CI-class permissions. Users can hold several; the built-in Administrator profile holds everything."
     }
   ]
 }

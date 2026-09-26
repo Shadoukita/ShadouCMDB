@@ -47,6 +47,12 @@ fn read_password(from_stdin: bool) -> anyhow::Result<String> {
 }
 
 pub async fn create_admin(cfg: &DatabaseConfig, args: CreateAdminArgs) -> anyhow::Result<()> {
+    let username_ok = regex::Regex::new(crate::api::schemas::USERNAME_PATTERN).is_ok_and(|re| re.is_match(&args.username));
+    if !username_ok {
+        bail!(
+            "--username: letters, digits, \".\", \"_\", \"@\" and \"-\", starting with a letter or digit (max 64 characters)"
+        );
+    }
     let password = read_password(args.password_stdin)?;
     if let Some(problem) = crate::auth::password::policy_error(&password) {
         bail!("password: {problem}");
@@ -68,6 +74,9 @@ pub async fn create_admin(cfg: &DatabaseConfig, args: CreateAdminArgs) -> anyhow
             profile_ids: vec![admin],
         };
         let user = users::create_in(&mut tx, &ctx, &input).await.map_err(|e| {
+            if e.code == crate::http::error::ErrorCode::Conflict {
+                return anyhow::anyhow!("a user named \"{}\" already exists", args.username);
+            }
             let details: Vec<String> =
                 e.details.iter().flatten().map(|d| format!("{}: {}", d.field, d.message)).collect();
             if details.is_empty() {

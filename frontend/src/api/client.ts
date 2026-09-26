@@ -9,7 +9,23 @@ export type Schemas = components["schemas"];
 
 export const api = createClient<paths>({
   baseUrl: config.apiBaseUrl,
-  headers: { "X-Actor-Name": config.actorName },
+  // The session cookie also travels when the API is on another origin (CORS_ORIGINS on the server).
+  credentials: "include",
+});
+
+/** The session's CSRF token, set by the API at sign-in in a cookie the UI can read. */
+function csrfToken(): string | undefined {
+  const match = document.cookie.match(/(?:^|;\s*)shadoucmdb_csrf=([^;]+)/);
+  return match?.[1];
+}
+
+// Every state-changing request echoes the CSRF token; the API rejects it otherwise.
+api.use({
+  onRequest({ request }) {
+    const token = csrfToken();
+    if (token && !["GET", "HEAD"].includes(request.method)) request.headers.set("X-CSRF-Token", token);
+    return request;
+  },
 });
 
 export interface ApiErrorDetail {
