@@ -2,11 +2,18 @@
 import { useQueries } from "@tanstack/vue-query";
 import { computed } from "vue";
 import { ciCountQuery, useCiClasses } from "../api/queries";
+import { useSessionStore } from "../stores/session";
 import NavLink from "./NavLink.vue";
 
-/** "Browse by class" is built from the API's class list, so new classes appear automatically. */
+/**
+ * "Browse by class" is built from the API's class list, so new classes appear automatically. It lists only
+ * the classes the user may view: the API filters the others out of every list, so their count would be a false 0.
+ */
 const classes = useCiClasses();
-const concrete = computed(() => (classes.data.value ?? []).filter((c) => c.isActive && !c.isAbstract));
+const session = useSessionStore();
+const concrete = computed(() =>
+  (classes.data.value ?? []).filter((c) => c.isActive && !c.isAbstract && session.canOnClass(c.id, "view")),
+);
 const counts = useQueries({ queries: computed(() => concrete.value.map((c) => ciCountQuery({ classId: c.id }))) });
 </script>
 

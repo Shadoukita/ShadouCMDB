@@ -11,6 +11,7 @@ import PaginationBar from "../components/PaginationBar.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
 import { formatRelative } from "../lib/format";
+import { viewableClasses } from "../lib/permissions";
 import { useSessionStore } from "../stores/session";
 
 /**
@@ -62,6 +63,10 @@ const query = computed<CiListQuery>(() => ({
 const list = useCiList(query);
 const classes = useCiClasses();
 const currentClass = computed(() => classes.data.value?.find((c) => c.id === query.value.classId));
+const session = useSessionStore();
+// The class filter offers only what the user may view; the API would answer any other class with an empty list.
+const classOptions = computed(() => viewableClasses(classes.data.value ?? [], (id) => session.canOnClass(id, "view")));
+const classDenied = computed(() => !!currentClass.value && !classOptions.value.some((c) => c.id === currentClass.value!.id));
 useDocumentTitle(() => currentClass.value?.name ?? "Inventory");
 
 function update(patch: Record<string, string | undefined>, resetPage = true) {
@@ -93,7 +98,6 @@ const rows = computed(() => list.data.value?.data ?? []);
 const newTo = computed(() =>
   query.value.classId && !currentClass.value?.isAbstract ? `/cis/new?classId=${query.value.classId}` : "/cis/new",
 );
-const session = useSessionStore();
 const canCreate = computed(() =>
   query.value.classId && currentClass.value && !currentClass.value.isAbstract
     ? session.canOnClass(query.value.classId, "create")
@@ -162,7 +166,8 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
         <label for="f-class">Class</label>
         <select id="f-class" :value="get('classId')" @change="update({ classId: ($event.target as HTMLSelectElement).value || undefined })">
           <option value="">All classes</option>
-          <option v-for="c in classes.data.value ?? []" :key="c.id" :value="c.id">
+          <option v-if="classDenied && currentClass" :value="currentClass.id">{{ currentClass.name }}</option>
+          <option v-for="c in classOptions" :key="c.id" :value="c.id">
             {{ c.name }}{{ c.isAbstract ? " (incl. subclasses)" : "" }}
           </option>
         </select>
@@ -223,14 +228,18 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
     </div>
     <LoadingState v-if="list.isLoading.value" label="Loading inventory…" />
 
-    <EmptyState v-if="list.data.value && total === 0 && activeFilters.length === 0" title="The inventory is empty">
+    <EmptyState v-if="classDenied" title="Permission denied">
+      None of your permission profiles allows viewing {{ currentClass?.name }} configuration items, so none are listed here.
+      <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
+    </EmptyState>
+    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length === 0" title="The inventory is empty">
       Configuration items are the servers, VMs, applications, databases, network devices and locations you track. Create
       one, then relate it to others from its detail page.
       <template v-if="canCreate" #actions>
         <RouterLink class="btn btn-primary" to="/cis/new">+ Create your first configuration item</RouterLink>
       </template>
     </EmptyState>
-    <EmptyState v-if="list.data.value && total === 0 && activeFilters.length > 0" title="No configuration items match these filters">
+    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length > 0" title="No configuration items match these filters">
       Adjust or clear the filters above.
     </EmptyState>
     <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" title="This page is past the end of the results">

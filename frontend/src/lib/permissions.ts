@@ -41,3 +41,22 @@ function allows(r: Record<ClassRight, boolean>, right: ClassRight): boolean {
   // Write rights imply view, as on the server.
   return right === "view" ? r.view || r.create || r.edit || r.delete : r[right];
 }
+
+/**
+ * The classes worth offering to a user: every concrete class they may view, plus each abstract ancestor of
+ * one (filtering by an abstract class lists its subclasses). Any other class would only ever list zero CIs,
+ * which reads as "empty" rather than "not yours". Grants are per exact class, so an abstract class's own
+ * grant shows nothing by itself.
+ */
+export function viewableClasses<C extends { id: string; parentId: string | null; isAbstract: boolean }>(
+  all: C[],
+  canView: (classId: string) => boolean,
+): C[] {
+  const byId = new Map(all.map((c) => [c.id, c]));
+  const keep = new Set<string>();
+  for (const c of all) {
+    if (c.isAbstract || !canView(c.id)) continue;
+    for (let p: C | undefined = c; p && !keep.has(p.id); p = p.parentId ? byId.get(p.parentId) : undefined) keep.add(p.id);
+  }
+  return all.filter((c) => keep.has(c.id));
+}

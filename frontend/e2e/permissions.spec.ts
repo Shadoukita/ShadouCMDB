@@ -206,6 +206,18 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
     await expect(page.getByRole("navigation", { name: "Administration" }), path).toHaveCount(0);
   }
 
+  // "Browse by class" lists only the classes the user may view, so no class shows a false count of 0.
+  await expect(nav.getByRole("link", { name: /^Application\b/ })).toBeVisible();
+  await expect(nav.getByRole("link", { name: /^Server\b/ })).toBeVisible();
+  await expect(nav.getByRole("link", { name: /^Database\b/ })).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: /^Location\b/ })).toHaveCount(0);
+  // A class the user may not view, opened by URL, explains itself instead of looking empty.
+  await page.goto(`/cis?classId=${databaseId}`);
+  await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
+  await expect(page.getByText("None of your permission profiles allows viewing Database")).toBeVisible();
+  // The class filter offers the viewable classes and their abstract parents (Hardware lists Servers), plus the one in the URL.
+  await expect(page.locator("#f-class option")).toHaveText(["All classes", "Database", "Application", "Hardware (incl. subclasses)", "Server"]);
+
   // "New CI" offers only the classes the profile may create.
   await page.goto("/");
   await page.getByRole("banner").getByRole("link", { name: "+ New CI" }).click();
@@ -232,7 +244,10 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
 
   // A Database CI opened by URL: refused, not rendered.
   await page.goto(`/cis/${await ciIdByName(request, "crm-db")}`);
-  await expect(page.getByRole("alert")).toContainText("You do not have the view permission on this CI class");
+  await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Permission denied");
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).not.toContainText("Not found");
+  await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 1, name: "crm-db" })).toHaveCount(0);
   await snap(page, "31-restricted-denied");
 
