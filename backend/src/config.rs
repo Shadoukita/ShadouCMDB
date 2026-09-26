@@ -115,6 +115,42 @@ impl Reader {
     }
 }
 
+/// Parses the comma-separated `CORS_ORIGINS` list. Each entry must be exactly
+/// what a browser sends in `Origin` (`scheme://host[:port]`, no path), because
+/// the CORS layer compares them byte for byte: `*`, a trailing slash or an
+/// upper-case host would otherwise be accepted here and silently match nothing.
+/// (A literal `*` could not be honoured anyway: the session cookie makes these
+/// credentialed requests, and browsers refuse `*` for those.)
+fn parse_cors_origins(raw: &str) -> Result<Vec<String>, String> {
+    let mut origins = Vec::new();
+    for entry in raw.split(',').map(str::trim).filter(|o| !o.is_empty()) {
+        // The URL parser accepts `*` in a host name, so wildcards are caught here.
+        if entry.contains('*') {
+            return Err(format!(
+                "\"{entry}\" is not supported: wildcard origins match nothing. List each web UI origin \
+                 explicitly, e.g. CORS_ORIGINS=https://cmdb.example.com,http://localhost:5173"
+            ));
+        }
+        let origin = url::Url::parse(entry)
+            .ok()
+            .filter(|u| matches!(u.scheme(), "http" | "https") && u.username().is_empty() && u.password().is_none())
+            .map(|u| u.origin().ascii_serialization());
+        match origin {
+            Some(o) if o == entry => origins.push(o),
+            Some(o) => {
+                return Err(format!("\"{entry}\" is not an origin as a browser sends it; did you mean \"{o}\"?"));
+            }
+            None => {
+                return Err(format!(
+                    "\"{entry}\" is not an origin; expected scheme://host[:port] with scheme http or https, \
+                     e.g. https://cmdb.example.com"
+                ));
+            }
+        }
+    }
+    Ok(origins)
+}
+
 impl Config {
     pub fn from_env() -> anyhow::Result<Config> {
         let mut r = Reader { errors: Vec::new() };
@@ -148,10 +184,14 @@ impl Config {
         let statement_timeout_ms = r.int::<u64>("DATABASE_STATEMENT_TIMEOUT_MS", 0, u64::MAX).unwrap_or(30_000);
         let connect_timeout_ms = r.int::<u64>("DATABASE_CONNECT_TIMEOUT_MS", 100, u64::MAX).unwrap_or(5_000);
 
-        let cors_origins = r
-            .raw("CORS_ORIGINS")
-            .map(|s| s.split(',').map(str::trim).filter(|o| !o.is_empty()).map(str::to_owned).collect())
-            .unwrap_or_default();
+        let cors_origins = match r.raw("CORS_ORIGINS").map(|s| parse_cors_origins(&s)) {
+            Some(Ok(origins)) => origins,
+            Some(Err(e)) => {
+                r.errors.push(format!("CORS_ORIGINS: {e}"));
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
 
         let session_idle_minutes =
             r.int::<u64>("SESSION_IDLE_TIMEOUT_MINUTES", 5, 525_600).unwrap_or(DEFAULT_SESSION_IDLE_MINUTES);
@@ -194,5 +234,46 @@ impl Config {
                 cookie_secure,
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cors_origins_accept_browser_origins() {
+        assert_eq!(
+            parse_cors_origins(" https://cmdb.example.com , http://localhost:5173,,http://10.0.0.5:8080").unwrap(),
+            ["https://cmdb.example.com", "http://localhost:5173", "http://10.0.0.5:8080"]
+        );
+        assert_eq!(parse_cors_origins("").unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn cors_origins_reject_wildcards_and_non_origins() {
+        let err = parse_cors_origins("https://a.example.com,*").unwrap_err();
+        assert!(err.contains("\"*\" is not supported"), "{err}");
+        assert!(err.contains("explicitly"), "{err}");
+        for bad in [
+            "cmdb.example.com",
+            "ftp://cmdb.example.com",
+            "https://user@cmdb.example.com",
+            "null",
+            "https://*.example.com",
+        ] {
+            assert!(parse_cors_origins(bad).is_err(), "{bad} should be rejected");
+        }
+        // Would never match a browser's Origin header byte for byte; the error names the right spelling.
+        assert!(
+            parse_cors_origins("https://cmdb.example.com/")
+                .unwrap_err()
+                .contains("did you mean \"https://cmdb.example.com\"")
+        );
+        assert!(parse_cors_origins("https://CMDB.example.com").unwrap_err().contains("\"https://cmdb.example.com\""));
+        assert!(
+            parse_cors_origins("https://cmdb.example.com:443").unwrap_err().contains("\"https://cmdb.example.com\"")
+        );
+        assert!(parse_cors_origins("https://cmdb.example.com/app").is_err());
     }
 }

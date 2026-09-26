@@ -167,7 +167,7 @@ async fn start_session(
     )
     .await?;
     drop(conn);
-    let cookies = session::login_cookies(&auth.config, session::secure_cookies(&auth.config, headers), &token, &csrf);
+    let cookies = session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &token, &csrf);
     Ok(WithCookies(Json(session_dto(pool, user_id, csrf).await?), cookies))
 }
 
