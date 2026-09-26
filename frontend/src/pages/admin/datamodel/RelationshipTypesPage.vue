@@ -61,12 +61,16 @@ const selectedRules = computed(() =>
 
 function commit(dragId: string, targetId: string) {
   const list = rows.value;
+  const dragged = list.find((t) => t.id === dragId);
   const moved = moveItem(list, list.findIndex((t) => t.id === dragId), list.findIndex((t) => t.id === targetId));
   pendingOrder.value = moved.map((t) => t.id);
   notice.value = null;
   reorder.mutate(
     moved.map((t) => ({ id: t.id, sortOrder: t.sortOrder })),
-    { onSettled: () => (pendingOrder.value = null) },
+    {
+      onSuccess: () => (notice.value = `Moved ${dragged?.name}. Pickers list relationship types in this order.`),
+      onSettled: () => (pendingOrder.value = null),
+    },
   );
 }
 function step(t: RelationshipType, delta: -1 | 1) {
@@ -213,8 +217,8 @@ const ruleLabel = (r: { sourceClassId: string; targetClassId: string }) =>
             </td>
             <td class="row-actions">
               <button type="button" class="btn btn-sm" :aria-label="`Edit ${t.name}`" @click="openType(t)">Edit</button>
-              <button v-if="t.isActive" type="button" class="btn btn-sm" :disabled="patchType.isPending.value" @click="setActive(t, false)">Archive</button>
-              <button v-else type="button" class="btn btn-sm" :disabled="patchType.isPending.value" @click="setActive(t, true)">Restore</button>
+              <button v-if="t.isActive" type="button" class="btn btn-sm" :disabled="patchType.isPending.value" :aria-label="`Archive ${t.name}`" @click="setActive(t, false)">Archive</button>
+              <button v-else type="button" class="btn btn-sm" :disabled="patchType.isPending.value" :aria-label="`Restore ${t.name}`" @click="setActive(t, true)">Restore</button>
               <DeleteRowButton
                 resource="relationship-types"
                 :id="t.id"

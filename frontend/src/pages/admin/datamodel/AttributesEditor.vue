@@ -209,8 +209,8 @@ function defaultText(d: AttributeDefinition): string {
               <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || flat.indexOf(d) === flat.length - 1" :aria-label="`Move ${d.label} down`" @click="step(d, 1)">↓</button>
             </td>
             <td class="row-actions">
-              <button v-if="d.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" @click="setActive(d, false)">Archive</button>
-              <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" @click="setActive(d, true)">Restore</button>
+              <button v-if="d.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Archive ${d.label}`" @click="setActive(d, false)">Archive</button>
+              <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Restore ${d.label}`" @click="setActive(d, true)">Restore</button>
               <DeleteRowButton
                 resource="attribute-definitions"
                 :id="d.id"

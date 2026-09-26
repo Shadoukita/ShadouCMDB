@@ -55,12 +55,16 @@ const list = computed(() => {
 });
 
 function commit(dragId: string, targetId: string) {
+  const dragged = list.value.find((r) => r.id === dragId);
   const moved = moveItem(list.value, list.value.findIndex((r) => r.id === dragId), list.value.findIndex((r) => r.id === targetId));
   pendingOrder.value = moved.map((r) => r.id);
   notice.value = null;
   reorder.mutate(
     moved.map((r) => ({ id: r.id, sortOrder: r.sortOrder })),
-    { onSettled: () => (pendingOrder.value = null) },
+    {
+      onSuccess: () => (notice.value = `Moved ${dragged?.name ?? props.noun}.`),
+      onSettled: () => (pendingOrder.value = null),
+    },
   );
 }
 function step(r: Row, delta: -1 | 1) {
@@ -156,8 +160,8 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
             </td>
             <td class="row-actions">
               <button type="button" class="btn btn-sm" :aria-label="`Edit ${r.name}`" @click="open(r)">Edit</button>
-              <button v-if="r.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" @click="setActive(r, false)">Archive</button>
-              <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" @click="setActive(r, true)">Restore</button>
+              <button v-if="r.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Archive ${r.name}`" @click="setActive(r, false)">Archive</button>
+              <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Restore ${r.name}`" @click="setActive(r, true)">Restore</button>
               <DeleteRowButton
                 :resource="resource"
                 :id="r.id"

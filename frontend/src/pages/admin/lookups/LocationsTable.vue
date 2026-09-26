@@ -164,8 +164,8 @@ function setActive(l: Location, isActive: boolean) {
               </td>
               <td class="row-actions">
                 <button type="button" class="btn btn-sm" :aria-label="`Edit ${l.name}`" @click="open(l)">Edit</button>
-                <button v-if="l.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" @click="setActive(l, false)">Archive</button>
-                <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" @click="setActive(l, true)">Restore</button>
+                <button v-if="l.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Archive ${l.name}`" @click="setActive(l, false)">Archive</button>
+                <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Restore ${l.name}`" @click="setActive(l, true)">Restore</button>
                 <DeleteRowButton
                   resource="locations"
                   :id="l.id"

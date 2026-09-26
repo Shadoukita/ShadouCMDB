@@ -179,8 +179,8 @@ function setActive(c: CiClass, isActive: boolean) {
             </td>
             <td class="row-actions">
               <RouterLink class="btn btn-sm" :to="`/admin/classes/${c.id}`">Edit</RouterLink>
-              <button v-if="c.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" @click="setActive(c, false)">Archive</button>
-              <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" @click="setActive(c, true)">Restore</button>
+              <button v-if="c.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Archive ${c.name}`" @click="setActive(c, false)">Archive</button>
+              <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Restore ${c.name}`" @click="setActive(c, true)">Restore</button>
             </td>
           </tr>
         </tbody>

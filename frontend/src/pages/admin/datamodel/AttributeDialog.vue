@@ -56,9 +56,10 @@ const helpText = ref("");
 const description = ref("");
 const enumText = ref("");
 const defaultValue = ref("");
-const vMin = ref("");
-const vMax = ref("");
-const vMaxLength = ref("");
+// v-model on type="number" inputs yields numbers once typed in; "" while empty.
+const vMin = ref<string | number>("");
+const vMax = ref<string | number>("");
+const vMaxLength = ref<string | number>("");
 const vPattern = ref("");
 const vUnit = ref("");
 const error = ref<unknown>(null);
@@ -143,8 +144,9 @@ const unplaced = computed(() =>
   error.value instanceof ApiError ? error.value.details.filter((d) => !PLACED.some((f) => d.field === f || d.field.startsWith(`${f}.`))) : [],
 );
 
-function numberOrUndefined(s: string): number | undefined {
-  if (s.trim() === "") return undefined;
+function numberOrUndefined(raw: string | number): number | undefined {
+  const s = String(raw).trim();
+  if (s === "") return undefined;
   const n = Number(s);
   return Number.isFinite(n) ? n : undefined;
 }
@@ -174,7 +176,7 @@ function checkLocal(): Record<string, string> {
   }
   if (dataType.value === "enum" && enumValues.value.length === 0) errs.enumValues = "Enter at least one value";
   for (const [field, raw] of [["validation.min", vMin.value], ["validation.max", vMax.value], ["validation.maxLength", vMaxLength.value]] as const) {
-    if (raw.trim() !== "" && numberOrUndefined(raw) === undefined) errs[field] = "Must be a number";
+    if (String(raw).trim() !== "" && numberOrUndefined(raw) === undefined) errs[field] = "Must be a number";
   }
   return errs;
 }

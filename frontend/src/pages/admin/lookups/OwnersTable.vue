@@ -138,8 +138,8 @@ function setActive(o: Owner, isActive: boolean) {
               </td>
               <td class="row-actions">
                 <button type="button" class="btn btn-sm" :aria-label="`Edit ${o.name}`" @click="open(o)">Edit</button>
-                <button v-if="o.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" @click="setActive(o, false)">Archive</button>
-                <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" @click="setActive(o, true)">Restore</button>
+                <button v-if="o.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Archive ${o.name}`" @click="setActive(o, false)">Archive</button>
+                <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Restore ${o.name}`" @click="setActive(o, true)">Restore</button>
                 <DeleteRowButton
                   resource="owners"
                   :id="o.id"
