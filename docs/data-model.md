@@ -28,6 +28,9 @@ audit_log (append-only; entity_type + entity_id point at any row)
 users ─< user_permission_profiles >─ permission_profiles ─┬─< permission_profile_global_permissions
   │                                                        └─< permission_profile_class_permissions >─ ci_classes (NULL = all)
   └─< sessions
+
+ui_settings (one row) ── (version) ─> ui_settings_versions (append-only)
+ui_assets (logo, favicon)
 ```
 
 | Table | Purpose | Key constraints |
@@ -51,6 +54,9 @@ users ─< user_permission_profiles >─ permission_profiles ─┬─< permissi
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
 | `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
 | `sessions` | Server-side login sessions: SHA-256 of the cookie token, `csrf_token`, `last_seen_at` (idle timeout), `expires_at` (absolute lifetime), `user_agent`. | unique `token_hash` (32 bytes); cascades with the user |
+| `ui_settings` | The one current UI settings document (`settings` jsonb, validated by the API against `UiSettingsDocument`), its `version`, and who saved it. Classes, attributes and lookups are referenced by key inside the document, not by FK, so it survives export/import; the API reports references that do not resolve. | exactly one row (`singleton` check + unique); `settings` is an object; `version` must exist in `ui_settings_versions` (deferred FK) |
+| `ui_settings_versions` | Every saved version of the document with actor, time and an optional comment. | PK `version`; **UPDATE/DELETE rejected** (trigger); comment at most 500 characters |
+| `ui_assets` | Logo and favicon bytes with `content_type` and `sha256` (ETag). Stored in the database so no shared file storage is needed and backups include them. | unique `kind` (`logo`, `favicon`); content type allowlist; size 1 byte to 512 KiB (logo) / 128 KiB (favicon); `sha256` format |
 | `audit_log` | actor (`actor_type`, `actor_id`, `actor_name`), `action`, `entity_type`, `entity_id`, `occurred_at`, `old_value`, `new_value` (jsonb), `request_id`. | action/actor checks; old/new presence per action; **UPDATE/DELETE rejected** (trigger) |
 
 All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which is a
@@ -101,6 +107,8 @@ The template contains:
 | `audit_log` | **Never deleted** | Append-only by trigger. Retention/archival is an operator decision for a later milestone. |
 | `users` | **Disable** (`is_active = false`), hard delete allowed | Disabling is the normal way to remove access and ends the user's sessions. A hard delete is allowed because nothing references a user by foreign key: `audit_log` keeps `actor_id` and `actor_name` as text, so history still names them. |
 | `permission_profiles` and their permission rows, `user_permission_profiles` | **Hard delete** | Pure configuration; every change is in `audit_log` (a profile's before/after includes its permissions, a user's includes their profiles). Deleting a profile removes it from its holders. |
+| `ui_settings`, `ui_settings_versions` | **Replaced, never deleted** | Saving creates a new version; history is append-only, so any earlier layout can be looked at and restored. |
+| `ui_assets` | **Hard delete** | An image is current state only; the audit log keeps its metadata (type, size, hash). |
 | `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login. |
 
 ## Auditing
@@ -112,7 +120,10 @@ Changes made through the API record the signed-in user (`actor_type = 'user'`, `
 the user's id, `actor_name` = their username). First-run setup, `create-admin` and `seed`
 record `actor_type = 'system'`; a starter template install records the installing user (or `system` / `seed`
 from the CLI), one `create` row per created row, sharing one `request_id`. Users and permission profiles are audited like everything
-else (`entity_type` `users` / `permission_profiles`); password hashes never appear in it.
+else (`entity_type` `users` / `permission_profiles`); password hashes never appear in it. UI settings saves are
+audited as `ui_settings` updates (old and new version with their documents), logo and favicon changes as
+`ui_assets` (metadata only, not the bytes). A configuration import writes one row per created or updated row with
+the importing user as the actor; a dry run writes none.
 
 ## Indexes for UI queries
 

@@ -2,7 +2,8 @@
 
 Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_schema.sql) and
 [`../migrations/0003_users_and_permission_profiles.sql`](../migrations/0003_users_and_permission_profiles.sql) and
-[`../migrations/0004_data_model_admin.sql`](../migrations/0004_data_model_admin.sql).
+[`../migrations/0004_data_model_admin.sql`](../migrations/0004_data_model_admin.sql) and
+[`../migrations/0005_ui_settings.sql`](../migrations/0005_ui_settings.sql).
 Update this diagram in the same pull request as any migration that adds, removes or re-links a table.
 Column-level rules and triggers are described in [`docs/data-model.md`](../../docs/data-model.md).
 
@@ -39,6 +40,7 @@ erDiagram
     permission_profiles ||--o{ permission_profile_class_permissions : "profile_id"
     ci_classes |o--o{ permission_profile_class_permissions : "class_id (NULL = all classes)"
     users ||--o{ sessions : "user_id"
+    ui_settings_versions ||--o| ui_settings : "version (current)"
 
     ci_classes {
         uuid id PK
@@ -196,6 +198,27 @@ erDiagram
         text csrf_token
         timestamptz last_seen_at
         timestamptz expires_at
+    }
+    ui_settings {
+        uuid id PK
+        boolean singleton UK "always true: one row"
+        int version FK
+        jsonb settings "UiSettingsDocument, references by key"
+        text updated_by_name
+    }
+    ui_settings_versions {
+        int version PK
+        jsonb settings
+        text actor_type
+        text actor_name
+        text comment
+    }
+    ui_assets {
+        uuid id PK
+        text kind UK "logo | favicon"
+        text content_type
+        bytea data
+        text sha256 "ETag"
     }
 ```
 

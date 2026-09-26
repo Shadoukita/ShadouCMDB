@@ -58,7 +58,7 @@ Every non-2xx response has this shape:
 | 409 | `VERSION_CONFLICT` | A stale `version` on a CI `PATCH`. |
 | 409 | `LAST_ADMINISTRATOR` | The change would leave no active user holding the Administrator profile. |
 | 429 | `RATE_LIMITED` | Too many failed sign-ins for this username; wait for `Retry-After` seconds. |
-| 413 / 415 | `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE` | The body is over 1 MiB, or is not JSON. |
+| 413 / 415 | `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE` | The body is over 1 MiB (16 MiB for a configuration import), or is not JSON. |
 | 503 | `DATABASE_UNAVAILABLE` | PostgreSQL is unreachable. |
 | 500 | `INTERNAL_ERROR` | A bug. The message is generic and the log carries `requestId`. |
 
@@ -77,6 +77,8 @@ Every non-2xx response has this shape:
 | Statuses, environments, locations, owners | `GET/POST /{statuses\|environments\|locations\|owners}`, `GET/PATCH/DELETE /…/{id}`, `GET /…/{id}/usage` | Filters include `isActive`, `isOperational` (statuses), `parentId` and `locationType` (locations), and `kind` (owners). |
 | Lookup lists | `GET/POST /lookup-lists`, `GET/PATCH/DELETE /lookup-lists/{id}`, `GET/POST /lookup-list-values`, `GET/PATCH/DELETE /lookup-list-values/{id}`, `GET /…/{id}/usage` | Lists an administrator defines (e.g. "Support contract": Gold, Silver). Values have `key`, `name`, `color`, `sortOrder`, `isActive`; filter values by `listId`. A `lookup` attribute stores one value by id. A list can be deleted with its values only while no attribute uses it. |
 | Templates | `GET /admin/templates`, `POST /admin/templates/{key}/install` | Needs `datamodel.manage`. Lists the starter templates (today `it_infrastructure`) with what each brings, how much of it exists already and a `status` (`not_installed`, `partial`, `installed`). Install adds every missing row in one transaction and leaves existing ones alone, so it is idempotent; the response counts `created` and `existing` rows. Every created row is audited with the installing user. |
+| UI settings | `GET/PUT /ui-settings`, `GET /ui-settings/branding`, `GET /ui-settings/versions`, `GET /ui-settings/versions/{version}`, `POST /ui-settings/versions/{version}/restore`, `GET/PUT/DELETE /ui-settings/assets/{logo\|favicon}` | One settings document for every user: branding, navigation, dashboard widgets, list views and detail/form layouts per class. Any signed-in user reads it; writes need `customization.manage`. `branding` and the images are public (login page). See [Customization](#customization-and-configuration-exportimport). |
+| Configuration export/import | `GET /admin/config/export`, `POST /admin/config/import?mode=dry_run\|apply` | Needs `config.export_import`. One JSON file with the data model, lookups, permission profiles and UI settings (no users, passwords or CIs). See [Customization](#customization-and-configuration-exportimport). |
 | Audit log | `GET /audit-log` | Read-only, needs `audit.view`. Filters: `entityType`, `entityId`, `action`, `actorId`, `actorName`, `requestId`, `from`, `to`. |
 | Setup | `GET /setup`, `POST /setup` | `setupRequired` is true while no user exists. `POST` creates the first user with the Administrator profile and signs them in; `409` once any user exists. |
 | Authentication | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` | `login` and `me` return `{ user, permissions, csrfToken }`. `permissions` is the union of the user's profiles: `administrator`, `global[]`, `allClasses` and per-class `classes[]`. Changing your own password needs `currentPassword` and ends your other sessions. |
@@ -183,6 +185,61 @@ Changes that would orphan or invalidate CI data are refused, and archiving is th
   attributes the new lineage does not provide is `400 attributes_outside_lineage`.
 - Keys and data types are immutable once created, because imports, reports and stored values depend on them.
 
+## Customization and configuration export/import
+
+**UI settings** (`/api/v1/ui-settings`) are one JSON document that the web UI applies for every user. Its schema is
+`UiSettingsDocument` in the spec; every section is optional and `{}` means the built-in UI.
+
+| Section | What it holds |
+| --- | --- |
+| `branding` | `appName`, `primaryColor` / `accentColor` (`#rrggbb`), `defaultTheme` (`light`, `dark`, `system`). |
+| `navigation.entries[]` | Menu order. `type: page` (`dashboard`, `inventory`, `search`, `audit_log`, `administration`), `type: class` (`classKey`) or `type: section` (`key`, `label`, `items[]` of classes). Each entry can be renamed (`label`) and `hidden`. Pages and classes not listed follow in their default order. |
+| `dashboard.widgets[]` | Widgets in order: `count_by_class` (optional `classKeys`), `count_by_status`, `count_by_environment`, `recent_changes` (`limit`), `saved_search` (`search`: `classKeys`, `includeSubclasses`, `filters`, `sort`). `null` keeps the built-in dashboard. |
+| `listViews[]` | Per class: `columns` (built-in fields such as `name`, `status`, `hostname`, or `attributes.<key>`), `defaultSort`, `defaultFilters` (`q`, `statusKeys`, `environmentKeys`, `locationKeys`), `pageSize`. |
+| `layouts[]` | Per class: `panels[]` (`key`, `label`, ordered `fields`, `collapsed`), `hiddenFields`, `readOnlyFields`. Fields not placed in a panel follow in a trailing panel grouped by attribute group. `name` can be neither hidden nor read-only. |
+
+- **References are keys.** Classes, attributes and lookups are named by key, so a document moves between installs.
+  A reference to something that does not exist is accepted: `GET` returns the *effective* settings without it and
+  lists it in `issues[]` (`unknown_class`, `unknown_attribute`, `unknown_status`, …, with a path into the stored
+  document). A required attribute that a layout hides or makes read-only is flagged as
+  `required_field_not_editable`. The stored document keeps every reference, so a class that comes back (e.g. from
+  an import) reappears.
+- **Versioned and audited.** `PUT` takes `{ version, settings, comment? }`: the version you loaded, or `409
+  VERSION_CONFLICT`. Each save is a new version kept in history (`GET /ui-settings/versions`); `POST
+  /ui-settings/versions/{n}/restore` saves version *n* again as the newest. An unchanged document is not saved
+  again. Every save has an `audit_log` row (`entity_type = ui_settings`) with the old and new version.
+- **Logo and favicon.** `PUT /ui-settings/assets/{logo|favicon}` with `{ contentType, data }` (base64). Logo: PNG,
+  JPEG, WebP or SVG up to 512 KiB; favicon: PNG, ICO or SVG up to 128 KiB. The bytes must match the declared type;
+  SVGs with scripts, event handlers, `javascript:` URLs or embedded HTML are refused. `GET` serves them without a
+  session, with an ETag (`If-None-Match` answers 304), `nosniff` and a sandboxing Content-Security-Policy. The
+  `url` in the settings carries a content hash (`?v=`). Uploads and removals are audited (`entity_type = ui_assets`).
+
+**Export** (`GET /api/v1/admin/config/export`) downloads one file (`format: "shadoucmdb.config"`, `formatVersion:
+1`) with `dataModel` (classes, attributes, relationship types and rules), `lookups` (statuses, environments,
+locations, owners, lookup lists with their values), `permissionProfiles` (all but the built-in Administrator) and
+`uiSettings` (the stored document plus the images, base64). It never contains users, passwords, sessions, CIs or
+relationships. Parents come before children; every reference is a key (a lookup attribute's default is the value's
+key).
+
+**Import** (`POST /api/v1/admin/config/import?mode=dry_run|apply`, body: such a file, up to 16 MiB):
+
+- Every section is optional. Rows are matched by key (owners by kind and name, profiles by name, both
+  case-insensitive), then created or updated field by field. **Nothing is deleted**: rows missing from the file are
+  kept and counted as `notInFile`. The `uiSettings` section is the exception: it replaces the document (as a new
+  version) and the images (a `null` logo removes the current one).
+- The whole file is checked first and every problem is reported in one `400 VALIDATION_ERROR` with paths into the
+  file (`dataModel.attributes.4.lookupList`): duplicates, unknown references, cycles, attribute rules, changes to
+  immutable fields (an attribute's `dataType`, `referenceClass`, `lookupList`; a relationship type's
+  `isDirectional`), invalid images.
+- The import then runs in **one transaction** through the same code as the admin API, so every rule applies
+  (e.g. making an attribute required while CIs lack a value is `409` with `code: values_missing`, prefixed with the
+  file path). A profile cannot grant more than the importing user holds (`403`). Every change is audited with the
+  importing user.
+- `mode=dry_run` runs exactly the same writes and rolls back, so its result is what `apply` would do: `summary[]`
+  (created, updated, deleted, unchanged, notInFile per section), `changes[]` (section, key, action, and for updates
+  the changed `fields` with `from` and `to`), `warnings[]` (e.g. the built-in profile in the file is skipped) and
+  `uiSettingsIssues[]`. Importing an install's own export reports no changes.
+
 ## Layers and extension seams
 
 The server is the Rust binary `shadoucmdb` (Axum + Tokio + sqlx) in `backend/`:
@@ -217,7 +274,8 @@ the same) runs every operation in the spec against a running API with a seeded d
 covering the success paths and the error paths. On a database without users it completes first-run setup itself;
 otherwise set `SMOKE_USERNAME` and `SMOKE_PASSWORD` to an administrator account. It also calls every non-public
 operation without a session (expects 401), every permission-guarded operation as a user without profiles (expects
-403), and checks class scoping, CSRF, the login backoff, the escalation guards and the last-Administrator guard. It fails on any unexpected status, any 5xx, any spec operation it
+403), and checks class scoping, CSRF, the login backoff, the escalation guards, the last-Administrator guard, UI settings
+versioning and images, and a configuration export/import round trip (dry run, apply, re-import without changes). It fails on any unexpected status, any 5xx, any spec operation it
 did not call, or any response body that does not match the schema the spec declares for it. It works against any
 URL: a local binary, a container or a remote host.
 
