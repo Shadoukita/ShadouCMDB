@@ -167,6 +167,42 @@ impl Permissions {
             })
     }
 
+    /// What both allow: an API token gets its owner's permissions narrowed to
+    /// its profile's, so it never grants more than the owner holds.
+    pub fn intersect(&self, other: &Permissions) -> Permissions {
+        if self.administrator {
+            return other.clone();
+        }
+        if other.administrator {
+            return self.clone();
+        }
+        let both = |id: Option<Uuid>| {
+            let can = |p: &Permissions, op| match id {
+                Some(id) => p.can(id, op),
+                None => p.all_classes.allows(op),
+            };
+            ClassRights {
+                view: can(self, ClassOp::View) && can(other, ClassOp::View),
+                create: can(self, ClassOp::Create) && can(other, ClassOp::Create),
+                edit: can(self, ClassOp::Edit) && can(other, ClassOp::Edit),
+                delete: can(self, ClassOp::Delete) && can(other, ClassOp::Delete),
+            }
+        };
+        let classes = self
+            .classes
+            .keys()
+            .chain(other.classes.keys())
+            .map(|id| (*id, both(Some(*id))))
+            .filter(|(_, r)| !r.is_empty())
+            .collect();
+        Permissions {
+            administrator: false,
+            global: self.global.intersection(&other.global).copied().collect(),
+            all_classes: both(None),
+            classes,
+        }
+    }
+
     /// Adds one profile's grants.
     pub fn merge_global(&mut self, p: GlobalPermission) {
         self.global.insert(p);
@@ -269,6 +305,38 @@ mod tests {
         all_view.merge_class(None, ClassRights { view: true, ..Default::default() });
         assert!(all_view.covers(&wildcard));
         assert!(all_view.covers(&other_class), "the wildcard covers a single class");
+    }
+
+    #[test]
+    fn intersect_keeps_only_what_both_allow() {
+        let admin = Permissions { administrator: true, ..Default::default() };
+        let mut owner = Permissions::default();
+        owner.merge_global(GlobalPermission::AuditView);
+        owner.merge_global(GlobalPermission::UsersManage);
+        owner.merge_class(None, ClassRights { view: true, ..Default::default() });
+        owner.merge_class(Some(id(1)), ClassRights { view: true, edit: true, ..Default::default() });
+
+        let mut scope = Permissions::default();
+        scope.merge_global(GlobalPermission::AuditView);
+        scope.merge_global(GlobalPermission::DatamodelManage);
+        scope.merge_class(Some(id(1)), ClassRights::ALL);
+        scope.merge_class(Some(id(2)), ClassRights { view: true, ..Default::default() });
+
+        let t = owner.intersect(&scope);
+        assert!(!t.administrator);
+        assert!(t.has(GlobalPermission::AuditView));
+        assert!(!t.has(GlobalPermission::UsersManage), "not in the scope");
+        assert!(!t.has(GlobalPermission::DatamodelManage), "not held by the owner");
+        assert!(t.can(id(1), ClassOp::Edit) && !t.can(id(1), ClassOp::Delete));
+        assert!(t.can(id(2), ClassOp::View), "the owner's wildcard covers class 2");
+        assert!(!t.can(id(3), ClassOp::View), "the scope has no wildcard");
+        assert_eq!(t.class_scope(ClassOp::View), Some(vec![id(1), id(2)]));
+        assert!(owner.covers(&t) && scope.covers(&t));
+
+        assert_eq!(admin.intersect(&scope), scope, "an administrator owner gets the scope");
+        assert_eq!(owner.intersect(&admin), owner, "the Administrator scope keeps the owner's rights");
+        assert!(admin.intersect(&admin).administrator);
+        assert_eq!(owner.intersect(&Permissions::default()), Permissions::default());
     }
 
     #[test]
