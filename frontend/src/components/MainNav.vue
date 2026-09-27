@@ -5,6 +5,7 @@ import { RouterLink, type RouteLocationNormalizedLoaded } from "vue-router";
 import { ciCountQuery, useCiClasses } from "../api/queries";
 import type { UiPage } from "../api/uiSettings";
 import { useAppSettings, useNavPreviewStore } from "../lib/appSettings";
+import { viewableClasses } from "../lib/permissions";
 import { buildNav, type NavLinkItem } from "../lib/uiSettings";
 import { visibleSections } from "../pages/admin/sections";
 import { useSessionStore } from "../stores/session";
@@ -15,7 +16,8 @@ import NavLink from "./NavLink.vue";
  * The main menu. Its order, names, sections and hidden entries come from
  * Administration › Customization › Navigation; pages and classes the settings
  * do not mention follow in the built-in order, so new classes appear by
- * themselves. Pages the user may not open are never shown.
+ * themselves. Pages the user may not open are never shown, nor classes they may
+ * not view: the API filters those out of every list, so their count would be a false 0.
  */
 const session = useSessionStore();
 const classes = useCiClasses();
@@ -28,7 +30,8 @@ function showPage(p: UiPage): boolean {
   if (p === "administration") return hasAdmin.value;
   return true;
 }
-const groups = computed(() => buildNav(preview.entries ?? doc.value.navigation.entries, classes.data.value ?? [], showPage));
+const navClasses = computed(() => viewableClasses(classes.data.value ?? [], (id) => session.canOnClass(id, "view")));
+const groups = computed(() => buildNav(preview.entries ?? doc.value.navigation.entries, navClasses.value, showPage));
 const items = computed(() => groups.value.flatMap((g) => g.items));
 const auditShown = computed(() => items.value.some((i) => i.page === "audit_log"));
 

@@ -17,6 +17,7 @@ export const ADMIN_SECTIONS: AdminSection[] = [
   { key: "users", label: "Users", group: "Access", to: "/admin/users", permissions: ["users.manage"] },
   // users.manage may read profiles too, to know what they assign.
   { key: "profiles", label: "Permission profiles", group: "Access", to: "/admin/profiles", permissions: ["profiles.manage", "users.manage"] },
+  { key: "api-tokens", label: "API tokens", group: "Access", to: "/admin/api-tokens", permissions: ["users.manage"] },
   { key: "classes", label: "CI classes", group: "Data model", to: "/admin/classes", permissions: ["datamodel.manage"] },
   { key: "relationships", label: "Relationship types", group: "Data model", to: "/admin/relationships", permissions: ["datamodel.manage"] },
   { key: "lookups", label: "Lookups", group: "Data model", to: "/admin/lookups", permissions: ["datamodel.manage"] },

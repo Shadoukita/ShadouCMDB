@@ -383,9 +383,24 @@ pub struct EdgeRecord {
     pub created_at: DateTime<Utc>,
     #[serde(serialize_with = "crate::api::schemas::ts::serialize")]
     pub updated_at: DateTime<Utc>,
-    /// Null: the audit entry records the edge as it was before the delete.
+    /// Null after a soft delete: the audit entry records the edge as it was
+    /// before the delete. A purge records the stored value.
     #[serde(serialize_with = "crate::api::schemas::ts_opt::serialize")]
     pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// Delete every edge of these CIs, soft-deleted ones included (type purge);
+/// returns the removed edges for auditing.
+pub async fn delete_edges_of(conn: &mut PgConnection, ci_ids: &[Uuid]) -> sqlx::Result<Vec<EdgeRecord>> {
+    sqlx::query_as!(
+        EdgeRecord,
+        r#"DELETE FROM ci_relationships
+           WHERE source_ci_id = ANY($1) OR target_ci_id = ANY($1)
+           RETURNING id, relationship_type_id, source_ci_id, target_ci_id, notes, created_at, updated_at, deleted_at"#,
+        ci_ids
+    )
+    .fetch_all(conn)
+    .await
 }
 
 /// Soft-delete every live edge of a CI; returns the removed edges for auditing.
