@@ -13,6 +13,7 @@ use super::schemas::{
     SearchResults, UpdateItemBody,
 };
 use crate::api::context::RequestContext;
+use crate::api::route::InvalidBody;
 use crate::api::schemas::{LookupRef, OwnerRef, Page, Paged};
 use crate::api::{pg_error, validate};
 use crate::auth::permissions::ClassOp;
@@ -246,6 +247,110 @@ async fn check_reference_classes(conn: &mut PgConnection, prepared: &Prepared<'_
     if errors.is_empty() { Ok(()) } else { Err(AppError::validation(errors)) }
 }
 
+/// Attribute checks for a new CI: the values (defaults filled in), the classes
+/// they reference, and that every required attribute has one.
+async fn prepare_new<'d>(
+    conn: &mut PgConnection,
+    defs: &'d [EffectiveAttributeRow],
+    input: Option<&Map<String, Value>>,
+    class_key: &str,
+) -> Result<Prepared<'d>, AppError> {
+    let attributes = with_defaults(defs, input);
+    let prepared = prepare_attributes(conn, defs, Some(&attributes), class_key, None, false).await?;
+    check_reference_classes(conn, &prepared).await?;
+    let given: HashSet<Uuid> = prepared.set.iter().map(|(d, _)| d.id).collect();
+    let missing: Vec<FieldError> = defs
+        .iter()
+        .filter(|d| d.is_required && d.is_active && !given.contains(&d.id))
+        .map(|d| body_error(format!("attributes.{}", d.key), format!("{} is required", d.label), "required"))
+        .collect();
+    if missing.is_empty() { Ok(prepared) } else { Err(AppError::validation(missing)) }
+}
+
+// ---------------------------------------------------------------------------
+// Bodies that failed validation
+//
+// A body that fails its schema never reaches create/update, but its attribute
+// values can still be checked against the class. Reporting both at once saves
+// the user a round trip per stage (GH#45). The attribute pass is best effort:
+// without a usable class id, an existing CI, or the right to use the class,
+// the body's own errors are the whole answer.
+// ---------------------------------------------------------------------------
+
+/// A uuid field of the raw body, unless the body's validation already rejected it.
+fn raw_uuid(invalid: &InvalidBody, field: &str) -> Option<Uuid> {
+    if invalid.errors.iter().any(|e| e.field == field) {
+        return None;
+    }
+    invalid.raw.get(field)?.as_str().and_then(|s| Uuid::parse_str(s).ok())
+}
+
+/// The body's errors plus the attribute errors not already reported for the same field.
+fn merged(mut errors: Vec<FieldError>, attributes: Result<(), AppError>) -> AppError {
+    if let Err(AppError { code: ErrorCode::ValidationError, details: Some(more), .. }) = attributes {
+        let seen: HashSet<String> = errors.iter().map(|e| e.field.clone()).collect();
+        errors.extend(more.into_iter().filter(|e| !seen.contains(&e.field)));
+    }
+    AppError::validation(errors)
+}
+
+/// The 400 for a create body that failed validation.
+pub async fn create_errors(pool: &PgPool, ctx: &RequestContext, invalid: InvalidBody) -> AppError {
+    let attributes = invalid.raw.get("attributes").map(Value::as_object);
+    let checked = match (raw_uuid(&invalid, "classId"), attributes) {
+        // An "attributes" that is not an object is already reported.
+        (Some(class_id), None | Some(Some(_))) if ctx.require_class(class_id, ClassOp::Create).is_ok() => {
+            check_new_attributes(pool, class_id, attributes.flatten()).await
+        }
+        _ => Ok(()),
+    };
+    merged(invalid.errors, checked)
+}
+
+async fn check_new_attributes(
+    pool: &PgPool,
+    class_id: Uuid,
+    input: Option<&Map<String, Value>>,
+) -> Result<(), AppError> {
+    let mut conn = pool.acquire().await?;
+    let key = class_key(&mut conn, class_id).await?;
+    let defs = class_data::effective_attributes(&mut conn, class_id).await?;
+    prepare_new(&mut conn, &defs, input, &key).await.map(drop)
+}
+
+/// The 400 for an update body that failed validation.
+pub async fn update_errors(pool: &PgPool, ctx: &RequestContext, id: Uuid, invalid: InvalidBody) -> AppError {
+    let checked = match invalid.raw.get("attributes").and_then(Value::as_object) {
+        Some(attributes) => check_changed_attributes(pool, ctx, id, raw_uuid(&invalid, "classId"), attributes).await,
+        None => Ok(()),
+    };
+    merged(invalid.errors, checked)
+}
+
+async fn check_changed_attributes(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    id: Uuid,
+    new_class: Option<Uuid>,
+    input: &Map<String, Value>,
+) -> Result<(), AppError> {
+    let mut conn = pool.acquire().await?;
+    // Outside a transaction the row lock ends with the statement.
+    let Some(before) = data::lock(&mut conn, id).await? else { return Ok(()) };
+    if before.deleted_at.is_some() || ctx.require_class(before.class_id, ClassOp::Edit).is_err() {
+        return Ok(());
+    }
+    let class_id = new_class.unwrap_or(before.class_id);
+    let class_changes = class_id != before.class_id;
+    if class_changes && ctx.require_class(class_id, ClassOp::Create).is_err() {
+        return Ok(());
+    }
+    let key = class_key(&mut conn, class_id).await?;
+    let defs = class_data::effective_attributes(&mut conn, class_id).await?;
+    let prepared = prepare_attributes(&mut conn, &defs, Some(input), &key, Some(id), class_changes).await?;
+    check_reference_classes(&mut conn, &prepared).await
+}
+
 /// The input plus the default of every active attribute it leaves out.
 fn with_defaults(defs: &[EffectiveAttributeRow], input: Option<&Map<String, Value>>) -> Map<String, Value> {
     let mut out = input.cloned().unwrap_or_default();
@@ -474,6 +579,12 @@ async fn with_attributes(
     Ok(items)
 }
 
+/// Full representations (values included) of these CIs, deleted ones included.
+pub async fn details(conn: &mut PgConnection, model: &Model, ids: &[Uuid]) -> Result<Vec<ConfigurationItem>, AppError> {
+    let rows = data::summaries(conn, ids).await?;
+    with_attributes(conn, model, rows).await
+}
+
 async fn detail(conn: &mut PgConnection, model: &Model, id: Uuid) -> Result<Option<ConfigurationItem>, AppError> {
     let Some(row) = data::summary(conn, id).await? else { return Ok(None) };
     Ok(with_attributes(conn, model, vec![row]).await?.pop())
@@ -505,18 +616,7 @@ pub async fn create(
     let key = class_key(&mut tx, input.class_id).await?;
     let model = Model::load(&mut tx).await?;
     let defs = class_data::effective_attributes(&mut tx, input.class_id).await?;
-    let attributes = with_defaults(&defs, input.attributes.as_ref());
-    let prepared = prepare_attributes(&mut tx, &defs, Some(&attributes), &key, None, false).await?;
-    check_reference_classes(&mut tx, &prepared).await?;
-    let given: HashSet<Uuid> = prepared.set.iter().map(|(d, _)| d.id).collect();
-    let missing: Vec<FieldError> = defs
-        .iter()
-        .filter(|d| d.is_required && d.is_active && !given.contains(&d.id))
-        .map(|d| body_error(format!("attributes.{}", d.key), format!("{} is required", d.label), "required"))
-        .collect();
-    if !missing.is_empty() {
-        return Err(AppError::validation(missing));
-    }
+    let prepared = prepare_new(&mut tx, &defs, input.attributes.as_ref(), &key).await?;
 
     let id = data::insert(
         &mut tx,
@@ -791,4 +891,77 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
             .collect(),
         truncated,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::route::{BodyInput, CheckedBody};
+    use crate::db::scratch;
+
+    async fn id_of(pool: &PgPool, table: &str, key: &str) -> Uuid {
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table} WHERE key = $1")))
+            .bind(key)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    fn fields(err: &AppError) -> Vec<&str> {
+        let mut f: Vec<&str> = err.details.iter().flatten().map(|d| d.field.as_str()).collect();
+        f.sort_unstable();
+        f
+    }
+
+    /// GH#45: a body with bad core fields and bad attributes reports both at once.
+    #[tokio::test]
+    async fn invalid_core_fields_do_not_hide_attribute_errors() {
+        let Some(db) = scratch::database("invalid_core_fields_do_not_hide_attribute_errors").await else { return };
+        let pool = &db.pool;
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        let (server, in_service) =
+            (id_of(pool, "ci_classes", "server").await, id_of(pool, "statuses", "in_service").await);
+        let ctx = RequestContext::system("test", "test");
+
+        let body = json!({ "name": "x", "classId": server, "statusId": in_service, "ipAddress": "999.1.1.1",
+            "attributes": { "management_ip": "abc", "cpu_cores": "x" } });
+        let Ok(CheckedBody(Err(invalid))) = CheckedBody::<CreateItemBody>::parse(Some(body)) else {
+            panic!("body passed")
+        };
+        let err = create_errors(pool, &ctx, invalid).await;
+        assert_eq!(err.code, ErrorCode::ValidationError);
+        assert_eq!(fields(&err), ["attributes.cpu_cores", "attributes.management_ip", "ipAddress"]);
+
+        // The attribute rules that need the database too: unknown keys and values out of range.
+        let body = json!({ "name": "", "classId": server, "statusId": in_service, "attributes": { "cpu_cores": 0, "nope": 1 } });
+        let Ok(CheckedBody(Err(invalid))) = CheckedBody::<CreateItemBody>::parse(Some(body)) else {
+            panic!("body passed")
+        };
+        assert_eq!(
+            fields(&create_errors(pool, &ctx, invalid).await),
+            ["attributes.cpu_cores", "attributes.nope", "name"]
+        );
+
+        // No usable class id: only the body's own errors.
+        let body =
+            json!({ "name": "x", "classId": "not-a-uuid", "statusId": in_service, "attributes": { "cpu_cores": "x" } });
+        let Ok(CheckedBody(Err(invalid))) = CheckedBody::<CreateItemBody>::parse(Some(body)) else {
+            panic!("body passed")
+        };
+        assert_eq!(fields(&create_errors(pool, &ctx, invalid).await), ["classId"]);
+
+        // Update: the same merge, checked against the CI's current class.
+        let valid = json!({ "name": "srv-1", "classId": server, "statusId": in_service });
+        let Ok(CheckedBody(Ok(valid))) = CheckedBody::<CreateItemBody>::parse(Some(valid)) else {
+            panic!("body failed")
+        };
+        let item = create(pool, &ctx, &valid).await.unwrap();
+        let body = json!({ "hostname": "-bad-", "attributes": { "management_ip": "abc", "cpu_cores": null } });
+        let Ok(CheckedBody(Err(invalid))) = CheckedBody::<UpdateItemBody>::parse(Some(body)) else {
+            panic!("body passed")
+        };
+        let err = update_errors(pool, &ctx, item.summary.id, invalid).await;
+        assert_eq!(fields(&err), ["attributes.management_ip", "hostname"]);
+        db.drop().await;
+    }
 }

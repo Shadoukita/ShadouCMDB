@@ -108,9 +108,10 @@ users ──HTTPS──▶ reverse proxy ──HTTP──▶ shadoucmdb ──TL
 
 ## Database TLS
 
-Set `DATABASE_SSL=verify-full`. The default, `require`, encrypts the connection but doesn't check
+Keep the default, `DATABASE_SSL=verify-full`. `require` encrypts the connection but doesn't check
 the server's certificate, so anyone who can intercept traffic between the server and the database
-can impersonate the database and read the credentials and data.
+can impersonate the database and read the credentials and data. The server logs a warning at
+startup when `require` is used with a host that is not loopback.
 
 ```sh
 DATABASE_SSL=verify-full

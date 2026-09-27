@@ -49,6 +49,8 @@ const notFound = computed(() => {
   const e = ci.error.value;
   return e instanceof ApiError && (e.code === "NOT_FOUND" || (e.code === "VALIDATION_ERROR" && e.details.some((d) => d.in === "params")));
 });
+// The API refuses a CI of a class the user may not view; that is a permission limit, not a missing record.
+const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.value.code === "FORBIDDEN");
 const c = computed(() => ci.data.value);
 
 // The class's layout from Customization, if it has one; otherwise the built-in General + attributes panels.
@@ -76,8 +78,12 @@ const crumbs = computed<Crumb[]>(() => {
 <template>
   <LoadingState v-if="ci.isLoading.value" label="Loading configuration item…" />
   <template v-else-if="ci.isError.value">
-    <Breadcrumbs :items="[{ label: 'Inventory', to: '/cis' }, { label: 'Not found' }]" />
-    <EmptyState v-if="notFound" title="Configuration item not found">
+    <Breadcrumbs :items="[{ label: 'Inventory', to: '/cis' }, { label: forbidden ? 'Permission denied' : notFound ? 'Not found' : 'Error' }]" />
+    <EmptyState v-if="forbidden" title="Permission denied">
+      None of your permission profiles allows viewing this configuration item's class, so it cannot be shown.
+      <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
+    </EmptyState>
+    <EmptyState v-else-if="notFound" title="Configuration item not found">
       No CI has the id <code>{{ id }}</code>. It may have been removed, or the link is wrong.
       <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
     </EmptyState>
