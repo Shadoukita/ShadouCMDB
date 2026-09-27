@@ -153,7 +153,11 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
         }
         ErrorCode::UnsupportedMediaType => (415, "Body is not application/json"),
         ErrorCode::PayloadTooLarge => (413, "Body too large"),
-        ErrorCode::DatabaseUnavailable => (503, "Database unreachable (code DATABASE_UNAVAILABLE)"),
+        ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated => (
+            503,
+            "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run \
+             `shadoucmdb migrate`)",
+        ),
         ErrorCode::InternalError => (500, "Unexpected server error (code INTERNAL_ERROR)"),
     }
 }
@@ -276,7 +280,7 @@ pub fn document(routes: &[Route]) -> OpenApi {
         codes.extend(r.errors.iter().copied());
         codes.push(ErrorCode::InternalError);
         if r.path.starts_with("/api/") {
-            codes.push(ErrorCode::DatabaseUnavailable);
+            codes.extend([ErrorCode::DatabaseUnavailable, ErrorCode::SchemaNotMigrated]);
         }
         if r.body.is_some() {
             codes.push(ErrorCode::UnsupportedMediaType);

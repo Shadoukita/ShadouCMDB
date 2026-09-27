@@ -44,6 +44,8 @@ pub enum ErrorCode {
     UnsupportedMediaType,
     PayloadTooLarge,
     DatabaseUnavailable,
+    /// The database has migrations pending; run `shadoucmdb migrate` (503)
+    SchemaNotMigrated,
     InternalError,
 }
 
@@ -63,7 +65,7 @@ impl ErrorCode {
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            ErrorCode::DatabaseUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated => StatusCode::SERVICE_UNAVAILABLE,
             ErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

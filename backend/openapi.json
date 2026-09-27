@@ -76,7 +76,7 @@
             }
           },
           "503": {
-            "description": "Not ready: database unreachable or migrations pending",
+            "description": "Not ready: database unreachable, credentials or privileges refused, or migrations pending",
             "content": {
               "application/json": {
                 "schema": {
@@ -119,7 +119,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -237,7 +237,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -348,7 +348,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -454,7 +454,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -511,7 +511,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -580,7 +580,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -699,7 +699,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -768,7 +768,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -897,7 +897,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1026,7 +1026,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1147,7 +1147,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1285,7 +1285,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1377,7 +1377,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1613,7 +1613,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1842,7 +1842,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1944,7 +1944,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2036,7 +2036,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2296,7 +2296,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2448,7 +2448,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2658,7 +2658,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2850,7 +2850,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2991,7 +2991,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3093,7 +3093,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3185,7 +3185,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3333,7 +3333,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3487,7 +3487,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3666,7 +3666,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3767,7 +3767,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3869,7 +3869,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4061,7 +4061,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4206,7 +4206,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4411,7 +4411,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4609,7 +4609,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4710,7 +4710,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4812,7 +4812,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5017,7 +5017,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5119,7 +5119,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5233,7 +5233,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5377,7 +5377,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5583,7 +5583,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5883,7 +5883,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5984,7 +5984,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6086,7 +6086,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6370,7 +6370,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6472,7 +6472,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6616,7 +6616,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6790,7 +6790,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6953,7 +6953,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7054,7 +7054,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7156,7 +7156,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7326,7 +7326,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7428,7 +7428,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7580,7 +7580,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7709,7 +7709,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7810,7 +7810,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7912,7 +7912,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8057,7 +8057,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8159,7 +8159,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8292,7 +8292,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8393,7 +8393,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8567,7 +8567,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8649,7 +8649,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8788,7 +8788,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8953,7 +8953,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9102,7 +9102,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9203,7 +9203,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9305,7 +9305,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9471,7 +9471,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9573,7 +9573,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9726,7 +9726,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9872,7 +9872,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9973,7 +9973,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10075,7 +10075,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10238,7 +10238,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10340,7 +10340,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10531,7 +10531,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10713,7 +10713,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10814,7 +10814,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10916,7 +10916,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11114,7 +11114,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11216,7 +11216,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11390,7 +11390,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11547,7 +11547,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11648,7 +11648,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11750,7 +11750,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11924,7 +11924,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12026,7 +12026,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12179,7 +12179,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12325,7 +12325,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12426,7 +12426,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12528,7 +12528,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12691,7 +12691,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12793,7 +12793,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12955,7 +12955,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13118,7 +13118,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13219,7 +13219,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13321,7 +13321,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13496,7 +13496,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13598,7 +13598,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13669,7 +13669,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13771,7 +13771,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13843,7 +13843,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13981,7 +13981,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14033,7 +14033,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14134,7 +14134,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14236,7 +14236,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14393,7 +14393,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14482,7 +14482,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14612,7 +14612,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14708,7 +14708,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14945,7 +14945,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15105,7 +15105,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15264,7 +15264,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15366,7 +15366,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15468,7 +15468,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15637,7 +15637,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15771,7 +15771,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15909,7 +15909,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16102,7 +16102,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16204,7 +16204,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16306,7 +16306,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16517,7 +16517,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16661,7 +16661,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16823,7 +16823,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16949,7 +16949,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -17048,7 +17048,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -17137,7 +17137,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -17206,7 +17206,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -17497,7 +17497,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -18522,7 +18522,8 @@
               "required": [
                 "id",
                 "name",
-                "deleted"
+                "deleted",
+                "hidden"
               ],
               "properties": {
                 "id": {
@@ -18530,10 +18531,19 @@
                   "format": "uuid"
                 },
                 "name": {
-                  "type": "string"
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Null when `hidden`"
                 },
                 "deleted": {
-                  "type": "boolean"
+                  "type": "boolean",
+                  "description": "Always false when `hidden`"
+                },
+                "hidden": {
+                  "type": "boolean",
+                  "description": "True when the caller may not view the referenced CI's class; its name and state are withheld"
                 }
               },
               "additionalProperties": false
@@ -19497,6 +19507,7 @@
                   "UNSUPPORTED_MEDIA_TYPE",
                   "PAYLOAD_TOO_LARGE",
                   "DATABASE_UNAVAILABLE",
+                  "SCHEMA_NOT_MIGRATED",
                   "INTERNAL_ERROR"
                 ]
               },
@@ -20784,9 +20795,13 @@
           },
           "database": {
             "type": "string",
+            "description": "`ok` once the database answered both queries; otherwise why it did not.",
             "enum": [
               "ok",
-              "unreachable"
+              "unreachable",
+              "authentication_failed",
+              "permission_denied",
+              "error"
             ]
           },
           "migrations": {
@@ -20797,7 +20812,7 @@
             "properties": {
               "applied": {
                 "type": "integer",
-                "description": "Absent when the database is unreachable",
+                "description": "Absent unless the database state is `ok`",
                 "minimum": 0
               },
               "expected": {
