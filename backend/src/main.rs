@@ -154,11 +154,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             runtime()?.block_on(http::serve(cfg, http::shutdown_signal()))
         }
         Command::Migrate { adopt_drizzle } => {
-            let cfg = Config::from_env()?;
-            let db = match &cfg.migration_url {
-                Some(url) => cfg.database.with_url(url),
-                None => cfg.database,
-            };
+            let db = Config::from_env()?.schema_owner_database();
             runtime()?.block_on(db::migrate(&db, adopt_drizzle))
         }
         Command::Seed { templates, demo } => {
@@ -181,17 +177,19 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             let cfg = Config::from_env()?;
             runtime()?.block_on(maintenance::backup::run(&cfg.database, args))
         }
+        // These rebuild or drop the schema: like `migrate`, they connect as the
+        // schema owner when MIGRATION_DATABASE_URL is set.
         Command::Restore(args) => {
-            let cfg = Config::from_env()?;
-            runtime()?.block_on(maintenance::restore::run(&cfg.database, args))
+            let db = Config::from_env()?.schema_owner_database();
+            runtime()?.block_on(maintenance::restore::run(&db, args))
         }
         Command::FactoryReset(args) => {
-            let cfg = Config::from_env()?;
-            runtime()?.block_on(maintenance::reset::factory_reset_cmd(&cfg.database, args))
+            let db = Config::from_env()?.schema_owner_database();
+            runtime()?.block_on(maintenance::reset::factory_reset_cmd(&db, args))
         }
         Command::Decommission(args) => {
-            let cfg = Config::from_env()?;
-            runtime()?.block_on(maintenance::reset::decommission_cmd(&cfg.database, args))
+            let db = Config::from_env()?.schema_owner_database();
+            runtime()?.block_on(maintenance::reset::decommission_cmd(&db, args))
         }
         Command::Service(cmd) => service::run(cmd, launch),
         Command::Openapi { .. } => unreachable!("handled above"),
