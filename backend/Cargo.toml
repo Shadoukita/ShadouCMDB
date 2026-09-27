@@ -23,7 +23,7 @@ futures-util = { version = "0.3", default-features = false }
 hex = "0.4"
 ipnetwork = "0.21"
 mime_guess = "2"
-password-hash = { version = "0.5", features = ["getrandom"] }
+password-hash = { version = "0.6", features = ["getrandom"] }
 regex = "1"
 # Reads the password for `create-admin` without echoing it.
 rpassword = "7"
