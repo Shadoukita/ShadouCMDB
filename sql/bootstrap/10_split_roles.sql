@@ -10,7 +10,7 @@
 --
 -- Order:
 --   1. Install the new binary and run `shadoucmdb migrate` as before (as
---      shadoucmdb_app), so migrations 0007 to 0009 are applied.
+--      shadoucmdb_app), so migrations 0007 to 0010 are applied.
 --   2. Stop the server. Run this script as an administrator, connected to the
 --      ShadouCMDB database:
 --        psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
@@ -27,8 +27,9 @@ BEGIN;
 DO $$
 BEGIN
   IF to_regprocedure('cmdb.prune_audit_log(interval, text, boolean, text)') IS NULL
-     OR to_regclass('cmdb.areas') IS NULL THEN
-    RAISE EXCEPTION 'migrations 0007 to 0009 are not applied: run `shadoucmdb migrate` first';
+     OR to_regclass('cmdb.areas') IS NULL
+     OR to_regclass('cmdb.audit_log_chain_head') IS NULL THEN
+    RAISE EXCEPTION 'migrations 0007 to 0010 are not applied: run `shadoucmdb migrate` first';
   END IF;
 END;
 $$;
@@ -96,7 +97,7 @@ SELECT format('GRANT CONNECT ON DATABASE %I TO shadoucmdb_app, shadoucmdb_mainte
 -- New areas are new schemas, created by the API.
 SELECT format('GRANT CREATE ON DATABASE %I TO shadoucmdb_app', current_database()) \gexec
 
--- Same grants as migrations 0007 and 0008 make on a fresh three-role install.
+-- Same grants as migrations 0007, 0008 and 0010 make on a fresh three-role install.
 GRANT USAGE ON SCHEMA cmdb TO shadoucmdb_app, shadoucmdb_maintenance;
 GRANT EXECUTE ON FUNCTION cmdb.prune_audit_log(interval, text, boolean, text) TO shadoucmdb_maintenance;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA cmdb TO shadoucmdb_app;
@@ -105,6 +106,8 @@ REVOKE UPDATE, DELETE, TRUNCATE ON cmdb.audit_log, cmdb.schema_changes FROM shad
 GRANT REFERENCES ON cmdb.configuration_items, cmdb.lookup_list_values TO shadoucmdb_app;
 GRANT SELECT ON public._sqlx_migrations TO shadoucmdb_app;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._sqlx_migrations FROM shadoucmdb_app;
+-- Only the audit_log trigger moves the hash-chain head (migration 0010).
+REVOKE ALL ON cmdb.audit_log_chain_head FROM shadoucmdb_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE shadoucmdb_owner IN SCHEMA cmdb
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO shadoucmdb_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE shadoucmdb_owner IN SCHEMA cmdb

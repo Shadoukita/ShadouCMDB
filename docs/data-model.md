@@ -227,7 +227,7 @@ for the proxy it assumes. Nothing alerts on these rows yet. With `AUDIT_CAPTURE_
 ### Tamper evidence
 
 `audit_log` rejects `UPDATE`, `DELETE` and `TRUNCATE` (triggers), and every row is hash-chained
-(migration 0007). A `BEFORE INSERT` trigger sets `chain_seq` (1, 2, 3, … in commit order),
+(migration 0008). A `BEFORE INSERT` trigger sets `chain_seq` (1, 2, 3, … in commit order),
 `prev_hash` (the previous row's `row_hash`; 32 zero bytes for the first) and
 
 ```
@@ -241,7 +241,7 @@ whatever the inserting statement supplied. Inserts serialise on the one row of
 longer matches their hash (`altered`), broken links (`relinked`), missing `chain_seq` values (`gap`) and a
 deleted tail (`tail`). A superuser can still rewrite the whole chain consistently; the defence against that
 is the off-host copy: `AUDIT_EXPORT` sends every row with its `rowHash` to a SIEM, and `audit-verify`
-prints the chain head to compare with it. Rows that existed before migration 0007 were chained in `id`
+prints the chain head to compare with it. Rows that existed before migration 0008 were chained in `id`
 order when it ran.
 
 ## Retention and personal data

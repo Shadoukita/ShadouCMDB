@@ -63,6 +63,16 @@ CREATE TABLE audit_log_chain_head (
 --> statement-breakpoint
 REVOKE ALL ON audit_log_chain_head FROM PUBLIC;
 --> statement-breakpoint
+-- Migration 0007's default privileges give the API role DML on new tables; it
+-- must not move the chain head, which only the trigger below writes.
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_app') AND current_user <> 'shadoucmdb_app' THEN
+    REVOKE ALL ON audit_log_chain_head FROM shadoucmdb_app;
+  END IF;
+END;
+$$;
+--> statement-breakpoint
 
 ALTER TABLE audit_log ADD COLUMN chain_seq bigint, ADD COLUMN prev_hash bytea, ADD COLUMN row_hash bytea;
 --> statement-breakpoint
