@@ -389,15 +389,19 @@ pub struct EdgeRecord {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
-/// Delete every edge of these CIs, soft-deleted ones included (type purge);
-/// returns the removed edges for auditing.
-pub async fn delete_edges_of(conn: &mut PgConnection, ci_ids: &[Uuid]) -> sqlx::Result<Vec<EdgeRecord>> {
+/// Delete up to `limit` edges of these CIs, soft-deleted ones included (type
+/// purge); returns the removed edges for auditing. Call until it returns fewer
+/// than `limit`, so a large type never returns all its edges in one statement.
+pub async fn delete_edges_of(conn: &mut PgConnection, ci_ids: &[Uuid], limit: i64) -> sqlx::Result<Vec<EdgeRecord>> {
     sqlx::query_as!(
         EdgeRecord,
         r#"DELETE FROM ci_relationships
-           WHERE source_ci_id = ANY($1) OR target_ci_id = ANY($1)
+           WHERE id IN (SELECT id FROM ci_relationships
+                        WHERE source_ci_id = ANY($1) OR target_ci_id = ANY($1)
+                        LIMIT $2)
            RETURNING id, relationship_type_id, source_ci_id, target_ci_id, notes, created_at, updated_at, deleted_at"#,
-        ci_ids
+        ci_ids,
+        limit
     )
     .fetch_all(conn)
     .await

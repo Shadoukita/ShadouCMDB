@@ -497,18 +497,26 @@ pub async fn purge_class_in(
             .collect();
         crud::write_audit(conn, ctx, entries).await?;
     }
-    let edges = items_data::delete_edges_of(conn, &items).await?;
-    let entries = edges
-        .iter()
-        .map(|e| AuditEntry {
-            action: AuditAction::Delete,
-            entity_type: "ci_relationships",
-            entity_id: e.id,
-            old_value: Some(crud::json(e)),
-            new_value: None,
-        })
-        .collect();
-    crud::write_audit(conn, ctx, entries).await?;
+    let mut edge_count = 0;
+    loop {
+        let edges = items_data::delete_edges_of(conn, &items, crud::AUDIT_BATCH as i64).await?;
+        edge_count += edges.len();
+        let done = edges.len() < crud::AUDIT_BATCH;
+        let entries = edges
+            .iter()
+            .map(|e| AuditEntry {
+                action: AuditAction::Delete,
+                entity_type: "ci_relationships",
+                entity_id: e.id,
+                old_value: Some(crud::json(e)),
+                new_value: None,
+            })
+            .collect();
+        crud::write_audit(conn, ctx, entries).await?;
+        if done {
+            break;
+        }
+    }
     // Type rows first, so that references between these CIs are gone before
     // their registry rows are deleted (the foreign keys check at statement end).
     for c in model.lineage(id) {
@@ -537,7 +545,7 @@ pub async fn purge_class_in(
         .await?;
     sqlx::query("DELETE FROM cmdb.ci_attribute_definitions WHERE class_id = $1").bind(id).execute(&mut *conn).await?;
     crud::delete_row(conn, CiClasses::TABLE, id).await?;
-    let summary = format!("Purge type {} ({} CIs, {} relationships deleted)", row.table_name, items.len(), edges.len());
+    let summary = format!("Purge type {} ({} CIs, {} relationships deleted)", row.table_name, items.len(), edge_count);
     let purge = Purge { tables: vec![table], ..Purge::default() };
     let parent_scope = row.parent_id.map(|p| vec![p]).unwrap_or_default();
     let change = engine::apply(conn, ctx, &summary, Scope::Classes(parent_scope), purge).await?;
