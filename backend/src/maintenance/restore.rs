@@ -1,7 +1,9 @@
 //! `shadoucmdb restore`: checks a backup completely, then loads it in a single
 //! transaction. The schema is rebuilt by this binary's migrations up to the
-//! level the backup was taken at, the rows go in, and any newer migrations run
-//! on top, so a backup from an older release restores into a newer one.
+//! level the backup was taken at, the rows go in (system tables first, then
+//! the tables of the types, built from the restored data model), and any newer
+//! migrations run on top, so a backup from an older release restores into a
+//! newer one.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -12,8 +14,8 @@ use clap::Args;
 use sqlx::Connection;
 use sqlx::postgres::PgConnection;
 
-use super::archive::{self, Header, Reader};
-use super::{EXCLUDED_TABLES, app_tables, ident, stored_columns};
+use super::archive::{self, Header, Reader, TableEntry};
+use super::{EXCLUDED_TABLES, TYPE_TABLES_MIGRATION, Table, app_tables, ident, stored_columns};
 use crate::config::DatabaseConfig;
 use crate::db::MIGRATOR;
 
@@ -129,6 +131,10 @@ pub fn check_compatible(header: &Header) -> anyhow::Result<()> {
 /// Loads `source` (already checked with [`archive::verify`]) into the
 /// connected database in one transaction; `wipe` drops the existing
 /// ShadouCMDB objects first, `commit = false` rolls everything back.
+///
+/// The system tables are rebuilt by the migrations up to the backup's level
+/// and loaded first; the tables of the types are then built from the restored
+/// data model by the DDL engine, checked against the backup and loaded.
 pub async fn restore<R: Read>(
     conn: &mut PgConnection,
     source: R,
@@ -138,6 +144,15 @@ pub async fn restore<R: Read>(
 ) -> anyhow::Result<Report> {
     check_compatible(header)?;
     let level = header.migration_level().context("backup has no migrations")?;
+    // The writer puts every system table before the first type table; loading relies on it.
+    let split = header.tables.iter().position(|t| t.table().is_area()).unwrap_or(header.tables.len());
+    let (system, types) = header.tables.split_at(split);
+    if types.iter().any(|t| !t.table().is_area()) {
+        bail!("backup is damaged: the system tables must come before the tables of the types");
+    }
+    if level < TYPE_TABLES_MIGRATION && !types.is_empty() {
+        bail!("the backup has tables of types, which migration {level} does not have");
+    }
     super::session_settings(conn).await?;
     let mut tx = conn.begin().await?;
 
@@ -148,27 +163,8 @@ pub async fn restore<R: Read>(
     MIGRATOR.run_to(level, &mut *tx).await.context("rebuilding the schema of the backup failed")?;
 
     // The schema at that level must have exactly the backup's tables and columns.
-    let tables = app_tables(&mut tx).await?;
-    let backed_up: Vec<&str> = header.tables.iter().map(|t| t.name.as_str()).collect();
-    for t in &tables {
-        if !backed_up.contains(&t.as_str()) && !EXCLUDED_TABLES.contains(&t.as_str()) {
-            bail!("table {t} exists at migration {level} but is not in the backup");
-        }
-    }
-    for t in &header.tables {
-        if !tables.contains(&t.name) {
-            bail!("the backup has table {} which migration {level} does not create", t.name);
-        }
-        let columns = stored_columns(&mut tx, &t.name).await?;
-        if columns != t.columns {
-            bail!(
-                "columns of {} differ between the backup ({}) and migration {level} ({})",
-                t.name,
-                t.columns.join(", "),
-                columns.join(", ")
-            );
-        }
-    }
+    let tables: Vec<Table> = app_tables(&mut tx).await?.into_iter().filter(|t| !t.is_area()).collect();
+    same_tables(&mut tx, &tables, system, &format!("migration {level}")).await?;
 
     // Migrations can leave deferred checks queued (0005 seeds ui_settings under a
     // deferred foreign key), and ALTER TABLE refuses tables with pending events:
@@ -179,29 +175,181 @@ pub async fn restore<R: Read>(
     // the data (which re-checks every reference), and the application's own
     // triggers are off, so rows go in exactly as they were backed up and no
     // audit entries or updated_at stamps are invented.
-    let foreign_keys: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT quote_ident(cl.relname), quote_ident(co.conname), pg_get_constraintdef(co.oid)
-         FROM pg_constraint co JOIN pg_class cl ON cl.oid = co.conrelid
-         WHERE co.contype = 'f' AND cl.relnamespace = current_schema()::regnamespace
-         ORDER BY cl.relname, co.conname",
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-    for (table, name, _) in &foreign_keys {
-        exec(&mut tx, format!("ALTER TABLE {table} DROP CONSTRAINT {name}")).await?;
-    }
+    let mut foreign_keys = drop_foreign_keys(&mut tx, &tables).await?;
     for t in &tables {
-        exec(&mut tx, format!("ALTER TABLE {} DISABLE TRIGGER USER", ident(t))).await?;
+        exec(&mut tx, format!("ALTER TABLE {} DISABLE TRIGGER USER", t.sql())).await?;
         // Rows the migrations seeded (built-in profile, default settings) are replaced by the backup's.
-        exec(&mut tx, format!("DELETE FROM {}", ident(t))).await?;
+        exec(&mut tx, format!("DELETE FROM {}", t.sql())).await?;
+    }
+    let mut reader = Reader::new(source)?;
+    load(&mut tx, &mut reader, system).await?;
+    let mut all_tables = tables;
+
+    if level >= TYPE_TABLES_MIGRATION {
+        // The areas, types and fields are restored: build their schemas and tables.
+        build_type_tables(&mut tx).await.context("building the tables of the types failed")?;
+        let tables: Vec<Table> = app_tables(&mut tx).await?.into_iter().filter(Table::is_area).collect();
+        same_tables(&mut tx, &tables, types, "the restored data model").await?;
+        foreign_keys.extend(drop_foreign_keys(&mut tx, &tables).await?);
+        for t in &tables {
+            exec(&mut tx, format!("ALTER TABLE {} DISABLE TRIGGER USER", t.sql())).await?;
+            // A required field may still lack values on older assets (the engine
+            // then left it nullable); the engine sets NOT NULL again after the load
+            // wherever every row has a value.
+            let not_null: Vec<String> = sqlx::query_scalar(
+                "SELECT a.attname::text FROM pg_attribute a
+                 WHERE a.attrelid = to_regclass(format('%I.%I', $1::text, $2::text))
+                   AND a.attnum > 0 AND NOT a.attisdropped AND a.attnotnull
+                   AND NOT EXISTS (SELECT 1 FROM pg_index i
+                                   WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY (i.indkey))",
+            )
+            .bind(&t.schema)
+            .bind(&t.name)
+            .fetch_all(&mut *tx)
+            .await?;
+            for c in not_null {
+                exec(&mut tx, format!("ALTER TABLE {} ALTER COLUMN {} DROP NOT NULL", t.sql(), ident(&c))).await?;
+            }
+        }
+        load(&mut tx, &mut reader, types).await?;
+        all_tables.extend(tables);
+    }
+    // The file is read a second time here; it must still be the one that was checked.
+    reader.finish()?;
+
+    for s in &header.sequences {
+        let exists: bool = sqlx::query_scalar("SELECT to_regclass(format('%I.%I', $1::text, $2::text)) IS NOT NULL")
+            .bind(&s.schema)
+            .bind(&s.name)
+            .fetch_one(&mut *tx)
+            .await?;
+        if !exists {
+            bail!("the backup has sequence {}.{} which the restored schema does not have", s.schema, s.name);
+        }
+        match s.last_value {
+            Some(v) => {
+                sqlx::query("SELECT setval(to_regclass(format('%I.%I', $1::text, $2::text)), $3, true)")
+                    .bind(&s.schema)
+                    .bind(&s.name)
+                    .bind(v)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            None => exec(&mut tx, format!("ALTER SEQUENCE {}.{} RESTART", ident(&s.schema), ident(&s.name))).await?,
+        }
     }
 
-    let mut reader = Reader::new(source)?;
+    for (table, name, definition) in &foreign_keys {
+        exec(&mut tx, format!("ALTER TABLE {} ADD CONSTRAINT {} {definition}", table.sql(), ident(name)))
+            .await
+            .with_context(|| format!("restored rows break the reference {name} on {table}"))?;
+    }
+    for t in &all_tables {
+        exec(&mut tx, format!("ALTER TABLE {} ENABLE TRIGGER USER", t.sql())).await?;
+    }
+
     for t in &header.tables {
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {}", t.table().sql())))
+            .fetch_one(&mut *tx)
+            .await?;
+        if n as u64 != t.rows {
+            bail!("table {} has {n} rows after the restore, the backup has {}", t.table(), t.rows);
+        }
+    }
+
+    // Back to checking deferrable constraints at commit, which is never stricter
+    // than their declared mode, so newer migrations run as they would anywhere else.
+    exec(&mut tx, "SET CONSTRAINTS ALL DEFERRED".into()).await?;
+    let applied = "SELECT count(*) FROM public._sqlx_migrations WHERE success";
+    let before: i64 = sqlx::query_scalar(applied).fetch_one(&mut *tx).await?;
+    MIGRATOR.run(&mut *tx).await.context("applying newer migrations to the restored data failed")?;
+    let after: i64 = sqlx::query_scalar(applied).fetch_one(&mut *tx).await?;
+    // As `shadoucmdb migrate` does afterwards: NOT NULL where every asset has a
+    // value again, reporting views, and anything newer migrations expect.
+    build_type_tables(&mut tx).await.context("reconciling the data model after the restore failed")?;
+
+    let builtin: i64 = sqlx::query_scalar("SELECT count(*) FROM cmdb.permission_profiles WHERE is_builtin")
+        .fetch_one(&mut *tx)
+        .await?;
+    if builtin != 1 {
+        bail!("the restored data has no built-in Administrator profile");
+    }
+    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM cmdb.users").fetch_one(&mut *tx).await?;
+
+    if commit {
+        tx.commit().await?;
+    } else {
+        tx.rollback().await?;
+    }
+    Ok(Report { rows: header.total_rows(), users, migrations_applied_after: (after - before) as usize })
+}
+
+/// `tables` (what the database has) must be exactly the backup's `entries`
+/// (plus the excluded ones), with the same columns. `made_by` names what built them.
+async fn same_tables(
+    conn: &mut PgConnection,
+    tables: &[Table],
+    entries: &[TableEntry],
+    made_by: &str,
+) -> anyhow::Result<()> {
+    for t in tables {
+        let excluded = !t.is_area() && EXCLUDED_TABLES.contains(&t.name.as_str());
+        if !excluded && !entries.iter().any(|e| e.table() == *t) {
+            bail!("table {t} exists after {made_by} but is not in the backup");
+        }
+    }
+    for e in entries {
+        let t = e.table();
+        if !tables.contains(&t) {
+            bail!("the backup has table {t} which {made_by} does not create");
+        }
+        let mut columns = stored_columns(&mut *conn, &t).await?;
+        if t.is_area() {
+            columns.sort();
+        }
+        if columns != e.columns {
+            bail!(
+                "columns of {t} differ between the backup ({}) and {made_by} ({})",
+                e.columns.join(", "),
+                columns.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Drops the foreign keys of `tables` and returns them for re-creation.
+async fn drop_foreign_keys(conn: &mut PgConnection, tables: &[Table]) -> anyhow::Result<Vec<(Table, String, String)>> {
+    let schemas: Vec<&str> = tables.iter().map(|t| t.schema.as_str()).collect();
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT n.nspname::text, cl.relname::text, co.conname::text, pg_get_constraintdef(co.oid)
+         FROM pg_constraint co JOIN pg_class cl ON cl.oid = co.conrelid JOIN pg_namespace n ON n.oid = cl.relnamespace
+         WHERE co.contype = 'f' AND n.nspname = ANY($1)
+         ORDER BY 1, 2, 3",
+    )
+    .bind(&schemas)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut out = Vec::new();
+    for (schema, table, name, definition) in rows {
+        let table = Table { schema, name: table };
+        if !tables.contains(&table) {
+            continue;
+        }
+        exec(conn, format!("ALTER TABLE {} DROP CONSTRAINT {}", table.sql(), ident(&name))).await?;
+        out.push((table, name, definition));
+    }
+    Ok(out)
+}
+
+/// Inserts the rows of `entries`, which are next in the file.
+async fn load<R: Read>(conn: &mut PgConnection, reader: &mut Reader<R>, entries: &[TableEntry]) -> anyhow::Result<()> {
+    for t in entries {
         reader.section(t)?;
+        let table = t.table();
         let insert = format!(
             "INSERT INTO {table} ({cols}) OVERRIDING SYSTEM VALUE SELECT {cols} FROM json_populate_recordset(NULL::{table}, $1::json)",
-            table = ident(&t.name),
+            table = table.sql(),
             cols = t.columns.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ")
         );
         let mut batch = String::from("[");
@@ -217,76 +365,27 @@ pub async fn restore<R: Read>(
                 batch.push(']');
                 sqlx::query(sqlx::AssertSqlSafe(insert.clone()))
                     .bind(&batch)
-                    .execute(&mut *tx)
+                    .execute(&mut *conn)
                     .await
-                    .with_context(|| format!("loading rows into {} failed", t.name))?;
+                    .with_context(|| format!("loading rows into {table} failed"))?;
                 batch = String::from("[");
                 in_batch = 0;
             }
         }
     }
-    // The file is read a second time here; it must still be the one that was checked.
-    reader.finish()?;
+    Ok(())
+}
 
-    for s in &header.sequences {
-        let exists: bool = sqlx::query_scalar("SELECT to_regclass(quote_ident($1)) IS NOT NULL")
-            .bind(&s.name)
-            .fetch_one(&mut *tx)
-            .await?;
-        if !exists {
-            bail!("the backup has sequence {} which migration {level} does not create", s.name);
-        }
-        match s.last_value {
-            Some(v) => {
-                sqlx::query("SELECT setval(to_regclass(quote_ident($1)), $2, true)")
-                    .bind(&s.name)
-                    .bind(v)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            None => exec(&mut tx, format!("ALTER SEQUENCE {} RESTART", ident(&s.name))).await?,
-        }
+/// The area schemas and type tables the restored data model describes, built
+/// by the DDL engine as the API role would (three-role install), without a
+/// schema change entry: the backup's history already records them.
+async fn build_type_tables(conn: &mut PgConnection) -> anyhow::Result<()> {
+    let switched = crate::db::act_as_api_role(&mut *conn).await?;
+    crate::schema::rebuild_unrecorded(&mut *conn).await.map_err(|e| anyhow::anyhow!("{}", e.message))?;
+    if switched {
+        exec(conn, "RESET ROLE".into()).await?;
     }
-
-    for (table, name, definition) in &foreign_keys {
-        exec(&mut tx, format!("ALTER TABLE {table} ADD CONSTRAINT {name} {definition}"))
-            .await
-            .with_context(|| format!("restored rows break the reference {name} on {table}"))?;
-    }
-    for t in &tables {
-        exec(&mut tx, format!("ALTER TABLE {} ENABLE TRIGGER USER", ident(t))).await?;
-    }
-
-    for t in &header.tables {
-        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {}", ident(&t.name))))
-            .fetch_one(&mut *tx)
-            .await?;
-        if n as u64 != t.rows {
-            bail!("table {} has {n} rows after the restore, the backup has {}", t.name, t.rows);
-        }
-    }
-
-    // Back to checking deferrable constraints at commit, which is never stricter
-    // than their declared mode, so newer migrations run as they would anywhere else.
-    exec(&mut tx, "SET CONSTRAINTS ALL DEFERRED".into()).await?;
-    let applied = "SELECT count(*) FROM _sqlx_migrations WHERE success";
-    let before: i64 = sqlx::query_scalar(applied).fetch_one(&mut *tx).await?;
-    MIGRATOR.run(&mut *tx).await.context("applying newer migrations to the restored data failed")?;
-    let after: i64 = sqlx::query_scalar(applied).fetch_one(&mut *tx).await?;
-
-    let builtin: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM permission_profiles WHERE is_builtin").fetch_one(&mut *tx).await?;
-    if builtin != 1 {
-        bail!("the restored data has no built-in Administrator profile");
-    }
-    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(&mut *tx).await?;
-
-    if commit {
-        tx.commit().await?;
-    } else {
-        tx.rollback().await?;
-    }
-    Ok(Report { rows: header.total_rows(), users, migrations_applied_after: (after - before) as usize })
+    Ok(())
 }
 
 async fn exec(conn: &mut PgConnection, sql: String) -> anyhow::Result<()> {

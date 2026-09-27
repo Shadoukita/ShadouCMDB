@@ -164,18 +164,7 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
     // anything missing (after migration 0009, or a new reporting role) in line.
     let ctx = crate::api::context::RequestContext::system("migrate", "migrate");
     let mut tx = pool.begin().await?;
-    // Three-role install: build them as the API role, which owns the area schemas
-    // and alters them at run time (migration 0008 checked the membership).
-    let as_api_role: bool = sqlx::query_scalar(
-        "SELECT current_user <> 'shadoucmdb_app' AND pg_has_role(current_user, 'shadoucmdb_app', 'MEMBER')
-         FROM pg_roles WHERE rolname = 'shadoucmdb_app'",
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .unwrap_or(false);
-    if as_api_role {
-        sqlx::query("SET LOCAL ROLE shadoucmdb_app").execute(&mut *tx).await?;
-    }
+    act_as_api_role(&mut tx).await?;
     let change = crate::schema::reconcile(&mut tx, &ctx, "Reconcile after migrate")
         .await
         .map_err(|e| anyhow::anyhow!("reconciling the data model failed: {}", e.message))?;
@@ -195,6 +184,24 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
         if pending.is_empty() && !reconciled { " (nothing to do)" } else { "" }
     );
     Ok(())
+}
+
+/// Three-role install: switches the transaction to the API role, which owns
+/// the area schemas and alters them at run time (migration 0008 checked the
+/// membership), so what is built now belongs to it. Returns whether it switched
+/// (`RESET ROLE` switches back).
+pub async fn act_as_api_role(conn: &mut sqlx::PgConnection) -> sqlx::Result<bool> {
+    let switch: bool = sqlx::query_scalar(
+        "SELECT current_user <> 'shadoucmdb_app' AND pg_has_role(current_user, 'shadoucmdb_app', 'MEMBER')
+         FROM pg_roles WHERE rolname = 'shadoucmdb_app'",
+    )
+    .fetch_optional(&mut *conn)
+    .await?
+    .unwrap_or(false);
+    if switch {
+        sqlx::query("SET LOCAL ROLE shadoucmdb_app").execute(&mut *conn).await?;
+    }
+    Ok(switch)
 }
 
 /// One-time hand-over from the Node/Drizzle runner: checks that every row in

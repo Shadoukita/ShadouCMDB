@@ -831,6 +831,21 @@ pub async fn reconcile(
     apply_with(conn, ctx, summary, Scope::All, Purge::default(), true).await
 }
 
+/// Builds everything the metadata describes (like [`reconcile`], lenient about
+/// NOT NULL) without recording a schema change. For `shadoucmdb restore`: the
+/// history of how the tables came to be is part of the restored rows. Returns
+/// the number of statements run.
+pub async fn rebuild_unrecorded(conn: &mut PgConnection) -> Result<usize, AppError> {
+    lock(conn).await?;
+    let model = Model::load(conn).await?;
+    let plan = build(conn, &model, &Scope::All, &Purge::default(), true).await?;
+    let statements = plan.statements();
+    for sql in &statements {
+        execute(conn, sql).await?;
+    }
+    Ok(statements.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

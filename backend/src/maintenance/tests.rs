@@ -3,16 +3,18 @@
 use sqlx::postgres::PgConnection;
 
 use super::archive::{self, Header};
-use super::{app_object_count, app_tables, backup, ident, reset, restore, stored_columns};
+use super::{Table, app_object_count, app_tables, backup, ident, reset, restore, stored_columns};
 use crate::db::{MIGRATOR, scratch};
 
 /// Every stored value of a table, order-independent.
-async fn fingerprint(c: &mut PgConnection, table: &str) -> String {
-    let cols = stored_columns(c, table).await.unwrap().iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ");
+async fn fingerprint(c: &mut PgConnection, table: &Table) -> String {
+    let mut cols = stored_columns(c, table).await.unwrap();
+    cols.sort();
+    let cols = cols.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ");
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT coalesce(md5(string_agg(r, E'\\n' ORDER BY r)), '') || ':' || count(*)
          FROM (SELECT row_to_json(x)::text AS r FROM (SELECT {cols} FROM {}) x) y",
-        ident(table)
+        table.sql()
     )))
     .fetch_one(c)
     .await
@@ -22,9 +24,9 @@ async fn fingerprint(c: &mut PgConnection, table: &str) -> String {
 async fn fingerprints(c: &mut PgConnection) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for t in app_tables(c).await.unwrap() {
-        if t != "sessions" {
+        if t.to_string() != "cmdb.sessions" {
             let f = fingerprint(c, &t).await;
-            out.push((t, f));
+            out.push((t.to_string(), f));
         }
     }
     out
@@ -70,10 +72,42 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     let mut ca = a.pool.acquire().await.unwrap();
     let mut cb = b.pool.acquire().await.unwrap();
 
+    // A required field that older assets still lack a value for: the engine left
+    // it nullable (reconcile is lenient), so the restore must too.
+    let required: Vec<(String, String)> = sqlx::query_as(
+        "SELECT format('%I.%I', n.nspname, c.relname), quote_ident(a.attname)
+         FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'infrastruktur' AND c.relkind = 'r' AND a.attnum > 0 AND a.attnotnull AND a.attname <> 'id'
+         ORDER BY 1, 2",
+    )
+    .fetch_all(&mut *ca)
+    .await
+    .unwrap();
+    let mut emptied = 0;
+    for (table, column) in &required {
+        let sql = format!("ALTER TABLE {table} ALTER COLUMN {column} DROP NOT NULL");
+        sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&mut *ca).await.unwrap();
+        let sql = format!("UPDATE {table} SET {column} = NULL WHERE id = (SELECT id FROM {table} LIMIT 1)");
+        let done = sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&mut *ca).await.unwrap().rows_affected();
+        if done == 0 {
+            // No assets of this type: keep the column required.
+            let sql = format!("ALTER TABLE {table} ALTER COLUMN {column} SET NOT NULL");
+            sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&mut *ca).await.unwrap();
+        }
+        emptied += done;
+        if emptied > 0 {
+            break;
+        }
+    }
+    assert!(emptied > 0, "the demo data has a required field with values: {required:?}");
+
     let (buf, header) = take_backup(&mut ca).await;
     assert!(header.total_rows() > 20, "demo data is in the backup");
-    assert_eq!(header.excluded_tables, vec!["sessions".to_owned()]);
+    assert_eq!(header.excluded_tables, vec!["cmdb.sessions".to_owned()]);
     assert!(!header.tables.iter().any(|t| t.name == "sessions"));
+    // The values of the demo assets live in the tables of their types.
+    let server = header.tables.iter().find(|t| t.schema == "infrastruktur" && t.name == "server");
+    assert!(server.is_some_and(|t| t.rows > 0), "type tables are in the backup: {:?}", header.tables);
 
     // The target is a migrated install: it has to be replaced.
     let report = restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
@@ -84,7 +118,7 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     assert_eq!(sessions, 0, "sessions are never restored");
 
     // Sequences continue where the source was, and the triggers are back on.
-    let seq = "SELECT last_value FROM audit_log_id_seq";
+    let seq = "SELECT last_value FROM cmdb.audit_log_id_seq";
     let (sa, sb): (i64, i64) = (
         sqlx::query_scalar(seq).fetch_one(&mut *ca).await.unwrap(),
         sqlx::query_scalar(seq).fetch_one(&mut *cb).await.unwrap(),
@@ -96,6 +130,17 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     // A backup of the restored database is the same data.
     let (_, again) = take_backup(&mut cb).await;
     assert_eq!(again.tables, header.tables);
+
+    // The reporting views and NOT NULL columns are back as well, and no schema
+    // change was recorded that the source does not have.
+    let shape = "SELECT (SELECT count(*) FROM pg_views WHERE schemaname = 'infrastruktur'),
+                        (SELECT count(*) FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+                         WHERE c.relnamespace = 'infrastruktur'::regnamespace AND c.relkind = 'r'
+                           AND a.attnum > 0 AND a.attnotnull)";
+    let (va, na): (i64, i64) = sqlx::query_as(shape).fetch_one(&mut *ca).await.unwrap();
+    let (vb, nb): (i64, i64) = sqlx::query_as(shape).fetch_one(&mut *cb).await.unwrap();
+    assert!(va > 0);
+    assert_eq!((va, na), (vb, nb));
 
     drop((ca, cb));
     a.drop().await;
@@ -149,7 +194,7 @@ async fn a_backup_from_an_older_schema_is_upgraded_on_restore() {
     let mut cb = b.pool.acquire().await.unwrap();
     let report = restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
     assert_eq!(report.migrations_applied_after, 1);
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations").fetch_one(&mut *cb).await.unwrap();
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM public._sqlx_migrations").fetch_one(&mut *cb).await.unwrap();
     assert_eq!(n as usize, crate::db::expected_count());
 
     drop((ca, cb));
@@ -162,6 +207,11 @@ async fn factory_reset_returns_to_first_run_and_decommission_leaves_nothing() {
     let Some(a) = scratch::database("factory_reset").await else { return };
     populate(&a.pool).await;
     let mut c = a.pool.acquire().await.unwrap();
+    let areas: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_namespace WHERE nspname = 'infrastruktur'")
+        .fetch_one(&mut *c)
+        .await
+        .unwrap();
+    assert_eq!(areas, 1, "the template built its area schema");
 
     reset::factory_reset(&mut c).await.unwrap();
     let (users, cis, classes, audit): (i64, i64, i64, i64) = sqlx::query_as(
@@ -172,6 +222,11 @@ async fn factory_reset_returns_to_first_run_and_decommission_leaves_nothing() {
     .await
     .unwrap();
     assert_eq!((users, cis, classes, audit), (0, 0, 0, 0));
+    let leftovers: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_namespace WHERE nspname = 'infrastruktur'")
+        .fetch_one(&mut *c)
+        .await
+        .unwrap();
+    assert_eq!(leftovers, 0, "the area schemas are gone");
     drop(c);
     assert!(crate::modules::auth::setup_required(&a.pool).await.unwrap(), "setup is forced");
     crate::seed::seed_system_rows(&a.pool).await.unwrap();
@@ -179,6 +234,12 @@ async fn factory_reset_returns_to_first_run_and_decommission_leaves_nothing() {
     let mut c = a.pool.acquire().await.unwrap();
     reset::decommission(&mut c).await.unwrap();
     assert_eq!(app_object_count(&mut c).await.unwrap(), 0);
+    let schemas: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM pg_namespace WHERE nspname IN ('cmdb', 'infrastruktur')")
+            .fetch_one(&mut *c)
+            .await
+            .unwrap();
+    assert_eq!(schemas, 0);
     // The empty database can be installed again.
     MIGRATOR.run(&mut *c).await.unwrap();
     assert!(app_object_count(&mut c).await.unwrap() > 0);

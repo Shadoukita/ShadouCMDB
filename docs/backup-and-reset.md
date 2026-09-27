@@ -19,11 +19,15 @@ the database credentials can.
 
 ## What a backup contains
 
-- **Everything in the database:** CIs, attribute values, relationships, the data
-  model (classes, attributes, relationship types, lookup lists), locations,
-  owners, statuses, environments, users with their password hashes, permission
-  profiles, UI settings including the logo and favicon, and the full audit log.
-  The migration level is recorded as well.
+- **Everything in the database:** CIs, relationships, the data model (areas,
+  classes, attributes, relationship types, lookup lists) and its schema change
+  history, locations, owners, statuses, environments, users with their password
+  hashes, permission profiles, UI settings including the logo and favicon, and
+  the full audit log. These are the system tables in the `cmdb` schema.
+- **The attribute values:** the table of every type in its area's schema
+  (`infrastruktur.server`, one schema per area listed in `cmdb.areas`,
+  archived areas included).
+- **The migration level**, from `public._sqlx_migrations`.
 - **Not the sessions.** Restoring them would sign people back in with tokens from
   the past. After a restore, everyone signs in again.
 - **Not what lives outside the database:** the env file (database password,
@@ -36,8 +40,9 @@ the database credentials can.
 - All tables are read in one `REPEATABLE READ` snapshot. The backup is consistent
   even while the server keeps writing, so you don't need to stop it.
 - The file is gzip-compressed JSON Lines. It holds a header (migrations and
-  their checksums, tables, columns, row counts, sequences), one section per
-  table, and an end marker with the total row count and the SHA-256 of the
+  their checksums, tables with their schema, columns, row counts, sequences),
+  one section per table (system tables first, then the tables of the types),
+  and an end marker with the total row count and the SHA-256 of the
   whole content. `zcat FILE | head -1` shows the header.
 - `backup` writes to `FILE.partial`, reads it back, checks the SHA-256 and every
   row count, and only then renames it to `FILE`. A backup that stopped halfway
@@ -45,7 +50,10 @@ the database credentials can.
 - `restore` checks the whole file (SHA-256, structure, row counts) **before** it
   connects. It then checks that this binary knows every migration in the backup
   with identical SQL, and that the schema at that level has exactly the backup's
-  tables and columns. Foreign keys are re-created after the load, so every
+  system tables and columns. After the system rows are in, the area schemas and
+  type tables are built from the restored data model by the same engine that
+  builds them at run time, and checked against the backup's tables and columns
+  the same way. Foreign keys are re-created after the load, so every
   reference is checked again, and each table's row count is compared with the
   header. The file is hashed a second time while it is loaded. If anything
   fails, the transaction rolls back and the database is left as it was.
@@ -74,7 +82,7 @@ shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env backup --out /var/backups/s
 
 ```
 Backing up database "shadoucmdb" on 10.0.4.12:5432
-Wrote 209 rows from 22 tables at migration 6 (14605 bytes)
+Wrote 197 rows from 31 tables at migration 9 (19587 bytes)
 Verified: SHA-256 and row counts match
 Backup: cmdb-2026-09-26.jsonl.gz
 ```
@@ -150,9 +158,9 @@ ShadouCMDB release.
 
    ```
    Checking cmdb-2026-09-26.jsonl.gz ...
-   Backup of database "shadoucmdb" taken 2026-09-26 00:14:14 UTC by ShadouCMDB 0.1.0: 209 rows in 22 tables, migration 6
+   Backup of database "shadoucmdb" taken 2026-09-26 00:14:14 UTC by ShadouCMDB 0.1.0: 197 rows in 31 tables, migration 9
    File is intact (SHA-256 and row counts match) and fits this release
-   Restored 209 rows into database "shadoucmdb" on 10.0.4.12:5432
+   Restored 197 rows into database "shadoucmdb" on 10.0.4.12:5432
    1 user(s) restored; sessions are not part of a backup, so everyone signs in again
    ```
 
@@ -171,6 +179,11 @@ In Docker, add `-it` so the confirmation can be typed, or pass `--yes`:
   binary does not know"). Restore it with that release or a later one.
 - A backup whose migration SQL differs from this binary's (a modified build) is
   refused as well.
+- **Backup format 1** files (written by development builds before the tables of
+  the types were included) lack the attribute values and are refused. Take a new
+  backup.
+- The restore writes no schema change history entry for the tables it builds:
+  the restored `cmdb.schema_changes` already records how they came to be.
 
 ### Test your backups
 
@@ -181,7 +194,7 @@ database. Record the date and the result.
 ## Factory reset
 
 This returns an installation to the state of a fresh install. It deletes every
-CI, relationship, the data model, every user, the settings, the logo and the
+CI, relationship, the data model with every area schema and type table, every user, the settings, the logo and the
 audit log, then rebuilds the empty schema through the migrations. No user
 exists afterwards, so the web UI shows first-run setup again. `create-admin`
 works as well.
@@ -197,9 +210,10 @@ adds a new administrator and keeps everything else (see
 
 ## Decommissioning
 
-`decommission` deletes every ShadouCMDB object from the database: all tables and
-their rows, views, functions, sequences, the migration history and the old
-Node/Drizzle bookkeeping schema. Nothing is rebuilt. It then checks that nothing
+`decommission` deletes every ShadouCMDB object from the database: the area
+schemas with the type tables and reporting views, the `cmdb` schema with every
+system table and its rows, functions and sequences, the migration history
+(`public._sqlx_migrations`) and the old Node/Drizzle bookkeeping schema. Nothing is rebuilt. It then checks that nothing
 is left. The `pg_trgm` extension stays, because it may be shared and holds no data.
 
 ```sh
@@ -247,9 +261,16 @@ provider's media sanitisation, not on `DELETE`.
 
 ## Limits
 
-- The backup covers the database's current schema (normally `public`). Objects
-  that someone added to that schema by hand are dropped by `--replace`,
-  `factory-reset` and `decommission`. Keep the database dedicated to ShadouCMDB.
+- The backup covers the `cmdb` schema, every area schema listed in `cmdb.areas`
+  and everything in `public` that is not part of an extension (the migration
+  history). `--replace`, `factory-reset` and `decommission` drop those schemas
+  whole (`DROP SCHEMA ... CASCADE`) and every non-extension object in `public`,
+  so objects someone added there by hand go too. Keep the database dedicated to
+  ShadouCMDB.
+- A table someone created by hand in an area schema is backed up, but a restore
+  refuses the backup ("which the restored data model does not create"): only the
+  data model's own type tables can be rebuilt. Move such tables elsewhere before
+  taking the backup.
 - A `jsonb` value that is the JSON literal `null` is restored as SQL `NULL`.
   ShadouCMDB does not store such values.
 - Restore loads the rows in one transaction. On very large databases, make sure

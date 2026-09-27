@@ -23,8 +23,39 @@ use crate::config::DatabaseConfig;
 /// people back in with tokens from the past; after a restore everyone signs in again.
 pub const EXCLUDED_TABLES: &[&str] = &["sessions"];
 
-/// Where sqlx records applied migrations; part of the schema, not of the data.
-const MIGRATIONS_TABLE: &str = "_sqlx_migrations";
+/// Schemas of the application's own tables: `cmdb` since migration 0008,
+/// `public` before it (now only the migration history and pg_trgm). Every
+/// other schema ShadouCMDB owns is an area, listed in `cmdb.areas`.
+pub const SYSTEM_SCHEMAS: &[&str] = &["public", "cmdb"];
+
+/// The first migration that keeps attribute values in per-type tables in the
+/// area schemas. From here on those tables are part of a backup.
+pub const TYPE_TABLES_MIGRATION: i64 = 9;
+
+/// A table of the application: a system table or the table of a type.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Table {
+    pub schema: String,
+    pub name: String,
+}
+
+impl Table {
+    /// `"schema"."name"`
+    pub fn sql(&self) -> String {
+        format!("{}.{}", ident(&self.schema), ident(&self.name))
+    }
+
+    /// In an area schema (the table of a type), rather than a system table.
+    pub fn is_area(&self) -> bool {
+        !SYSTEM_SCHEMAS.contains(&self.schema.as_str())
+    }
+}
+
+impl std::fmt::Display for Table {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.schema, self.name)
+    }
+}
 
 #[derive(Debug, Args)]
 pub struct ConfirmArgs {
@@ -113,61 +144,117 @@ pub fn confirm(action: &str, database: &str, place: &str, yes: bool) -> anyhow::
     Ok(())
 }
 
-/// Base tables of the application schema, excluding extension members and the
-/// migration bookkeeping table, sorted by name.
-pub async fn app_tables(conn: &mut PgConnection) -> sqlx::Result<Vec<String>> {
+/// Schemas of the areas that exist in the database, from `cmdb.areas`.
+pub async fn area_schemas(conn: &mut PgConnection) -> sqlx::Result<Vec<String>> {
+    let has_areas: bool =
+        sqlx::query_scalar("SELECT to_regclass('cmdb.areas') IS NOT NULL").fetch_one(&mut *conn).await?;
+    if !has_areas {
+        return Ok(Vec::new());
+    }
     sqlx::query_scalar(
-        "SELECT c.relname::text FROM pg_class c
-         WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind = 'r' AND NOT c.relispartition
-           AND c.relname <> $1
-           AND NOT EXISTS (SELECT 1 FROM pg_depend d
-                           WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
-         ORDER BY c.relname",
+        "SELECT a.key FROM cmdb.areas a WHERE EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname = a.key)
+         ORDER BY a.key",
     )
-    .bind(MIGRATIONS_TABLE)
     .fetch_all(conn)
     .await
+}
+
+/// The system schemas followed by the area schemas.
+pub async fn app_schemas(conn: &mut PgConnection) -> sqlx::Result<Vec<String>> {
+    let mut schemas: Vec<String> = SYSTEM_SCHEMAS.iter().map(|s| (*s).to_owned()).collect();
+    schemas.extend(area_schemas(conn).await?);
+    Ok(schemas)
+}
+
+/// Base tables of the application, excluding extension members and the
+/// migration bookkeeping table: system tables first, then the tables of the
+/// types, each sorted by schema and name.
+pub async fn app_tables(conn: &mut PgConnection) -> sqlx::Result<Vec<Table>> {
+    let schemas = app_schemas(conn).await?;
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT n.nspname::text, c.relname::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = ANY($1) AND c.relkind = 'r' AND NOT c.relispartition
+           AND NOT (n.nspname = 'public' AND c.relname = '_sqlx_migrations')
+           AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                           WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')",
+    )
+    .bind(&schemas)
+    .fetch_all(conn)
+    .await?;
+    let mut tables: Vec<Table> = rows.into_iter().map(|(schema, name)| Table { schema, name }).collect();
+    tables.sort_by(|a, b| (a.is_area(), a).cmp(&(b.is_area(), b)));
+    Ok(tables)
 }
 
 /// Stored (non-generated) columns of a table, in table order.
-pub async fn stored_columns(conn: &mut PgConnection, table: &str) -> sqlx::Result<Vec<String>> {
+pub async fn stored_columns(conn: &mut PgConnection, table: &Table) -> sqlx::Result<Vec<String>> {
     sqlx::query_scalar(
         "SELECT attname::text FROM pg_attribute
-         WHERE attrelid = to_regclass(quote_ident($1)) AND attnum > 0 AND NOT attisdropped AND attgenerated = ''
+         WHERE attrelid = to_regclass(format('%I.%I', $1::text, $2::text))
+           AND attnum > 0 AND NOT attisdropped AND attgenerated = ''
          ORDER BY attnum",
     )
-    .bind(table)
+    .bind(&table.schema)
+    .bind(&table.name)
     .fetch_all(conn)
     .await
 }
 
-/// Objects in the application schema that are not part of an extension. Zero
-/// means the database is empty as far as ShadouCMDB is concerned.
-pub async fn app_object_count(conn: &mut PgConnection) -> sqlx::Result<i64> {
+/// Relations, functions and types in `schemas` that are not part of an extension.
+async fn object_count(conn: &mut PgConnection, schemas: &[String]) -> sqlx::Result<i64> {
     sqlx::query_scalar(
-        "SELECT (SELECT count(*) FROM pg_class c
-                 WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+        "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+                   AND NOT (c.relkind = 'r' AND c.relispartition)
                    AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass
-                                   AND d.objid = c.oid AND d.deptype = 'e'))
-              + (SELECT count(*) FROM pg_proc p
-                 WHERE p.pronamespace = current_schema()::regnamespace
+                                   AND d.objid = c.oid AND d.deptype IN ('e', 'a', 'i')))
+              + (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = ANY($1)
                    AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass
-                                   AND d.objid = p.oid AND d.deptype = 'e'))
-              + (SELECT count(*) FROM pg_namespace WHERE nspname = 'drizzle')",
+                                   AND d.objid = p.oid AND d.deptype = 'e'))",
     )
+    .bind(schemas)
     .fetch_one(conn)
     .await
 }
 
-/// Drops every ShadouCMDB object: all tables (with their rows, indexes,
-/// triggers and sequences), views, functions and types in the application
-/// schema, the migration history, and the old Node/Drizzle bookkeeping schema.
+/// Objects ShadouCMDB left in the database: everything in `public` that is not
+/// part of an extension (the migration history, or the tables of an install
+/// from before migration 0008), plus the `cmdb`, area and old Node/Drizzle
+/// schemas themselves. Zero means the database is empty as far as ShadouCMDB
+/// is concerned.
+pub async fn app_object_count(conn: &mut PgConnection) -> sqlx::Result<i64> {
+    let mut schemas = vec!["cmdb".to_owned(), "drizzle".to_owned()];
+    schemas.extend(area_schemas(conn).await?);
+    let in_public = object_count(conn, &["public".to_owned()]).await?;
+    let own_schemas: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_namespace WHERE nspname = ANY($1)")
+        .bind(&schemas)
+        .fetch_one(conn)
+        .await?;
+    Ok(in_public + own_schemas)
+}
+
+/// Drops every ShadouCMDB object: the area schemas (the tables of the types
+/// and their reporting views), the `cmdb` schema (all system tables with their
+/// rows, indexes, triggers and sequences, functions and types), everything
+/// else in `public` (the migration history, and the tables of an install from
+/// before migration 0008) and the old Node/Drizzle bookkeeping schema.
 /// Extensions (pg_trgm) stay: they may be shared and are harmless.
 /// Returns the number of objects dropped. Run inside a transaction.
 pub async fn drop_app_objects(conn: &mut PgConnection) -> anyhow::Result<usize> {
+    let areas = area_schemas(&mut *conn).await?;
+    let mut owned = areas.clone();
+    owned.push("cmdb".into());
+    let in_schemas = object_count(&mut *conn, &owned).await?;
+    let mut statements: Vec<String> = Vec::new();
+    // Areas first: their tables reference cmdb.configuration_items.
+    for schema in areas.iter().map(String::as_str).chain(["cmdb", "drizzle"]) {
+        statements.push(format!("DROP SCHEMA IF EXISTS {} CASCADE", ident(schema)));
+    }
+
     let relations: Vec<(String, String)> = sqlx::query_as(
         "SELECT c.relkind::text, quote_ident(c.relname) FROM pg_class c
-         WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+         WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
            AND NOT (c.relkind = 'r' AND c.relispartition)
            -- extension members, and sequences owned by a column (they go with their table)
            AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
@@ -178,7 +265,7 @@ pub async fn drop_app_objects(conn: &mut PgConnection) -> anyhow::Result<usize> 
     .await?;
     let functions: Vec<(String, String)> = sqlx::query_as(
         "SELECT p.prokind::text, p.oid::regprocedure::text FROM pg_proc p
-         WHERE p.pronamespace = current_schema()::regnamespace
+         WHERE p.pronamespace = 'public'::regnamespace
            AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
                            AND d.deptype = 'e')",
     )
@@ -186,7 +273,7 @@ pub async fn drop_app_objects(conn: &mut PgConnection) -> anyhow::Result<usize> 
     .await?;
     let types: Vec<(String, String)> = sqlx::query_as(
         "SELECT t.typtype::text, format_type(t.oid, NULL) FROM pg_type t
-         WHERE t.typnamespace = current_schema()::regnamespace AND t.typtype IN ('e', 'd', 'r', 'c')
+         WHERE t.typnamespace = 'public'::regnamespace AND t.typtype IN ('e', 'd', 'r', 'c')
            AND (t.typtype <> 'c' OR (SELECT relkind FROM pg_class WHERE oid = t.typrelid) = 'c')
            AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid
                            AND d.deptype = 'e')",
@@ -195,9 +282,8 @@ pub async fn drop_app_objects(conn: &mut PgConnection) -> anyhow::Result<usize> 
     .await?;
 
     let of = |kinds: &[&str]| -> Vec<String> {
-        relations.iter().filter(|(k, _)| kinds.contains(&k.as_str())).map(|(_, n)| n.clone()).collect()
+        relations.iter().filter(|(k, _)| kinds.contains(&k.as_str())).map(|(_, n)| format!("public.{n}")).collect()
     };
-    let mut statements = Vec::new();
     for (kinds, keyword) in [
         (&["r", "p"][..], "TABLE"),
         (&["v"][..], "VIEW"),
@@ -210,19 +296,22 @@ pub async fn drop_app_objects(conn: &mut PgConnection) -> anyhow::Result<usize> 
             statements.push(format!("DROP {keyword} IF EXISTS {} CASCADE", names.join(", ")));
         }
     }
+    // Names are qualified: regprocedure and format_type omit `public.` when it is on the search_path.
     for (kind, signature) in &functions {
         let keyword = match kind.as_str() {
             "p" => "PROCEDURE",
             "a" => "AGGREGATE",
             _ => "FUNCTION",
         };
+        let signature =
+            if signature.starts_with("public.") { signature.clone() } else { format!("public.{signature}") };
         statements.push(format!("DROP {keyword} IF EXISTS {signature} CASCADE"));
     }
     for (kind, name) in &types {
         let keyword = if kind == "d" { "DOMAIN" } else { "TYPE" };
+        let name = if name.starts_with("public.") { name.clone() } else { format!("public.{name}") };
         statements.push(format!("DROP {keyword} IF EXISTS {name} CASCADE"));
     }
-    statements.push("DROP SCHEMA IF EXISTS drizzle CASCADE".into());
 
     for s in &statements {
         sqlx::query(sqlx::AssertSqlSafe(s.clone()))
@@ -230,7 +319,7 @@ pub async fn drop_app_objects(conn: &mut PgConnection) -> anyhow::Result<usize> 
             .await
             .with_context(|| format!("could not run: {s}"))?;
     }
-    Ok(relations.len() + functions.len() + types.len())
+    Ok(in_schemas as usize + relations.len() + functions.len() + types.len())
 }
 
 #[cfg(test)]
