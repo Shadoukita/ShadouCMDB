@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { ApiError } from "../api/client";
+import { useAreas } from "../api/datamodel";
 import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -56,6 +57,7 @@ const c = computed(() => ci.data.value);
 // The class's layout from Customization, if it has one; otherwise the built-in General + attributes panels.
 const settings = useAppSettings();
 const classes = useCiClasses();
+const areas = useAreas();
 const classKey = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId)?.key);
 const layout = computed(() => layoutFor(settings.doc.value, classKey.value));
 const attrs = useClassAttributes(() => (layout.value ? c.value?.classId : undefined));
@@ -68,6 +70,8 @@ const crumbs = computed<Crumb[]>(() => {
   if (trail.value.length > 0) {
     trail.value.forEach((s, i) => out.push({ label: s.name, to: { path: `/cis/${s.id}`, state: { trail: trail.value.slice(0, i) } } }));
   } else {
+    const area = areas.data.value?.find((a) => a.id === classes.data.value?.find((k) => k.id === c.value?.classId)?.areaId);
+    if (area) out.push({ label: area.name });
     out.push({ label: c.value.class.name, to: `/cis?classId=${c.value.classId}` });
   }
   out.push({ label: c.value.name });

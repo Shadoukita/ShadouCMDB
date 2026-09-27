@@ -5,6 +5,7 @@ import { configApi, useImportConfig, type ImportResult } from "../../../api/uiSe
 import Breadcrumbs from "../../../components/Breadcrumbs.vue";
 import ConfirmDialog from "../../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
+import SchemaChangeList from "../../../components/SchemaChangeList.vue";
 import { useDocumentTitle } from "../../../lib/composables";
 import { plural } from "../../../lib/format";
 import { useBrandingStore } from "../../../stores/branding";
@@ -116,6 +117,7 @@ function show(v: unknown): string {
   return s.length > 120 ? `${s.slice(0, 117)}…` : s;
 }
 const SECTION_NAMES: Record<string, string> = {
+  areas: "Areas",
   classes: "CI classes",
   attributes: "Attributes",
   relationshipTypes: "Relationship types",
@@ -224,6 +226,14 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
             <li v-for="(w, i) in dryRun.uiSettingsIssues" :key="`u${i}`"><code>uiSettings.settings.{{ w.path }}</code> {{ w.message }}</li>
           </ul>
         </div>
+      </div>
+      <div v-if="dryRun.schemaChanges.length > 0" class="panel-body">
+        <h3 class="subhead">Database changes</h3>
+        <p class="muted" style="margin-top: 0">
+          Areas, classes and attributes are PostgreSQL schemas, tables and columns. Applying the import runs this SQL in the
+          same transaction.
+        </p>
+        <SchemaChangeList :changes="dryRun.schemaChanges" />
       </div>
       <div v-if="dryRun.changes.length > 0" class="panel-body">
         <h3 class="subhead">Changes</h3>

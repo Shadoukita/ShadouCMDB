@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter, type LocationQueryRaw } from "vue-router";
+import { useAreas } from "../api/datamodel";
 import { useCiClasses, useCiList, useClassAttributes, useLookup, type CiListQuery } from "../api/queries";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import CiCell from "../components/CiCell.vue";
@@ -13,6 +14,7 @@ import PaginationBar from "../components/PaginationBar.vue";
 import { useAppSettings } from "../lib/appSettings";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
 import { isInAppNavigation } from "../lib/navigation";
+import { groupByArea } from "../lib/areas";
 import { viewableClasses } from "../lib/permissions";
 import { flattenTree } from "../lib/tree";
 import { attributeKey, BUILTIN, DEFAULT_COLUMNS, fieldLabel, hasFilters, listViewFor, sortParam } from "../lib/uiSettings";
@@ -62,11 +64,14 @@ const query = computed<CiListQuery>(() => ({
   offset: offset.value,
 }));
 const list = useCiList(query);
+const areas = useAreas();
 const session = useSessionStore();
 // The class filter offers only what the user may view; the API would answer any other class with an empty list.
 const classOptions = computed(() => viewableClasses(classes.data.value ?? [], (id) => session.canOnClass(id, "view")));
 const classDenied = computed(() => !!currentClass.value && !classOptions.value.some((c) => c.id === currentClass.value!.id));
 const classTree = computed(() => flattenTree(classOptions.value));
+const classGroups = computed(() => groupByArea(classTree.value, (n) => n.item.areaId, areas.data.value ?? []));
+const currentArea = computed(() => areas.data.value?.find((a) => a.id === currentClass.value?.areaId));
 
 const columns = computed(() => (view.value?.columns?.length ? view.value.columns : DEFAULT_COLUMNS));
 const attrColumns = computed(() => columns.value.some((c) => attributeKey(c) !== null));
@@ -153,7 +158,9 @@ const canCreate = computed(() =>
 );
 const newLabel = computed(() => (currentClass.value && !currentClass.value.isAbstract ? currentClass.value.name : "CI"));
 const crumbs = computed(() =>
-  currentClass.value ? [{ label: "Inventory", to: "/cis" }, { label: currentClass.value.name }] : [{ label: "Inventory" }],
+  currentClass.value
+    ? [{ label: "Inventory", to: "/cis" }, ...(currentArea.value ? [{ label: currentArea.value.name }] : []), { label: currentClass.value.name }]
+    : [{ label: "Inventory" }],
 );
 
 const toggleSort = (field: string) => update({ sort: sort.value === field ? `-${field}` : field }, true);
@@ -215,9 +222,11 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
         <select id="f-class" :value="get('classId')" @change="update({ classId: ($event.target as HTMLSelectElement).value || undefined })">
           <option value="">All classes</option>
           <option v-if="classDenied && currentClass" :value="currentClass.id">{{ currentClass.name }}</option>
-          <option v-for="n in classTree" :key="n.item.id" :value="n.item.id">
-            {{ "\u00a0\u00a0".repeat(n.depth) }}{{ n.item.name }}{{ n.item.isAbstract ? " (incl. subclasses)" : "" }}{{ n.item.isActive ? "" : " (archived)" }}
-          </option>
+          <optgroup v-for="g in classGroups" :key="g.area?.id ?? '-'" :label="g.area?.name ?? 'Other'">
+            <option v-for="n in g.items" :key="n.item.id" :value="n.item.id">
+              {{ "\u00a0\u00a0".repeat(n.depth) }}{{ n.item.name }}{{ n.item.isAbstract ? " (incl. subclasses)" : "" }}{{ n.item.isActive ? "" : " (archived)" }}
+            </option>
+          </optgroup>
         </select>
       </div>
       <div class="field">

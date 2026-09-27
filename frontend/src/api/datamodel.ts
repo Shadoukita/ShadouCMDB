@@ -7,6 +7,7 @@ import { toValue, type MaybeRefOrGetter } from "vue";
 import { api, unwrap, type JsonBody, type ListQuery, type Schemas } from "./client";
 import { MAX_PAGE } from "./queries";
 
+export type Area = Schemas["Area"];
 export type AttributeDefinition = Schemas["AttributeDefinition"];
 export type DataType = JsonBody<"/api/v1/attribute-definitions", "post">["dataType"];
 export type RelationshipRule = Schemas["RelationshipRule"];
@@ -16,6 +17,8 @@ export type StarterTemplate = Schemas["StarterTemplate"];
 export type TemplateInstallResult = Schemas["TemplateInstallResult"];
 export type UsageReport = Schemas["UsageReport"];
 
+export type AreaCreateBody = JsonBody<"/api/v1/areas", "post">;
+export type AreaUpdateBody = JsonBody<"/api/v1/areas/{id}", "patch">;
 export type ClassCreateBody = JsonBody<"/api/v1/ci-classes", "post">;
 export type ClassUpdateBody = JsonBody<"/api/v1/ci-classes/{id}", "patch">;
 export type AttributeCreateBody = JsonBody<"/api/v1/attribute-definitions", "post">;
@@ -36,6 +39,7 @@ export type OwnerKind = OwnerBody["kind"];
 
 /** Every data model and lookup resource. Each has GET/PATCH/DELETE /{resource}/{id} and GET …/{id}/usage. */
 export type Resource =
+  | "areas"
   | "ci-classes"
   | "attribute-definitions"
   | "relationship-types"
@@ -61,8 +65,9 @@ export const dmKeys = {
 
 /** Query-key prefixes a change to each resource can make stale. */
 const AFFECTS: Record<Resource, readonly (readonly unknown[])[]> = {
-  "ci-classes": [["ci-classes"], ["attribute-definitions"], ["relationship-rules"], ["relationship-types"], ["cis"], dmKeys.templates],
-  "attribute-definitions": [["ci-classes"], ["attribute-definitions"], ["cis", "detail"], dmKeys.templates],
+  areas: [["areas"], ["technical-names"], ["ci-classes"], ["cis"], ["schema-changes"], dmKeys.templates],
+  "ci-classes": [["areas"], ["technical-names"], ["ci-classes"], ["attribute-definitions"], ["relationship-rules"], ["relationship-types"], ["cis"], ["schema-changes"], dmKeys.templates],
+  "attribute-definitions": [["technical-names"], ["ci-classes"], ["attribute-definitions"], ["cis", "detail"], ["schema-changes"], dmKeys.templates],
   "relationship-types": [["relationship-types"], ["relationship-rules"], ["relationships"], ["cis", "graph"], dmKeys.templates],
   "relationship-rules": [["relationship-rules"], ["relationship-types"], dmKeys.templates],
   statuses: [["lookup", "statuses"], ["cis"], dmKeys.templates],
@@ -134,6 +139,29 @@ export function useReorder(resource: Resource) {
     },
     // Also after a partial failure: the rows written so far did change.
     onSettled: () => invalidateResource(qc, resource),
+  });
+}
+
+// ---------- Areas ----------
+
+/**
+ * Every area, archived ones included, in tab order. Areas are few (one per
+ * menu tab), so they are fetched whole; screens filter out archived ones.
+ */
+export function useAreas() {
+  return useQuery({
+    queryKey: ["areas"],
+    staleTime: 5 * 60_000,
+    queryFn: ({ signal }) =>
+      unwrap(api.GET("/api/v1/areas", { params: { query: { limit: MAX_PAGE, sort: "sortOrder" } }, signal })).then((r) => r.data),
+  });
+}
+
+export function useCreateArea() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AreaCreateBody) => unwrap(api.POST("/api/v1/areas", { body })),
+    onSuccess: () => invalidateResource(qc, "areas"),
   });
 }
 

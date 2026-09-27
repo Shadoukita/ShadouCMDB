@@ -26,6 +26,7 @@ pub fn routes() -> Vec<Route> {
     [
         modules::health::routes(),
         modules::auth::routes(),
+        modules::mfa::routes(),
         modules::items::routes(),
         modules::relationships::routes(),
         modules::areas::routes(),

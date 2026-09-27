@@ -128,9 +128,16 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             401,
             "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
         ),
-        ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid => {
-            (403, "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)")
-        }
+        ErrorCode::MfaRequired => (
+            401,
+            "Wrong credentials (code UNAUTHENTICATED), or the password was right and the second factor is due (code \
+             MFA_REQUIRED)",
+        ),
+        ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid | ErrorCode::MfaEnrolmentRequired => (
+            403,
+            "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up \
+             first (code MFA_ENROLMENT_REQUIRED)",
+        ),
         ErrorCode::NotFound => (404, "Not found (code NOT_FOUND)"),
         ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => (
             409,
@@ -266,6 +273,9 @@ pub fn document(routes: &[Route]) -> OpenApi {
         }
         if r.access != Access::Public && r.method != Method::GET {
             codes.push(ErrorCode::CsrfTokenInvalid);
+        }
+        if r.access != Access::Public && !r.before_mfa_enrolment {
+            codes.push(ErrorCode::MfaEnrolmentRequired);
         }
         codes.extend(r.errors.iter().copied());
         codes.push(ErrorCode::InternalError);

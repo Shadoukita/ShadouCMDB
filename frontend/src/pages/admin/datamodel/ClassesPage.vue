@@ -1,23 +1,27 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
-import { usePatch, useReorder } from "../../../api/datamodel";
+import { useAreas, usePatch, useRemove, useReorder } from "../../../api/datamodel";
 import { useCiClasses, type CiClass } from "../../../api/queries";
 import Breadcrumbs from "../../../components/Breadcrumbs.vue";
 import ClassBadge from "../../../components/ClassBadge.vue";
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
+import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
 import { useDocumentTitle } from "../../../lib/composables";
 import { useListQuery } from "../../../lib/listQuery";
 import { moveItem, useDragReorder } from "../../../lib/reorder";
+import { useSchemaChangeFlow } from "../../../lib/schemaChange";
 import { bySortOrder, flattenTree } from "../../../lib/tree";
+import { useFlashStore } from "../../../stores/flash";
 
 /**
  * Administration › Data model › CI classes. The class tree in the order menus and
  * pickers use. Reorder by dragging a row (or with the arrow buttons) among its
  * siblings; a class moves with its subclasses. Archived classes are hidden unless
- * "Show archived" is on (kept in the URL).
+ * "Show archived" is on; the area filter narrows the list to one area's classes
+ * (both kept in the URL).
  */
 useDocumentTitle("CI classes");
 const lq = useListQuery({ sort: "sortOrder" });
@@ -25,7 +29,14 @@ const showArchived = computed(() => lq.get("archived") === "show");
 const classes = useCiClasses();
 const reorder = useReorder("ci-classes");
 const patch = usePatch<CiClass>("ci-classes");
-const notice = ref<string | null>(null);
+const remove = useRemove("ci-classes");
+const areas = useAreas();
+const flow = useSchemaChangeFlow();
+const flash = useFlashStore();
+const notice = ref<string | null>(flash.forCi("classes") ?? null);
+const failure = ref<unknown>(null);
+const areaFilter = computed(() => lq.get("areaId") ?? "");
+const areaById = computed(() => new Map((areas.data.value ?? []).map((a) => [a.id, a])));
 /** The order being saved, shown until the refetch arrives. */
 const pendingOrder = ref<string[] | null>(null);
 
@@ -37,7 +48,9 @@ const all = computed(() => {
 });
 const byId = computed(() => new Map(all.value.map((c) => [c.id, c])));
 const tree = computed(() => flattenTree(all.value));
-const rows = computed(() => tree.value.filter((n) => showArchived.value || n.item.isActive));
+const rows = computed(() =>
+  tree.value.filter((n) => (showArchived.value || n.item.isActive) && (!areaFilter.value || n.item.areaId === areaFilter.value)),
+);
 const archivedCount = computed(() => all.value.filter((c) => !c.isActive).length);
 
 /** Siblings of a class in the current order (archived ones included, so their place is kept). */
@@ -84,17 +97,29 @@ function canStep(c: CiClass, delta: -1 | 1): boolean {
 const dnd = useDragReorder(commit, () => !reorder.isPending.value);
 const parentName = (c: CiClass) => (c.parentId ? byId.value.get(c.parentId)?.name : undefined);
 
-function setActive(c: CiClass, isActive: boolean) {
+async function setActive(c: CiClass, isActive: boolean) {
   notice.value = null;
-  patch.mutate(
-    { id: c.id, body: { isActive } },
-    {
-      onSuccess: () =>
-        (notice.value = isActive
-          ? `Restored ${c.name}: new CIs of this class can be created again.`
-          : `Archived ${c.name}: its CIs are kept, but no new ones can be created.`),
-    },
-  );
+  failure.value = null;
+  const outcome = isActive
+    ? await flow.run({
+        title: `Restore class “${c.name}”`,
+        preview: { operation: "updateType", id: c.id, body: { isActive: true } },
+        apply: () => patch.mutateAsync({ id: c.id, body: { isActive: true } }),
+        applyLabel: "Restore class",
+      })
+    : await flow.run({
+        title: `Archive class “${c.name}”?`,
+        intro: `Its table ${c.tableName}, its CIs and every stored value are kept and stay readable, but no new CIs can be created and the menu hides it. Restore it at any time; only a purge (on the class's page) deletes the data.`,
+        preview: { operation: "deleteType", id: c.id },
+        apply: () => remove.mutateAsync(c.id),
+        applyLabel: "Archive class",
+        alwaysShow: true,
+      });
+  if (outcome.status === "applied")
+    notice.value = isActive
+      ? `Restored ${c.name}: new CIs of this class can be created again.`
+      : `Archived ${c.name}: its CIs are kept, but no new ones can be created.`;
+  else if (outcome.status === "refused") failure.value = outcome.error;
 }
 </script>
 
@@ -107,19 +132,26 @@ function setActive(c: CiClass, isActive: boolean) {
       <span v-if="reorder.isPending.value || patch.isPending.value || (classes.isFetching.value && !classes.isLoading.value)" class="spinner" aria-label="Saving" />
     </div>
     <div class="actions">
-      <RouterLink class="btn btn-primary" to="/admin/classes/new">+ New class</RouterLink>
+      <RouterLink class="btn btn-primary" :to="{ path: '/admin/classes/new', query: areaFilter ? { areaId: areaFilter } : {} }">+ New class</RouterLink>
     </div>
   </div>
 
   <div v-if="notice" class="alert" role="status">{{ notice }}</div>
   <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
-  <ErrorAlert v-if="patch.isError.value" :error="patch.error.value" title="Not saved" />
+  <ErrorAlert v-if="failure" :error="failure" title="Not saved" />
 
   <section class="panel" aria-label="CI classes">
     <div class="toolbar">
       <label class="checkbox-row">
         <input type="checkbox" :checked="showArchived" @change="lq.update({ archived: ($event.target as HTMLInputElement).checked ? 'show' : undefined })" />
         Show archived classes<span v-if="archivedCount" class="muted">&nbsp;({{ archivedCount }})</span>
+      </label>
+      <label class="inline-control">
+        Area
+        <select :value="areaFilter" @change="lq.update({ areaId: ($event.target as HTMLSelectElement).value || undefined })">
+          <option value="">All areas</option>
+          <option v-for="a in areas.data.value ?? []" :key="a.id" :value="a.id">{{ a.name }}{{ a.isActive ? "" : " (archived)" }}</option>
+        </select>
       </label>
       <span class="muted" style="margin-left: auto">Drag a row, or use the arrows, to change the order of menus and pickers.</span>
     </div>
@@ -135,6 +167,12 @@ function setActive(c: CiClass, isActive: boolean) {
         <RouterLink class="btn" to="/admin/classes/new">+ New class</RouterLink>
       </template>
     </EmptyState>
+    <EmptyState v-else-if="classes.data.value && rows.length === 0 && areaFilter" title="No classes in this area">
+      <template #actions>
+        <RouterLink class="btn btn-primary" :to="{ path: '/admin/classes/new', query: { areaId: areaFilter } }">+ New class in {{ areaById.get(areaFilter)?.name }}</RouterLink>
+        <button type="button" class="btn" @click="lq.update({ areaId: undefined })">All areas</button>
+      </template>
+    </EmptyState>
     <EmptyState v-else-if="classes.data.value && rows.length === 0" title="Every class is archived">
       <template #actions>
         <button type="button" class="btn" @click="lq.update({ archived: 'show' })">Show archived classes</button>
@@ -147,7 +185,8 @@ function setActive(c: CiClass, isActive: boolean) {
           <tr>
             <th scope="col" class="drag-col"><span class="sr-only">Drag to reorder</span></th>
             <th scope="col">Class</th>
-            <th scope="col">Key</th>
+            <th scope="col">Area</th>
+            <th scope="col">Table</th>
             <th scope="col">Parent</th>
             <th scope="col">Kind</th>
             <th scope="col">Status</th>
@@ -163,7 +202,12 @@ function setActive(c: CiClass, isActive: boolean) {
                 <RouterLink :to="`/admin/classes/${c.id}`"><ClassBadge :icon="c.icon" :color="c.color" :name="c.name" /></RouterLink>
               </span>
             </td>
-            <td class="mono">{{ c.key }}</td>
+            <td>
+              <RouterLink v-if="areaById.get(c.areaId)" :to="{ query: { ...$route.query, areaId: c.areaId } }" :title="`Only classes in ${areaById.get(c.areaId)!.name}`">
+                {{ areaById.get(c.areaId)!.name }}
+              </RouterLink>
+            </td>
+            <td class="mono">{{ c.tableName }}</td>
             <td>{{ parentName(c) ?? "" }}</td>
             <td>
               <span v-if="c.isAbstract" class="badge warn" title="Groups other classes; holds no CIs itself">Abstract</span>
@@ -179,12 +223,13 @@ function setActive(c: CiClass, isActive: boolean) {
             </td>
             <td class="row-actions">
               <RouterLink class="btn btn-sm" :to="`/admin/classes/${c.id}`">Edit</RouterLink>
-              <button v-if="c.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Archive ${c.name}`" @click="setActive(c, false)">Archive</button>
-              <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Restore ${c.name}`" @click="setActive(c, true)">Restore</button>
+              <button v-if="c.isActive" type="button" class="btn btn-sm" :aria-label="`Archive ${c.name}`" @click="setActive(c, false)">Archive</button>
+              <button v-else type="button" class="btn btn-sm" :aria-label="`Restore ${c.name}`" @click="setActive(c, true)">Restore</button>
             </td>
           </tr>
         </tbody>
       </table>
     </div>
   </section>
+  <SchemaChangeDialog :flow="flow" />
 </template>

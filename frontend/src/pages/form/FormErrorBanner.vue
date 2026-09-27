@@ -19,7 +19,7 @@ const apiError = computed(() => (props.error instanceof ApiError ? props.error :
       </template>
     </div>
   </div>
-  <div v-else-if="apiError?.code === 'VALIDATION_ERROR' || apiError?.code === 'CONFLICT'" class="alert alert-error" role="alert">
+  <div v-else-if="apiError?.code === 'VALIDATION_ERROR' || apiError?.code === 'CONFLICT' || apiError?.code === 'INVALID_NAME'" class="alert alert-error" role="alert">
     <strong>Not saved — fix the highlighted fields.</strong>
     <div>{{ apiError.message }}</div>
     <ul v-if="unplaced.length > 0">

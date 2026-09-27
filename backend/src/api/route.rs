@@ -10,7 +10,8 @@
 //! state-changing methods on a session and the permission is checked before
 //! the request is validated, so an unauthenticated caller learns nothing about
 //! a route beyond 401. Routes marked [`RouteBuilder::session_only`] refuse
-//! API tokens.
+//! API tokens. A session whose user must set up MFA first reaches only the
+//! routes marked [`RouteBuilder::before_mfa_enrolment`].
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -427,6 +428,23 @@ impl Output for StatusOnly {
     }
 }
 
+/// An error answer that still sets cookies (sign-in: the second factor is due).
+/// Documented through the route's error codes.
+pub struct ErrorWithCookies(pub AppError, pub Vec<HeaderValue>);
+
+impl Output for ErrorWithCookies {
+    fn doc() -> Option<ResponseDoc> {
+        None
+    }
+    fn respond(self, _: StatusCode) -> Response {
+        let mut res = self.0.into_response();
+        for c in self.1 {
+            res.headers_mut().append(header::SET_COOKIE, c);
+        }
+        res
+    }
+}
+
 /// Another output plus Set-Cookie headers (login, logout, first-run setup).
 pub struct WithCookies<R>(pub R, pub Vec<HeaderValue>);
 
@@ -459,6 +477,8 @@ pub struct Route {
     pub access: Access,
     /// API tokens are refused (403): the route needs a browser session.
     pub session_only: bool,
+    /// Answers a session that must set up MFA before anything else.
+    pub before_mfa_enrolment: bool,
     /// Error codes beyond VALIDATION_ERROR / INTERNAL_ERROR / DATABASE_UNAVAILABLE
     /// (and the 401/403 implied by `access`).
     pub errors: Vec<ErrorCode>,
@@ -481,6 +501,7 @@ pub struct RouteBuilder {
     status: Option<StatusCode>,
     access: Access,
     session_only: bool,
+    before_mfa_enrolment: bool,
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
     body_limit: Option<usize>,
@@ -497,6 +518,7 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         status: None,
         access: Access::Authenticated,
         session_only: false,
+        before_mfa_enrolment: false,
         errors: Vec::new(),
         also_returns: Vec::new(),
         body_limit: None,
@@ -545,6 +567,13 @@ impl RouteBuilder {
         self.session_only = true;
         self
     }
+    /// Reachable by a session whose user holds a profile requiring MFA and has
+    /// not set it up yet (sign-out, the current session, MFA set-up). Every
+    /// other route answers such a session 403 MFA_ENROLMENT_REQUIRED.
+    pub fn before_mfa_enrolment(mut self) -> Self {
+        self.before_mfa_enrolment = true;
+        self
+    }
     /// The service checks per-class permissions, so the route can answer 403.
     pub fn class_checked(self) -> Self {
         self.errors(&[ErrorCode::Forbidden])
@@ -581,6 +610,7 @@ impl RouteBuilder {
         let filter = MethodFilter::try_from(self.method.clone()).expect("supported HTTP method");
         let access = self.access;
         let session_only = self.session_only;
+        let before_mfa_enrolment = self.before_mfa_enrolment;
         let safe_method = self.method == Method::GET || self.method == Method::HEAD;
         let (method, operation_id) = (self.method.clone(), Arc::<str>::from(self.operation_id.as_str()));
 
@@ -602,7 +632,7 @@ impl RouteBuilder {
                         user_agent: auth::session::user_agent(&headers),
                     };
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
-                    let rule = Rule { access, session_only, safe_method };
+                    let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };
                     let ctx = authorise(&state, &headers, rule, client, used).await?;
                     let body = read_body(&headers, body)?;
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
@@ -623,6 +653,7 @@ impl RouteBuilder {
             status,
             access,
             session_only,
+            before_mfa_enrolment,
             errors: self.errors,
             also_returns: self.also_returns,
             path_params: P::params(),
@@ -642,13 +673,15 @@ impl RouteBuilder {
 struct Rule {
     access: Access,
     session_only: bool,
+    before_mfa_enrolment: bool,
     safe_method: bool,
 }
 
 /// Resolves the caller and enforces the route's access rule: 401 without a
 /// live session or a valid API token, 403 CSRF_TOKEN_INVALID for a
 /// state-changing request without the session's token, 403 FORBIDDEN without
-/// the required permission (or for a token on a session-only route).
+/// the required permission (or for a token on a session-only route), 403
+/// MFA_ENROLMENT_REQUIRED for a session that must set up MFA first.
 ///
 /// An `Authorization: Bearer` header selects token authentication and the
 /// cookies are then ignored: a bad token is 401, never a fall-back to the
@@ -679,6 +712,12 @@ async fn authorise(
         return Err(AppError::new(
             ErrorCode::CsrfTokenInvalid,
             "Missing or wrong X-CSRF-Token header (send the csrfToken from /api/v1/auth/me)",
+        ));
+    }
+    if principal.mfa_enrolment_required() && !rule.before_mfa_enrolment {
+        return Err(AppError::new(
+            ErrorCode::MfaEnrolmentRequired,
+            "Your permission profile requires two-factor authentication: set it up first (POST /api/v1/auth/mfa/totp)",
         ));
     }
     if let Access::Permission(p) = rule.access
