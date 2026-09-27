@@ -10,7 +10,7 @@ image before you run it.
 | **cargo-deny** ([`backend/deny.toml`](../backend/deny.toml)) | `supply-chain.yml` | a Rust crate has a RustSec advisory (vulnerable, unsound, unmaintained) or is yanked; a licence is not on the allow list; a crate comes from anywhere but crates.io |
 | **npm audit** | `supply-chain.yml` | `package-lock.json` or `tools/sbom/package-lock.json` has a high or critical advisory; `npm audit signatures` finds a package whose registry signature or provenance does not verify |
 | **gitleaks** | `supply-chain.yml` | a secret (key, token, password, private key) is anywhere in the git history. Findings are redacted in the log |
-| **Dependency review** (PRs only) | `supply-chain.yml` | the PR adds a dependency with a known high or critical advisory |
+| **Dependency review** (PRs only) | `supply-chain.yml` | the PR adds a dependency with a known high or critical advisory. Needs the repository's Dependency graph: while that is off, the job passes with a *Dependency review skipped* warning and cargo-deny and npm audit remain the advisory gate |
 | **Actions pinned** | `supply-chain.yml` | any `uses:` refers to a tag or branch instead of a 40-character commit SHA |
 | **SBOM** | `supply-chain.yml` | the CycloneDX SBOM cannot be generated or does not validate. The SBOM of each build is kept as the `sbom` artifact for 30 days |
 | **CodeQL** (Rust, JavaScript/TypeScript, GitHub Actions; `security-extended`) | `codeql.yml` | results appear under *Security → Code scanning* and on the PR. They block a merge once code scanning is a required check (below) |
