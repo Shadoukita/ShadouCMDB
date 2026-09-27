@@ -65,9 +65,9 @@ export const dmKeys = {
 
 /** Query-key prefixes a change to each resource can make stale. */
 const AFFECTS: Record<Resource, readonly (readonly unknown[])[]> = {
-  areas: [["areas"], ["ci-classes"], ["cis"], ["schema-changes"], dmKeys.templates],
-  "ci-classes": [["areas"], ["ci-classes"], ["attribute-definitions"], ["relationship-rules"], ["relationship-types"], ["cis"], ["schema-changes"], dmKeys.templates],
-  "attribute-definitions": [["ci-classes"], ["attribute-definitions"], ["cis", "detail"], ["schema-changes"], dmKeys.templates],
+  areas: [["areas"], ["technical-names"], ["ci-classes"], ["cis"], ["schema-changes"], dmKeys.templates],
+  "ci-classes": [["areas"], ["technical-names"], ["ci-classes"], ["attribute-definitions"], ["relationship-rules"], ["relationship-types"], ["cis"], ["schema-changes"], dmKeys.templates],
+  "attribute-definitions": [["technical-names"], ["ci-classes"], ["attribute-definitions"], ["cis", "detail"], ["schema-changes"], dmKeys.templates],
   "relationship-types": [["relationship-types"], ["relationship-rules"], ["relationships"], ["cis", "graph"], dmKeys.templates],
   "relationship-rules": [["relationship-rules"], ["relationship-types"], dmKeys.templates],
   statuses: [["lookup", "statuses"], ["cis"], dmKeys.templates],

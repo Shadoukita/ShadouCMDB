@@ -113,7 +113,8 @@ async function submit() {
   if (isNew.value) {
     const k = keyError(key.value);
     if (k) errs.key = k;
-    if (!areaId.value) errs.areaId = "Choose the area its table goes into";
+    // Without any area the API creates the default area "infrastruktur" for the class.
+    if (!areaId.value && activeAreas.value.length > 0) errs.areaId = "Choose the area its table goes into";
   }
   local.value = errs;
   if (Object.keys(errs).length > 0) {
@@ -131,8 +132,8 @@ async function submit() {
   if (isNew.value) {
     // New classes go to the end of the menu.
     const last = Math.max(0, ...(classes.data.value ?? []).map((c) => c.sortOrder));
-    const createBody: ClassCreateBody = { ...body, name: body.name!, key: key.value, areaId: areaId.value, sortOrder: last + 10 };
-    const where = `${area.value?.key ?? "?"}.${key.value}`;
+    const createBody: ClassCreateBody = { ...body, name: body.name!, key: key.value, sortOrder: last + 10, ...(areaId.value ? { areaId: areaId.value } : {}) };
+    const where = `${area.value?.key ?? "infrastruktur"}.${key.value}`;
     const outcome = await flow.run({
       title: `Create class “${createBody.name}”`,
       intro: body.isAbstract
@@ -266,12 +267,14 @@ const notFound = computed(() => {
           :hint="isNew ? 'The menu tab and database schema its table goes into. Cannot change later.' : 'Fixed after creation'"
         >
           <select v-if="isNew" :id="p.id" v-model="areaId" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" @change="areaTouched = true">
-            <option value="" disabled>{{ areas.isLoading.value ? "Loading…" : activeAreas.length ? "Choose an area…" : "No areas yet" }}</option>
+            <option value="" :disabled="activeAreas.length > 0">
+              {{ areas.isLoading.value ? "Loading…" : activeAreas.length ? "Choose an area…" : "Infrastruktur (created with the class)" }}
+            </option>
             <option v-for="a in activeAreas" :key="a.id" :value="a.id">{{ a.name }} ({{ a.key }})</option>
           </select>
           <input v-else :id="p.id" type="text" readonly :value="area ? `${area.name} (${area.key})` : ''" :aria-describedby="p.describedBy" />
           <span v-if="isNew && areas.data.value && activeAreas.length === 0" class="hint">
-            <RouterLink to="/admin/areas">Create an area first</RouterLink>
+            No areas yet: the class goes into the default area Infrastruktur, or <RouterLink to="/admin/areas">create an area first</RouterLink>.
           </span>
         </FormField>
         <TechnicalNameField

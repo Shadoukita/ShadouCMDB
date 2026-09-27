@@ -77,3 +77,15 @@ export async function pickCi(page: Page, inputSelector: string, search: string, 
   const option = page.getByRole("option").filter({ has: page.getByText(name, { exact: true }) });
   await option.first().click();
 }
+
+/**
+ * Confirms the open data model change preview (the dialog showing the DDL a change runs) with its
+ * apply button, optionally checking the SQL it shows first.
+ */
+export async function applySchemaChange(page: Page, button: string, expectSql?: string) {
+  const dialog = page.locator("dialog.schema-change[open]");
+  await expect(dialog.getByRole("heading", { name: "What it does" })).toBeVisible();
+  if (expectSql) await expect(dialog.locator(".sc-ddl")).toContainText(expectSql);
+  await dialog.getByRole("button", { name: button, exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+}

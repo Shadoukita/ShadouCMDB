@@ -1,6 +1,6 @@
 import type { APIRequestContext } from "@playwright/test";
 import { BARE_STATE, FRESH_ADMIN, IMPORT_TARGET_STATE } from "./global-setup";
-import { apiGet, apiSend, expect, snap, test } from "./support";
+import { apiGet, apiSend, applySchemaChange, expect, snap, test } from "./support";
 
 // A bare install built up from nothing, then exported and imported into a second fresh install, nothing mocked.
 // Two more APIs next to the shared demo instance, each on its own migrated and `seed`ed database (system rows only,
@@ -113,13 +113,15 @@ test.describe("a bare install", () => {
     await expect(page.locator("#class-key")).toHaveValue(CLASS_KEY);
     await page.locator("#class-parent").selectOption({ label: "Hardware" });
     await page.getByRole("button", { name: "Create class" }).click();
-    await expect(page.getByRole("status").filter({ hasText: `Created class ${CLASS}.` })).toBeVisible();
+    await applySchemaChange(page, "Create class", "CREATE TABLE");
+    await expect(page.getByRole("status").filter({ hasText: `Created class ${CLASS} (table` })).toBeVisible();
     const classId = page.url().split("/").pop()!;
     const add = async (label: string, fill: () => Promise<void>) => {
       await page.getByRole("button", { name: "+ Add attribute" }).click();
       await page.locator("#ad-label").fill(label);
       await fill();
-      await page.getByRole("button", { name: "Add attribute", exact: true }).click();
+      await page.getByRole("button", { name: "Preview and add…" }).click();
+      await applySchemaChange(page, "Add attribute", "ADD COLUMN");
       await expect(page.getByRole("status").filter({ hasText: `Added attribute ${label}.` })).toBeVisible();
     };
     await add("Outlets", async () => {

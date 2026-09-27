@@ -211,7 +211,7 @@ function openEdit(a: Area) {
               <div v-if="a.description" class="muted cell-note">{{ a.description }}</div>
             </td>
             <td class="mono">{{ a.key }}</td>
-            <td>
+            <td class="wrap">
               <span v-if="typesOf(a).length === 0" class="muted">none</span>
               <template v-for="(c, j) in typesOf(a)" :key="c.id">
                 <RouterLink :to="`/admin/classes/${c.id}`" :class="{ muted: !c.isActive }">{{ c.name }}</RouterLink><template v-if="j < typesOf(a).length - 1">, </template>

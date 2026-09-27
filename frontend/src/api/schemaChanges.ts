@@ -50,7 +50,6 @@ export function useTechnicalName(query: MaybeRefOrGetter<TechnicalNameQuery | nu
     return {
       queryKey: ["technical-names", q],
       enabled: !!q,
-      staleTime: 30_000,
       placeholderData: keepPreviousData,
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         unwrap(

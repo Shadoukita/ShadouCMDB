@@ -1317,3 +1317,42 @@ table.schema-changes .sc-ddl {
 td.nowrap {
   white-space: nowrap;
 }
+.shell-nav h2.nav-area {
+  padding: var(--sp-3) var(--sp-3) var(--sp-1);
+}
+.shell-nav h2.nav-area button {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 3px var(--sp-2);
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: #aab5c3;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.shell-nav h2.nav-area button:hover {
+  background: var(--c-sidebar-active);
+  color: #fff;
+}
+.shell-nav h2.nav-area button:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.shell-nav .nav-fold {
+  width: 10px;
+  text-align: center;
+}
+.shell-nav .nav-area-items a {
+  padding-left: calc(var(--sp-5) + 8px);
+}
+table.data td.wrap {
+  white-space: normal;
+  min-width: 220px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}

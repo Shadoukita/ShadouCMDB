@@ -65,21 +65,21 @@ export function useSchemaChangeFlow() {
     if (settle) finish({ status: "cancelled" });
     Object.assign(state, { options, loading: true, preview: null, refusal: null, applying: false, applyError: null, typed: "" });
     const outcome = new Promise<SchemaChangeOutcome>((resolve) => (settle = resolve));
-    // The dialog opens at once for purges and forced previews (the user asked for it); otherwise only when there is something to show.
-    if (options.confirmName || options.alwaysShow) state.open = true;
+    // A purge opens the dialog at once (the administrator asked for it); anything else once the preview is in.
+    if (options.confirmName) state.open = true;
     try {
       const preview = await previewSchemaChange(options.preview);
       state.preview = preview;
       state.loading = false;
       const empty = preview.statements.length === 0 && preview.impact.length === 0;
-      if (empty && !state.open) {
+      if (empty && !state.open && !options.alwaysShow) {
         await apply();
         return outcome;
       }
       state.open = true;
     } catch (e) {
       state.loading = false;
-      if (e instanceof ApiError && FORM_CODES.has(e.code) && !state.open) {
+      if (e instanceof ApiError && FORM_CODES.has(e.code) && !options.confirmName) {
         finish({ status: "refused", error: e });
         return outcome;
       }
