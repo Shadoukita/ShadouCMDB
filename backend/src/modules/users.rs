@@ -17,7 +17,7 @@ use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use super::profiles;
+use super::{api_tokens, profiles};
 use crate::api::context::{RequestContext, forbidden};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{
@@ -254,7 +254,11 @@ async fn lock(conn: &mut PgConnection, id: Uuid) -> Result<User, AppError> {
 }
 
 /// A user manager can only act on accounts whose permissions they hold themselves.
-async fn must_cover_user(conn: &mut PgConnection, ctx: &RequestContext, user_id: Uuid) -> Result<(), AppError> {
+pub(crate) async fn must_cover_user(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    user_id: Uuid,
+) -> Result<(), AppError> {
     let Some(me) = ctx.principal() else { return Ok(()) };
     if me.permissions.administrator {
         return Ok(());
@@ -415,7 +419,7 @@ pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_pas
     must_cover_user(&mut tx, ctx, id).await?;
     data::set_password(&mut tx, id, &hash).await?;
     let own = ctx.principal().filter(|p| p.user_id == id);
-    let ended = data::delete_user_sessions(&mut tx, id, own.map(|p| p.session_id)).await?;
+    let ended = data::delete_user_sessions(&mut tx, id, own.and_then(|p| p.session_id())).await?;
     let reason = if own.is_some() { RevokeReason::PasswordChanged } else { RevokeReason::PasswordReset };
     events::revoked(&mut tx, ctx, &ended, reason).await?;
     let dto = load(&mut tx, id).await?;
@@ -439,6 +443,8 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     // Ended explicitly (not by the foreign key's cascade) so each gets an audit row.
     let ended = data::delete_user_sessions(&mut tx, id, None).await?;
     events::revoked(&mut tx, ctx, &ended, RevokeReason::UserDeleted).await?;
+    // Their API tokens go with them; each gets a delete row.
+    api_tokens::audit_deleted_with_owner(&mut tx, ctx, id).await?;
     data::delete_user(&mut tx, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Delete,
