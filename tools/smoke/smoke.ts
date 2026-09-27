@@ -737,7 +737,7 @@ async function permissions(x: Json) {
     await del(`/api/v1/admin/users/${plain.id}`);
     await del(`/api/v1/admin/users/${nobody.id}`, 409); // not yourself
     // Identity providers decide who gets which profile: Administrator only, even with users.manage.
-    await get('/api/v1/admin/identity-providers');
+    await get('/api/v1/admin/identity-providers', 403);
     await post('/api/v1/admin/identity-providers', { kind: 'oidc', name: `x-${RUN}`, oidc: { issuerUrl: 'https://idp.invalid', clientId: 'x' } }, 403);
   });
 
