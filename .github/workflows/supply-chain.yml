@@ -50,8 +50,15 @@ jobs:
       - name: npm audit (tools/sbom)
         run: npm audit --audit-level=high
         working-directory: tools/sbom
+      # The npm bundled with the runner's Node 22 failed with EMISSINGSIGNATUREKEY on
+      # attestations signed with the registry's current key (SHAA-112), so this step uses a
+      # pinned npm instead. Bump NPM_VERSION on purpose, not by tag.
       - name: Registry signatures of the installed packages
+        env:
+          NPM_VERSION: 11.19.0
         run: |
+          npm install -g "npm@$NPM_VERSION" --ignore-scripts --no-audit --no-fund
+          echo "node $(node --version), npm $(npm --version)"
           npm ci --ignore-scripts --no-audit --no-fund
           npm audit signatures
 
