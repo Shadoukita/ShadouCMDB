@@ -16425,10 +16425,7 @@
                     "maxItems": 1000
                   },
                   "requireMfa": {
-                    "type": [
-                      "boolean",
-                      "null"
-                    ],
+                    "type": "boolean",
                     "description": "Holders must set up two-factor authentication. The only field the\nbuilt-in Administrator profile accepts."
                   }
                 },

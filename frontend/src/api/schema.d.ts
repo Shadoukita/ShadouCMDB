@@ -13691,7 +13691,7 @@ export interface operations {
                      * @description Holders must set up two-factor authentication. The only field the
                      *     built-in Administrator profile accepts.
                      */
-                    requireMfa?: boolean | null;
+                    requireMfa?: boolean;
                 };
             };
         };

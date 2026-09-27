@@ -125,6 +125,7 @@ pub struct ProfileUpdate {
     class_permissions: Option<Vec<ClassPermission>>,
     /// Holders must set up two-factor authentication. The only field the
     /// built-in Administrator profile accepts.
+    #[schema(nullable = false)]
     require_mfa: Option<bool>,
 }
 
