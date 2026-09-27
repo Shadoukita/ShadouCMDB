@@ -165,5 +165,7 @@ jobs:
             echo "::error::check-actions-pinned.py found $n of 8 unpinned refs in the fixture"; exit 1
           fi
           python3 .github/scripts/check-actions-pinned.py "$fixtures/pinned.yml"
+      # SCRATCH (#66 regression demo, reverted in the next commit)
+      - {name: scratch unpinned ref, if: false, uses: actions/setup-node@v4}
       - name: No action or reusable workflow referenced by tag or branch
         run: python3 .github/scripts/check-actions-pinned.py .github/workflows .github/actions
