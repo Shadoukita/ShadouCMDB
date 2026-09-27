@@ -224,7 +224,7 @@ async function main() {
 
   // --- Without a session, everything but health, login and setup is 401 ----------
   console.log('\n# Unauthenticated');
-  const PUBLIC = ['getLiveness', 'getReadiness', 'getSetupStatus', 'completeSetup', 'login', 'getPublicBranding', 'getUiAsset'];
+  const PUBLIC = ['getLiveness', 'getReadiness', 'getSetupStatus', 'completeSetup', 'login', 'loginSecondFactor', 'getPublicBranding', 'getUiAsset'];
   const specPublic = Object.values(spec.paths as Record<string, Record<string, Json>>)
     .flatMap((m) => Object.values(m))
     .filter((op) => Array.isArray(op.security) && op.security.length === 0)
@@ -832,11 +832,115 @@ async function permissions(x: Json) {
   check(tokenTrail.every((e) => !JSON.stringify(e).includes(readerToken.secret.slice(6)) &&
     !JSON.stringify(e).includes(createHash('sha256').update(readerToken.secret).digest('hex'))), 'no token secret or hash in the audit log');
 
+  await mfa(builtin, createHash);
+
   // Clean up what only this run uses.
   await del(`/api/v1/admin/users/${reader.id}`);
   await del(`/api/v1/admin/users/${nobody.id}`);
   for (const p of [readers, editors, copy, userManagers]) await del(`/api/v1/admin/profiles/${p.id}`);
   await del(`/api/v1/admin/profiles/${readers.id}`, 404);
+}
+
+/** The code an authenticator app shows for a base32 secret at a 30-second step (RFC 6238, HMAC-SHA1, 6 digits). */
+async function totpCode(secret: string, step: number): Promise<string> {
+  const { createHmac } = await import('node:crypto');
+  let buffer = 0, bits = 0;
+  const key: number[] = [];
+  for (const c of secret) {
+    buffer = (buffer << 5) | 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'.indexOf(c);
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      key.push((buffer >> bits) & 0xff);
+    }
+  }
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const d = createHmac('sha1', Buffer.from(key)).update(counter).digest();
+  const offset = d[d.length - 1]! & 0x0f;
+  return String((d.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+}
+
+/** TOTP enrolment, the second sign-in step, recovery codes, the admin reset and the per-profile requirement. */
+async function mfa(builtin: Json, createHash: typeof import('node:crypto').createHash) {
+  console.log('\n# Two-factor authentication');
+  const nowStep = () => Math.floor(Date.now() / 30_000);
+  const password = `mfa-${RUN}-password`;
+  const user = (await post('/api/v1/admin/users', { username: `smoke-mfa-${RUN}`, displayName: 'Smoke MFA', password })).json;
+  check(user.mfaEnabled === false, 'a new user has no MFA');
+  const session = await login(user.username, password);
+  const { secret, codes, lastStep } = await as(session, async () => {
+    check((await get('/api/v1/auth/mfa')).json.totpEnabled === false, 'MFA status: off');
+    await post('/api/v1/auth/mfa/totp', { currentPassword: 'wrong password!' }, 400);
+    const started = (await post('/api/v1/auth/mfa/totp', { currentPassword: password })).json;
+    check(/^[A-Z2-7]{32}$/.test(started.secret) && started.otpauthUri.startsWith('otpauth://totp/') && started.digits === 6 && started.period === 30,
+      'set-up returns a 160-bit base32 secret and its otpauth URI');
+    await post('/api/v1/auth/mfa/totp/confirm', { code: await totpCode(started.secret, nowStep() - 5) }, 400);
+    const step = nowStep();
+    const confirmed = (await post('/api/v1/auth/mfa/totp/confirm', { code: await totpCode(started.secret, step) }, 200)).json;
+    check(confirmed.codes.length === 10 && confirmed.codes.every((c: string) => /^[a-z2-7]{4}(-[a-z2-7]{4}){3}$/.test(c)), 'confirming returns 10 recovery codes');
+    await post('/api/v1/auth/mfa/totp/confirm', { code: await totpCode(started.secret, step + 1) }, 409);
+    await post('/api/v1/auth/mfa/totp', { currentPassword: password }, 409);
+    const status = (await get('/api/v1/auth/mfa')).json;
+    check(status.totpEnabled && status.recoveryCodesRemaining === 10, 'MFA status: on, 10 recovery codes left');
+    return { secret: started.secret as string, codes: confirmed.codes as string[], lastStep: step };
+  });
+
+  // Sign-in now takes two steps; the challenge cookie carries the first one.
+  const firstStep = async () => {
+    const res = await loginFails(user.username, password);
+    check(res.json.error?.code === 'MFA_REQUIRED', 'a right password answers MFA_REQUIRED');
+    const cookie = res.headers.getSetCookie().map((c) => c.split(';')[0]!).find((c) => c.startsWith('shadoucmdb_mfa='));
+    check(cookie, 'the MFA challenge cookie is set');
+    return { name: 'mfa challenge', cookie: cookie ?? '', csrf: '' };
+  };
+  await as(null, () => post('/api/v1/auth/login/mfa', { code: '123456' }, 401)); // no challenge
+  const challenge = await firstStep();
+  const stale = await totpCode(secret, lastStep - 5);
+  await as(challenge, () => post('/api/v1/auth/login/mfa', { code: stale }, 401));
+  await as(challenge, () => post('/api/v1/auth/login/mfa', { code: 'short' }, 400));
+  const signedIn = identityFrom(user.username, await as(challenge, async () => post('/api/v1/auth/login/mfa', { code: await totpCode(secret, lastStep + 1) }, 200)));
+  await as(challenge, () => post('/api/v1/auth/login/mfa', { code: codes[0]! }, 401)); // the challenge is used up
+  const newCodes: string[] = await as(signedIn, async () => {
+    await get('/api/v1/auth/me');
+    await post('/api/v1/auth/mfa/recovery-codes', { currentPassword: password, code: '000000' }, 400);
+    const fresh = (await post('/api/v1/auth/mfa/recovery-codes', { currentPassword: password, code: codes[0]!.toUpperCase() }, 200)).json.codes;
+    await post('/api/v1/auth/mfa/recovery-codes', { currentPassword: password, code: codes[1]! }, 400); // the old codes are gone
+    return fresh;
+  });
+  const recovered = identityFrom(user.username, await as(await firstStep(), () => post('/api/v1/auth/login/mfa', { code: newCodes[0]! }, 200)));
+  await as(recovered, async () => {
+    check((await get('/api/v1/auth/mfa')).json.recoveryCodesRemaining === 9, 'a used recovery code is gone');
+  });
+
+  // An administrator resets a lost authenticator; a profile can require MFA.
+  check((await get(`/api/v1/admin/users/${user.id}`)).json.mfaEnabled === true, 'the user list shows mfaEnabled');
+  await del('/api/v1/admin/users/00000000-0000-4000-8000-000000000000/mfa', 404);
+  await del(`/api/v1/admin/users/${user.id}/mfa`);
+  await patch(`/api/v1/admin/profiles/${builtin.id}`, { requireMfa: false }); // the one change the built-in profile allows
+  const required = (await post('/api/v1/admin/profiles', { name: `smoke-mfa-required-${RUN}`, requireMfa: true })).json;
+  check(required.requireMfa === true, 'a profile can require MFA');
+  await patch(`/api/v1/admin/users/${user.id}`, { profileIds: [required.id] });
+  const mustEnrol = await login(user.username, password); // the password alone signs in after the reset
+  await as(mustEnrol, async () => {
+    check((await get('/api/v1/auth/mfa')).json.enrolmentRequired === true, 'MFA status: set-up required');
+    const blocked = await get('/api/v1/statuses?limit=1', 403);
+    check(blocked.json.error?.code === 'MFA_ENROLMENT_REQUIRED', 'other routes answer MFA_ENROLMENT_REQUIRED until MFA is set up');
+    await post('/api/v1/auth/mfa/totp', { currentPassword: password });
+    await call('DELETE', '/api/v1/auth/mfa/totp', { currentPassword: password, code: '000000' }, 204); // cancels the unfinished set-up
+    await call('DELETE', '/api/v1/auth/mfa/totp', { currentPassword: password, code: '000000' }, 409);
+  });
+
+  const trail: Json[] = (await get(`/api/v1/audit-log?entityType=users&entityId=${user.id}&sort=occurredAt&limit=100`)).json.data;
+  const actions = trail.filter((e) => e.action.startsWith('mfa.')).map((e) => e.action).join(',');
+  check(actions === 'mfa.enrol,mfa.failure,mfa.failure,mfa.recovery_code_used,mfa.recovery_codes,mfa.failure,mfa.recovery_code_used,mfa.disable',
+    `enrolment, failures, recovery codes and the reset are audited (${actions})`);
+  const secrets = [secret, ...codes, ...newCodes].flatMap((s) => [s, s.replaceAll('-', '')]);
+  check(trail.every((e) => secrets.every((s) => !JSON.stringify(e).includes(s) && !JSON.stringify(e).includes(createHash('sha256').update(s).digest('hex')))),
+    'no TOTP secret or recovery code (or its hash) in the audit log');
+
+  await del(`/api/v1/admin/users/${user.id}`);
+  await del(`/api/v1/admin/profiles/${required.id}`);
 }
 
 /** Areas are PostgreSQL schemas, types are tables, fields are typed columns: names, DDL, guards, concurrency, purge. */
