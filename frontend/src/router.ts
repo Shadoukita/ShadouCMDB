@@ -7,6 +7,7 @@ import InventoryPage from "./pages/InventoryPage.vue";
 import NotFoundPage from "./pages/NotFoundPage.vue";
 import SearchPage from "./pages/SearchPage.vue";
 import AdminLayout from "./pages/admin/AdminLayout.vue";
+import ApiTokensPage from "./pages/admin/ApiTokensPage.vue";
 import AuditLogPage from "./pages/admin/AuditLogPage.vue";
 import TemplatesPage from "./pages/admin/TemplatesPage.vue";
 import ConfigTransferPage from "./pages/admin/config/ConfigTransferPage.vue";
@@ -64,6 +65,7 @@ export const router = createRouter({
         { path: "profiles", component: ProfilesPage, meta: { permissions: section("profiles") } },
         { path: "profiles/new", component: ProfileEditPage, meta: { permissions: ["profiles.manage"] } },
         { path: "profiles/:id", component: ProfileEditPage, meta: { permissions: section("profiles") } },
+        { path: "api-tokens", component: ApiTokensPage, meta: { permissions: section("api-tokens") } },
         { path: "classes", component: ClassesPage, meta: { permissions: section("classes") } },
         { path: "classes/new", component: ClassEditPage, meta: { permissions: section("classes") } },
         { path: "classes/:id", component: ClassEditPage, meta: { permissions: section("classes") } },
