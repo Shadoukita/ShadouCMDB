@@ -34,7 +34,7 @@ Start this plan on any of these:
 
 ## Roles
 
-The **incident lead** is the security owner (`TODO(owner): named security owner`), or the deputy
+The **incident lead** is the security owner (Shadoukita (product owner)), or the deputy
 (`TODO(owner): deputy`). They coordinate, decide, and keep the timeline. They may delegate
 technical work, but not the decision to revoke, unpublish or notify.
 

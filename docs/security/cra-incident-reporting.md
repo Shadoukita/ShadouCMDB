@@ -12,7 +12,7 @@ missed deadline.
 
 | Role | Who | Does |
 | --- | --- | --- |
-| Security owner | `TODO(owner): named security owner` | Decides whether a report is due, submits it, owns the timeline |
+| Security owner | Shadoukita (product owner) | Decides whether a report is due, submits it, owns the timeline |
 | Deputy | `TODO(owner): deputy` | Same authority when the owner is not reachable within 4 hours |
 | Engineering lead | the maintainer on the affected area | Analysis, fix, release |
 | Communications | `TODO(owner)` | Customer notification, advisory text |

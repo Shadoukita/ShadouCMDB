@@ -17,9 +17,12 @@
 Values marked `TODO(owner)` in these documents are waiting on a decision by the product owner
 (tracked in SHAA-77):
 
-- the security contact address (and OpenPGP key, if any);
-- the named security owner and a deputy;
-- the support period.
+- a deputy for the security owner;
+- the manufacturer's legal entity and address, and the ENISA platform registration;
+- a customer notification channel (e.g. a security-announce mailing list);
+- the CRA product classification, and acceptance of the residual risk.
 
-Search for `TODO(owner)` to find every place that needs the answer, including
-`backend/src/http/security_txt.rs`.
+Decided in SHAA-77: reports go through GitHub private vulnerability reporting only; the security
+owner is Shadoukita (product owner); the support period is 5 years per major version.
+
+Search for `TODO(owner)` to find every place that still needs an answer.

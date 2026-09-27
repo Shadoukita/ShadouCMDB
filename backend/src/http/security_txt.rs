@@ -8,9 +8,8 @@
 //! [`EXPIRES_AFTER_DAYS`]. The contacts are the project's for as long as a
 //! release is supported (SECURITY.md), which is what `Expires` vouches for.
 //!
-//! TODO(owner): add the security contact mailbox as the first `Contact:` line
-//! once it is decided (SHAA-77). The GitHub links only reach reporters once
-//! the repository is public.
+//! GitHub private vulnerability reporting is the only contact (SHAA-77). The
+//! GitHub links only reach reporters once the repository is public.
 //!
 //! `Canonical` is left out on purpose: it must be the URL this file is served
 //! from, which only the operator knows.

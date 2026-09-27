@@ -137,5 +137,5 @@ documented risk acceptance by the security owner exists.
   years after the product is placed on the market, or for the support period if that is longer
   (Art. 13(13)).
 
-Owner of this document: the security owner (`TODO(owner): named security owner`). Reviewed at
+Owner of this document: the security owner (Shadoukita (product owner)). Reviewed at
 least yearly and after every incident.

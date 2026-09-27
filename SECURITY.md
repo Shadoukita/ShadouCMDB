@@ -12,12 +12,9 @@ other security documents are listed in [docs/security](docs/security/README.md).
 
 **Do not open a public issue, pull request or discussion for a vulnerability.**
 
-Report it privately, through either channel:
-
-- **GitHub:** [report a vulnerability](https://github.com/Shadoukita/ShadouCMDB/security/advisories/new)
-  (GitHub private vulnerability reporting).
-- **Email:** `TODO(owner): security contact address`. Encrypt with our OpenPGP key if you can:
-  `TODO(owner): key fingerprint and URL`, or leave this line out.
+Report it privately through GitHub:
+[report a vulnerability](https://github.com/Shadoukita/ShadouCMDB/security/advisories/new)
+(GitHub private vulnerability reporting). This is currently the only reporting channel.
 
 Every installation also serves these contacts at `/.well-known/security.txt` (RFC 9116).
 
@@ -63,8 +60,7 @@ disclosure date with them.
 | --- | --- |
 | `0.1.x` (pre-release, `0.1.0-rc.*`) | Yes, until `0.1.0` is released. Release candidates are for evaluation, not production. |
 
-Support period: `TODO(owner): support period` (the CRA expects at least five years unless the
-product is expected to be in use for less time). Each release will state its end-of-support date
+Support period: **5 years from the release of each major version** (the CRA default). Each release will state its end-of-support date
 (month and year) in its release notes, and this table will list it. See
 [support period](docs/security/support-period.md) for what "supported" means.
 
@@ -102,4 +98,4 @@ If you are unsure whether something is allowed, ask us first through the channel
 ## Contact and responsibility
 
 Security owner (the person accountable for handling reports and CRA notifications):
-`TODO(owner): named security owner`.
+Shadoukita (product owner, [@Shadoukita](https://github.com/Shadoukita)).

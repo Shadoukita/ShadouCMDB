@@ -9,7 +9,7 @@ changes the attack surface, after every incident, and at least yearly.
 | Version | 1 (2026-09-27) |
 | Covers | `main` as of SHAA-79, release line `0.1.x` |
 | Author | Mamori (security engineering) |
-| Approved by | `TODO(owner): named security owner` |
+| Approved by | Shadoukita (product owner) |
 | Next review | on the next attack-surface change, or 2027-09 at the latest |
 
 ## 1. Product and intended use

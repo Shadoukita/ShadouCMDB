@@ -3,7 +3,7 @@
 The support period is the time during which a ShadouCMDB release line receives security fixes
 (CRA Art. 13(8)).
 
-**Support period:** `TODO(owner): support period, e.g. "5 years from the release of each minor version"`.
+**Support period:** 5 years from the release of each major version.
 
 ## What we commit to
 
