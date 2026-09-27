@@ -30,6 +30,9 @@
 -- ci_attribute_values and its trigger are dropped. Every statement run is
 -- recorded in cmdb.schema_changes.
 --
+-- On a three-role install the schemas and tables are then handed to the API
+-- role (shadoucmdb_app), which alters them at run time.
+--
 -- Reporting views (<area>.v_<type>) are created by `shadoucmdb migrate` right
 -- after the migrations, by the same engine that maintains them afterwards.
 
@@ -49,6 +52,8 @@ DECLARE
   total_expected bigint;
   nulls bigint;
   notes jsonb := '[]'::jsonb;
+  -- Three-role install: the API role owns what it will alter at run time (see 0008).
+  handover boolean := EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_app') AND current_user <> 'shadoucmdb_app';
 BEGIN
   FOR area IN SELECT key FROM cmdb.areas ORDER BY sort_order, key LOOP
     stmt := format('CREATE SCHEMA %I', area.key);
@@ -142,6 +147,21 @@ BEGIN
     RAISE EXCEPTION 'moving attribute values failed: % in ci_attribute_values, % moved', total_expected, total_moved;
   END IF;
 
+  IF handover THEN
+    FOR area IN SELECT key FROM cmdb.areas ORDER BY sort_order, key LOOP
+      stmt := format('ALTER SCHEMA %I OWNER TO shadoucmdb_app', area.key);
+      EXECUTE stmt;
+      stmts := stmts || stmt;
+    END LOOP;
+    FOR cls IN
+      SELECT c.key, a.key AS area FROM cmdb.ci_classes c JOIN cmdb.areas a ON a.id = c.area_id ORDER BY a.key, c.key
+    LOOP
+      stmt := format('ALTER TABLE %I.%I OWNER TO shadoucmdb_app', cls.area, cls.key);
+      EXECUTE stmt;
+      stmts := stmts || stmt;
+    END LOOP;
+  END IF;
+
   -- The generic value table and its validation are replaced by the typed columns.
   DROP TABLE cmdb.ci_attribute_values;
   stmts := stmts || 'DROP TABLE cmdb.ci_attribute_values'::text;
@@ -149,8 +169,8 @@ BEGIN
 
   IF cardinality(stmts) > 1 THEN
     INSERT INTO cmdb.schema_changes (actor_type, actor_name, summary, statements, impact)
-    VALUES ('system', 'migration 0008',
-            format('Migration 0008: %s attribute values moved into per-type tables', total_moved),
+    VALUES ('system', 'migration 0009',
+            format('Migration 0009: %s attribute values moved into per-type tables', total_moved),
             stmts,
             jsonb_build_array(jsonb_build_object('kind', 'data_moved', 'rows', total_moved,
               'message', format('%s values moved from ci_attribute_values and verified', total_moved))) || notes);

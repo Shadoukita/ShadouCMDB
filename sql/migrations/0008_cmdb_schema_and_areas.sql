@@ -23,11 +23,28 @@
 --
 -- Existing installs: the CI classes they already have are placed in an area
 -- "Infrastruktur" (schema `infrastruktur`), the area the IT infrastructure
--- starter template installs into. Migration 0008 then builds their tables and
+-- starter template installs into. Migration 0009 then builds their tables and
 -- moves the values out of ci_attribute_values.
 --
 -- Soft delete: areas are archived with is_active = false (the API's DELETE);
 -- the separate purge drops the schema. Nothing else here is deleted.
+
+-- Three-role installs (sql/bootstrap/): the API role, shadoucmdb_app, owns the
+-- area schemas and type tables, because it creates and alters them at run
+-- time. The migrations run as shadoucmdb_owner, which builds the tables of the
+-- existing classes (0009) and the reporting views (`shadoucmdb migrate`) and
+-- hands them over, so it must be a member of shadoucmdb_app. Only an
+-- administrator can grant that, so check it before anything changes.
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_app') AND current_user <> 'shadoucmdb_app'
+     AND NOT pg_has_role(current_user, 'shadoucmdb_app', 'MEMBER') THEN
+    RAISE EXCEPTION 'role % must be a member of shadoucmdb_app to build the per-type tables. As an administrator run: GRANT shadoucmdb_app TO %; (sql/bootstrap/10_split_roles.sql does this too), then run `shadoucmdb migrate` again',
+      current_user, quote_ident(current_user) USING ERRCODE = 'insufficient_privilege';
+  END IF;
+END;
+$$;
+--> statement-breakpoint
 
 CREATE SCHEMA IF NOT EXISTS cmdb;
 --> statement-breakpoint
@@ -63,12 +80,87 @@ BEGIN
   FOREACH f IN ARRAY ARRAY[
     'set_updated_at', 'ci_classes_prevent_cycle', 'locations_prevent_cycle',
     'configuration_items_validate', 'ci_attribute_values_validate', 'ci_relationships_validate',
-    'audit_log_append_only', 'permission_profiles_protect_builtin', 'permission_rows_not_builtin',
+    'permission_profiles_protect_builtin', 'permission_rows_not_builtin',
     'users_keep_one_administrator', 'lookup_list_values_keep_list', 'ui_settings_versions_append_only'
   ] LOOP
     EXECUTE format('ALTER FUNCTION public.%I() SET SCHEMA cmdb', f);
     EXECUTE format('ALTER FUNCTION cmdb.%I() SET search_path = cmdb, public', f);
   END LOOP;
+END;
+$$;
+--> statement-breakpoint
+-- Already pinned to pg_catalog, pg_temp (migration 0007); it only moves.
+ALTER FUNCTION public.audit_log_append_only() SET SCHEMA cmdb;
+--> statement-breakpoint
+
+-- The retention function (migration 0007) names its tables with their schema,
+-- so it is recreated with the new one. Same signature, owner and grants.
+ALTER FUNCTION public.prune_audit_log(interval, text, boolean, text) SET SCHEMA cmdb;
+--> statement-breakpoint
+CREATE OR REPLACE FUNCTION cmdb.prune_audit_log(p_older_than interval, p_scope text, p_dry_run boolean, p_operator text DEFAULT NULL)
+RETURNS TABLE (category text, total bigint)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  cutoff timestamptz := now() - p_older_than;
+  session_cutoff timestamptz := now() - interval '30 days';
+  actions text[];
+  counts jsonb;
+  sessions_count bigint := 0;
+BEGIN
+  IF p_older_than IS NULL OR cutoff > now() - interval '30 days' THEN
+    RAISE EXCEPTION 'prune_audit_log: the window must be at least 30 days (got %)', p_older_than
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  actions := CASE p_scope
+    WHEN 'auth' THEN ARRAY['login.success', 'login.failure', 'login.locked', 'logout', 'session.revoke']
+    WHEN 'changes' THEN ARRAY['create', 'update', 'delete', 'restore']
+  END;
+  IF actions IS NULL OR p_dry_run IS NULL THEN
+    RAISE EXCEPTION 'prune_audit_log: scope must be auth or changes, and dry_run true or false'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  IF p_dry_run THEN
+    SELECT coalesce(jsonb_object_agg(a.action, a.n), '{}') INTO counts
+    FROM (SELECT l.action, count(*) AS n FROM cmdb.audit_log l
+          WHERE l.action = ANY (actions) AND l.occurred_at < cutoff GROUP BY l.action) a;
+    IF p_scope = 'auth' THEN
+      SELECT count(*) INTO sessions_count FROM cmdb.sessions s WHERE s.expires_at < session_cutoff;
+    END IF;
+  ELSE
+    PERFORM set_config('shadoucmdb.audit_purge', 'on', true);
+    WITH gone AS (
+      DELETE FROM cmdb.audit_log l WHERE l.action = ANY (actions) AND l.occurred_at < cutoff RETURNING l.action
+    )
+    SELECT coalesce(jsonb_object_agg(g.action, g.n), '{}') INTO counts
+    FROM (SELECT gone.action, count(*) AS n FROM gone GROUP BY gone.action) g;
+    PERFORM set_config('shadoucmdb.audit_purge', '', true);
+    IF p_scope = 'auth' THEN
+      DELETE FROM cmdb.sessions s WHERE s.expires_at < session_cutoff;
+      GET DIAGNOSTICS sessions_count = ROW_COUNT;
+    END IF;
+
+    INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+    VALUES ('system', session_user, 'audit.purge', 'audit_log', gen_random_uuid(), jsonb_build_object(
+      'scope', p_scope,
+      'olderThan', p_older_than::text,
+      'cutoff', cutoff,
+      'deleted', counts,
+      'sessionsDeleted', sessions_count,
+      'sessionsCutoff', CASE WHEN p_scope = 'auth' THEN session_cutoff END,
+      'databaseUser', session_user,
+      'clientAddress', host(inet_client_addr()),
+      'operator', left(p_operator, 128)
+    ));
+  END IF;
+
+  RETURN QUERY SELECT c.key, c.value::bigint FROM jsonb_each_text(counts) c ORDER BY c.key;
+  IF p_scope = 'auth' THEN
+    RETURN QUERY SELECT 'sessions'::text, sessions_count;
+  END IF;
 END;
 $$;
 --> statement-breakpoint
@@ -273,5 +365,31 @@ BEGIN
   RETURN true;
 EXCEPTION WHEN data_exception THEN
   RETURN false;
+END;
+$$;
+--> statement-breakpoint
+
+-- ---------------------------------------------------------------------------
+-- Grants for the three-role setup (as migration 0007 makes them for public)
+-- ---------------------------------------------------------------------------
+-- The moved tables keep their grants. The API role gets USAGE on cmdb, DML on
+-- the new tables (schema_changes is append-only: SELECT and INSERT), the
+-- REFERENCES its type tables need for their foreign keys, and CREATE on the
+-- database for the schemas of new areas. The maintenance role reaches
+-- cmdb.prune_audit_log() and nothing else.
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_maintenance') THEN
+    GRANT USAGE ON SCHEMA cmdb TO shadoucmdb_maintenance;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_app') AND current_user <> 'shadoucmdb_app' THEN
+    GRANT USAGE ON SCHEMA cmdb TO shadoucmdb_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON cmdb.areas TO shadoucmdb_app;
+    GRANT SELECT, INSERT ON cmdb.schema_changes TO shadoucmdb_app;
+    GRANT REFERENCES ON cmdb.configuration_items, cmdb.lookup_list_values TO shadoucmdb_app;
+    EXECUTE format('GRANT CREATE ON DATABASE %I TO shadoucmdb_app', current_database());
+    ALTER DEFAULT PRIVILEGES IN SCHEMA cmdb GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO shadoucmdb_app;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA cmdb GRANT USAGE, SELECT ON SEQUENCES TO shadoucmdb_app;
+  END IF;
 END;
 $$;

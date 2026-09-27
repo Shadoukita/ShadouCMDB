@@ -4,8 +4,8 @@ Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_sc
 [`../migrations/0003_users_and_permission_profiles.sql`](../migrations/0003_users_and_permission_profiles.sql) and
 [`../migrations/0004_data_model_admin.sql`](../migrations/0004_data_model_admin.sql) and
 [`../migrations/0005_ui_settings.sql`](../migrations/0005_ui_settings.sql) and
-[`../migrations/0007_cmdb_schema_and_areas.sql`](../migrations/0007_cmdb_schema_and_areas.sql) and
-[`../migrations/0008_type_tables.sql`](../migrations/0008_type_tables.sql)
+[`../migrations/0008_cmdb_schema_and_areas.sql`](../migrations/0008_cmdb_schema_and_areas.sql) and
+[`../migrations/0009_type_tables.sql`](../migrations/0009_type_tables.sql)
 (`sessions.ip_address` from [`../migrations/0006_auth_audit.sql`](../migrations/0006_auth_audit.sql)).
 Every table below lives in the `cmdb` schema, except the type tables: each area is a schema of its
 own and each type a table in it. `area_schema__type_table` stands for one of them (e.g.

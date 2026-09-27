@@ -22,7 +22,7 @@ pub static MIGRATOR: Migrator = Migrator {
 /// Where sqlx records applied migrations.
 const MIGRATIONS_TABLE: &str = "public._sqlx_migrations";
 
-/// System tables live in `cmdb` (migration 0007); `public` holds the pg_trgm
+/// System tables live in `cmdb` (migration 0008); `public` holds the pg_trgm
 /// functions. Admin-defined areas are separate schemas, always schema-qualified.
 pub const SEARCH_PATH: &str = "cmdb, public";
 /// Where the Node/Drizzle runner recorded them before this binary existed.
@@ -161,9 +161,21 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
     let after = applied_count(pool).await?;
 
     // Area schemas, type tables and reporting views follow the data model; bring
-    // anything missing (after migration 0008, or a new reporting role) in line.
+    // anything missing (after migration 0009, or a new reporting role) in line.
     let ctx = crate::api::context::RequestContext::system("migrate", "migrate");
     let mut tx = pool.begin().await?;
+    // Three-role install: build them as the API role, which owns the area schemas
+    // and alters them at run time (migration 0008 checked the membership).
+    let as_api_role: bool = sqlx::query_scalar(
+        "SELECT current_user <> 'shadoucmdb_app' AND pg_has_role(current_user, 'shadoucmdb_app', 'MEMBER')
+         FROM pg_roles WHERE rolname = 'shadoucmdb_app'",
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .unwrap_or(false);
+    if as_api_role {
+        sqlx::query("SET LOCAL ROLE shadoucmdb_app").execute(&mut *tx).await?;
+    }
     let change = crate::schema::reconcile(&mut tx, &ctx, "Reconcile after migrate")
         .await
         .map_err(|e| anyhow::anyhow!("reconciling the data model failed: {}", e.message))?;

@@ -1,7 +1,7 @@
 //! The DDL engine: keeps the physical schema in step with the data model.
 //!
 //! Areas are PostgreSQL schemas, types are tables and fields are columns (see
-//! migration 0007/0008). Services change the metadata rows (cmdb.areas,
+//! migration 0008/0009). Services change the metadata rows (cmdb.areas,
 //! cmdb.ci_classes, cmdb.ci_attribute_definitions) and then call [`apply`] in
 //! the same transaction. The engine
 //!

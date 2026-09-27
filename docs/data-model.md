@@ -13,7 +13,7 @@ that need to look at other rows), not only in the API.
 Migrations: [`sql/migrations/`](../sql/migrations/)
 (`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`,
 `0003_users_and_permission_profiles`, `0004_data_model_admin`, `0005_ui_settings`, `0006_auth_audit`,
-`0007_cmdb_schema_and_areas`, `0008_type_tables`).
+`0008_cmdb_schema_and_areas`, `0009_type_tables`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -164,7 +164,7 @@ area schema and `SELECT` on every reporting view, and nothing else: it cannot re
 or the type tables directly. `POST /api/v1/schema-changes/reconcile` (and every `shadoucmdb migrate`)
 catches up after the role is created later. See `sql/bootstrap/00_create_role_and_database.sql`.
 
-**The move from `ci_attribute_values` (migration 0008).** Existing classes go into the area
+**The move from `ci_attribute_values` (migration 0009).** Existing classes go into the area
 `infrastruktur`; each gets its table, each attribute its column, and every value is copied into it.
 For every attribute the number of values written must equal its number of rows in
 `ci_attribute_values`, and the totals must match, or the migration fails and nothing changes. The
@@ -261,7 +261,8 @@ and never for an `audit.purge` row. Because the function runs with the owner's r
 `search_path` is `pg_catalog, pg_temp` and it names its tables by schema: a function or
 aggregate another role planted in `public` can never be resolved in its place. For the same
 reason no role but the owner may create objects in `public` (PostgreSQL 14 allows it by
-default; the bootstrap scripts and migration 0007 revoke it). The schema owner remains able to change anything, which
+default; the bootstrap scripts and migration 0007 revoke it). Migration 0008 moved the function into
+`cmdb` with the other system objects (`cmdb.prune_audit_log`). The schema owner remains able to change anything, which
 is why its credentials belong to migrations only, not to the running server.
 
 **Erasure for one person (GDPR Art. 17) is not supported.** It conflicts with an append-only

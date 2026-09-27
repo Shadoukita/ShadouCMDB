@@ -184,8 +184,8 @@ Every schema change is a migration. No hand-applied DDL.
 
 Adding an area, CI type, field or relationship type is **data**, not a migration: the application's
 DDL engine creates the matching PostgreSQL schema, table or column (area "Bestand" + type "Netzwerk"
-→ table `bestand.netzwerk`), so the app role needs the `CREATE` privilege on its database (see
-[`sql/README.md`](sql/README.md)). See
+→ table `bestand.netzwerk`), so the API role needs the `CREATE` privilege on its database and owns the area schemas (see
+[`sql/README.md`](sql/README.md) and [Database roles](docs/deployment.md#database-roles)). See
 [docs/data-model.md](docs/data-model.md#areas-type-tables-and-the-ddl-engine).
 
 ## Contributing
