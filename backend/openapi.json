@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ShadouCMDB API",
-    "description": "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.\n\n- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`.\n- `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.\n- Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.\n- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie. Every operation except the health probes, login and first-run setup answers 401 `UNAUTHENTICATED` without a live session.\n- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie); without it: 403 `CSRF_TOKEN_INVALID`.\n- Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.\n- Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.\n- Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.",
+    "description": "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.\n\n- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`.\n- `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.\n- Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.\n- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie. Every operation except the health probes, login and first-run setup answers 401 `UNAUTHENTICATED` without a live session.\n- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie); without it: 403 `CSRF_TOKEN_INVALID`.\n- Scripts and services use an API token instead (`Authorization: Bearer scmdb_...`, created under `/api/v1/admin/api-tokens`). With that header the cookies are ignored and no CSRF token is needed; an invalid, expired or revoked token is 401. A token may do what both its owner and its permission profile allow. Operations that answer 403 to tokens say so (sign-out, password change, `/auth/me` and token administration need a session). Every request made with a token is recorded in the audit log.\n- Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.\n- Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.\n- Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.",
     "version": "0.1.0"
   },
   "servers": [
@@ -308,7 +308,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -367,6 +367,7 @@
           "Authentication"
         ],
         "summary": "Sign out: end this session and clear its cookies",
+        "description": "Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "logout",
         "parameters": [],
         "responses": {
@@ -374,7 +375,7 @@
             "description": "Success, no content"
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -428,6 +429,7 @@
           "Authentication"
         ],
         "summary": "The signed-in user, their effective permissions and the CSRF token",
+        "description": "Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "getCurrentSession",
         "parameters": [],
         "responses": {
@@ -442,7 +444,17 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
             "content": {
               "application/json": {
                 "schema": {
@@ -485,7 +497,7 @@
           "Authentication"
         ],
         "summary": "Change your own password (ends your other sessions)",
-        "description": "400 when `currentPassword` is wrong. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
+        "description": "400 when `currentPassword` is wrong. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "changeOwnPassword",
         "parameters": [],
         "requestBody": {
@@ -531,7 +543,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -787,7 +799,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -820,6 +832,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -993,7 +1008,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1047,6 +1062,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -1092,7 +1110,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1145,6 +1163,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -1181,7 +1202,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1235,6 +1256,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -1418,7 +1442,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1492,6 +1516,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -1587,7 +1614,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1640,6 +1667,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -1804,7 +1834,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1837,6 +1867,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -1983,7 +2016,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2016,6 +2049,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -2091,7 +2127,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2155,6 +2191,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -2200,7 +2239,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2253,6 +2292,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -2289,7 +2331,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2343,6 +2385,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -2414,7 +2459,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2488,6 +2533,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -2595,7 +2643,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2628,6 +2676,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -2731,7 +2782,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2805,6 +2856,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -2849,7 +2903,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2892,6 +2946,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -2928,7 +2985,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2992,6 +3049,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -3097,7 +3157,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3181,6 +3241,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -3249,7 +3312,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3323,6 +3386,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -3481,7 +3547,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3514,6 +3580,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -3636,7 +3705,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3710,6 +3779,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -3754,7 +3826,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3797,6 +3869,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -3833,7 +3908,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3897,6 +3972,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -4015,7 +4093,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4099,6 +4177,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -4144,7 +4225,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4187,6 +4268,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -4245,7 +4329,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4288,6 +4372,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -4356,7 +4443,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4430,6 +4517,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -4589,7 +4679,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4622,6 +4712,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -4846,7 +4939,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4920,6 +5013,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -4964,7 +5060,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5007,6 +5103,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -5043,7 +5142,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5107,6 +5206,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -5115,7 +5217,7 @@
           "Attribute definitions"
         ],
         "summary": "Update a attribute definition (partial)",
-        "description": "Requires `datamodel.manage`. `dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert. Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. Preview any change with `POST /api/v1/schema-changes/preview`.",
+        "description": "Requires `datamodel.manage`. `dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. Preview any change with `POST /api/v1/schema-changes/preview`.",
         "operationId": "updateAttributeDefinition",
         "parameters": [
           {
@@ -5304,7 +5406,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5388,6 +5490,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -5433,7 +5538,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5476,6 +5581,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -5544,7 +5652,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5618,6 +5726,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -5745,7 +5856,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5778,6 +5889,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -5875,7 +5989,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5939,6 +6053,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -5983,7 +6100,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6026,6 +6143,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -6062,7 +6182,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6126,6 +6246,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -6219,7 +6342,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6293,6 +6416,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -6338,7 +6464,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6381,6 +6507,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -6487,7 +6616,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6520,6 +6649,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -6583,7 +6715,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6647,6 +6779,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -6691,7 +6826,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6734,6 +6869,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -6770,7 +6908,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6834,6 +6972,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -6902,7 +7043,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6976,6 +7117,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -7021,7 +7165,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7064,6 +7208,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -7151,7 +7298,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7194,6 +7341,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -7239,7 +7389,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7292,6 +7442,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -7380,7 +7533,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7464,6 +7617,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -7489,7 +7645,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7543,6 +7699,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -7635,7 +7794,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7678,6 +7837,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -7797,7 +7959,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7830,6 +7992,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -7913,7 +8078,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7977,6 +8142,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -8021,7 +8189,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8064,6 +8232,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -8100,7 +8271,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8164,6 +8335,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -8253,7 +8427,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8327,6 +8501,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -8372,7 +8549,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8415,6 +8592,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -8522,7 +8702,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8555,6 +8735,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -8635,7 +8818,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8699,6 +8882,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -8743,7 +8929,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8786,6 +8972,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -8822,7 +9011,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8886,6 +9075,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -8972,7 +9164,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9046,6 +9238,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -9091,7 +9286,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9134,6 +9329,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -9279,7 +9477,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9312,6 +9510,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -9428,7 +9629,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9492,6 +9693,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -9536,7 +9740,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9579,6 +9783,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -9615,7 +9822,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9679,6 +9886,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -9800,7 +10010,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9874,6 +10084,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -9919,7 +10132,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9962,6 +10175,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -10090,7 +10306,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10123,6 +10339,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -10214,7 +10433,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10278,6 +10497,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -10322,7 +10544,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10365,6 +10587,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -10401,7 +10626,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10465,6 +10690,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -10562,7 +10790,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10636,6 +10864,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -10681,7 +10912,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10724,6 +10955,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -10831,7 +11065,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10864,6 +11098,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -10944,7 +11181,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11008,6 +11245,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -11052,7 +11292,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11095,6 +11335,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -11131,7 +11374,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11195,6 +11438,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -11281,7 +11527,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11355,6 +11601,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -11400,7 +11649,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11443,6 +11692,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -11559,7 +11811,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11592,6 +11844,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -11689,7 +11944,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11753,6 +12008,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -11797,7 +12055,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11840,6 +12098,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -11876,7 +12137,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11940,6 +12201,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -12038,7 +12302,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12112,6 +12376,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -12157,7 +12424,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12200,6 +12467,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -12225,7 +12495,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12268,6 +12538,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -12314,7 +12587,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12368,6 +12641,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -12393,7 +12669,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12426,6 +12702,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -12498,7 +12777,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12562,6 +12841,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -12668,7 +12950,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12711,6 +12993,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -12757,7 +13042,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12810,6 +13095,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -12891,7 +13179,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12965,6 +13253,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -13127,7 +13418,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13181,6 +13472,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -13220,7 +13514,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13274,6 +13568,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -13284,7 +13581,7 @@
           "Audit log"
         ],
         "summary": "Change history (read-only, paginated, newest first by default)",
-        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. Passwords, session tokens and CSRF tokens are never recorded. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned.",
+        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, no_scope, session_only, forbidden), method, path, `operationId`, `ipAddress` and `userAgent`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. Passwords, session tokens, CSRF tokens and API token secrets are never recorded.",
         "operationId": "listAuditLog",
         "parameters": [
           {
@@ -13351,7 +13648,8 @@
                 "sessions",
                 "audit_log",
                 "areas",
-                "schema_changes"
+                "schema_changes",
+                "api_tokens"
               ]
             }
           },
@@ -13380,7 +13678,8 @@
                 "login.locked",
                 "logout",
                 "session.revoke",
-                "audit.purge"
+                "audit.purge",
+                "token.use"
               ]
             }
           },
@@ -13457,7 +13756,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13500,6 +13799,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -13614,7 +13916,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13657,6 +13959,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -13750,7 +14055,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13814,6 +14119,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -13859,7 +14167,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13912,6 +14220,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -13948,7 +14259,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14012,6 +14323,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -14104,7 +14418,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14178,6 +14492,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -14245,7 +14562,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14309,6 +14626,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -14400,7 +14720,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14443,6 +14763,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -14566,7 +14889,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14630,6 +14953,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -14675,7 +15001,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14728,6 +15054,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -14764,7 +15093,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14828,6 +15157,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       },
@@ -14958,7 +15290,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15032,6 +15364,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -15099,7 +15434,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15173,32 +15508,125 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
     },
-    "/api/v1/admin/config/export": {
+    "/api/v1/admin/api-tokens": {
       "get": {
         "tags": [
-          "Configuration export/import"
+          "API tokens"
         ],
-        "summary": "Download the whole configuration as one JSON file",
-        "description": "Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookups (statuses, environments, locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`.",
-        "operationId": "exportConfig",
-        "parameters": [],
+        "summary": "List API tokens (paginated, searchable, filterable by owner and status); never their secrets",
+        "description": "Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "listApiTokens",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: createdAt, name, expiresAt, lastUsedAt",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "-createdAt",
+              "enum": [
+                "createdAt",
+                "-createdAt",
+                "name",
+                "-name",
+                "expiresAt",
+                "-expiresAt",
+                "lastUsedAt",
+                "-lastUsedAt"
+              ]
+            }
+          },
+          {
+            "name": "userId",
+            "in": "query",
+            "description": "One or more ids, comma-separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "expired",
+                "revoked"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ConfigFile"
+                  "$ref": "#/components/schemas/ApiTokenList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15241,6 +15669,392 @@
         "security": [
           {
             "sessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "API tokens"
+        ],
+        "summary": "Create an API token; the response carries its secret, shown this once",
+        "description": "Requires `users.manage`. The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not. 400 when the owner is disabled or the owner or profile does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "createApiToken",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "profileId",
+                  "expiresAt"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "What the token is for, e.g. \"backup script\"",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "The owner; default: yourself. Use a dedicated user for a service token."
+                  },
+                  "profileId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "The scope: the token may do what both this profile and its owner allow"
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "In the future, at most 366 days from now (ISO 8601)"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedApiToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/api-tokens/{id}": {
+      "get": {
+        "tags": [
+          "API tokens"
+        ],
+        "summary": "Get one API token (without its secret)",
+        "description": "Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "getApiToken",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "API tokens"
+        ],
+        "summary": "Revoke an API token (it stays listed as revoked; revoking twice is a no-op)",
+        "description": "Requires `users.manage`. 403 when the owner holds permissions you do not (your own tokens are always revocable). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "revokeApiToken",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/config/export": {
+      "get": {
+        "tags": [
+          "Configuration export/import"
+        ],
+        "summary": "Download the whole configuration as one JSON file",
+        "description": "Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookups (statuses, environments, locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`.",
+        "operationId": "exportConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigFile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -15456,7 +16270,7 @@
             }
           },
           "401": {
-            "description": "Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED)",
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15530,6 +16344,9 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -15537,6 +16354,131 @@
   },
   "components": {
     "schemas": {
+      "ApiToken": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "userId",
+          "username",
+          "ownerIsActive",
+          "profile",
+          "tokenPrefix",
+          "status",
+          "expiresAt",
+          "revokedAt",
+          "revokedBy",
+          "lastUsedAt",
+          "lastUsedIp",
+          "createdBy",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The owner: the token acts as this user, within its profile"
+          },
+          "username": {
+            "type": "string"
+          },
+          "ownerIsActive": {
+            "type": "boolean",
+            "description": "A disabled owner's tokens are refused"
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "The scope; null once the profile was deleted (the token is then refused)"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokenPrefix": {
+            "type": "string",
+            "description": "The first characters of the secret, to recognise it; never the secret"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "expired",
+              "revoked"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revokedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revokedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastUsedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastUsedIp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Client address of the last accepted request (evidence only)"
+          },
+          "createdBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ApiTokenList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiToken"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
       "Area": {
         "type": "object",
         "required": [
@@ -15865,7 +16807,8 @@
               "login.locked",
               "logout",
               "session.revoke",
-              "audit.purge"
+              "audit.purge",
+              "token.use"
             ]
           },
           "entityType": {
@@ -16587,6 +17530,24 @@
             ],
             "format": "date-time",
             "description": "Set when the CI was deleted (soft delete); history keeps resolving"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreatedApiToken": {
+        "type": "object",
+        "description": "A new token and its secret. The secret is shown here only: store it now.",
+        "required": [
+          "token",
+          "secret"
+        ],
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/ApiToken"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Send as `Authorization: Bearer <secret>`. Not retrievable later."
           }
         },
         "additionalProperties": false
@@ -20877,6 +21838,11 @@
       }
     },
     "securitySchemes": {
+      "apiToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API token (`scmdb_` + 64 hex characters) from POST /api/v1/admin/api-tokens. No CSRF token needed; cookies are ignored."
+      },
       "csrfHeader": {
         "type": "apiKey",
         "in": "header",
@@ -20894,6 +21860,9 @@
   "security": [
     {
       "sessionCookie": []
+    },
+    {
+      "apiToken": []
     }
   ],
   "tags": [
@@ -20974,6 +21943,10 @@
     {
       "name": "Permission profiles",
       "description": "Administration: named sets of global and per-CI-class permissions. Users can hold several; the built-in Administrator profile holds everything."
+    },
+    {
+      "name": "API tokens",
+      "description": "Administration: tokens for scripts and services. A token acts as its owner, limited to one permission profile, until it expires or is revoked. Needs users.manage and a signed-in session."
     },
     {
       "name": "Configuration export/import",

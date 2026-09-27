@@ -37,7 +37,8 @@ audit_log (append-only; entity_type + entity_id point at any row)
 
 users ─< user_permission_profiles >─ permission_profiles ─┬─< permission_profile_global_permissions
   │                                                        └─< permission_profile_class_permissions >─ ci_classes (NULL = all)
-  └─< sessions
+  ├─< sessions
+  └─< api_tokens >─ permission_profiles (scope; NULL once deleted)
 
 ui_settings (one row) ── (version) ─> ui_settings_versions (append-only)
 ui_assets (logo, favicon)
@@ -66,6 +67,7 @@ ui_assets (logo, favicon)
 | `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
 | `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
+| `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by`. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted |
 | `sessions` | Server-side login sessions: SHA-256 of the cookie token, `csrf_token`, `last_seen_at` (idle timeout), `expires_at` (absolute lifetime), `user_agent`, `ip_address` (`inet`, client address at sign-in; evidence only). | unique `token_hash` (32 bytes); cascades with the user |
 | `ui_settings` | The one current UI settings document (`settings` jsonb, validated by the API against `UiSettingsDocument`), its `version`, and who saved it. Classes, attributes and lookups are referenced by key inside the document, not by FK, so it survives export/import; the API reports references that do not resolve. | exactly one row (`singleton` check + unique); `settings` is an object; `version` must exist in `ui_settings_versions` (deferred FK) |
 | `ui_settings_versions` | Every saved version of the document with actor, time and an optional comment. | PK `version`; **UPDATE/DELETE rejected** (trigger); comment at most 500 characters |
@@ -122,9 +124,11 @@ created. The API derives it from the display name unless one is given: lower cas
 `virtuelle_maschinen`, "Größe" → `groesse`. `GET /api/v1/technical-names` previews it. A name must
 match `^[a-z][a-z0-9_]{0,62}$` (types: at most 61 characters, since the view adds `v_`), so it never
 needs quoting in a report. Refused with `422 INVALID_NAME` and the reason: reserved SQL keywords,
-`pg_` prefixes, system schemas (`cmdb`, `public`, `information_schema`, `cmdb_*`), `v_` for types,
-registry column names (`id`, `name`, `status`, …) for fields, and names already taken (types are
-unique across areas; a field is unique within its type's lineage).
+`pg_` prefixes, system schemas (`cmdb`, `public`, `information_schema`, `cmdb_*`), the database
+role prefix `shadoucmdb_*` for areas, `v_` for types, registry column names (`id`, `name`,
+`status`, …) for fields, and names already taken (types are unique across areas; a field is unique
+within its type's lineage; an area may not match an existing schema or database role, since a schema
+named after a role comes first on that role's default search_path).
 
 **The engine** (`backend/src/schema/`). A data model write changes the metadata rows, then asks the
 engine to bring the catalog in line, **in the same transaction**:
@@ -187,6 +191,7 @@ value before and after the upgrade.
 | `permission_profiles` and their permission rows, `user_permission_profiles` | **Hard delete** | Pure configuration; every change is in `audit_log` (a profile's before/after includes its permissions, a user's includes their profiles). Deleting a profile removes it from its holders. |
 | `ui_settings`, `ui_settings_versions` | **Replaced, never deleted** | Saving creates a new version; history is append-only, so any earlier layout can be looked at and restored. |
 | `ui_assets` | **Hard delete** | An image is current state only; the audit log keeps its metadata (type, size, hash). |
+| `api_tokens` | **Revoke** (`revoked_at`), row kept | A revoked or expired token stays listed next to its audit rows. Deleting the owner deletes their tokens; the API writes a `delete` audit row for each first. |
 | `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login, and `prune-audit` removes any left 30 days after their expiry. Every session the API ends (not expiry) leaves a `logout` or `session.revoke` row in `audit_log`. |
 
 ## Auditing
@@ -223,6 +228,15 @@ Passwords, session tokens, token hashes and CSRF tokens are never written. The I
 evidence, not an access control: see [deployment](deployment.md#https-and-session-cookies)
 for the proxy it assumes. Nothing alerts on these rows yet.
 
+API tokens (`entity_type = 'api_tokens'`, `entity_id` = the token): creating one is a `create` row and revoking it
+an `update` row (old and new token, never the secret or its hash). **Every request made with a known token** is a
+`token.use` row whose `new_value` has `tokenName`, `tokenPrefix`, `userId`, `username`, `outcome` (`accepted`,
+`revoked`, `expired`, `owner_disabled`, `no_scope`, `session_only` or `forbidden`), `method`, `path`,
+`operationId`, `ipAddress` and `userAgent`. Its actor is the owner with `actor_type = 'api_client'`, as for the
+changes the request makes, which share its `request_id`. A made-up token matches no row and is not recorded
+(anyone could grow the table that way); the server logs a warning instead. A class-permission refusal inside a
+service is recorded as `accepted` (the route let the token in); the response says `403`.
+
 ## Retention and personal data
 
 **Personal data.** An IP address or user agent tied to a user is personal data (GDPR Art. 4(1)).
@@ -231,7 +245,9 @@ These fields hold it:
 | Where | Fields |
 | --- | --- |
 | `audit_log`, `entity_type = 'sessions'` (`login.*`, `logout`, `session.revoke`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.userAgent`, `new_value.session.ipAddress`, `new_value.session.userAgent`, and the user named in `actor_*`, `new_value.username` / `attemptedUsername` |
+| `audit_log`, `entity_type = 'api_tokens'` (`token.use`) | `new_value.ipAddress`, `new_value.userAgent`, `new_value.username`, and the owner in `actor_*` |
 | `sessions` | `ip_address`, `user_agent` |
+| `api_tokens` | `last_used_ip` |
 | `users` | `username`, `display_name`, `email` |
 | `audit_log`, `entity_type = 'users'` and every row's `actor_name` | the same user details, as history |
 
@@ -239,7 +255,7 @@ These fields hold it:
 
 | Data | Kept | How it goes |
 | --- | --- | --- |
-| Authentication events in `audit_log` | **180 days** | `shadoucmdb prune-audit --older-than 180d --execute`, run by the operator (scope `auth`, the default) |
+| Authentication events and `token.use` rows in `audit_log` | **180 days** | `shadoucmdb prune-audit --older-than 180d --execute`, run by the operator (scope `auth`, the default) |
 | CI and configuration change history in `audit_log` (`create`, `update`, `delete`, `restore`) | **Indefinitely** | Only if an operator explicitly runs `prune-audit --scope changes` |
 | `sessions` rows | Until **30 days after expiry**; revoked sessions are deleted at once | Deleted at sign-in once expired; `prune-audit` (scope `auth`) removes any older than 30 days past expiry |
 | `audit.purge` rows | **Forever** | Never deleted, not even by the purge |
@@ -262,7 +278,7 @@ and never for an `audit.purge` row. Because the function runs with the owner's r
 aggregate another role planted in `public` can never be resolved in its place. For the same
 reason no role but the owner may create objects in `public` (PostgreSQL 14 allows it by
 default; the bootstrap scripts and migration 0007 revoke it). Migration 0008 moved the function into
-`cmdb` with the other system objects (`cmdb.prune_audit_log`). The schema owner remains able to change anything, which
+`cmdb` with the other system objects (`cmdb.prune_audit_log`); migration 0010 added `token.use` to the `auth` scope. The schema owner remains able to change anything, which
 is why its credentials belong to migrations only, not to the running server.
 
 **Erasure for one person (GDPR Art. 17) is not supported.** It conflicts with an append-only

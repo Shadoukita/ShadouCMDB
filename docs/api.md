@@ -27,6 +27,7 @@ The backend is the only database client. Everything the UI needs goes through th
 | Optimistic locking | CIs carry `version`. Send it in `PATCH`; if it is stale you get `409 VERSION_CONFLICT`. |
 | Audit | Every write adds an `audit_log` row in the same transaction, with the signed-in user as the actor (`actorType: user`, `actorId`, `actorName` = username). `X-Request-Id` is echoed back and stored. |
 | Sessions | The `shadoucmdb_session` cookie (see below). Writes (`POST`, `PUT`, `PATCH`, `DELETE`) also need `X-CSRF-Token`. |
+| API tokens | Scripts and services send `Authorization: Bearer scmdb_…` instead; no cookie, no CSRF token (see [API tokens](#api-tokens)). |
 | CORS | Off by default. Set `CORS_ORIGINS` when the UI is served from another origin; those origins may send credentials (the session cookie). |
 
 ## Error envelope
@@ -49,15 +50,15 @@ Every non-2xx response has this shape:
 | HTTP | `code` | When |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | The body, query or path failed validation, including database rule violations such as an illegal relationship class, a class cycle or an abstract class. `details[]` gives each field. |
-| 401 | `UNAUTHENTICATED` | No session, an expired or idle session, a disabled user, or (on login) a wrong username or password. |
-| 403 | `FORBIDDEN` | Signed in, but a global permission or a class permission is missing. |
+| 401 | `UNAUTHENTICATED` | No session, an expired or idle session, a disabled user, an unknown, expired or revoked API token, or (on login) a wrong username or password. |
+| 403 | `FORBIDDEN` | Signed in, but a global permission or a class permission is missing; or an API token on a route that needs a session. |
 | 403 | `CSRF_TOKEN_INVALID` | A write without the session's `X-CSRF-Token` header. |
 | 404 | `NOT_FOUND` | The id does not exist, or the route does not exist. |
 | 409 | `CONFLICT` | A duplicate (unique key or live edge), or a write to a soft-deleted CI or relationship. |
 | 409 | `IN_USE` | A hard delete of a row that is still referenced. `details[]` names each kind of reference and its count (`field` is the kind, e.g. `configurationItems`; `code` is `in_use`). Retire the row with `PATCH {"isActive": false}` instead. |
 | 409 | `VERSION_CONFLICT` | A stale `version` on a CI `PATCH`. |
 | 409 | `LAST_ADMINISTRATOR` | The change would leave no active user holding the Administrator profile. |
-| 422 | `INVALID_NAME` | A technical name (area, type or field `key`) is malformed, reserved (SQL keyword, `pg_` prefix, system schema, registry column) or already taken. `details[]` names the field and the reason. |
+| 422 | `INVALID_NAME` | A technical name (area, type or field `key`) is malformed, reserved (SQL keyword, `pg_` or `shadoucmdb_` prefix, system schema, registry column) or already taken. `details[]` names the field and the reason. |
 | 422 | `SCHEMA_CHANGE_REFUSED` | A data-loss guard stopped a schema change: a type change some stored values would not survive, `isRequired` while assets lack a value, removing stored enum values, or a purge that is not allowed yet (still active, wrong `confirm`, dependants). Nothing was changed. |
 | 429 | `RATE_LIMITED` | Too many failed sign-ins (for this username, or on the whole server), or too many wrong current passwords on `PUT /auth/password`; wait for `Retry-After` seconds. |
 | 413 / 415 | `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE` | The body is over 1 MiB (16 MiB for a configuration import), or is not JSON. |
@@ -87,6 +88,7 @@ Every non-2xx response has this shape:
 | Setup | `GET /setup`, `POST /setup` | `setupRequired` is true while no user exists. `POST` creates the first user with the Administrator profile and signs them in; `409` once any user exists. |
 | Authentication | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` | `login` and `me` return `{ user, permissions, csrfToken }`. `permissions` is the union of the user's profiles: `administrator`, `global[]`, `allClasses` and per-class `classes[]`. Changing your own password needs `currentPassword` and ends your other sessions. |
 | Users | `GET/POST /admin/users`, `GET/PATCH/DELETE /admin/users/{id}`, `PUT /admin/users/{id}/password` | Needs `users.manage`. `PATCH` renames, disables (`isActive: false`, which ends the user's sessions) and assigns profiles (`profileIds` replaces the set). `PUT …/password` sets a new password and ends the user's sessions. Filters: `q`, `isActive`, `profileId`. |
+| API tokens | `GET/POST /admin/api-tokens`, `GET/DELETE /admin/api-tokens/{id}` | Needs `users.manage` and a session. `POST {name, profileId, expiresAt, userId?}` answers `201 { token, secret }`; the secret is in that response only. `DELETE` revokes (the token stays listed with `status: revoked`). Filters: `q`, `userId`, `status` (`active`, `expired`, `revoked`). See [API tokens](#api-tokens). |
 | Permission profiles | `GET/POST /admin/profiles`, `GET/PATCH/DELETE /admin/profiles/{id}`, `POST /admin/profiles/{id}/clone` | Writes need `profiles.manage`; reading also works with `users.manage`. A profile is `{ name, description, globalPermissions[], classPermissions[] }`; `PATCH` replaces whichever list it sends. The built-in Administrator profile is read-only (`409`) and listed first. |
 | Health | `GET /healthz`, `GET /readyz` | `/readyz` returns `503` when the database is unreachable or migrations are pending, and reports `migrations: { applied, expected, upToDate }`. |
 
@@ -125,6 +127,26 @@ that already exist are unaffected.
 `PUT /api/v1/auth/password` has the same per-user backoff for wrong `currentPassword` values (5 free, then 1 s,
 2 s, … up to 15 min), so a stolen session cannot be turned into the password by guessing. The counters live in
 memory (per process, reset on restart).
+
+**API tokens.** <a id="api-tokens"></a>For scripts and services. A token belongs to a user (its owner; use a
+dedicated account for a service) and is scoped to one permission profile: it may do exactly what **both** the owner
+and that profile allow, so it never grants more than its owner holds, and taking a right from the owner takes it
+from their tokens. Every token has an expiry (at most 366 days ahead) and can be revoked; it also stops working
+while its owner is disabled or once its profile is deleted. Send it as `Authorization: Bearer scmdb_<64 hex>`.
+
+- The secret is returned once, by `POST /api/v1/admin/api-tokens`. The server stores its SHA-256 and the first 14
+  characters (`tokenPrefix`, to recognise a token found in a script or a log).
+- With a `Bearer` header the request is authenticated by the token alone: cookies are ignored, and a bad token is
+  `401`, never a fall-back to the session. That is why tokens need no CSRF token: a cross-site page cannot set the
+  header (and `CORS_ORIGINS` does not allow it), and adding one cannot take a browser's session past the CSRF
+  check. Other schemes (a proxy's `Basic` auth) are ignored and the session applies as usual.
+- The same server-side checks apply as for a session: the route's global permission, then class permissions in the
+  service. Sign-out, `/auth/me`, the password change and token administration need a session and answer tokens with
+  `403 FORBIDDEN`, so a token cannot mint a longer-lived token.
+- Managing tokens needs `users.manage`. As for accounts, a non-administrator can only create or revoke tokens for
+  users whose permissions they hold themselves (their own tokens are always revocable).
+- Every request made with a known token, accepted or refused, writes a `token.use` audit row; creating and revoking
+  write `create` and `update` rows (see [data model](data-model.md#auditing)).
 
 **First run.** While there are no users, `GET /api/v1/setup` returns `{"setupRequired": true}` and
 `POST /api/v1/setup` creates the first administrator and signs them in. `shadoucmdb create-admin` does the same
@@ -265,7 +287,7 @@ The server is the Rust binary `shadoucmdb` (Axum + Tokio + sqlx) in `backend/`:
 ```
 src/http/*      transport: middleware (request id, CORS, body limit), error envelope, fallback, shutdown
 src/api/*       route table, access rules, request validation (schema-driven), OpenAPI document, caller context, PG error mapping
-src/auth/*      sessions and cookies, CSRF, argon2id passwords, login backoff, permissions, the create-admin command
+src/auth/*      sessions and cookies, CSRF, API tokens, argon2id passwords, login backoff, permissions, the create-admin command
 src/modules/*   routes and services (rules, transactions, audit) per resource
 src/data/*      SQL only: compile-time checked sqlx queries (offline data in backend/.sqlx) and QueryBuilder lists
 ```
