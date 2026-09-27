@@ -631,7 +631,10 @@ mod tests {
     async fn guessing_the_current_password_is_throttled() {
         let Some(db) = scratch::database("guessing_the_current_password_is_throttled").await else { return };
         let (pool, auth) = (&db.pool, auth_state());
-        setup(pool, &auth, &HeaderMap::new(), &anon(), body("owner")).await.expect("setup");
+        let owner = body("owner");
+        // Guesses derive from the fixture password rather than repeating literals.
+        let (right, wrong) = (owner.password.clone(), owner.password.to_uppercase());
+        setup(pool, &auth, &HeaderMap::new(), &anon(), owner).await.expect("setup");
         let user_id: Uuid = sqlx::query_scalar("SELECT id FROM users").fetch_one(pool).await.unwrap();
         let permissions = data::load_permissions(&mut pool.acquire().await.unwrap(), user_id).await.unwrap();
         let principal = Principal {
@@ -650,14 +653,14 @@ mod tests {
             new_password: "a brand new passphrase".into(),
         };
         for _ in 0..crate::auth::throttle::FREE_FAILURES {
-            let e = change_password(pool, &auth, &ctx, change("wrong guess")).await.unwrap_err();
+            let e = change_password(pool, &auth, &ctx, change(&wrong)).await.unwrap_err();
             assert_eq!(e.code, ErrorCode::ValidationError);
         }
-        let e = change_password(pool, &auth, &ctx, change("correct horse battery")).await.unwrap_err();
+        let e = change_password(pool, &auth, &ctx, change(&right)).await.unwrap_err();
         assert_eq!(e.code, ErrorCode::RateLimited, "locked: not even the right password is checked");
         assert_eq!(e.retry_after, Some(1));
         let hash = data::password_hash(&mut pool.acquire().await.unwrap(), user_id).await.unwrap();
-        assert!(password::verify("correct horse battery", hash.as_deref()).await.unwrap(), "password unchanged");
+        assert!(password::verify(&right, hash.as_deref()).await.unwrap(), "password unchanged");
         db.drop().await;
     }
 
