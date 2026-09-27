@@ -1544,6 +1544,8 @@ dependencies = [
  "chrono",
  "clap",
  "dotenvy",
+ "flate2",
+ "futures-util",
  "hex",
  "ipnetwork",
  "mimalloc",

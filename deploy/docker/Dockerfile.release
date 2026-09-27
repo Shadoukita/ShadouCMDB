@@ -11,7 +11,8 @@
 #
 # To build from source instead, use the root Dockerfile.
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# Pinned by digest; Dependabot (.github/dependabot.yml) proposes updates.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG TARGETARCH
 COPY --chmod=0755 linux-${TARGETARCH}/shadoucmdb /usr/local/bin/shadoucmdb
 ENV API_HOST=0.0.0.0 \

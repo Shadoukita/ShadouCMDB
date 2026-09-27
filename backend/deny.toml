@@ -1,0 +1,62 @@
+# cargo-deny: supply-chain policy for the Rust dependency graph.
+# CI runs `cargo deny --locked check` (.github/workflows/supply-chain.yml) on every
+# pull request, on main and once a day, so a newly published advisory fails
+# the next run even without a code change. Run it locally the same way from backend/.
+
+[graph]
+# Check the targets we ship, so a Windows-only or musl-only crate is not missed.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "x86_64-pc-windows-msvc",
+]
+all-features = true
+
+[advisories]
+# RustSec: vulnerabilities, unsound crates and yanked versions fail the build;
+# unmaintained crates fail when they are a direct or transitive dependency.
+# An exception goes in `ignore` with the advisory id, a reason and a ticket.
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+ignore = []
+
+[licenses]
+# Permissive licences only. Anything else (GPL, AGPL, SSPL, unknown) fails
+# until someone decides it is acceptable and adds it here with a reason.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "BSL-1.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "CC0-1.0",
+  # webpki-roots: the Mozilla CA bundle as data.
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+# Keep common permissive licences allowed before a dependency first needs them.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# The shadoucmdb crate itself (publish = false).
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only: no git dependencies and no other registries unless added here.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

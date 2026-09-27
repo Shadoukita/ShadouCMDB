@@ -65,7 +65,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    ```
 
    **or** the discrete `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` variables. Also set
-   `MIGRATION_DATABASE_URL` (as `shadoucmdb_owner`) for `migrate`, and `MAINTENANCE_DATABASE_URL`
+   `MIGRATION_DATABASE_URL` (as `shadoucmdb_owner`) for `migrate`, `restore` and the resets, and `MAINTENANCE_DATABASE_URL`
    (as `shadoucmdb_maintenance`) for `prune-audit`.
    Then choose TLS with `DATABASE_SSL`:
 
@@ -173,6 +173,13 @@ docker compose up api                    # http://localhost:3000/readyz
 
 For a PostgreSQL running on the Docker host itself, set `PGHOST=host.docker.internal`, not
 `localhost`: inside a container, localhost is the container.
+
+## Backup, restore and reset
+
+`shadoucmdb backup` writes a consistent, checksummed backup of every table without pg_dump.
+`shadoucmdb restore FILE` checks it and restores it in one transaction. `factory-reset` returns
+an installation to first-run setup, and `decommission` removes all ShadouCMDB data and settings from
+the database before you retire it. See [docs/backup-and-reset.md](docs/backup-and-reset.md).
 
 ## Changing the schema
 
