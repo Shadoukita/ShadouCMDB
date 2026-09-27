@@ -25,11 +25,15 @@ Create the database (once, as a PostgreSQL admin)
 On any machine with psql (it need not be this server), from the directory you
 extracted this archive to (or copy sql/bootstrap/ there):
 
+  read -rsp 'shadoucmdb_owner password: ' OWNER_PW; echo
+  read -rsp 'shadoucmdb_app password: ' APP_PW; echo
+  read -rsp 'shadoucmdb_maintenance password: ' MAINT_PW; echo
   psql "postgres://admin@db.example.internal:5432/postgres" \
-       -v owner_password='<password 1>' \
-       -v app_password='<password 2>' \
-       -v maintenance_password='<password 3>' \
+       -v owner_password="$OWNER_PW" \
+       -v app_password="$APP_PW" \
+       -v maintenance_password="$MAINT_PW" \
        -f sql/bootstrap/00_create_role_and_database.sql
+  unset OWNER_PW APP_PW MAINT_PW
 
 Generate each password with `openssl rand -hex 24`. They go into connection
 URLs, where characters such as @ : / # % ? must be percent-encoded (@ -> %40);
@@ -76,6 +80,15 @@ Install as a systemd service
 Upgrade
 -------
 
+If the database still has only shadoucmdb_app (installed before the three-role
+setup), shadoucmdb_owner does not exist yet. Split the roles once first, in the
+order given in the header of sql/bootstrap/10_split_roles.sql:
+  1. install the new binary (first command below), then run migrate as
+     before, without MIGRATION_DATABASE_URL:
+       sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+  2. stop the server and run 10_split_roles.sql as a PostgreSQL admin;
+  3. start the server. From then on, migrate as shown below.
+
   sudo install -m 0755 shadoucmdb /usr/local/bin/shadoucmdb
   read -rsp 'shadoucmdb_owner password: ' PW; echo
   export MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$PW@db.example.internal:5432/shadoucmdb"
@@ -83,14 +96,6 @@ Upgrade
     shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
   unset PW MIGRATION_DATABASE_URL
   sudo systemctl restart shadoucmdb
-
-If the database still has only shadoucmdb_app (installed before the three-role
-setup), shadoucmdb_owner does not exist yet. Split the roles once first, in the
-order given in the header of sql/bootstrap/10_split_roles.sql:
-  1. run migrate as before, without MIGRATION_DATABASE_URL:
-       sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
-  2. stop the server and run 10_split_roles.sql as a PostgreSQL admin;
-  3. start the server. From then on, migrate as shown above.
 
 
 Audit log retention

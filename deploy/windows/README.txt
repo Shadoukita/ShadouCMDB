@@ -21,14 +21,18 @@ Create the database (once, as a PostgreSQL admin)
 -------------------------------------------------
 
 On any machine with psql (it need not be this server), in PowerShell, from the
-folder you extracted this archive to (or copy sql\bootstrap\ there). In cmd.exe,
-put the command on one line instead of using the ` continuations:
+folder you extracted this archive to (or copy sql\bootstrap\ there). The
+passwords are prompted for, so they stay out of the PowerShell history:
 
+  $owner = (Get-Credential shadoucmdb_owner).GetNetworkCredential().Password
+  $app   = (Get-Credential shadoucmdb_app).GetNetworkCredential().Password
+  $maint = (Get-Credential shadoucmdb_maintenance).GetNetworkCredential().Password
   psql "postgres://admin@db.example.internal:5432/postgres" `
-       -v owner_password='<password 1>' `
-       -v app_password='<password 2>' `
-       -v maintenance_password='<password 3>' `
+       -v "owner_password=$owner" `
+       -v "app_password=$app" `
+       -v "maintenance_password=$maint" `
        -f sql\bootstrap\00_create_role_and_database.sql
+  Remove-Variable owner, app, maint
 
 Use long random passwords, e.g. 48 hex characters. They go into connection URLs,
 where characters such as @ : / # % ? must be percent-encoded (@ -> %40); the
@@ -91,6 +95,15 @@ Then open http://<server>:3000/ in a browser.
 Upgrade
 -------
 
+If the database still has only shadoucmdb_app (installed before the three-role
+setup), shadoucmdb_owner does not exist yet. Split the roles once first, in the
+order given in the header of sql\bootstrap\10_split_roles.sql:
+  1. stop the service and copy the new binary (first two commands below),
+     then run migrate as before, without MIGRATION_DATABASE_URL:
+       & 'C:\Program Files\ShadouCMDB\shadoucmdb.exe' --env-file 'C:\ProgramData\ShadouCMDB\shadoucmdb.env' migrate
+  2. run 10_split_roles.sql as a PostgreSQL admin;
+  3. start the service. From then on, migrate as shown below.
+
   Stop-Service ShadouCMDB
   Copy-Item .\shadoucmdb.exe 'C:\Program Files\ShadouCMDB' -Force
   $pw = [uri]::EscapeDataString((Get-Credential shadoucmdb_owner).GetNetworkCredential().Password)
@@ -98,14 +111,6 @@ Upgrade
   & 'C:\Program Files\ShadouCMDB\shadoucmdb.exe' --env-file 'C:\ProgramData\ShadouCMDB\shadoucmdb.env' migrate
   Remove-Item Env:MIGRATION_DATABASE_URL; Remove-Variable pw
   Start-Service ShadouCMDB
-
-If the database still has only shadoucmdb_app (installed before the three-role
-setup), shadoucmdb_owner does not exist yet. Split the roles once first, in the
-order given in the header of sql\bootstrap\10_split_roles.sql:
-  1. run migrate as before, without MIGRATION_DATABASE_URL:
-       & 'C:\Program Files\ShadouCMDB\shadoucmdb.exe' --env-file 'C:\ProgramData\ShadouCMDB\shadoucmdb.env' migrate
-  2. stop the service and run 10_split_roles.sql as a PostgreSQL admin;
-  3. start the service. From then on, migrate as shown above.
 
 
 Audit log retention

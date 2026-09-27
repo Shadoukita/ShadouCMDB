@@ -198,6 +198,8 @@ owner). PostgreSQL 15 and later withhold it already.
 The owner can change anything, including the audit log's trigger, so keep its connection
 string out of the running server's environment. For example, prompt for the password and
 pass it only to the command that needs it (variables already set win over the env file).
+Use the same host, port and database as `DATABASE_URL`; any `sslmode` in the URL is ignored,
+`DATABASE_SSL` applies.
 Prompting also keeps it out of shell history, the sudo log and `ps`:
 
 ```sh
