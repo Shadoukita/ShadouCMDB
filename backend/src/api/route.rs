@@ -5,10 +5,12 @@
 //!
 //! Access control is part of the declaration too: every route needs a signed-in
 //! user unless it is marked [`RouteBuilder::public`], and may require a global
-//! permission ([`RouteBuilder::requires`]). The session is resolved, CSRF is
-//! checked for state-changing methods and the permission is checked before the
-//! request is validated, so an unauthenticated caller learns nothing about a
-//! route beyond 401.
+//! permission ([`RouteBuilder::requires`]). The session (or the API token of an
+//! `Authorization: Bearer` header) is resolved, CSRF is checked for
+//! state-changing methods on a session and the permission is checked before
+//! the request is validated, so an unauthenticated caller learns nothing about
+//! a route beyond 401. Routes marked [`RouteBuilder::session_only`] refuse
+//! API tokens.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -18,7 +20,7 @@ use axum::Extension;
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, RawPathParams, RawQuery, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodFilter, MethodRouter, on};
 use serde::Serialize;
@@ -424,6 +426,8 @@ pub struct Route {
     pub description: Option<String>,
     pub status: StatusCode,
     pub access: Access,
+    /// API tokens are refused (403): the route needs a browser session.
+    pub session_only: bool,
     /// Error codes beyond VALIDATION_ERROR / INTERNAL_ERROR / DATABASE_UNAVAILABLE
     /// (and the 401/403 implied by `access`).
     pub errors: Vec<ErrorCode>,
@@ -445,6 +449,7 @@ pub struct RouteBuilder {
     description: Option<String>,
     status: Option<StatusCode>,
     access: Access,
+    session_only: bool,
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
     body_limit: Option<usize>,
@@ -460,6 +465,7 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         description: None,
         status: None,
         access: Access::Authenticated,
+        session_only: false,
         errors: Vec::new(),
         also_returns: Vec::new(),
         body_limit: None,
@@ -501,6 +507,13 @@ impl RouteBuilder {
         self.access = Access::Permission(permission);
         self
     }
+    /// Refuse API tokens (403 FORBIDDEN): sign-out, password changes and token
+    /// administration need a signed-in session, so a token cannot outlive its
+    /// revocation by minting another.
+    pub fn session_only(mut self) -> Self {
+        self.session_only = true;
+        self
+    }
     /// The service checks per-class permissions, so the route can answer 403.
     pub fn class_checked(self) -> Self {
         self.errors(&[ErrorCode::Forbidden])
@@ -536,15 +549,19 @@ impl RouteBuilder {
         let status = self.status.unwrap_or(if response.is_some() { StatusCode::OK } else { StatusCode::NO_CONTENT });
         let filter = MethodFilter::try_from(self.method.clone()).expect("supported HTTP method");
         let access = self.access;
+        let session_only = self.session_only;
         let safe_method = self.method == Method::GET || self.method == Method::HEAD;
+        let (method, operation_id) = (self.method.clone(), Arc::<str>::from(self.operation_id.as_str()));
 
         let handler = move |State(state): State<AppState>,
+                            uri: Uri,
                             raw_path: RawPathParams,
                             RawQuery(raw_query): RawQuery,
                             headers: HeaderMap,
                             peer: Option<Extension<ConnectInfo<SocketAddr>>>,
                             body: Result<Bytes, BytesRejection>| {
             let f = f.clone();
+            let (method, operation_id) = (method.clone(), operation_id.clone());
             async move {
                 let run = async move {
                     let peer_ip = peer.map(|Extension(ConnectInfo(a))| a.ip());
@@ -553,7 +570,9 @@ impl RouteBuilder {
                         peer_ip,
                         user_agent: auth::session::user_agent(&headers),
                     };
-                    let ctx = authorise(&state, &headers, access, safe_method).await?.with_client(client);
+                    let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
+                    let rule = Rule { access, session_only, safe_method };
+                    let ctx = authorise(&state, &headers, rule, client, used).await?;
                     let body = read_body(&headers, body)?;
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
                     let api = Api { pool: state.pool, ctx, auth: state.auth, headers };
@@ -572,6 +591,7 @@ impl RouteBuilder {
             description: self.description,
             status,
             access,
+            session_only,
             errors: self.errors,
             also_returns: self.also_returns,
             path_params: P::params(),
@@ -586,34 +606,56 @@ impl RouteBuilder {
     }
 }
 
+/// A route's access rule.
+#[derive(Clone, Copy)]
+struct Rule {
+    access: Access,
+    session_only: bool,
+    safe_method: bool,
+}
+
 /// Resolves the caller and enforces the route's access rule: 401 without a
-/// live session, 403 CSRF_TOKEN_INVALID for a state-changing request without
-/// the session's token, 403 FORBIDDEN without the required permission.
+/// live session or a valid API token, 403 CSRF_TOKEN_INVALID for a
+/// state-changing request without the session's token, 403 FORBIDDEN without
+/// the required permission (or for a token on a session-only route).
+///
+/// An `Authorization: Bearer` header selects token authentication and the
+/// cookies are then ignored: a bad token is 401, never a fall-back to the
+/// session, so the header cannot be used to skip the session's CSRF check.
 async fn authorise(
     state: &AppState,
     headers: &HeaderMap,
-    access: Access,
-    safe_method: bool,
+    rule: Rule,
+    client: ClientInfo,
+    used: auth::token::Use<'_>,
 ) -> Result<RequestContext, AppError> {
     let request_id = request_id::current();
-    if access == Access::Public {
-        return Ok(RequestContext::anonymous(request_id));
+    if rule.access == Access::Public {
+        return Ok(RequestContext::anonymous(request_id).with_client(client));
+    }
+    if let Some(secret) = auth::token::bearer(headers) {
+        let required = match rule.access {
+            Access::Permission(p) => Some(p),
+            _ => None,
+        };
+        return auth::token::authenticate(&state.pool, secret, required, rule.session_only, request_id, client, used)
+            .await;
     }
     let Some(principal) = auth::authenticate(&state.pool, &state.auth.config, headers).await? else {
         return Err(unauthenticated());
     };
-    if !safe_method && !auth::csrf_ok(&principal, headers) {
+    if !rule.safe_method && !auth::csrf_ok(&principal, headers) {
         return Err(AppError::new(
             ErrorCode::CsrfTokenInvalid,
             "Missing or wrong X-CSRF-Token header (send the csrfToken from /api/v1/auth/me)",
         ));
     }
-    if let Access::Permission(p) = access
+    if let Access::Permission(p) = rule.access
         && !principal.permissions.has(p)
     {
         return Err(forbidden(format!("This requires the {} permission", p.as_str())));
     }
-    Ok(RequestContext::user(Arc::new(principal), request_id))
+    Ok(RequestContext::user(Arc::new(principal), request_id).with_client(client))
 }
 
 /// JSON is the only accepted body type. An empty body counts as no body

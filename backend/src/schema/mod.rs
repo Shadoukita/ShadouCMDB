@@ -280,8 +280,15 @@ fn quoted_list(values: &[String]) -> String {
     values.iter().map(|v| format!("\"{v}\"")).collect::<Vec<_>>().join(", ")
 }
 
+/// What the dry run looks for: values that would not convert at all, or
+/// values that would convert but lose part of themselves (a narrowing change).
+enum Guard {
+    Castable(String),
+    Lossless(String),
+}
+
 /// `ALTER COLUMN .. TYPE .. USING ..` for a type change, after a dry run of the
-/// conversion over every stored value.
+/// conversion over every stored value. A change must be lossless or it is refused.
 async fn type_change(
     conn: &mut PgConnection,
     plan: &mut Plan,
@@ -292,13 +299,21 @@ async fn type_change(
     let col = f.column();
     let to = pg_type(f.data_type);
     let rows = count(conn, format!("SELECT count(*) FROM {} WHERE {col} IS NOT NULL", table.sql())).await?;
-    let (using, bad): (String, Option<String>) = match (from, to) {
+    let (using, bad): (String, Option<Guard>) = match (from, to) {
         (_, "text") => (text_expr(&col, from), None),
         ("bigint", "numeric") => (format!("{col}::numeric"), None),
         ("numeric", "bigint") => (
             format!("{col}::bigint"),
-            Some(format!("{col} <> trunc({col}) OR {col} NOT BETWEEN -9223372036854775808 AND 9223372036854775807")),
+            Some(Guard::Castable(format!(
+                "{col} <> trunc({col}) OR {col} NOT BETWEEN -9223372036854775808 AND 9223372036854775807"
+            ))),
         ),
+        // Dates are UTC days: never through text, whose meaning depends on the session TimeZone.
+        ("timestamp with time zone", "date") => (
+            format!("({col} AT TIME ZONE 'UTC')::date"),
+            Some(Guard::Lossless(format!("({col} AT TIME ZONE 'UTC')::time <> '00:00'"))),
+        ),
+        ("date", "timestamp with time zone") => (format!("{col}::timestamp AT TIME ZONE 'UTC'"), None),
         ("uuid", _) | (_, "uuid") => {
             if rows > 0 {
                 return Err(field_error(
@@ -315,27 +330,48 @@ async fn type_change(
         }
         _ => {
             let text = text_expr(&col, from);
-            (format!("({text})::{to}"), Some(format!("NOT cmdb.value_castable({text}, '{to}'::regtype)")))
+            (
+                format!("({text})::{to}"),
+                Some(Guard::Castable(format!("NOT cmdb.value_castable({text}, '{to}'::regtype)"))),
+            )
         }
     };
-    if let Some(bad) = bad {
+    if let Some(guard) = bad {
+        let (Guard::Castable(bad) | Guard::Lossless(bad)) = &guard;
         let where_bad = format!("FROM {} WHERE {col} IS NOT NULL AND ({bad})", table.sql());
         let failing = count(conn, format!("SELECT count(*) {where_bad}")).await?;
         if failing > 0 {
-            let sample =
-                samples(conn, format!("SELECT DISTINCT {} {where_bad} ORDER BY 1 LIMIT 5", text_expr(&col, from)))
-                    .await?;
-            return Err(field_error(
-                "dataType",
-                "type_change_failed",
-                format!(
-                    "{failing} of {rows} stored values of \"{}\" cannot be converted to {}: {}. Correct or clear them \
-                     first; nothing was changed.",
-                    f.key,
-                    f.data_type.as_str(),
-                    quoted_list(&sample)
+            let shown = match from {
+                "timestamp with time zone" => {
+                    format!("to_char({col} AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')")
+                }
+                _ => text_expr(&col, from),
+            };
+            let sample = samples(conn, format!("SELECT DISTINCT {shown} {where_bad} ORDER BY 1 LIMIT 5")).await?;
+            let (code, message) = match guard {
+                Guard::Castable(_) => (
+                    "type_change_failed",
+                    format!(
+                        "{failing} of {rows} stored values of \"{}\" cannot be converted to {}: {}. Correct or clear \
+                         them first; nothing was changed.",
+                        f.key,
+                        f.data_type.as_str(),
+                        quoted_list(&sample)
+                    ),
                 ),
-            ));
+                Guard::Lossless(_) => (
+                    "type_change_lossy",
+                    format!(
+                        "{failing} of {rows} stored values of \"{}\" would lose information as {}: {}. Correct or \
+                         clear them first (a date holds no time of day: only values at midnight UTC convert); nothing \
+                         was changed.",
+                        f.key,
+                        f.data_type.as_str(),
+                        quoted_list(&sample)
+                    ),
+                ),
+            };
+            return Err(field_error("dataType", code, message));
         }
     }
     let i = plan.ddl(format!("ALTER TABLE {} ALTER COLUMN {col} TYPE {to} USING {using}", table.sql()));
@@ -971,6 +1007,78 @@ mod tests {
         assert_eq!(view_column(&mut c, &v_ours).await, None);
         assert_eq!(view_column(&mut c, &v_theirs).await.as_deref(), Some("x"));
         assert_eq!(view_column(&mut c, &theirs).await, None, "the purged table is gone");
+        drop(c);
+        db.drop().await;
+    }
+
+    /// GH#60: datetime -> date is refused while a value has a time of day, and
+    /// converts by the UTC day (not the session TimeZone) once none has.
+    #[tokio::test]
+    async fn datetime_to_date_is_refused_unless_lossless() {
+        const TEST: &str = "datetime_to_date_is_refused_unless_lossless";
+        let Some(db) = crate::db::scratch::database(TEST).await else { return };
+        let mut c = db.pool.acquire().await.unwrap();
+        let conn: &mut PgConnection = &mut c;
+        // Far from UTC: a conversion through text would move 2024-05-01 00:00Z to 2024-04-30.
+        sqlx::raw_sql("SET TimeZone = 'America/Los_Angeles'; CREATE TABLE public.t (last_seen timestamptz)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::raw_sql("INSERT INTO public.t VALUES ('2024-05-01T23:30:00Z'), ('2024-05-02T00:00:00Z'), (NULL)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        let table = TableName { schema: Ident::trusted("public"), table: Ident::trusted("t") };
+        let mut f = Field {
+            id: Uuid::new_v4(),
+            class_id: Uuid::new_v4(),
+            key: "last_seen".into(),
+            label: "Last seen".into(),
+            data_type: AttributeDataType::Date,
+            enum_values: None,
+            is_required: false,
+            is_active: true,
+            sort_order: 0,
+        };
+        let run = async |conn: &mut PgConnection, f: &Field, from: &str| {
+            let mut plan = Plan::default();
+            type_change(conn, &mut plan, &table, f, from).await?;
+            for sql in &plan.ddl {
+                execute(conn, sql).await?;
+            }
+            Ok::<_, AppError>(())
+        };
+
+        let err = run(&mut *conn, &f, "timestamp with time zone").await.unwrap_err();
+        let detail = &err.details.as_ref().unwrap()[0];
+        assert_eq!(detail.code, "type_change_lossy");
+        assert!(err.message.contains("1 of 2") && err.message.contains("\"2024-05-01T23:30:00Z\""), "{}", err.message);
+
+        sqlx::raw_sql(
+            "UPDATE public.t SET last_seen = '2024-05-01T00:00:00Z' WHERE last_seen = '2024-05-01T23:30:00Z'",
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        run(&mut *conn, &f, "timestamp with time zone").await.unwrap();
+        let days: Vec<String> =
+            sqlx::query_scalar("SELECT last_seen::text FROM public.t WHERE last_seen IS NOT NULL ORDER BY 1")
+                .fetch_all(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(days, ["2024-05-01", "2024-05-02"]);
+
+        // And back: a date is midnight UTC, whatever the session TimeZone.
+        f.data_type = AttributeDataType::Datetime;
+        run(&mut *conn, &f, "date").await.unwrap();
+        let back: Vec<String> = sqlx::query_scalar(
+            "SELECT to_char(last_seen AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') FROM public.t WHERE last_seen IS NOT NULL ORDER BY 1",
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap();
+        assert_eq!(back, ["2024-05-01 00:00", "2024-05-02 00:00"]);
+
         drop(c);
         db.drop().await;
     }
