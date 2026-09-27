@@ -301,7 +301,8 @@ async fn login(
 
 async fn logout(pool: &PgPool, ctx: &RequestContext) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
-    if let Some(ended) = data::delete_session(&mut tx, principal(ctx)?.session_id).await? {
+    let Some(session_id) = principal(ctx)?.session_id() else { return Err(unauthenticated()) };
+    if let Some(ended) = data::delete_session(&mut tx, session_id).await? {
         events::logout(&mut tx, ctx, &ended).await?;
     }
     tx.commit().await?;
@@ -375,6 +376,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::POST, "/api/v1/auth/logout", "logout")
             .tag(TAG)
             .summary("Sign out: end this session and clear its cookies")
+            .session_only()
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 logout(&api.pool, &api.ctx).await?;
                 let secure = session::secure_cookies(&api.auth.config, &api.headers);
@@ -383,13 +385,16 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, "/api/v1/auth/me", "getCurrentSession")
             .tag(TAG)
             .summary("The signed-in user, their effective permissions and the CSRF token")
+            .session_only()
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 let me = principal(&api.ctx)?;
-                Ok(Json(session_dto(&api.pool, me.user_id, me.csrf_token.clone()).await?))
+                let csrf_token = me.csrf_token().ok_or_else(unauthenticated)?.to_owned();
+                Ok(Json(session_dto(&api.pool, me.user_id, csrf_token).await?))
             }),
         route(Method::PUT, "/api/v1/auth/password", "changeOwnPassword")
             .tag(TAG)
             .summary("Change your own password (ends your other sessions)")
+            .session_only()
             .description(
                 "400 when `currentPassword` is wrong. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
             )
@@ -406,6 +411,7 @@ mod tests {
     use sqlx::Executor;
 
     use super::*;
+    use crate::auth::Credential;
     use crate::config::{AuthConfig, CookieSecure};
     use crate::db::scratch;
 
@@ -512,8 +518,7 @@ mod tests {
         let principal = Principal {
             user_id,
             username: "owner".into(),
-            session_id: Uuid::nil(),
-            csrf_token: String::new(),
+            credential: Credential::Session { id: Uuid::nil(), csrf_token: String::new() },
             permissions,
         };
         let ctx = RequestContext::user(std::sync::Arc::new(principal), String::new());
@@ -646,8 +651,7 @@ mod tests {
         let principal = Principal {
             user_id: owner.user.id,
             username: "owner".into(),
-            session_id: Uuid::nil(),
-            csrf_token: String::new(),
+            credential: Credential::Session { id: Uuid::nil(), csrf_token: String::new() },
             permissions,
         };
         let admin =
