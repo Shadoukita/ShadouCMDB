@@ -36,6 +36,9 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
 ## Pointing the app at an external PostgreSQL
 
+Installing from a release? Follow the step-by-step [operator setup guide](docs/operator-setup.md),
+from an empty directory to a verified install. The steps below are the same flow for a source checkout.
+
 1. **Create the database and its roles** on your PostgreSQL server (run as an admin there):
 
    ```sh
