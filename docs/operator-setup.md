@@ -316,6 +316,31 @@ roles with `sql/bootstrap/10_split_roles.sql` (see
 [deployment.md](deployment.md#upgrading-a-single-role-install)). For backups before an upgrade
 see [backup-and-reset.md](backup-and-reset.md).
 
+### Upgrade paths tested in CI
+
+Every pull request and every push to `main` and `release/*` upgrades a real database in place
+(`.github/workflows/upgrade.yml`):
+
+| From | To | How |
+| --- | --- | --- |
+| `v0.1.0-rc.1` (single role, migrations 0000–0006) | the commit under test | `migrate` as `shadoucmdb_app`, then `10_split_roles.sql`, then `migrate` as `shadoucmdb_owner` |
+
+For each path the job installs the old release from its GitHub Release archive (checksum
+verified), bootstraps PostgreSQL with that release's own `00_create_role_and_database.sql`, loads
+its demo inventory and creates more data through its API: a CI class with one attribute of every
+data type, CIs, a relationship, a deleted CI, a restricted permission profile and user, and the
+audit rows all of that writes. After the upgrade, `tools/upgrade/upgrade-check.ts` reads every
+object again and fails if an id, attribute value, relationship, profile grant or audit row is
+missing or changed, or if the restricted user sees anything other than before. Then `verify` and
+the smoke suite run against the upgraded instance.
+
+One difference is expected when upgrading from a release before migration 0008: every CI class
+that existed before gets the time of the upgrade as its `updatedAt`, because 0008 assigns each
+class to the area "Infrastruktur".
+
+Paths not in the table are not tested. Upgrade through the newest tested release, or test on a
+copy of your database first ([backup-and-reset.md](backup-and-reset.md)).
+
 ## How this guide was verified
 
 Followed end to end on 2026-09-27 (SHAA-5), from an empty directory and an empty database:

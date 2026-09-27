@@ -8,8 +8,8 @@
 | `frontend/` | Vue 3 + Vite + TanStack Query web UI. Talks to the API only. |
 | `sql/` | Database artifacts: migrations, bootstrap scripts, ER diagram. |
 | `docs/` | Architecture, API, deployment and data-model documentation. |
-| `tools/` | Smoke test (`smoke/smoke.ts`, runs against any API URL), the OpenAPI diff script, and the pinned CycloneDX generator for the SBOM (`sbom/`, own lockfile). |
-| `.github/` | CI, supply-chain, CodeQL and release workflows, Dependabot config, pull request template. |
+| `tools/` | Smoke test (`smoke/smoke.ts`, runs against any API URL), the in-place upgrade check (`upgrade/upgrade-check.ts`), the OpenAPI diff script, and the pinned CycloneDX generator for the SBOM (`sbom/`, own lockfile). |
+| `.github/` | CI, upgrade, supply-chain, CodeQL and release workflows, Dependabot config, pull request template. |
 | `deploy/` | systemd unit, release Dockerfile, READMEs shipped inside the release archives. |
 
 ## Workflow
@@ -20,7 +20,8 @@
    ("Add CI search endpoint") and reference the issue in the body (`Refs SHAA-3`).
 3. Push the branch and open a pull request against `main` using the template.
 4. CI must be green before merging: **CI** (frontend typecheck, API types, build), **Rust** (fmt, clippy,
-   tests, `openapi --check`, PostgreSQL integration and smoke suite, Windows, Docker), **Supply chain**
+   tests, `openapi --check`, PostgreSQL integration and smoke suite, Windows, Docker), **Upgrade**
+   (in-place upgrade from each published release, no data lost or changed), **Supply chain**
    (cargo-deny, npm audit, gitleaks, SBOM, dependency review, actions pinned by SHA), **CodeQL** and, for
    PRs that touch the pipeline, **Release** as a dry run. Squash-merge, then delete the branch.
    What each check does and how to fix a failure: [docs/supply-chain.md](docs/supply-chain.md).
@@ -131,6 +132,10 @@ version accordingly.
    `shadoucmdb-<version>.cdx.json`, `shadoucmdb-<version>.provenance.jsonl`, `SHA256SUMS` and a
    `.sigstore.json` for each of them, and the verification steps in
    [docs/supply-chain.md](docs/supply-chain.md#verifying-a-download) pass for one archive and the image.
+5. **Add the tag to the upgrade matrix** (`from:` in
+   [`.github/workflows/upgrade.yml`](.github/workflows/upgrade.yml)) and to the table in
+   [docs/operator-setup.md](docs/operator-setup.md#upgrade-paths-tested-in-ci), in a PR to `main`,
+   so every later change is tested against an upgrade from it.
 
 Image tags: `1.2.0` gets `1.2.0`, `1.2`, `1` and `latest` (`0.x` versions get no bare major tag). A
 patch on an older line (e.g. `1.1.4` after `1.2.0`) gets `1.1.4` and `1.1` only: `latest`, the bare

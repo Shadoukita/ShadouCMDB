@@ -239,6 +239,9 @@ purge itself. To split it, once:
 3. Set `MIGRATION_DATABASE_URL` and `MAINTENANCE_DATABASE_URL`, keep `DATABASE_URL` on
    `shadoucmdb_app`, start the server and run `shadoucmdb verify`.
 
+CI runs this path from `v0.1.0-rc.1` on every pull request; see
+[operator-setup.md](operator-setup.md#upgrade-paths-tested-in-ci).
+
 ## Audit log retention
 
 Authentication events in `audit_log` hold client IP addresses and user agents, which are
