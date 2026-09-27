@@ -12,5 +12,10 @@
     "smoke": "node tools/smoke/smoke.ts",
     "openapi:diff": "node tools/openapi-diff.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "overrides": {
+    "openapi-typescript": {
+      "typescript": "^6.0.3"
+    }
   }
 }
