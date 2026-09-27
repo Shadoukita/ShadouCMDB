@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
-    "@types/node": "^22.20.4",
+    "@types/node": "^26.6.2",
     "@vitejs/plugin-vue": "^6.0.9",
     "openapi-typescript": "^7.13.0",
     "typescript": "^5.9.3",
