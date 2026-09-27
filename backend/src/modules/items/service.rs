@@ -474,6 +474,12 @@ async fn with_attributes(
     Ok(items)
 }
 
+/// Full representations (values included) of these CIs, deleted ones included.
+pub async fn details(conn: &mut PgConnection, model: &Model, ids: &[Uuid]) -> Result<Vec<ConfigurationItem>, AppError> {
+    let rows = data::summaries(conn, ids).await?;
+    with_attributes(conn, model, rows).await
+}
+
 async fn detail(conn: &mut PgConnection, model: &Model, id: Uuid) -> Result<Option<ConfigurationItem>, AppError> {
     let Some(row) = data::summary(conn, id).await? else { return Ok(None) };
     Ok(with_attributes(conn, model, vec![row]).await?.pop())
