@@ -246,7 +246,8 @@ Recorded as an audit.purge entry in audit_log.
 - `--older-than` takes days (`180d` or `180`); anything under 30 days is refused, by the
   command and by the database function.
 - `--scope auth` (default): `login.success`, `login.failure`, `login.locked`, `logout` and
-  `session.revoke` rows, plus `sessions` rows that expired more than 30 days ago.
+  `session.revoke` rows, API token `token.use` rows, plus `sessions` rows that expired more
+  than 30 days ago.
   `--scope changes`: `create`, `update`, `delete` and `restore` rows, only if you decide to
   cut change history too.
 - The command needs `MAINTENANCE_DATABASE_URL` and refuses to run without it. Each executed
