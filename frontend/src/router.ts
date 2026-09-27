@@ -8,6 +8,8 @@ import NotFoundPage from "./pages/NotFoundPage.vue";
 import SearchPage from "./pages/SearchPage.vue";
 import AdminLayout from "./pages/admin/AdminLayout.vue";
 import ApiTokensPage from "./pages/admin/ApiTokensPage.vue";
+import IdentityProviderEditPage from "./pages/admin/identity/IdentityProviderEditPage.vue";
+import IdentityProvidersPage from "./pages/admin/identity/IdentityProvidersPage.vue";
 import AuditLogPage from "./pages/admin/AuditLogPage.vue";
 import TemplatesPage from "./pages/admin/TemplatesPage.vue";
 import ConfigTransferPage from "./pages/admin/config/ConfigTransferPage.vue";
@@ -38,6 +40,8 @@ declare module "vue-router" {
     bare?: boolean;
     /** Administration screens: the user needs any one of these. */
     permissions?: GlobalPermission[];
+    /** Administration screens only for holders of the built-in Administrator profile. */
+    administratorOnly?: boolean;
   }
 }
 
@@ -67,7 +71,7 @@ export const router = createRouter({
           path: "",
           // Opens the first section the user may use; with none, AdminLayout explains the missing permission.
           component: { render: () => null },
-          beforeEnter: () => visibleSections(useSessionStore().can)[0]?.to ?? true,
+          beforeEnter: () => visibleSections(useSessionStore().adminAccess)[0]?.to ?? true,
         },
         { path: "users", component: UsersPage, meta: { permissions: section("users") } },
         { path: "users/new", component: UserEditPage, meta: { permissions: section("users") } },
@@ -76,6 +80,9 @@ export const router = createRouter({
         { path: "profiles/new", component: ProfileEditPage, meta: { permissions: ["profiles.manage"] } },
         { path: "profiles/:id", component: ProfileEditPage, meta: { permissions: section("profiles") } },
         { path: "api-tokens", component: ApiTokensPage, meta: { permissions: section("api-tokens") } },
+        { path: "identity-providers", component: IdentityProvidersPage, meta: { administratorOnly: true } },
+        { path: "identity-providers/new", component: IdentityProviderEditPage, meta: { administratorOnly: true } },
+        { path: "identity-providers/:id", component: IdentityProviderEditPage, meta: { administratorOnly: true } },
         { path: "areas", component: AreasPage, meta: { permissions: section("areas") } },
         { path: "classes", component: ClassesPage, meta: { permissions: section("classes") } },
         { path: "classes/new", component: ClassEditPage, meta: { permissions: section("classes") } },
