@@ -46,6 +46,7 @@ export const authApi = {
   setupStatus: () => unwrap(api.GET("/api/v1/setup")),
   setup: (body: SetupBody) => unwrap(api.POST("/api/v1/setup", { body })),
   login: (body: LoginBody) => unwrap(api.POST("/api/v1/auth/login", { body })),
+  loginMfa: (code: string) => unwrap(api.POST("/api/v1/auth/login/mfa", { body: { code } })),
   logout: () => unwrap(api.POST("/api/v1/auth/logout")),
   me: () => unwrap(api.GET("/api/v1/auth/me")),
 };

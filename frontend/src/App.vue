@@ -28,7 +28,7 @@ function retry() {
       <ErrorAlert :error="session.bootError" :on-retry="retry" />
     </div>
   </div>
-  <RouterView v-else-if="route.meta.public" />
+  <RouterView v-else-if="route.meta.public || route.meta.bare" />
   <div v-else-if="session.status === 'signedIn'" class="shell">
     <div class="shell-brand">
       <RouterLink to="/" :aria-label="`${branding.effective.appName} home`"><BrandMark /></RouterLink>

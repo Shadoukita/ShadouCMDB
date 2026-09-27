@@ -22,6 +22,8 @@ import ProfilesPage from "./pages/admin/ProfilesPage.vue";
 import UserEditPage from "./pages/admin/UserEditPage.vue";
 import UsersPage from "./pages/admin/UsersPage.vue";
 import { ADMIN_SECTIONS, visibleSections } from "./pages/admin/sections";
+import AccountPage from "./pages/account/AccountPage.vue";
+import TwoFactorSetupPage from "./pages/account/TwoFactorSetupPage.vue";
 import LoginPage from "./pages/auth/LoginPage.vue";
 import SetupPage from "./pages/auth/SetupPage.vue";
 import { trackNavigations } from "./lib/navigation";
@@ -32,10 +34,15 @@ declare module "vue-router" {
   interface RouteMeta {
     /** Reachable without a session (sign-in, first-run setup); rendered without the app shell. */
     public?: boolean;
+    /** Needs a session but is rendered without the app shell (forced two-factor set-up). */
+    bare?: boolean;
     /** Administration screens: the user needs any one of these. */
     permissions?: GlobalPermission[];
   }
 }
+
+/** Where a user goes while a profile they hold requires two-factor authentication they have not set up. */
+export const TWO_FACTOR_SETUP = "/two-factor-setup";
 
 const section = (key: string) => ADMIN_SECTIONS.find((s) => s.key === key)!.permissions;
 
@@ -50,6 +57,8 @@ export const router = createRouter({
     { path: "/cis/:id", component: CiDetailPage },
     { path: "/cis/:id/edit", component: CiEditPage },
     { path: "/search", component: SearchPage },
+    { path: "/account", component: AccountPage },
+    { path: TWO_FACTOR_SETUP, component: TwoFactorSetupPage, meta: { bare: true } },
     {
       path: "/admin",
       component: AdminLayout,
@@ -105,5 +114,10 @@ router.beforeEach(async (to) => {
     return { path: "/login", query: to.fullPath === "/" ? {} : { redirect: to.fullPath } };
   }
   if (to.meta.public) return safeRedirect(to.query.redirect);
+  // Until the required two-factor set-up is done, the API refuses everything else (403 MFA_ENROLMENT_REQUIRED).
+  if (session.enrolmentRequired && to.path !== TWO_FACTOR_SETUP) {
+    return { path: TWO_FACTOR_SETUP, query: to.fullPath === "/" ? {} : { redirect: to.fullPath } };
+  }
+  if (!session.enrolmentRequired && to.path === TWO_FACTOR_SETUP) return "/account";
   return true;
 });
