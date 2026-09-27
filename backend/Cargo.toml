@@ -17,6 +17,9 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
+# Backup files are gzip-compressed JSON Lines (pure Rust backend, no zlib to link).
+flate2 = "1"
+futures-util = { version = "0.3", default-features = false }
 hex = "0.4"
 ipnetwork = "0.21"
 mime_guess = "2"

@@ -171,6 +171,13 @@ docker compose up api                    # http://localhost:3000/readyz
 For a PostgreSQL running on the Docker host itself, set `PGHOST=host.docker.internal`, not
 `localhost`: inside a container, localhost is the container.
 
+## Backup, restore and reset
+
+`shadoucmdb backup` writes a consistent, checksummed backup of every table without pg_dump.
+`shadoucmdb restore FILE` checks it and restores it in one transaction. `factory-reset` returns
+an installation to first-run setup, and `decommission` removes all ShadouCMDB data and settings from
+the database before you retire it. See [docs/backup-and-reset.md](docs/backup-and-reset.md).
+
 ## Changing the schema
 
 Every schema change is a migration. No hand-applied DDL.
