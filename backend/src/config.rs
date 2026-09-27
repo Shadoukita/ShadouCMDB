@@ -74,7 +74,18 @@ pub struct Config {
     /// Where browsers send CSP violation reports; `None` sends none.
     pub csp_report_uri: Option<String>,
     pub database: DatabaseConfig,
+    /// `shadoucmdb migrate` connects with this instead of `database` (the schema owner role).
+    pub migration_url: Option<String>,
+    /// `shadoucmdb prune-audit` connects only with this (the maintenance role).
+    pub maintenance_url: Option<String>,
     pub auth: AuthConfig,
+}
+
+impl DatabaseConfig {
+    /// The same TLS, pool and timeout settings for another role's connection string.
+    pub fn with_url(&self, url: &str) -> DatabaseConfig {
+        DatabaseConfig { url: Some(url.to_owned()), ..self.clone() }
+    }
 }
 
 /// Collects every problem so the operator sees them all at once.
@@ -204,6 +215,8 @@ impl Config {
         let api_port = r.int::<u16>("API_PORT", 1, 65535).unwrap_or(3000);
 
         let url = r.raw("DATABASE_URL");
+        let migration_url = r.raw("MIGRATION_DATABASE_URL");
+        let maintenance_url = r.raw("MAINTENANCE_DATABASE_URL");
         let host = r.raw("PGHOST");
         let port = r.int::<u16>("PGPORT", 1, 65535).unwrap_or(5432);
         let database = r.raw("PGDATABASE");
@@ -275,6 +288,8 @@ impl Config {
                 statement_timeout: Duration::from_millis(statement_timeout_ms),
                 connect_timeout: Duration::from_millis(connect_timeout_ms),
             },
+            migration_url,
+            maintenance_url,
             auth: AuthConfig {
                 session_idle: Duration::from_secs(session_idle_minutes * 60),
                 session_max_age: Duration::from_secs(session_max_age_hours * 3600),

@@ -267,6 +267,10 @@ pub enum AuditAction {
     #[serde(rename = "session.revoke")]
     #[sqlx(rename = "session.revoke")]
     SessionRevoke,
+    /// Written by prune_audit_log() (`shadoucmdb prune-audit`), never by the API; never pruned.
+    #[serde(rename = "audit.purge")]
+    #[sqlx(rename = "audit.purge")]
+    AuditPurge,
 }
 
 impl AuditAction {
@@ -281,6 +285,7 @@ impl AuditAction {
             AuditAction::LoginLocked => "login.locked",
             AuditAction::Logout => "logout",
             AuditAction::SessionRevoke => "session.revoke",
+            AuditAction::AuditPurge => "audit.purge",
         }
     }
 }

@@ -135,7 +135,16 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
 
     // Each pending migration runs in its own transaction together with its
     // bookkeeping row, under an advisory lock; re-running is a no-op.
-    MIGRATOR.run(pool).await.context("migration failed")?;
+    MIGRATOR.run(pool).await.map_err(|e| {
+        let denied = e.to_string().contains("permission denied");
+        let err = anyhow::Error::new(e).context("migration failed");
+        if denied {
+            // The usual cause on a three-role install: migrating with the API's DATABASE_URL.
+            err.context("this database user may not change the schema; set MIGRATION_DATABASE_URL to the schema owner (shadoucmdb_owner), see docs/deployment.md")
+        } else {
+            err
+        }
+    })?;
 
     for m in &pending {
         println!("  applied {}", label(m));

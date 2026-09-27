@@ -8,6 +8,7 @@ mod db;
 mod http;
 mod logging;
 mod modules;
+mod prune;
 mod seed;
 mod service;
 mod verify;
@@ -63,6 +64,8 @@ enum Command {
     Verify,
     /// Create a user with the built-in Administrator profile (first install or lost access).
     CreateAdmin(auth::cli::CreateAdminArgs),
+    /// Delete audit_log rows past the retention window (a dry run unless --execute).
+    PruneAudit(prune::PruneAuditArgs),
     /// Print the OpenAPI document generated from the code, or compare it with a file.
     Openapi {
         /// Write the document to this file instead of stdout.
@@ -85,6 +88,7 @@ impl Command {
             Command::Seed { .. } => "seed",
             Command::Verify => "verify",
             Command::CreateAdmin(_) => "create-admin",
+            Command::PruneAudit(_) => "prune-audit",
             Command::Openapi { .. } => "openapi",
             Command::Service(_) => "service",
         }
@@ -137,7 +141,11 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Command::Migrate { adopt_drizzle } => {
             let cfg = Config::from_env()?;
-            runtime()?.block_on(db::migrate(&cfg.database, adopt_drizzle))
+            let db = match &cfg.migration_url {
+                Some(url) => cfg.database.with_url(url),
+                None => cfg.database,
+            };
+            runtime()?.block_on(db::migrate(&db, adopt_drizzle))
         }
         Command::Seed { templates, demo } => {
             let cfg = Config::from_env()?;
@@ -150,6 +158,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Command::CreateAdmin(args) => {
             let cfg = Config::from_env()?;
             runtime()?.block_on(auth::cli::create_admin(&cfg.database, args))
+        }
+        Command::PruneAudit(args) => {
+            let cfg = Config::from_env()?;
+            runtime()?.block_on(prune::run(&cfg, args))
         }
         Command::Service(cmd) => service::run(cmd, launch),
         Command::Openapi { .. } => unreachable!("handled above"),

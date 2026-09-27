@@ -329,6 +329,8 @@ mod tests {
                 statement_timeout: Duration::ZERO,
                 connect_timeout: Duration::from_secs(1),
             },
+            migration_url: None,
+            maintenance_url: None,
             auth: auth.clone(),
         };
         configure(&mut cfg);

@@ -35,14 +35,18 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
 ## Pointing the app at an external PostgreSQL
 
-1. **Create a database and a role** on your PostgreSQL server (run as an admin there):
+1. **Create the database and its roles** on your PostgreSQL server (run as an admin there):
 
-   ```sql
-   CREATE ROLE shadoucmdb_app LOGIN PASSWORD '<a strong password>';
-   CREATE DATABASE shadoucmdb OWNER shadoucmdb_app;
+   ```sh
+   psql "<admin connection string>" -v owner_password='<pw 1>' -v app_password='<pw 2>' \
+        -v maintenance_password='<pw 3>' -f sql/bootstrap/00_create_role_and_database.sql
    ```
 
-   The role does not need superuser. Migrations run `CREATE EXTENSION IF NOT EXISTS pg_trgm`;
+   This creates `shadoucmdb_owner` (owns the schema, runs migrations), `shadoucmdb_app` (the API:
+   reads and writes data, cannot delete audit history) and `shadoucmdb_maintenance` (may only prune
+   the audit log). None needs superuser. See
+   [docs/deployment.md](docs/deployment.md#database-roles); an install made with the older single-role
+   setup is upgraded with `sql/bootstrap/10_split_roles.sql`. Migrations run `CREATE EXTENSION IF NOT EXISTS pg_trgm`;
    `pg_trgm` is a *trusted* extension, so the database owner can create it on PostgreSQL 13+ and
    on RDS / Cloud SQL / Azure Flexible Server. If your provider restricts extensions, have an admin
    run `CREATE EXTENSION pg_trgm;` in the database once beforehand.
@@ -59,7 +63,9 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    DATABASE_URL=postgres://shadoucmdb_app:<password>@db.example.internal:5432/shadoucmdb
    ```
 
-   **or** the discrete `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` variables.
+   **or** the discrete `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` variables. Also set
+   `MIGRATION_DATABASE_URL` (as `shadoucmdb_owner`) for `migrate`, and `MAINTENANCE_DATABASE_URL`
+   (as `shadoucmdb_maintenance`) for `prune-audit`.
    Then choose TLS with `DATABASE_SSL`:
 
    | `DATABASE_SSL` | Use when |
@@ -82,7 +88,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
    ```
    Connected to database "shadoucmdb" (PostgreSQL 18.1), ssl=verify-full
-   Migrations: 7 in binary, 0 applied, 7 pending
+   Migrations: 8 in binary, 0 applied, 8 pending
      applied 0000_extensions
      applied 0001_core_schema
      applied 0002_integrity_triggers
@@ -90,7 +96,8 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
      applied 0004_data_model_admin
      applied 0005_ui_settings
      applied 0006_auth_audit
-   Database is at migration 7/7
+     applied 0007_audit_retention
+   Database is at migration 8/8
    ```
 
    Re-running is safe; it reports `nothing to do`. Applied migrations are tracked in `_sqlx_migrations`.
