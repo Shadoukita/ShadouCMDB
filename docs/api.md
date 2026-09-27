@@ -62,9 +62,11 @@ Every non-2xx response has this shape:
 | 409 | `LAST_ADMINISTRATOR` | The change would leave no active user holding the Administrator profile. |
 | 422 | `INVALID_NAME` | A technical name (area, type or field `key`) is malformed, reserved (SQL keyword, `pg_` or `shadoucmdb_` prefix, system schema, registry column) or already taken. `details[]` names the field and the reason. |
 | 422 | `SCHEMA_CHANGE_REFUSED` | A data-loss guard stopped a schema change: a type change some stored values would not survive, `isRequired` while assets lack a value, removing stored enum values, or a purge that is not allowed yet (still active, wrong `confirm`, dependants). Nothing was changed. |
+| 409 | `CONFLICT` (password) | `PUT /auth/password` or `PUT /admin/users/{id}/password` for an account that signs in through an identity provider. |
 | 429 | `RATE_LIMITED` | Too many failed sign-ins (for this username, or on the whole server), or too many wrong current passwords on `PUT /auth/password`; wait for `Retry-After` seconds. |
 | 413 / 415 | `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE` | The body is over 1 MiB (16 MiB for a configuration import), or is not JSON. |
 | 503 | `DATABASE_UNAVAILABLE` | PostgreSQL is unreachable. |
+| 503 | `IDENTITY_PROVIDER_UNAVAILABLE` | Login only: the LDAP/AD directory that would check this username could not be reached (or its certificate is not trusted). Local accounts still sign in. |
 | 503 | `SCHEMA_NOT_MIGRATED` | The database has migrations pending (the message says how many are applied). Run `shadoucmdb migrate`; the server picks the change up without a restart. |
 | 500 | `INTERNAL_ERROR` | A bug. The message is generic and the log carries `requestId`. |
 
@@ -90,8 +92,10 @@ Every non-2xx response has this shape:
 | Audit log | `GET /audit-log` | Read-only, needs `audit.view`. Filters: `entityType`, `entityId`, `action`, `actorId`, `actorName`, `requestId`, `from`, `to`. Also records authentication events (`entityType=sessions`; actions `login.success`, `login.failure`, `login.locked`, `logout`, `session.revoke`) with the client `ipAddress` and `userAgent` in `newValue` (plus `peerIpAddress` when the TCP peer differs from the forwarded address); a failed sign-in has no actor id and stores only the attempted username. See [data model](data-model.md#auditing). |
 | Setup | `GET /setup`, `POST /setup` | `setupRequired` is true while no user exists. `POST` creates the first user with the Administrator profile and signs them in; `409` once any user exists. |
 | Authentication | `POST /auth/login`, `POST /auth/login/mfa`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` | `login` and `me` return `{ user, permissions, mfa, csrfToken }`. `permissions` is the union of the user's profiles: `administrator`, `global[]`, `allClasses` and per-class `classes[]`. Changing your own password needs `currentPassword` and ends your other sessions. |
+| Enterprise sign-in | `GET /auth/providers`, `GET /auth/oidc/{id}/start`, `GET /auth/oidc/callback` | Public. The sign-in page's OIDC buttons and whether a directory is enabled; the OIDC redirect flow (browser navigations, not fetches). See [Enterprise sign-in](#enterprise-sign-in). |
+| Identity providers | `GET/POST /admin/identity-providers`, `GET/PATCH/DELETE /admin/identity-providers/{id}`, `POST /admin/identity-providers/{id}/test` | Administrator profile only (`users.manage` alone is `403`). OIDC providers and LDAP/AD directories with their group-to-profile mappings; secrets are write-only. See [Enterprise sign-in](#enterprise-sign-in). |
 | Two-factor authentication | `GET /auth/mfa`, `POST/DELETE /auth/mfa/totp`, `POST /auth/mfa/totp/confirm`, `POST /auth/mfa/recovery-codes` | One's own TOTP set-up; needs a session. See [Two-factor authentication](#two-factor-authentication). |
-| Users | `GET/POST /admin/users`, `GET/PATCH/DELETE /admin/users/{id}`, `PUT /admin/users/{id}/password`, `DELETE /admin/users/{id}/mfa` | Needs `users.manage`. `PATCH` renames, disables (`isActive: false`, which ends the user's sessions) and assigns profiles (`profileIds` replaces the set). `PUT …/password` sets a new password and ends the user's sessions. `DELETE …/mfa` turns off a user's two-factor authentication (lost device). A user shows `mfaEnabled`. Filters: `q`, `isActive`, `profileId`. |
+| Users | `GET/POST /admin/users`, `GET/PATCH/DELETE /admin/users/{id}`, `PUT /admin/users/{id}/password`, `DELETE /admin/users/{id}/mfa` | Needs `users.manage`. `PATCH` renames, disables (`isActive: false`, which ends the user's sessions) and assigns profiles (`profileIds` replaces the set). `PUT …/password` sets a new password and ends the user's sessions. `DELETE …/mfa` turns off a user's two-factor authentication (lost device). A user shows `mfaEnabled` and `identityProvider` (null for a local account). Filters: `q`, `isActive`, `profileId`. |
 | API tokens | `GET/POST /admin/api-tokens`, `GET/DELETE /admin/api-tokens/{id}` | Needs `users.manage` and a session. `POST {name, profileId, expiresAt, userId?}` answers `201 { token, secret }`; the secret is in that response only. `DELETE` revokes (the token stays listed with `status: revoked`). Filters: `q`, `userId`, `status` (`active`, `expired`, `revoked`). See [API tokens](#api-tokens). |
 | Permission profiles | `GET/POST /admin/profiles`, `GET/PATCH/DELETE /admin/profiles/{id}`, `POST /admin/profiles/{id}/clone` | Writes need `profiles.manage`; reading also works with `users.manage`. A profile is `{ name, description, globalPermissions[], classPermissions[], requireMfa }`; `PATCH` replaces whichever list it sends. `requireMfa` makes two-factor authentication mandatory for its holders. The built-in Administrator profile is read-only except for `requireMfa` (`409`) and listed first. |
 | Health | `GET /healthz`, `GET /readyz` | `/readyz` returns `503` when the database is unreachable or migrations are pending, and reports `migrations: { applied, expected, upToDate }`. `database` is `ok`, `unreachable` (no connection), `authentication_failed` (credentials refused), `permission_denied` (connected, but the role may not read the schema) or `error` (see the server log). |
@@ -160,6 +164,55 @@ user manager for `DELETE /api/v1/admin/users/{id}/mfa`; if every administrator i
 `shadoucmdb create-admin` creates a new one who can do that. Enrolment, turning MFA off, wrong codes and the use of
 recovery codes are audited (`mfa.*`, see [data model](data-model.md#auditing)). WebAuthn / passkeys are not
 supported yet.
+
+**Enterprise sign-in.** <a id="enterprise-sign-in"></a>Besides local accounts, users can sign in through OpenID
+Connect providers (Microsoft Entra ID, Okta, Keycloak, ADFS, Google Workspace, …) and LDAP / Active Directory
+directories. An administrator (built-in Administrator profile) sets them up under `/api/v1/admin/identity-providers`
+and maps the provider's groups to permission profiles.
+
+- **Accounts.** The first sign-in of a person creates their account (`identityProvider` set, no password). Every
+  sign-in sets its display name and e-mail from the provider and its profiles to exactly those its groups map to
+  (compared case-insensitively). With no mapped group the sign-in is refused and an existing account loses its
+  profiles. An account is never linked to a provider by username: if the name is taken, the sign-in is refused
+  (`account_conflict`). Disabling an account here holds whatever the provider says. Changing an account's profiles
+  by hand lasts until its next sign-in; change the mappings instead.
+- **Break-glass.** Local accounts keep working next to any provider, including when the provider is down or
+  misconfigured. Keep at least one local administrator (with two-factor authentication) and its password in your
+  emergency procedure; `shadoucmdb create-admin` remains the last resort. Two-factor authentication for provider
+  accounts is the provider's job: `requireMfa` on a profile applies to local accounts only.
+- **Disabling or deleting a provider** ends the sessions of its accounts. A provider with accounts cannot be deleted
+  (`409 IN_USE`): disable it.
+
+*OIDC* (authorization code flow with PKCE S256, `state` and `nonce`; confidential or public clients). Set
+`PUBLIC_URL` and register `{PUBLIC_URL}/api/v1/auth/oidc/callback` (shown as `oidc.redirectUri`) at the provider.
+Request a `groups` claim in the ID token (Entra ID: *Groups assigned to the application*, which also avoids the
+200-group overage; Keycloak: a group mapper, or `groupsClaim: realm_access.roles`). The web UI lists
+`GET /api/v1/auth/providers` as buttons and **navigates** to `startUrl` (with `?returnTo=/path`). After the provider,
+the callback sets the session cookies like `POST /auth/login` and redirects to `returnTo`; on a problem it redirects
+to `/login?ssoError=<code>`: `expired`, `cancelled`, `failed`, `unavailable`, `not_configured`, `not_authorised`,
+`account_conflict`, `account_disabled`, `invalid_username` or `last_administrator`. The ID token is verified in full:
+its signature against the provider's published keys (RS256/384/512, PS256/384/512, ES256/384, EdDSA; never `none`
+or HMAC), `iss`, `aud`/`azp`, `exp`, `iat`, `nbf`, the sign-in's `nonce`, and the callback's `iss` (RFC 9207) when
+sent. The issuer must be `https://` (plain `http://` only for a test issuer on the same host). The username comes
+from `usernameClaim` (default `preferred_username`) and must be a valid ShadouCMDB username.
+
+*LDAP / Active Directory.* `ldaps://host[:port]`, or `ldap://host[:port]` with StartTLS (`startTls` defaults to
+match the scheme); plain LDAP is refused. Certificates are always verified against the public roots and the
+operating system's trust store; add a private CA with `caCertificate` (PEM). The service account (`bindDn`,
+`bindPassword`; read-only is enough) searches `userBaseDn` with `userFilter` (default
+`(&(objectClass=user)(sAMAccountName={username}))`; `{username}` is escaped), which must find exactly one entry;
+then ShadouCMDB binds as that entry with the typed password (an empty password is refused before any bind). Groups
+come from `groupAttribute` (default `memberOf`, direct membership; map each group, or resolve nested groups in the
+filter with `LDAP_MATCHING_RULE_IN_CHAIN`). Directory users sign in with the normal username/password form: a name
+no local account has is looked up in the enabled directories in `sortOrder`, and the first directory that knows the
+name decides. Directory sign-ins share the login backoff of local ones. `503 IDENTITY_PROVIDER_UNAVAILABLE` means
+the directory could not be asked.
+
+`POST /api/v1/admin/identity-providers/{id}/test` checks the saved settings (OIDC: discovery and keys; LDAP: TLS,
+service bind and, with `{"username": "..."}`, the entry, its groups and the profiles they map to) and answers
+`200 { ok, message, details, user }` without changing anything. The OIDC client secret and the LDAP bind password
+are write-only (`clientSecretSet`, `bindPasswordSet`); they are stored in the database so the server can present
+them, like the TOTP secrets, so protect database access and backups accordingly. SAML is not supported.
 
 **API tokens.** <a id="api-tokens"></a>For scripts and services. A token belongs to a user (its owner; use a
 dedicated account for a service) and is scoped to one permission profile: it may do exactly what **both** the owner
