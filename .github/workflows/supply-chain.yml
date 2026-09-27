@@ -1,0 +1,161 @@
+name: Supply chain
+
+# Dependency and secret hygiene (docs/supply-chain.md): cargo-deny (RustSec
+# advisories, licences, sources), npm audit (high and critical), gitleaks over
+# the whole git history, a CycloneDX SBOM of every build, dependency review on
+# pull requests and a check that every action is pinned by commit SHA. CodeQL
+# is in codeql.yml. The daily run catches advisories published after a merge.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo-deny (advisories, licences, sources)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-deny
+      - run: cargo deny --locked check
+        working-directory: backend
+
+  npm-audit:
+    name: npm audit (high, critical)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      # Reads the lockfiles against the npm advisory database; installs nothing.
+      - name: npm audit (root and frontend workspace)
+        run: npm audit --audit-level=high
+      - name: npm audit (tools/sbom)
+        run: npm audit --audit-level=high
+        working-directory: tools/sbom
+      - name: Registry signatures of the installed packages
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm audit signatures
+
+  gitleaks:
+    name: gitleaks (secrets in the whole history)
+    runs-on: ubuntu-24.04
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (checksum-verified release binary)
+        run: |
+          f=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          curl -fsSLo "$RUNNER_TEMP/$f" "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/$f"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP" gitleaks
+      # --redact keeps any finding out of the job log; the location is enough to act on.
+      - run: $RUNNER_TEMP/gitleaks git --redact --no-banner --verbose --exit-code 1 .
+
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --workspace frontend --include-workspace-root --ignore-scripts --no-audit --no-fund
+      - run: npm ci --prefix tools/sbom --ignore-scripts --omit=optional --no-audit --no-fund
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-cyclonedx,cyclonedx
+      - name: .github/scripts/sbom.sh
+        run: |
+          crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' backend/Cargo.toml | head -1)
+          .github/scripts/sbom.sh "$crate-dev.${GITHUB_SHA::7}" dist/shadoucmdb.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          path: dist/shadoucmdb.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+
+  dependency-review:
+    name: Dependency review (new high/critical advisories)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # Dependency review needs the repository's Dependency graph. Until the owner turns it on,
+      # skip with a warning instead of failing every PR; cargo-deny and npm audit still gate
+      # advisories. Only a "not enabled" answer, a 404 or a bare "Forbidden" 403 (what the compare
+      # endpoint returns while the graph is off; this job's token has contents: read, which is all
+      # it needs) skips. Missing-permission ("Resource not accessible"), bad-credential, rate-limit
+      # and server errors still run the action, so it fails closed.
+      - name: Check that the Dependency graph is enabled
+        id: graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if out=$(gh api "repos/$REPO/dependency-graph/compare/$BASE...$HEAD" 2>&1 >/dev/null); then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'dependency (review|graph).*(not supported|not enabled|disabled)|ensure that dependency graph is enabled|\(HTTP 404\)|^gh: Forbidden \(HTTP 403\)$' <<<"$out"; then
+            reason=$(tr -s '\n\r:' '   ' <<<"$out" | cut -c1-200)
+            echo "::warning title=Dependency review skipped::Dependency graph is off for this repository (API said: $reason). Enable it in Settings -> Code security (see docs/supply-chain.md)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Dependency graph probe::$(tr -s '\n\r:' '   ' <<<"$out" | cut -c1-200)"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.graph.outputs.enabled == 'true'
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: high
+
+  actions-pinned:
+    name: Every action pinned by commit SHA
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: No action or reusable workflow referenced by tag or branch
+        run: |
+          # Local actions (./...) and docker:// images with a digest are fine; anything
+          # else needs owner/repo@<40-hex SHA>, with the version in a trailing comment.
+          bad=$(grep -rnE '^\s*(-\s+)?uses:' .github/workflows .github/actions 2>/dev/null \
+            | grep -vE 'uses:\s*\./' \
+            | grep -vE 'uses:\s*docker://[^ ]+@sha256:[0-9a-f]{64}' \
+            | grep -vE 'uses:\s*[^ @]+@[0-9a-f]{40}(\s|$)' || true)
+          if [ -n "$bad" ]; then echo "::error::Unpinned actions:"; echo "$bad"; exit 1; fi
+          echo "all actions pinned"

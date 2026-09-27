@@ -68,7 +68,7 @@ from an empty directory to a verified install. The steps below are the same flow
    ```
 
    **or** the discrete `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` variables. Also set
-   `MIGRATION_DATABASE_URL` (as `shadoucmdb_owner`) for `migrate`, and `MAINTENANCE_DATABASE_URL`
+   `MIGRATION_DATABASE_URL` (as `shadoucmdb_owner`) for `migrate`, `restore` and the resets, and `MAINTENANCE_DATABASE_URL`
    (as `shadoucmdb_maintenance`) for `prune-audit`.
    Then choose TLS with `DATABASE_SSL`:
 

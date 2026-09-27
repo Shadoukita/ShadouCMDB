@@ -1,0 +1,8 @@
+{
+  "name": "shadoucmdb-sbom-tools",
+  "private": true,
+  "description": "Pinned CycloneDX generator for the web UI SBOM (.github/workflows/supply-chain.yml, release.yml). Not part of the app.",
+  "devDependencies": {
+    "@cyclonedx/cyclonedx-npm": "6.0.1"
+  }
+}

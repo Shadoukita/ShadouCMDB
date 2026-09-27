@@ -1,0 +1,47 @@
+# Dependabot version updates (docs/supply-chain.md). Security updates for
+# known advisories come on top of these once "Dependabot security updates" is
+# on in the repository settings. Minor and patch bumps are grouped per
+# ecosystem so the weekly PR count stays small; majors come one by one.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /tools/sbom
+    schedule:
+      interval: monthly
+
+  # Updates the commit SHA and the version comment of every pinned action.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images, pinned by digest: Dockerfile and deploy/docker/Dockerfile.release.
+  - package-ecosystem: docker
+    directories: [/, /deploy/docker]
+    schedule:
+      interval: weekly
+      day: monday
