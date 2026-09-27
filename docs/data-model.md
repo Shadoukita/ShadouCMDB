@@ -124,9 +124,11 @@ created. The API derives it from the display name unless one is given: lower cas
 `virtuelle_maschinen`, "Größe" → `groesse`. `GET /api/v1/technical-names` previews it. A name must
 match `^[a-z][a-z0-9_]{0,62}$` (types: at most 61 characters, since the view adds `v_`), so it never
 needs quoting in a report. Refused with `422 INVALID_NAME` and the reason: reserved SQL keywords,
-`pg_` prefixes, system schemas (`cmdb`, `public`, `information_schema`, `cmdb_*`), `v_` for types,
-registry column names (`id`, `name`, `status`, …) for fields, and names already taken (types are
-unique across areas; a field is unique within its type's lineage).
+`pg_` prefixes, system schemas (`cmdb`, `public`, `information_schema`, `cmdb_*`), the database
+role prefix `shadoucmdb_*` for areas, `v_` for types, registry column names (`id`, `name`,
+`status`, …) for fields, and names already taken (types are unique across areas; a field is unique
+within its type's lineage; an area may not match an existing schema or database role, since a schema
+named after a role comes first on that role's default search_path).
 
 **The engine** (`backend/src/schema/`). A data model write changes the metadata rows, then asks the
 engine to bring the catalog in line, **in the same transaction**:

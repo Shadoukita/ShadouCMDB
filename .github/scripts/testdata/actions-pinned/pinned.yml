@@ -1,0 +1,12 @@
+# Fixture for check-actions-pinned.py: nothing below may be reported.
+jobs:
+  reusable:
+    uses: org/repo/.github/workflows/build.yml@11d5960a326750d5838078e36cf38b85af677262 # v1.0.0
+  steps:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' # v4.4.0
+      - {name: flow style, uses: github/codeql-action/init@11d5960a326750d5838078e36cf38b85af677262}
+      - uses: ./.github/actions/local
+      - uses: docker://alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
