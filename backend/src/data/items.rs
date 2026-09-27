@@ -383,9 +383,28 @@ pub struct EdgeRecord {
     pub created_at: DateTime<Utc>,
     #[serde(serialize_with = "crate::api::schemas::ts::serialize")]
     pub updated_at: DateTime<Utc>,
-    /// Null: the audit entry records the edge as it was before the delete.
+    /// Null after a soft delete: the audit entry records the edge as it was
+    /// before the delete. A purge records the stored value.
     #[serde(serialize_with = "crate::api::schemas::ts_opt::serialize")]
     pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// Delete up to `limit` edges of these CIs, soft-deleted ones included (type
+/// purge); returns the removed edges for auditing. Call until it returns fewer
+/// than `limit`, so a large type never returns all its edges in one statement.
+pub async fn delete_edges_of(conn: &mut PgConnection, ci_ids: &[Uuid], limit: i64) -> sqlx::Result<Vec<EdgeRecord>> {
+    sqlx::query_as!(
+        EdgeRecord,
+        r#"DELETE FROM ci_relationships
+           WHERE id IN (SELECT id FROM ci_relationships
+                        WHERE source_ci_id = ANY($1) OR target_ci_id = ANY($1)
+                        LIMIT $2)
+           RETURNING id, relationship_type_id, source_ci_id, target_ci_id, notes, created_at, updated_at, deleted_at"#,
+        ci_ids,
+        limit
+    )
+    .fetch_all(conn)
+    .await
 }
 
 /// Soft-delete every live edge of a CI; returns the removed edges for auditing.
@@ -515,17 +534,28 @@ pub async fn values(conn: &mut PgConnection, model: &Model, ci_ids: &[Uuid]) -> 
     Ok(out)
 }
 
-/// Name and deleted flag of referenced CIs.
-pub async fn reference_names(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<HashMap<Uuid, (String, bool)>> {
+/// A referenced CI: its name, whether it is deleted, and its class (callers
+/// redact references into classes the reader may not view).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ReferencedItem {
+    pub id: Uuid,
+    pub name: String,
+    pub deleted: bool,
+    pub class_id: Uuid,
+}
+
+/// The referenced CIs, by id.
+pub async fn reference_names(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<HashMap<Uuid, ReferencedItem>> {
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows: Vec<(Uuid, String, bool)> =
-        sqlx::query_as("SELECT id, name, deleted_at IS NOT NULL FROM cmdb.configuration_items WHERE id = ANY($1)")
-            .bind(ids)
-            .fetch_all(conn)
-            .await?;
-    Ok(rows.into_iter().map(|(id, name, deleted)| (id, (name, deleted))).collect())
+    let rows: Vec<ReferencedItem> = sqlx::query_as(
+        "SELECT id, name, deleted_at IS NOT NULL AS deleted, class_id FROM cmdb.configuration_items WHERE id = ANY($1)",
+    )
+    .bind(ids)
+    .fetch_all(conn)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r)).collect())
 }
 
 /// One typed value, bound as text and cast to the column type.
@@ -678,12 +708,13 @@ pub fn search_tables(model: &Model) -> Vec<SearchTable> {
     out
 }
 
-/// Of the given CI ids, those that exist and are not deleted.
-pub async fn live_items(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<Vec<Uuid>> {
+/// Of the given CI ids, those that exist and are not deleted, with their class.
+pub async fn live_items(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<Vec<(Uuid, Uuid)>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    sqlx::query_scalar!("SELECT id FROM configuration_items WHERE id = ANY($1) AND deleted_at IS NULL", ids)
+    sqlx::query_as("SELECT id, class_id FROM cmdb.configuration_items WHERE id = ANY($1) AND deleted_at IS NULL")
+        .bind(ids)
         .fetch_all(conn)
         .await
 }

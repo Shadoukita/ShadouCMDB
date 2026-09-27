@@ -37,7 +37,7 @@ test("Administration has its own sub-navigation", async ({ page }) => {
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Administration", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/users$/);
   const sub = page.getByRole("navigation", { name: "Administration" });
-  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "Areas", "CI classes", "Relationship types", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
+  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "API tokens", "Areas", "CI classes", "Relationship types", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
   await expect(page.getByRole("heading", { level: 1, name: "Users" })).toBeVisible();
   await expect(page.getByRole("cell", { name: E2E_USER.username, exact: true })).toBeVisible();
 });

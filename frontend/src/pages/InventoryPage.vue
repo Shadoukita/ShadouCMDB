@@ -15,6 +15,7 @@ import { useAppSettings } from "../lib/appSettings";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
 import { isInAppNavigation } from "../lib/navigation";
 import { groupByArea } from "../lib/areas";
+import { viewableClasses } from "../lib/permissions";
 import { flattenTree } from "../lib/tree";
 import { attributeKey, BUILTIN, DEFAULT_COLUMNS, fieldLabel, hasFilters, listViewFor, sortParam } from "../lib/uiSettings";
 import { useSessionStore } from "../stores/session";
@@ -64,7 +65,11 @@ const query = computed<CiListQuery>(() => ({
 }));
 const list = useCiList(query);
 const areas = useAreas();
-const classTree = computed(() => flattenTree(classes.data.value ?? []));
+const session = useSessionStore();
+// The class filter offers only what the user may view; the API would answer any other class with an empty list.
+const classOptions = computed(() => viewableClasses(classes.data.value ?? [], (id) => session.canOnClass(id, "view")));
+const classDenied = computed(() => !!currentClass.value && !classOptions.value.some((c) => c.id === currentClass.value!.id));
+const classTree = computed(() => flattenTree(classOptions.value));
 const classGroups = computed(() => groupByArea(classTree.value, (n) => n.item.areaId, areas.data.value ?? []));
 const currentArea = computed(() => areas.data.value?.find((a) => a.id === currentClass.value?.areaId));
 
@@ -146,7 +151,6 @@ const rows = computed(() => list.data.value?.data ?? []);
 const newTo = computed(() =>
   query.value.classId && !currentClass.value?.isAbstract ? `/cis/new?classId=${query.value.classId}` : "/cis/new",
 );
-const session = useSessionStore();
 const canCreate = computed(() =>
   query.value.classId && currentClass.value && !currentClass.value.isAbstract
     ? session.canOnClass(query.value.classId, "create")
@@ -217,6 +221,7 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
         <label for="f-class">Class</label>
         <select id="f-class" :value="get('classId')" @change="update({ classId: ($event.target as HTMLSelectElement).value || undefined })">
           <option value="">All classes</option>
+          <option v-if="classDenied && currentClass" :value="currentClass.id">{{ currentClass.name }}</option>
           <optgroup v-for="g in classGroups" :key="g.area?.id ?? '-'" :label="g.area?.name ?? 'Other'">
             <option v-for="n in g.items" :key="n.item.id" :value="n.item.id">
               {{ "\u00a0\u00a0".repeat(n.depth) }}{{ n.item.name }}{{ n.item.isAbstract ? " (incl. subclasses)" : "" }}{{ n.item.isActive ? "" : " (archived)" }}
@@ -280,7 +285,11 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
     </div>
     <LoadingState v-if="list.isLoading.value" label="Loading inventory…" />
 
-    <DataModelEmpty v-if="list.data.value && total === 0 && activeFilters.length === 0 && classes.data.value?.length === 0" />
+    <EmptyState v-if="classDenied" title="Permission denied">
+      None of your permission profiles allows viewing {{ currentClass?.name }} configuration items, so none are listed here.
+      <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
+    </EmptyState>
+    <DataModelEmpty v-else-if="list.data.value && total === 0 && activeFilters.length === 0 && classes.data.value?.length === 0" />
     <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length === 0" title="The inventory is empty">
       Configuration items are the servers, VMs, applications, databases, network devices and locations you track. Create
       one, then relate it to others from its detail page.
@@ -288,7 +297,7 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
         <RouterLink class="btn btn-primary" to="/cis/new">+ Create your first configuration item</RouterLink>
       </template>
     </EmptyState>
-    <EmptyState v-if="list.data.value && total === 0 && activeFilters.length > 0" title="No configuration items match these filters">
+    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length > 0" title="No configuration items match these filters">
       Adjust or clear the filters above.
     </EmptyState>
     <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" title="This page is past the end of the results">

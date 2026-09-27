@@ -34,7 +34,7 @@ test("the sub-navigation groups Access, Data model and System", async ({ page })
   await page.goto("/admin/templates");
   const sub = page.getByRole("navigation", { name: "Administration" });
   await expect(sub.getByRole("heading")).toHaveText(["Access", "Data model", "System"]);
-  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "Areas", "CI classes", "Relationship types", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
+  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "API tokens", "Areas", "CI classes", "Relationship types", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
   await expect(sub.getByRole("link", { name: "Templates" })).toHaveAttribute("aria-current", "page");
 });
 

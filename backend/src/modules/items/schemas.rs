@@ -91,12 +91,15 @@ fn summary_nested(schemas: &mut Vec<(String, RefOr<Schema>)>) {
     OwnerRef::schemas(schemas);
 }
 
-/// The referenced CI of a reference attribute.
+/// The referenced CI of a reference attribute. When the caller may not view
+/// the referenced CI's class, `hidden` is true, `name` is null and `deleted` is
+/// false: only the id (already the attribute's value) is disclosed.
 #[derive(Debug, Clone, Serialize)]
 pub struct AttributeReference {
     pub id: Uuid,
-    pub name: String,
+    pub name: Option<String>,
     pub deleted: bool,
+    pub hidden: bool,
 }
 
 /// A CI with its attribute values.
@@ -121,11 +124,26 @@ impl PartialSchema for ConfigurationItem {
     fn schema() -> RefOr<Schema> {
         let reference = ObjectBuilder::new()
             .property("id", schemas::uuid_builder())
-            .property("name", ObjectBuilder::new().schema_type(Type::String))
-            .property("deleted", ObjectBuilder::new().schema_type(Type::Boolean))
+            .property(
+                "name",
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::from_iter([Type::String, Type::Null]))
+                    .description(Some("Null when `hidden`")),
+            )
+            .property(
+                "deleted",
+                ObjectBuilder::new().schema_type(Type::Boolean).description(Some("Always false when `hidden`")),
+            )
+            .property(
+                "hidden",
+                ObjectBuilder::new().schema_type(Type::Boolean).description(Some(
+                    "True when the caller may not view the referenced CI's class; its name and state are withheld",
+                )),
+            )
             .required("id")
             .required("name")
             .required("deleted")
+            .required("hidden")
             .additional_properties(Some(AdditionalProperties::FreeForm(false)));
         summary_with(vec![
             (

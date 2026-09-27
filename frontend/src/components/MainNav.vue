@@ -6,6 +6,7 @@ import { useAreas } from "../api/datamodel";
 import { ciCountQuery, useCiClasses } from "../api/queries";
 import type { UiPage } from "../api/uiSettings";
 import { useAppSettings, useNavPreviewStore } from "../lib/appSettings";
+import { viewableClasses } from "../lib/permissions";
 import { buildNav, type NavLinkItem } from "../lib/uiSettings";
 import { visibleSections } from "../pages/admin/sections";
 import { useSessionStore } from "../stores/session";
@@ -18,7 +19,9 @@ import NavLink from "./NavLink.vue";
  * do not mention follow in the built-in order, so new classes appear by
  * themselves. Classes that no section claims sit under their area's tab
  * (Administration › Areas), which folds open and shut; the folded tabs are
- * remembered in this browser. Pages the user may not open are never shown.
+ * remembered in this browser. Pages the user may not open are never shown, nor
+ * classes they may not view: the API filters those out of every list, so their
+ * count would be a false 0.
  */
 const session = useSessionStore();
 const classes = useCiClasses();
@@ -32,8 +35,9 @@ function showPage(p: UiPage): boolean {
   if (p === "administration") return hasAdmin.value;
   return true;
 }
+const navClasses = computed(() => viewableClasses(classes.data.value ?? [], (id) => session.canOnClass(id, "view")));
 const groups = computed(() =>
-  buildNav(preview.entries ?? doc.value.navigation.entries, classes.data.value ?? [], showPage, areas.data.value ?? []),
+  buildNav(preview.entries ?? doc.value.navigation.entries, navClasses.value, showPage, areas.data.value ?? []),
 );
 
 const FOLDED_KEY = "shadoucmdb.nav.folded";
