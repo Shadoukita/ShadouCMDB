@@ -93,11 +93,44 @@ pub trait Resource: Send + Sync + 'static {
     /// References reported by `GET {BASE_PATH}/{id}/usage` and checked before a delete.
     const USAGE: &'static [Usage] = &[];
 
+    /// DELETE archives the row (`is_active = false`, data kept) instead of
+    /// removing it; a separate purge removes it. Areas, types and fields: their
+    /// rows are database objects (schemas, tables, columns).
+    const ARCHIVE_ON_DELETE: bool = false;
+
+    /// Description of the PATCH operation (empty: none).
+    const UPDATE_DESCRIPTION: &'static str = "";
+
+    /// Further errors create, update and delete can return (documented in the spec).
+    const WRITE_ERRORS: &'static [ErrorCode] = &[];
+
     fn id(row: &Self::Dto) -> Uuid;
+
+    /// Checks the columns of a create (`create = true`) or update before they
+    /// are written, e.g. a technical name.
+    fn validate(_columns: &ColumnSet, _create: bool) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    /// Runs first in every write transaction (e.g. to take a lock).
+    fn before_write(_conn: &mut PgConnection) -> BoxFuture<'_, Result<(), AppError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Runs in a create's transaction after `before_write`, before the insert, to
+    /// fill in columns that depend on other rows (e.g. a default parent).
+    fn prepare_create<'a>(
+        _conn: &'a mut PgConnection,
+        _ctx: &'a RequestContext,
+        _columns: &'a mut ColumnSet,
+    ) -> BoxFuture<'a, Result<(), AppError>> {
+        Box::pin(async { Ok(()) })
+    }
 
     /// Runs inside the write transaction after insert/update; an error rolls back.
     fn after_write<'a>(
         _conn: &'a mut PgConnection,
+        _ctx: &'a RequestContext,
         _row: &'a Self::Dto,
         _previous: Option<&'a Self::Dto>,
     ) -> BoxFuture<'a, Result<(), AppError>> {
@@ -168,10 +201,13 @@ pub async fn get<R: Resource>(pool: &PgPool, id: Uuid) -> Result<R::Dto, AppErro
 pub async fn create_in<R: Resource>(
     conn: &mut PgConnection,
     ctx: &RequestContext,
-    columns: ColumnSet,
+    mut columns: ColumnSet,
 ) -> Result<R::Dto, AppError> {
+    R::validate(&columns, true)?;
+    R::before_write(conn).await?;
+    R::prepare_create(conn, ctx, &mut columns).await?;
     let row: R::Dto = crud::insert_row(conn, R::TABLE, R::COLUMNS, columns).await?;
-    R::after_write(conn, &row, None).await?;
+    R::after_write(conn, ctx, &row, None).await?;
     let entry = AuditEntry {
         action: AuditAction::Create,
         entity_type: R::TABLE,
@@ -190,11 +226,13 @@ pub async fn update_in<R: Resource>(
     id: Uuid,
     columns: ColumnSet,
 ) -> Result<R::Dto, AppError> {
+    R::validate(&columns, false)?;
+    R::before_write(conn).await?;
     let before: R::Dto = crud::select_by_id(conn, R::TABLE, R::COLUMNS, id, true)
         .await?
         .ok_or_else(|| AppError::missing(R::LABEL, id))?;
     let row: R::Dto = crud::update_row(conn, R::TABLE, R::COLUMNS, id, columns).await?;
-    R::after_write(conn, &row, Some(&before)).await?;
+    R::after_write(conn, ctx, &row, Some(&before)).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
         entity_type: R::TABLE,
@@ -268,11 +306,24 @@ fn refuse_if_used(label: &str, report: &UsageReport) -> Result<(), AppError> {
 
 pub async fn remove<R: Resource>(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
-    let before: R::Dto = crud::select_by_id(&mut tx, R::TABLE, R::COLUMNS, id, true)
-        .await?
-        .ok_or_else(|| AppError::missing(R::LABEL, id))?;
-    refuse_if_used(R::LABEL, &usage_counts::<R>(&mut tx, id).await?)?;
-    crud::delete_row(&mut tx, R::TABLE, id).await?;
+    remove_in::<R>(&mut tx, ctx, id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// DELETE in the caller's transaction: archive or hard delete (see [`Resource::ARCHIVE_ON_DELETE`]).
+pub async fn remove_in<R: Resource>(tx: &mut PgConnection, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
+    if R::ARCHIVE_ON_DELETE {
+        let mut c = ColumnSet::default();
+        c.opt("is_active", Some(false));
+        update_in::<R>(tx, ctx, id, c).await?;
+        return Ok(());
+    }
+    R::before_write(tx).await?;
+    let before: R::Dto =
+        crud::select_by_id(tx, R::TABLE, R::COLUMNS, id, true).await?.ok_or_else(|| AppError::missing(R::LABEL, id))?;
+    refuse_if_used(R::LABEL, &usage_counts::<R>(tx, id).await?)?;
+    crud::delete_row(tx, R::TABLE, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Delete,
         entity_type: R::TABLE,
@@ -280,8 +331,7 @@ pub async fn remove<R: Resource>(pool: &PgPool, ctx: &RequestContext, id: Uuid) 
         old_value: Some(crud::json(&before)),
         new_value: None,
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
-    tx.commit().await?;
+    crud::write_audit(tx, ctx, vec![entry]).await?;
     Ok(())
 }
 
@@ -323,14 +373,17 @@ pub fn routes<R: Resource>() -> Vec<Route> {
             .requires(GlobalPermission::DatamodelManage)
             .status(StatusCode::CREATED)
             .errors(&[ErrorCode::Conflict])
+            .errors(R::WRITE_ERRORS)
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<R::Create>>| async move {
                 Ok(Json(create::<R>(&api.pool, &api.ctx, &b).await?))
             }),
         route(Method::PATCH, by_id.clone(), format!("update{}", cap(R::SINGULAR)))
             .tag(R::TAG)
             .summary(format!("Update a {label} (partial)"))
+            .description(R::UPDATE_DESCRIPTION)
             .requires(GlobalPermission::DatamodelManage)
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .errors(R::WRITE_ERRORS)
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<R::Update>>| async move {
                 Ok(Json(update::<R>(&api.pool, &api.ctx, id, &b).await?))
             }),
@@ -339,7 +392,12 @@ pub fn routes<R: Resource>() -> Vec<Route> {
             .summary(format!("Delete a {label}"))
             .requires(GlobalPermission::DatamodelManage)
             .description(R::DELETE_DESCRIPTION)
-            .errors(&[ErrorCode::NotFound, ErrorCode::InUse])
+            .errors(if R::ARCHIVE_ON_DELETE {
+                &[ErrorCode::NotFound]
+            } else {
+                &[ErrorCode::NotFound, ErrorCode::InUse]
+            })
+            .errors(R::WRITE_ERRORS)
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 remove::<R>(&api.pool, &api.ctx, id).await?;
                 Ok(NoContent)

@@ -37,6 +37,8 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   ui_assets: "UI asset",
   sessions: "Sign-in / session",
   audit_log: "Audit log",
+  areas: "Area",
+  schema_changes: "Schema change",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));
 const ACTION_SET: Record<Action, true> = {

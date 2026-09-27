@@ -478,8 +478,12 @@ impl RouteBuilder {
         self.summary = summary.into();
         self
     }
+    /// An empty description is ignored.
     pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
+        let description = description.into();
+        if !description.is_empty() {
+            self.description = Some(description);
+        }
         self
     }
     /// Success status; defaults to 200, or 204 when there is no response body.

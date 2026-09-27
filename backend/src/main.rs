@@ -9,6 +9,7 @@ mod http;
 mod logging;
 mod modules;
 mod prune;
+mod schema;
 mod seed;
 mod service;
 mod verify;

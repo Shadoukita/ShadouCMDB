@@ -22,7 +22,8 @@ use crate::api::schemas::{self, OwnerKind, description_schema, key_schema, name_
 use crate::auth::permissions::GlobalPermission;
 
 pub const FORMAT: &str = "shadoucmdb.config";
-pub const FORMAT_VERSION: i32 = 1;
+/// Version 2 adds areas (and the area of each class); version 1 files are still read.
+pub const FORMAT_VERSION: i32 = 2;
 
 fn yes() -> bool {
     true
@@ -51,11 +52,43 @@ fn list<T: ToSchema>(max: usize) -> Schema {
 // Data model
 // ---------------------------------------------------------------------------
 
+/// An area: a menu tab and the PostgreSQL schema of its types' tables
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AreaSpec {
+    /// Technical name: the schema name
+    #[schema(schema_with = key_schema)]
+    pub key: String,
+    #[schema(schema_with = name_schema)]
+    #[serde(deserialize_with = "trimmed")]
+    pub name: String,
+    #[schema(schema_with = description_schema)]
+    #[serde(default)]
+    pub description: Option<String>,
+    #[schema(schema_with = crate::modules::classes::icon_schema)]
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[schema(schema_with = schemas::nullable_color_schema)]
+    #[serde(default)]
+    pub color: Option<String>,
+    #[schema(schema_with = sort_order_schema)]
+    #[serde(default)]
+    pub sort_order: i32,
+    #[serde(default = "yes")]
+    pub is_active: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClassSpec {
+    /// Technical name: the table name in the area's schema
     #[schema(schema_with = key_schema)]
     pub key: String,
+    /// Key of the area (in the file or already in the target). Left out (version 1 files): the class's current
+    /// area, or "infrastruktur" for a new class. A class cannot move to another area.
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default)]
+    pub area: Option<String>,
     #[schema(schema_with = name_schema)]
     #[serde(deserialize_with = "trimmed")]
     pub name: String,
@@ -181,10 +214,16 @@ fn relationship_rules_schema() -> Schema {
     list::<RelationshipRuleSpec>(20_000)
 }
 
-/// Classes (parents before children is not required), attributes, relationship types and rules
+fn areas_schema() -> Schema {
+    list::<AreaSpec>(1_000)
+}
+
+/// Areas, classes (parents before children is not required), attributes, relationship types and rules
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct DataModelSection {
+    #[schema(schema_with = areas_schema)]
+    pub areas: Vec<AreaSpec>,
     #[schema(schema_with = classes_schema)]
     pub classes: Vec<ClassSpec>,
     #[schema(schema_with = attributes_schema)]
@@ -447,8 +486,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server reads version 1
-    #[schema(minimum = 1, maximum = 1)]
+    /// File format version; this server writes version 2 and reads 1 and 2
+    #[schema(minimum = 1, maximum = 2)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]

@@ -156,9 +156,19 @@ creates three roles. None is a superuser.
 
 | Role | Used by | Variable | May |
 | --- | --- | --- | --- |
-| `shadoucmdb_owner` | `shadoucmdb migrate` | `MIGRATION_DATABASE_URL` | Own the database and schema; run migrations. |
-| `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log`; no `EXECUTE` on the purge. |
-| `shadoucmdb_maintenance` | `shadoucmdb prune-audit` | `MAINTENANCE_DATABASE_URL` | Execute `prune_audit_log()`, nothing else. |
+| `shadoucmdb_owner` | `shadoucmdb migrate` | `MIGRATION_DATABASE_URL` | Own the database and the `cmdb` system schema; run migrations. Member of `shadoucmdb_app`. |
+| `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log` and `schema_changes`; no `EXECUTE` on the purge. Owns the area schemas (`CREATE` on the database). |
+| `shadoucmdb_maintenance` | `shadoucmdb prune-audit` | `MAINTENANCE_DATABASE_URL` | Execute `cmdb.prune_audit_log()`, nothing else. |
+
+Areas are PostgreSQL schemas whose tables and columns the API changes at run time, when an
+administrator adds an area, type or field (see [data-model.md](data-model.md)). So
+`shadoucmdb_app` owns the area schemas, their type tables and reporting views, but nothing
+in `cmdb` or `public`. `shadoucmdb_owner` is a member of `shadoucmdb_app` so that `migrate`
+can build the tables of existing types (migration 0009) and hand them over, and build the
+reporting views as that role. The membership only runs that way round; the API role gains
+nothing from it. Migration 0008 stops with the `GRANT` to run if the membership is missing,
+e.g. on an install split before this version: run `GRANT shadoucmdb_app TO shadoucmdb_owner;`
+as an administrator, or re-run `10_split_roles.sql`, then `migrate` again.
 
 Only `shadoucmdb_owner` may create objects in schema `public`. PostgreSQL 14 lets every role
 do so by default, which would let the API role plant a function that owner-privileged code

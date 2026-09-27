@@ -29,6 +29,10 @@ pub enum ErrorCode {
     Conflict,
     InUse,
     VersionConflict,
+    /// A technical name (area, type or field) is malformed, reserved or already taken (422)
+    InvalidName,
+    /// A data model change was refused because it would lose or break stored data (422)
+    SchemaChangeRefused,
     /// The change would leave no active user holding the Administrator profile
     LastAdministrator,
     /// Too many failed password attempts; retry after the Retry-After header
@@ -49,6 +53,7 @@ impl ErrorCode {
             ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => {
                 StatusCode::CONFLICT
             }
+            ErrorCode::InvalidName | ErrorCode::SchemaChangeRefused => StatusCode::UNPROCESSABLE_ENTITY,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,

@@ -88,7 +88,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
    ```
    Connected to database "shadoucmdb" (PostgreSQL 18.1), ssl=verify-full
-   Migrations: 8 in binary, 0 applied, 8 pending
+   Migrations: 10 in binary, 0 applied, 10 pending
      applied 0000_extensions
      applied 0001_core_schema
      applied 0002_integrity_triggers
@@ -97,7 +97,9 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
      applied 0005_ui_settings
      applied 0006_auth_audit
      applied 0007_audit_retention
-   Database is at migration 8/8
+     applied 0008_cmdb_schema_and_areas
+     applied 0009_type_tables
+   Database is at migration 10/10
    ```
 
    Re-running is safe; it reports `nothing to do`. Applied migrations are tracked in `_sqlx_migrations`.
@@ -180,8 +182,11 @@ Every schema change is a migration. No hand-applied DDL.
    (`sqlx::query!`) is affected, refresh `backend/.sqlx` (see [docs/api.md](docs/api.md#layers-and-extension-seams)).
    Commit the migration, the code change and any ERD update together. See [`sql/README.md`](sql/README.md).
 
-Adding a CI class, attribute or relationship type is **data**, not a schema change. See
-[docs/data-model.md](docs/data-model.md#extending-the-model-without-migrations).
+Adding an area, CI type, field or relationship type is **data**, not a migration: the application's
+DDL engine creates the matching PostgreSQL schema, table or column (area "Bestand" + type "Netzwerk"
+→ table `bestand.netzwerk`), so the API role needs the `CREATE` privilege on its database and owns the area schemas (see
+[`sql/README.md`](sql/README.md) and [Database roles](docs/deployment.md#database-roles)). See
+[docs/data-model.md](docs/data-model.md#areas-type-tables-and-the-ddl-engine).
 
 ## Contributing
 

@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
-use sqlx::{Connection, PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use super::schemas::{
@@ -13,14 +13,15 @@ use super::schemas::{
     SearchResults, UpdateItemBody,
 };
 use crate::api::context::RequestContext;
-use crate::api::schemas::{LookupRef, OwnerRef, Page, Paged, iso};
+use crate::api::schemas::{LookupRef, OwnerRef, Page, Paged};
 use crate::api::{pg_error, validate};
 use crate::auth::permissions::ClassOp;
 use crate::data::classes::{self as class_data, EffectiveAttributeRow};
 use crate::data::crud::{self, AuditAction, AuditEntry};
-use crate::data::items::{self as data, Direction, ItemFilters, StoredValue, StoredValueRow, SummaryRow, inet_text};
+use crate::data::items::{self as data, Direction, ItemFilters, StoredValue, SummaryRow, inet_text};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
+use crate::schema::model::{Field, Model};
 
 pub fn summary_dto(r: SummaryRow) -> ConfigurationItemSummary {
     let lookup = |id: Option<Uuid>, key: Option<String>, name: Option<String>| match (id, key, name) {
@@ -52,36 +53,6 @@ pub fn summary_dto(r: SummaryRow) -> ConfigurationItemSummary {
         updated_at: r.updated_at,
         deleted_at: r.deleted_at,
     }
-}
-
-fn number_json(n: f64) -> Value {
-    if n.fract() == 0.0 && n.abs() < 9.0e15 {
-        Value::from(n as i64)
-    } else {
-        serde_json::Number::from_f64(n).map(Value::Number).unwrap_or(Value::Null)
-    }
-}
-
-fn value_to_json(v: &StoredValueRow) -> Option<Value> {
-    if let Some(t) = &v.value_text {
-        return Some(Value::String(t.clone()));
-    }
-    if let Some(n) = v.value_number {
-        return Some(number_json(n));
-    }
-    if let Some(b) = v.value_boolean {
-        return Some(Value::Bool(b));
-    }
-    if let Some(d) = &v.value_date {
-        return Some(Value::String(d.clone()));
-    }
-    if let Some(t) = &v.value_datetime {
-        return Some(Value::String(iso(t)));
-    }
-    if let Some(ip) = v.value_ip.as_ref().or(v.value_cidr.as_ref()) {
-        return Some(Value::String(ip.clone()));
-    }
-    v.value_ref_ci_id.or(v.value_lookup_id).map(|id| Value::String(id.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +223,29 @@ async fn prepare_attributes<'d>(
     if errors.is_empty() { Ok(prepared) } else { Err(AppError::validation(errors)) }
 }
 
+/// A reference must point at a CI of the field's class (or a subclass); the
+/// foreign key only guarantees that the CI exists.
+async fn check_reference_classes(conn: &mut PgConnection, prepared: &Prepared<'_>) -> Result<(), AppError> {
+    let mut errors = Vec::new();
+    for (def, value) in &prepared.set {
+        let (StoredValue::Reference(target), Some(class)) = (value, def.reference_class_id) else { continue };
+        let fits: Option<bool> =
+            sqlx::query_scalar("SELECT cmdb.ci_class_is_a(class_id, $2) FROM cmdb.configuration_items WHERE id = $1")
+                .bind(target)
+                .bind(class)
+                .fetch_optional(&mut *conn)
+                .await?;
+        if fits == Some(false) {
+            errors.push(body_error(
+                format!("attributes.{}", def.key),
+                "Referenced CI is not of the class this field points at",
+                "reference_class",
+            ));
+        }
+    }
+    if errors.is_empty() { Ok(()) } else { Err(AppError::validation(errors)) }
+}
+
 /// The input plus the default of every active attribute it leaves out.
 fn with_defaults(defs: &[EffectiveAttributeRow], input: Option<&Map<String, Value>>) -> Map<String, Value> {
     let mut out = input.cloned().unwrap_or_default();
@@ -265,26 +259,61 @@ fn with_defaults(defs: &[EffectiveAttributeRow], input: Option<&Map<String, Valu
     out
 }
 
-async fn write_attributes(
+/// A database error while writing type rows, attributed to the field it concerns.
+fn field_write_error(err: sqlx::Error, model: &Model) -> AppError {
+    let Some(db) = err.as_database_error() else { return err.into() };
+    let pg = db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>();
+    let column = pg.and_then(|p| p.column()).map(str::to_owned);
+    let constraint = db.constraint().map(str::to_owned);
+    // ck_<field id hex>_<hash>, fk_<field id hex>
+    let by_constraint = constraint.as_deref().and_then(|c| {
+        let hex = c.strip_prefix("ck_").or_else(|| c.strip_prefix("fk_"))?.get(..32)?;
+        model.fields.iter().find(|f| f.hex() == hex).map(|f| f.key.clone())
+    });
+    match by_constraint.or(column) {
+        Some(key) => pg_error::map(&err, Some(&format!("attributes.{key}"))).unwrap_or_else(|| err.into()),
+        None => pg_error::map(&err, None).unwrap_or_else(|| err.into()),
+    }
+}
+
+/// Writes the CI's rows in its type tables: `insert` for tables it has no row
+/// in yet, `update` (only the columns that change) for the others.
+async fn write_type_rows(
     conn: &mut PgConnection,
+    model: &Model,
     ci_id: Uuid,
+    class_id: Uuid,
     set: &[(&EffectiveAttributeRow, StoredValue)],
+    clear: &[Uuid],
+    new_tables: &[Uuid],
 ) -> Result<(), AppError> {
-    for (def, value) in set {
-        // A savepoint keeps the transaction usable so the error can be reported per field.
-        let mut sp = conn.begin().await?;
-        match data::upsert_attribute_value(&mut sp, ci_id, def.id, value).await {
-            Ok(()) => sp.commit().await?,
-            Err(err) => {
-                return Err(pg_error::map(&err, Some(&format!("attributes.{}", def.key))).unwrap_or_else(|| err.into()));
+    for class in model.lineage(class_id) {
+        let Some(table) = model.table(class.id) else { continue };
+        let mut values: Vec<(&Field, Option<String>)> = Vec::new();
+        for f in model.own_fields(class.id) {
+            if let Some((_, v)) = set.iter().find(|(d, _)| d.id == f.id) {
+                values.push((f, Some(v.as_text())));
+            } else if clear.contains(&f.id) {
+                values.push((f, None));
             }
         }
+        let result = if new_tables.contains(&class.id) {
+            data::insert_type_row(conn, &table, ci_id, &values).await
+        } else {
+            data::update_type_row(conn, &table, ci_id, &values).await
+        };
+        result.map_err(|e| field_write_error(e, model))?;
     }
     Ok(())
 }
 
-async fn check_required(conn: &mut PgConnection, ci_id: Uuid, defs: &[EffectiveAttributeRow]) -> Result<(), AppError> {
-    let present: HashSet<String> = data::attribute_values(conn, &[ci_id]).await?.into_iter().map(|v| v.key).collect();
+async fn check_required(
+    conn: &mut PgConnection,
+    model: &Model,
+    ci_id: Uuid,
+    defs: &[EffectiveAttributeRow],
+) -> Result<(), AppError> {
+    let present: HashSet<String> = data::values(conn, model, &[ci_id]).await?.into_iter().map(|v| v.key).collect();
     let missing: Vec<FieldError> = defs
         .iter()
         .filter(|d| d.is_required && d.is_active && !present.contains(&d.key))
@@ -322,7 +351,14 @@ async fn filters(pool: &PgPool, q: &impl ItemFilterQuery) -> Result<ItemFilters,
         ip_within: q.ip_within().map(str::to_owned),
         deleted: Some(q.deleted()),
         visible_class_ids: None,
+        search_tables: Vec::new(),
     })
+}
+
+/// Type tables searched by `q`.
+async fn search_tables(pool: &PgPool) -> Result<Vec<data::SearchTable>, AppError> {
+    let model = Model::load(&mut *pool.acquire().await?).await?;
+    Ok(data::search_tables(&model))
 }
 
 /// Only CIs of classes the caller may view.
@@ -331,19 +367,30 @@ pub async fn list(
     ctx: &RequestContext,
     q: &ListItemsQuery,
 ) -> Result<Page<ConfigurationItem>, AppError> {
-    let f =
-        ItemFilters { q: q.q.clone(), visible_class_ids: ctx.class_scope(ClassOp::View), ..filters(pool, q).await? };
+    let search_tables = if q.q.is_some() { search_tables(pool).await? } else { Vec::new() };
+    let f = ItemFilters {
+        q: q.q.clone(),
+        visible_class_ids: ctx.class_scope(ClassOp::View),
+        search_tables,
+        ..filters(pool, q).await?
+    };
     let (rows, total) = data::list(pool, &f, &q.sort.field, q.sort.desc, q.limit, q.offset).await?;
-    let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
-    let values = data::attribute_values(&mut *pool.acquire().await?, &ids).await?;
-    Ok(Page { data: with_attributes(rows, &values), page: q.page_meta(total) })
+    let mut conn = pool.acquire().await?;
+    let model = Model::load(&mut conn).await?;
+    Ok(Page { data: with_attributes(&mut conn, &model, rows).await?, page: q.page_meta(total) })
 }
 
 pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Result<SearchResults, AppError> {
-    let f = ItemFilters { visible_class_ids: ctx.class_scope(ClassOp::View), ..filters(pool, q).await? };
+    let mut conn = pool.acquire().await?;
+    let model = Model::load(&mut conn).await?;
+    let f = ItemFilters {
+        visible_class_ids: ctx.class_scope(ClassOp::View),
+        search_tables: data::search_tables(&model),
+        ..filters(pool, q).await?
+    };
     let (rows, total) = data::search(pool, &q.q, &f, q.limit, q.offset).await?;
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
-    let values = data::attribute_values(&mut *pool.acquire().await?, &ids).await?;
+    let values = data::values(&mut conn, &model, &ids).await?;
 
     let needle = q.q.to_lowercase();
     let hit = |s: &str| s.to_lowercase().contains(&needle);
@@ -382,8 +429,8 @@ pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Res
                 }
             }
             for v in values.iter().filter(|v| v.ci_id == item.id) {
-                let is_net = v.value_ip.is_some() || v.value_cidr.is_some();
-                if let Some(text) = v.value_text.as_ref().or(v.value_ip.as_ref()).or(v.value_cidr.as_ref())
+                let is_net = matches!(v.data_type, AttributeDataType::Ip | AttributeDataType::Cidr);
+                if let Some(text) = v.search_text()
                     && (hit(text) || (is_net && text.starts_with(&q.q)))
                 {
                     add(&format!("attributes.{}", v.key), &v.label, text);
@@ -395,8 +442,16 @@ pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Res
     Ok(SearchResults { data, page: q.page_meta(total) })
 }
 
-/// Summary rows plus their attribute values (one batched read for the page).
-fn with_attributes(rows: Vec<SummaryRow>, values: &[StoredValueRow]) -> Vec<ConfigurationItem> {
+/// Summary rows plus their field values and reference names (batched reads for the page).
+async fn with_attributes(
+    conn: &mut PgConnection,
+    model: &Model,
+    rows: Vec<SummaryRow>,
+) -> Result<Vec<ConfigurationItem>, AppError> {
+    let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let values = data::values(conn, model, &ids).await?;
+    let refs: Vec<Uuid> = values.iter().filter_map(|v| v.reference()).collect();
+    let names = data::reference_names(conn, &refs).await?;
     let mut items: Vec<ConfigurationItem> = rows
         .into_iter()
         .map(|row| ConfigurationItem {
@@ -407,33 +462,31 @@ fn with_attributes(rows: Vec<SummaryRow>, values: &[StoredValueRow]) -> Vec<Conf
         .collect();
     let index: HashMap<Uuid, usize> = items.iter().enumerate().map(|(i, item)| (item.summary.id, i)).collect();
     for v in values {
-        let (Some(&i), Some(json)) = (index.get(&v.ci_id), value_to_json(v)) else { continue };
+        let Some(&i) = index.get(&v.ci_id) else { continue };
         let item = &mut items[i];
-        item.attributes.insert(v.key.clone(), json);
-        if let Some(ref_id) = v.value_ref_ci_id {
-            let reference = AttributeReference {
-                id: ref_id,
-                name: v.ref_name.clone().unwrap_or_default(),
-                deleted: v.ref_deleted.unwrap_or(false),
-            };
+        if let Some(ref_id) = v.reference() {
+            let (name, deleted) = names.get(&ref_id).cloned().unwrap_or_default();
+            let reference = AttributeReference { id: ref_id, name, deleted };
             item.attribute_references.insert(v.key.clone(), crud::json(&reference));
         }
+        item.attributes.insert(v.key, v.value);
     }
-    items
+    Ok(items)
 }
 
-async fn detail(conn: &mut PgConnection, id: Uuid) -> Result<Option<ConfigurationItem>, AppError> {
+async fn detail(conn: &mut PgConnection, model: &Model, id: Uuid) -> Result<Option<ConfigurationItem>, AppError> {
     let Some(row) = data::summary(conn, id).await? else { return Ok(None) };
-    let values = data::attribute_values(conn, &[id]).await?;
-    Ok(with_attributes(vec![row], &values).pop())
+    Ok(with_attributes(conn, model, vec![row]).await?.pop())
 }
 
-async fn must_detail(conn: &mut PgConnection, id: Uuid) -> Result<ConfigurationItem, AppError> {
-    detail(conn, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))
+async fn must_detail(conn: &mut PgConnection, model: &Model, id: Uuid) -> Result<ConfigurationItem, AppError> {
+    detail(conn, model, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))
 }
 
 pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<ConfigurationItem, AppError> {
-    let dto = must_detail(&mut *pool.acquire().await?, id).await?;
+    let mut conn = pool.acquire().await?;
+    let model = Model::load(&mut conn).await?;
+    let dto = must_detail(&mut conn, &model, id).await?;
     ctx.require_class(dto.summary.class_id, ClassOp::View)?;
     Ok(dto)
 }
@@ -450,9 +503,20 @@ pub async fn create(
     ctx.require_class(input.class_id, ClassOp::Create)?;
     let mut tx = pool.begin().await?;
     let key = class_key(&mut tx, input.class_id).await?;
+    let model = Model::load(&mut tx).await?;
     let defs = class_data::effective_attributes(&mut tx, input.class_id).await?;
     let attributes = with_defaults(&defs, input.attributes.as_ref());
     let prepared = prepare_attributes(&mut tx, &defs, Some(&attributes), &key, None, false).await?;
+    check_reference_classes(&mut tx, &prepared).await?;
+    let given: HashSet<Uuid> = prepared.set.iter().map(|(d, _)| d.id).collect();
+    let missing: Vec<FieldError> = defs
+        .iter()
+        .filter(|d| d.is_required && d.is_active && !given.contains(&d.id))
+        .map(|d| body_error(format!("attributes.{}", d.key), format!("{} is required", d.label), "required"))
+        .collect();
+    if !missing.is_empty() {
+        return Err(AppError::validation(missing));
+    }
 
     let id = data::insert(
         &mut tx,
@@ -470,10 +534,10 @@ pub async fn create(
         },
     )
     .await?;
-    write_attributes(&mut tx, id, &prepared.set).await?;
-    check_required(&mut tx, id, &defs).await?;
+    let lineage: Vec<Uuid> = model.lineage(input.class_id).iter().map(|c| c.id).collect();
+    write_type_rows(&mut tx, &model, id, input.class_id, &prepared.set, &[], &lineage).await?;
 
-    let dto = must_detail(&mut tx, id).await?;
+    let dto = must_detail(&mut tx, &model, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Create,
         entity_type: "configuration_items",
@@ -518,13 +582,17 @@ pub async fn update(
             "stale",
         )]));
     }
-    let before_dto = must_detail(&mut tx, id).await?;
+    let model = Model::load(&mut tx).await?;
+    let before_dto = must_detail(&mut tx, &model, id).await?;
 
     let class_id = input.class_id.unwrap_or(before.class_id);
     let class_changes = class_id != before.class_id;
     let key = class_key(&mut tx, class_id).await?;
     let defs = class_data::effective_attributes(&mut tx, class_id).await?;
     let prepared = prepare_attributes(&mut tx, &defs, input.attributes.as_ref(), &key, Some(id), class_changes).await?;
+    check_reference_classes(&mut tx, &prepared).await?;
+    let old_lineage: Vec<Uuid> = model.lineage(before.class_id).iter().map(|c| c.id).collect();
+    let new_lineage: Vec<Uuid> = model.lineage(class_id).iter().map(|c| c.id).collect();
 
     if class_changes {
         // Values the new class does not define must be cleared in the same request.
@@ -547,12 +615,13 @@ pub async fn update(
                 "attributes_outside_class",
             ));
         }
-        let current = data::attribute_values(&mut tx, &[id]).await?;
-        let outside: Vec<Uuid> =
-            current.iter().filter(|v| !keep.contains(v.key.as_str())).map(|v| v.attribute_id).collect();
-        data::delete_attribute_values(&mut tx, id, &outside).await?;
+        // Rows in the tables of classes the CI leaves go (their values were cleared above).
+        for gone in old_lineage.iter().filter(|c| !new_lineage.contains(c)) {
+            if let Some(table) = model.table(*gone) {
+                data::delete_type_rows(&mut tx, &table, &[id]).await?;
+            }
+        }
     }
-    data::delete_attribute_values(&mut tx, id, &prepared.clear).await?;
 
     let patch = data::ItemPatch {
         class_id: input.class_id,
@@ -567,10 +636,11 @@ pub async fn update(
         notes: input.notes.as_ref().map(|h| h.as_deref()),
     };
     data::update(&mut tx, id, &patch).await?;
-    write_attributes(&mut tx, id, &prepared.set).await?;
-    check_required(&mut tx, id, &defs).await?;
+    let entering: Vec<Uuid> = new_lineage.iter().filter(|c| !old_lineage.contains(c)).copied().collect();
+    write_type_rows(&mut tx, &model, id, class_id, &prepared.set, &prepared.clear, &entering).await?;
+    check_required(&mut tx, &model, id, &defs).await?;
 
-    let dto = must_detail(&mut tx, id).await?;
+    let dto = must_detail(&mut tx, &model, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
         entity_type: "configuration_items",
@@ -590,7 +660,8 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
         Some(row) if row.deleted_at.is_none() => ctx.require_class(row.class_id, ClassOp::Delete)?,
         _ => return Err(AppError::missing("Configuration item", id)),
     }
-    let before = must_detail(&mut tx, id).await?;
+    let model = Model::load(&mut tx).await?;
+    let before = must_detail(&mut tx, &model, id).await?;
     let edges = data::soft_delete_edges_of(&mut tx, id).await?;
     data::soft_delete(&mut tx, id).await?;
 

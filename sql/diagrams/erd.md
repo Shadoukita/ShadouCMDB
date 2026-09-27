@@ -3,13 +3,19 @@
 Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_schema.sql) and
 [`../migrations/0003_users_and_permission_profiles.sql`](../migrations/0003_users_and_permission_profiles.sql) and
 [`../migrations/0004_data_model_admin.sql`](../migrations/0004_data_model_admin.sql) and
-[`../migrations/0005_ui_settings.sql`](../migrations/0005_ui_settings.sql)
+[`../migrations/0005_ui_settings.sql`](../migrations/0005_ui_settings.sql) and
+[`../migrations/0008_cmdb_schema_and_areas.sql`](../migrations/0008_cmdb_schema_and_areas.sql) and
+[`../migrations/0009_type_tables.sql`](../migrations/0009_type_tables.sql)
 (`sessions.ip_address` from [`../migrations/0006_auth_audit.sql`](../migrations/0006_auth_audit.sql)).
+Every table below lives in the `cmdb` schema, except the type tables: each area is a schema of its
+own and each type a table in it. `area_schema__type_table` stands for one of them (e.g.
+`bestand.netzwerk`); its columns other than `id` are the type's fields, created by the DDL engine.
 Update this diagram in the same pull request as any migration that adds, removes or re-links a table.
 Column-level rules and triggers are described in [`docs/data-model.md`](../../docs/data-model.md).
 
 ```mermaid
 erDiagram
+    areas ||--o{ ci_classes : "area_id (the table's schema)"
     ci_classes ||--o{ ci_classes : "parent_id"
     ci_classes ||--o{ ci_attribute_definitions : "class_id"
     ci_classes |o--o{ ci_attribute_definitions : "reference_class_id"
@@ -17,12 +23,13 @@ erDiagram
     ci_classes ||--o{ relationship_type_rules : "source_class_id"
     ci_classes ||--o{ relationship_type_rules : "target_class_id"
 
-    configuration_items ||--o{ ci_attribute_values : "ci_id"
-    ci_attribute_definitions ||--o{ ci_attribute_values : "attribute_id"
-    configuration_items |o--o{ ci_attribute_values : "value_ref_ci_id"
+    configuration_items ||--o| area_schema__type_table : "id (PK and FK, ON DELETE CASCADE)"
+    ci_classes ||--|| area_schema__type_table : "one table per type"
+    ci_attribute_definitions ||--|| area_schema__type_table : "one column per field"
+    configuration_items |o--o{ area_schema__type_table : "reference field (FK)"
     lookup_lists |o--o{ ci_attribute_definitions : "lookup_list_id"
     lookup_lists ||--o{ lookup_list_values : "list_id"
-    lookup_list_values |o--o{ ci_attribute_values : "value_lookup_id"
+    lookup_list_values |o--o{ area_schema__type_table : "lookup field (FK, RESTRICT)"
 
     relationship_types ||--o{ relationship_type_rules : "relationship_type_id"
     relationship_types ||--o{ ci_relationships : "relationship_type_id"
@@ -43,10 +50,19 @@ erDiagram
     users ||--o{ sessions : "user_id"
     ui_settings_versions ||--o| ui_settings : "version (current)"
 
+    areas {
+        uuid id PK
+        text key UK "schema name, immutable"
+        text name
+        text color
+        integer sort_order
+        boolean is_active "false = archived"
+    }
     ci_classes {
         uuid id PK
-        text key UK
+        text key UK "table name, immutable"
         text name
+        uuid area_id FK "immutable"
         uuid parent_id FK
         boolean is_abstract
         text color
@@ -55,8 +71,8 @@ erDiagram
     }
     ci_attribute_definitions {
         uuid id PK
-        uuid class_id FK
-        text key
+        uuid class_id FK "immutable"
+        text key "column name, immutable"
         text data_type
         boolean is_required
         jsonb enum_values
@@ -95,19 +111,27 @@ erDiagram
         timestamptz deleted_at
         tsvector search_vector
     }
-    ci_attribute_values {
+    area_schema__type_table {
+        uuid id PK,FK "configuration_items.id"
+        text text_or_enum_field "enum: CHECK on the values"
+        numeric number_field
+        bigint integer_field
+        boolean boolean_field
+        date date_field
+        timestamptz datetime_field
+        inet ip_field
+        cidr cidr_field
+        uuid reference_field FK "configuration_items"
+        uuid lookup_field FK "lookup_list_values"
+    }
+    schema_changes {
         uuid id PK
-        uuid ci_id FK
-        uuid attribute_id FK
-        text value_text
-        numeric value_number
-        boolean value_boolean
-        date value_date
-        timestamptz value_datetime
-        inet value_ip
-        cidr value_cidr
-        uuid value_ref_ci_id FK
-        uuid value_lookup_id FK
+        timestamptz occurred_at
+        text actor_type
+        text actor_name
+        text summary
+        text_array statements "the exact DDL"
+        jsonb impact
     }
     relationship_types {
         uuid id PK
@@ -223,6 +247,10 @@ erDiagram
         text sha256 "ETag"
     }
 ```
+
+`schema_changes` is append-only like `audit_log` and, like it, has no foreign keys: it records what
+ran, even for objects purged since. Each type also has a read-only reporting view `<area>.v_<type>`
+(registry columns plus the fields of the type and its ancestors), not shown here.
 
 `audit_log` has no foreign keys by design: `entity_type` + `entity_id` point at a row in any table,
 and the log is append-only (UPDATE and DELETE are rejected by a trigger). `actor_id` holds the acting

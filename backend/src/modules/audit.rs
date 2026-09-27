@@ -41,6 +41,8 @@ pub enum EntityType {
     Sessions,
     /// Operator purges (`audit.purge`)
     AuditLog,
+    Areas,
+    SchemaChanges,
 }
 
 impl EntityType {
@@ -62,6 +64,8 @@ impl EntityType {
             EntityType::UiAssets => "ui_assets",
             EntityType::Sessions => "sessions",
             EntityType::AuditLog => "audit_log",
+            EntityType::Areas => "areas",
+            EntityType::SchemaChanges => "schema_changes",
         }
     }
 }

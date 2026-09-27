@@ -1,6 +1,6 @@
 //! `shadoucmdb prune-audit`: apply the audit_log retention window.
 //!
-//! The deletion itself is `prune_audit_log()` (migration 0007), a SECURITY
+//! The deletion itself is `cmdb.prune_audit_log()` (migrations 0007, 0008), a SECURITY
 //! DEFINER function that only the maintenance role may execute. It deletes by
 //! age only, refuses windows under 30 days, and records every real run as an
 //! `audit.purge` row. This command connects with MAINTENANCE_DATABASE_URL and
@@ -313,7 +313,7 @@ mod tests {
              GRANT CREATE ON SCHEMA public TO shadoucmdb_app;
              SET ROLE shadoucmdb_app;
              CREATE FUNCTION public.hijack(jsonb, text, bigint) RETURNS jsonb LANGUAGE plpgsql AS $$
-               BEGIN GRANT UPDATE, DELETE ON public.audit_log TO shadoucmdb_app; RETURN $1; END $$;
+               BEGIN GRANT UPDATE, DELETE ON cmdb.audit_log TO shadoucmdb_app; RETURN $1; END $$;
              CREATE AGGREGATE public.jsonb_object_agg(text, bigint) (sfunc = public.hijack, stype = jsonb);
              SET ROLE shadoucmdb_maintenance;",
         )
@@ -324,8 +324,8 @@ mod tests {
         c.execute("RESET ROLE").await.unwrap();
 
         let gained = privilege(
-            "SELECT has_table_privilege('shadoucmdb_app', 'public.audit_log', 'UPDATE')
-                 OR has_table_privilege('shadoucmdb_app', 'public.audit_log', 'DELETE')",
+            "SELECT has_table_privilege('shadoucmdb_app', 'cmdb.audit_log', 'UPDATE')
+                 OR has_table_privilege('shadoucmdb_app', 'cmdb.audit_log', 'DELETE')",
         );
         assert!(!gained.fetch_one(&mut *c).await.unwrap(), "the planted aggregate ran as the owner");
         assert_eq!(dry, vec![("login.failure".into(), 1), ("sessions".into(), 0)]);

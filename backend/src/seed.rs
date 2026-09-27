@@ -17,7 +17,9 @@ use uuid::Uuid;
 
 use crate::api::context::RequestContext;
 use crate::config::DatabaseConfig;
+use crate::data::items;
 use crate::modules::templates;
+use crate::schema::model::{Field, Model};
 
 /// Demo owners: kind, name, email, external ref
 const OWNERS: &[(&str, &str, &str, &str)] = &[
@@ -88,6 +90,16 @@ enum Val<'a> {
     Ref(Uuid),
 }
 
+impl Val<'_> {
+    fn text(&self) -> String {
+        match self {
+            Val::Text(v) | Val::Number(v) | Val::Date(v) | Val::Ip(v) | Val::Cidr(v) => (*v).to_owned(),
+            Val::Bool(b) => b.to_string(),
+            Val::Ref(id) => id.to_string(),
+        }
+    }
+}
+
 /// Small sample inventory (and the owners it uses) on top of the IT
 /// infrastructure template; only loaded into a database with no CIs.
 pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
@@ -120,6 +132,7 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
             .into_iter()
             .collect();
 
+    let mut created: Vec<(Uuid, Uuid)> = Vec::new();
     let mut insert = async |ci: DemoCi<'_>| -> anyhow::Result<Uuid> {
         let class_id = must(&cls, ci.class)?;
         let status_id = must(&st, ci.status.unwrap_or("in_service"))?;
@@ -169,6 +182,7 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
         .bind(Value::Object(new_value))
         .execute(&mut *tx)
         .await?;
+        created.push((id, class_id));
         Ok(id)
     };
 
@@ -250,71 +264,45 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
     })
     .await?;
 
-    let defs: HashMap<(String, String), Uuid> = sqlx::query_as::<_, (String, String, Uuid)>(
-        "SELECT k.key, d.key, d.id FROM ci_attribute_definitions d JOIN ci_classes k ON k.id = d.class_id",
-    )
-    .fetch_all(&mut *tx)
-    .await?
-    .into_iter()
-    .map(|(c, a, id)| ((c, a), id))
-    .collect();
     let values = [
-        (srv, "hardware", "manufacturer", Val::Text("HPE")),
-        (srv, "hardware", "model", Val::Text("ProLiant DL380 Gen10")),
-        (srv, "hardware", "warranty_end", Val::Date("2028-03-31")),
-        (srv, "server", "cpu_cores", Val::Number("32")),
-        (srv, "server", "memory_gb", Val::Number("512")),
-        (srv, "server", "os_family", Val::Text("other")),
-        (srv, "server", "management_ip", Val::Ip("10.10.100.11")),
-        (sw, "hardware", "manufacturer", Val::Text("Cisco")),
-        (sw, "network_device", "device_role", Val::Text("switch")),
-        (sw, "network_device", "port_count", Val::Number("48")),
-        (sw, "network_device", "management_subnet", Val::Cidr("10.10.0.0/24")),
-        (vm, "virtual_machine", "vcpu", Val::Number("8")),
-        (vm, "virtual_machine", "memory_gb", Val::Number("32")),
-        (vm, "virtual_machine", "os_family", Val::Text("linux")),
-        (vm, "virtual_machine", "platform", Val::Text("vmware")),
-        (db1, "database", "engine", Val::Text("postgresql")),
-        (db1, "database", "engine_version", Val::Text("17.2")),
-        (db1, "database", "port", Val::Number("5432")),
-        (db1, "database", "backup_enabled", Val::Bool(true)),
-        (app, "application", "version", Val::Text("4.2.0")),
-        (app, "application", "criticality", Val::Text("high")),
-        (app, "application", "primary_database", Val::Ref(db1)),
-        (svc, "service", "service_tier", Val::Text("tier_1")),
-        (svc, "service", "sla_uptime_percent", Val::Number("99.9")),
+        (srv, "manufacturer", Val::Text("HPE")),
+        (srv, "model", Val::Text("ProLiant DL380 Gen10")),
+        (srv, "warranty_end", Val::Date("2028-03-31")),
+        (srv, "cpu_cores", Val::Number("32")),
+        (srv, "memory_gb", Val::Number("512")),
+        (srv, "os_family", Val::Text("other")),
+        (srv, "management_ip", Val::Ip("10.10.100.11")),
+        (sw, "manufacturer", Val::Text("Cisco")),
+        (sw, "device_role", Val::Text("switch")),
+        (sw, "port_count", Val::Number("48")),
+        (sw, "management_subnet", Val::Cidr("10.10.0.0/24")),
+        (vm, "vcpu", Val::Number("8")),
+        (vm, "memory_gb", Val::Number("32")),
+        (vm, "os_family", Val::Text("linux")),
+        (vm, "platform", Val::Text("vmware")),
+        (db1, "engine", Val::Text("postgresql")),
+        (db1, "engine_version", Val::Text("17.2")),
+        (db1, "port", Val::Number("5432")),
+        (db1, "backup_enabled", Val::Bool(true)),
+        (app, "version", Val::Text("4.2.0")),
+        (app, "criticality", Val::Text("high")),
+        (app, "primary_database", Val::Ref(db1)),
+        (svc, "service_tier", Val::Text("tier_1")),
+        (svc, "sla_uptime_percent", Val::Number("99.9")),
     ];
-    for (ci, class, key, val) in values {
-        let attribute_id = *defs
-            .get(&(class.to_owned(), key.to_owned()))
-            .with_context(|| format!("seed: unknown attribute {class}.{key}"))?;
-        let (mut text, mut num, mut boolean, mut date, mut ip, mut cidr, mut reference) =
-            (None, None, None, None, None, None, None);
-        match val {
-            Val::Text(v) => text = Some(v),
-            Val::Number(v) => num = Some(v),
-            Val::Bool(v) => boolean = Some(v),
-            Val::Date(v) => date = Some(v),
-            Val::Ip(v) => ip = Some(v),
-            Val::Cidr(v) => cidr = Some(v),
-            Val::Ref(v) => reference = Some(v),
+    // One row per CI in the table of its class and of every ancestor, with its values.
+    let model = Model::load(&mut tx).await?;
+    for (ci, class_id) in created {
+        for class in model.lineage(class_id) {
+            let table = model.table(class.id).context("seed: type without a table")?;
+            let row: Vec<(&Field, Option<String>)> = model
+                .own_fields(class.id)
+                .filter_map(|f| {
+                    values.iter().find(|(c, k, _)| *c == ci && *k == f.key).map(|(_, _, v)| (f, Some(v.text())))
+                })
+                .collect();
+            items::insert_type_row(&mut tx, &table, ci, &row).await?;
         }
-        sqlx::query(
-            "INSERT INTO ci_attribute_values
-               (ci_id, attribute_id, value_text, value_number, value_boolean, value_date, value_ip, value_cidr, value_ref_ci_id)
-             VALUES ($1, $2, $3, $4::numeric, $5, $6::date, $7::inet, $8::cidr, $9)",
-        )
-        .bind(ci)
-        .bind(attribute_id)
-        .bind(text)
-        .bind(num)
-        .bind(boolean)
-        .bind(date)
-        .bind(ip)
-        .bind(cidr)
-        .bind(reference)
-        .execute(&mut *tx)
-        .await?;
     }
 
     let edges = [
