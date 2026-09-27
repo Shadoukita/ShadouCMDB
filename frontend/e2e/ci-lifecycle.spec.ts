@@ -78,6 +78,11 @@ test("inventory: search and class filter live in the URL and survive a reload", 
   await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
   await snap(page, "06-inventory-filtered");
 
+  // Global search results count their hits in the singular for one match (GH#46).
+  await page.goto(`/search?q=${name}`);
+  await expect(page.locator(".page-header")).toContainText("1 match");
+  await expect(page.locator(".page-header")).not.toContainText("matches");
+
   // Sort and page size are URL state too, and paging is driven by page.total.
   await page.goto("/cis?limit=25&sort=-updatedAt");
   await expect(page.getByRole("columnheader", { name: /Updated/ })).toHaveAttribute("aria-sort", "descending");
@@ -139,6 +144,14 @@ test("relationships: add in both directions; illegal pairs offer no type", async
   await page.locator("#rel-type").selectOption({ label: `${name} is located in FRA1 Rack A01` });
   await page.getByRole("button", { name: "Add relationship" }).click();
   await expect(page.getByRole("status").filter({ hasText: `Added: ${name} is located in FRA1 Rack A01` })).toBeVisible();
+
+  // With one relationship the delete confirmation speaks in the singular (GH#46); cancel, nothing is deleted.
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("This relationship will break:");
+  await expect(dialog.getByRole("button", { name: "Delete CI and 1 relationship" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
 
   // Reverse direction: the application runs on this server, so from here it reads "hosts".
   await pickCi(page, "#rel-target", "CRM", "CRM");
