@@ -37,6 +37,10 @@ pub enum ErrorCode {
     LastAdministrator,
     /// Too many failed password attempts; retry after the Retry-After header
     RateLimited,
+    /// The password was right; send the authenticator or recovery code to POST /api/v1/auth/login/mfa (401)
+    MfaRequired,
+    /// A profile the user holds requires MFA; until it is set up only the MFA set-up routes answer (403)
+    MfaEnrolmentRequired,
     UnsupportedMediaType,
     PayloadTooLarge,
     DatabaseUnavailable,
@@ -49,8 +53,10 @@ impl ErrorCode {
     pub fn status(self) -> StatusCode {
         match self {
             ErrorCode::ValidationError => StatusCode::BAD_REQUEST,
-            ErrorCode::Unauthenticated => StatusCode::UNAUTHORIZED,
-            ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid => StatusCode::FORBIDDEN,
+            ErrorCode::Unauthenticated | ErrorCode::MfaRequired => StatusCode::UNAUTHORIZED,
+            ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid | ErrorCode::MfaEnrolmentRequired => {
+                StatusCode::FORBIDDEN
+            }
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => {
                 StatusCode::CONFLICT

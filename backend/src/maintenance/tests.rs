@@ -121,8 +121,8 @@ async fn a_backup_restores_into_another_database_value_for_value() {
 
     let (buf, header) = take_backup(&mut ca).await;
     assert!(header.total_rows() > 20, "demo data is in the backup");
-    assert_eq!(header.excluded_tables, vec!["cmdb.sessions".to_owned()]);
-    assert!(!header.tables.iter().any(|t| t.name == "sessions"));
+    assert_eq!(header.excluded_tables, vec!["cmdb.mfa_challenges".to_owned(), "cmdb.sessions".to_owned()]);
+    assert!(!header.tables.iter().any(|t| t.name == "sessions" || t.name == "mfa_challenges"));
     // The system tables, then the type tables of the area.
     assert!(header.tables.iter().any(|t| t.schema == "cmdb" && t.name == "schema_changes" && t.rows > 0));
     let server = header.tables.iter().find(|t| t.schema == "infrastruktur" && t.name == "server").unwrap();

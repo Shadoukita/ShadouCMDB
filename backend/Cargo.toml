@@ -23,6 +23,8 @@ futures-util = { version = "0.3", default-features = false }
 # Session and CSRF tokens straight from the OS random number generator.
 getrandom = "0.4"
 hex = "0.4"
+# TOTP codes (RFC 6238 is HMAC-SHA1); both already in the tree through sqlx.
+hmac = "0.13"
 ipnetwork = "0.21"
 mime_guess = "2"
 regex = "1"
@@ -33,6 +35,7 @@ serde = { version = "1", features = ["derive"] }
 # preserve_order: JSON objects keep insertion order (attribute values follow the class definition order).
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_path_to_error = "0.1"
+sha1 = "0.11"
 sha2 = "0.10"
 # rustls with ring and the Mozilla root set: no OpenSSL and no system TLS library,
 # so the same code builds unchanged for Linux (x64/arm64) and Windows.

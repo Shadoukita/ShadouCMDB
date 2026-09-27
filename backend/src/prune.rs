@@ -20,8 +20,8 @@ pub const MIN_DAYS: u32 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Scope {
-    /// Sign-in, sign-out, session and API token use events (IP address, user
-    /// agent), plus sessions that expired more than 30 days ago.
+    /// Sign-in, sign-out, session, two-factor and API token use events (IP
+    /// address, user agent), plus sessions that expired more than 30 days ago.
     Auth,
     /// CI and configuration change history (create, update, delete, restore).
     Changes,
