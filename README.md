@@ -71,9 +71,13 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
    | `DATABASE_SSL` | Use when |
    | --- | --- |
-   | `verify-full` | Production and managed databases. Add `DATABASE_SSL_CA_FILE` if the CA is not publicly trusted (e.g. the RDS CA bundle). |
-   | `require` (default) | Encrypted, but the server certificate is not verified. |
+   | `verify-full` (**recommended**) | Production and managed databases. Add `DATABASE_SSL_CA_FILE` if the CA is not publicly trusted (e.g. the RDS CA bundle). |
+   | `require` (default) | Encrypted, but the server certificate is not verified: anyone on the network path can impersonate the database and read the password. Acceptable only while you set up the CA file. |
    | `disable` | Only for a database on a trusted private network without TLS. |
+
+   Use `DATABASE_SSL=verify-full` wherever the database is not on the same host. The default stays
+   `require` only so that a first start against a database with a private CA does not fail before
+   `DATABASE_SSL_CA_FILE` is set.
 
    There is no default host. If nothing is configured, the backend exits with an error naming
    the missing variable. Every variable is documented in [`.env.example`](.env.example).
@@ -147,8 +151,8 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    send `X-Forwarded-Proto` so session cookies are marked `Secure`
    (see [docs/deployment.md](docs/deployment.md#https-and-session-cookies)).
 
-8. **Use the API.** It lives under `/api/v1`. The OpenAPI 3.1 contract is served at `/openapi.json`, and
-   there is a browsable UI at `/docs`. The same contract is committed as
+8. **Use the API.** It lives under `/api/v1`. With `API_DOCS=authenticated` or `public` (off by default) the
+   OpenAPI 3.1 contract is served at `/openapi.json`, and there is a browsable UI at `/docs`. The same contract is committed as
    [`backend/openapi.json`](backend/openapi.json). See [docs/api.md](docs/api.md) for conventions
    (pagination, errors, attributes) and extension points. To check a deployment end to end:
 
