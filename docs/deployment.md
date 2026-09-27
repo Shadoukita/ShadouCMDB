@@ -154,7 +154,9 @@ Each [GitHub Release](https://github.com/Shadoukita/ShadouCMDB/releases) has:
 | `shadoucmdb-<version>-linux-arm64.tar.gz` | The same for `aarch64-unknown-linux-musl` (Graviton, Ampere, Raspberry Pi 4/5 with a 64-bit OS). |
 | `shadoucmdb-<version>-windows-x64.zip` | `shadoucmdb.exe` (`x86_64-pc-windows-msvc`, static C runtime, so no Visual C++ Redistributable), `shadoucmdb.env.example`, and a `README.txt` with the Windows Service install steps. |
 | `SHA256SUMS` | `sha256sum --ignore-missing -c SHA256SUMS` |
-| image `ghcr.io/shadoukita/shadoucmdb:<version>` | `linux/amd64` + `linux/arm64`, made from the two Linux binaries above. |
+| `shadoucmdb-<version>.cdx.json` | CycloneDX SBOM: every Rust crate and web UI package in the binaries. |
+| `*.sigstore.json`, `shadoucmdb-<version>.provenance.jsonl` | cosign keyless signature per file and SLSA build provenance. How to check them: [supply-chain.md](supply-chain.md#verifying-a-download). |
+| image `ghcr.io/shadoukita/shadoucmdb:<version>` | `linux/amd64` + `linux/arm64`, made from the two Linux binaries above. Signed with cosign, with provenance and SBOM attestations ([supply-chain.md](supply-chain.md#verifying-the-image)). |
 
 All three binaries embed the same web UI build. The Linux builds are static musl
 executables. musl's own allocator serialises threads on a single lock, so those

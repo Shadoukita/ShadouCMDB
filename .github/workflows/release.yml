@@ -5,9 +5,20 @@ name: Release
 # binary against PostgreSQL, pushes the multi-arch image to GHCR and publishes a
 # GitHub Release with the archives and SHA256SUMS. See CONTRIBUTING.md.
 #
+# Supply chain (docs/supply-chain.md): a CycloneDX SBOM of the release, cosign
+# keyless signatures (Sigstore bundles) for every file and for the image, and
+# SLSA build provenance as GitHub artifact attestations. The image also carries
+# BuildKit provenance and the SBOM as a signed cosign attestation.
+#
 # Pull requests that touch the pipeline run everything except the two publish
 # steps (image push and GitHub Release), so a broken pipeline is caught before
-# a tag is cut.
+# a tag is cut. Same-repository pull requests also sign and attest the dev
+# archives, so signing is tested too; those signatures name the PR ref, never
+# a v* tag, so they cannot pass for a release (docs/supply-chain.md).
+#
+# No build caches (rust-cache, npm, zig) anywhere in this workflow: the release
+# binaries are signed, so they are built from a clean slate and not from a
+# cache that another workflow run could have written.
 
 on:
   push:
@@ -21,6 +32,7 @@ on:
       - backend/Cargo.lock
       - backend/.cargo/**
       - backend/build.rs
+      - tools/sbom/**
   workflow_dispatch:
 
 permissions:
@@ -52,9 +64,14 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       publish: ${{ steps.v.outputs.publish }}
       prerelease: ${{ steps.v.outputs.prerelease }}
+      sign: ${{ steps.v.outputs.sign }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - id: v
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' backend/Cargo.toml | head -1)
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
@@ -69,25 +86,58 @@ jobs:
             publish=false
           fi
           [[ "$version" == *-* ]] && prerelease=true || prerelease=false
-          echo "version=$version publish=$publish prerelease=$prerelease" | tee -a "$GITHUB_STEP_SUMMARY"
-          { echo "version=$version"; echo "publish=$publish"; echo "prerelease=$prerelease"; } >> "$GITHUB_OUTPUT"
+          # Keyless signing needs an OIDC token, which fork pull requests do not get.
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] || [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then sign=true; else sign=false; fi
+          echo "version=$version publish=$publish prerelease=$prerelease sign=$sign" | tee -a "$GITHUB_STEP_SUMMARY"
+          { echo "version=$version"; echo "publish=$publish"; echo "prerelease=$prerelease"; echo "sign=$sign"; } >> "$GITHUB_OUTPUT"
 
   ui:
     name: Web UI (built once)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
-          cache: npm
       - run: npm ci --workspace frontend --include-workspace-root --no-audit --no-fund
       - run: npm run build --workspace frontend
       - run: test -f frontend/dist/index.html
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: web-ui
           path: frontend/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  sbom:
+    name: SBOM (CycloneDX)
+    needs: [meta]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      SBOM: shadoucmdb-${{ needs.meta.outputs.version }}.cdx.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci --workspace frontend --include-workspace-root --ignore-scripts --no-audit --no-fund
+      - run: npm ci --prefix tools/sbom --ignore-scripts --omit=optional --no-audit --no-fund
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-cyclonedx,cyclonedx
+      - run: .github/scripts/sbom.sh "$VERSION" "dist/$SBOM"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-sbom
+          path: dist/${{ env.SBOM }}
           if-no-files-found: error
           retention-days: 7
 
@@ -120,22 +170,22 @@ jobs:
     env:
       PKG: shadoucmdb-${{ needs.meta.outputs.version }}-linux-${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: web-ui
           path: frontend/dist
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: backend
-          key: ${{ matrix.target }}
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: ${{ env.ZIG_VERSION }}
-      - uses: taiki-e/install-action@v2
+          use-cache: false
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-zigbuild
 
@@ -173,13 +223,13 @@ jobs:
           tar -C dist -czf "dist/$PKG.tar.gz" --owner=0 --group=0 "$PKG"
           tar -tvzf "dist/$PKG.tar.gz"
           cp "dist/$PKG/shadoucmdb" dist/docker/linux-${{ matrix.docker_arch }}/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-linux-${{ matrix.arch }}
           path: dist/${{ env.PKG }}.tar.gz
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: docker-linux-${{ matrix.docker_arch }}
           path: dist/docker
@@ -200,16 +250,16 @@ jobs:
       PGPASSWORD: root
       PGDATABASE: postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: web-ui
           path: frontend/dist
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
-          workspaces: backend
-          key: release
+          toolchain: stable
       # backend/.cargo/config.toml links the C runtime statically (+crt-static).
       - run: cargo build --release --locked
         working-directory: backend
@@ -264,7 +314,7 @@ jobs:
           Copy-Item .env.example "dist\$env:PKG\shadoucmdb.env.example"
           Compress-Archive -Path "dist\$env:PKG" -DestinationPath "dist\$env:PKG.zip"
           Get-ChildItem "dist\$env:PKG" | Format-Table Name, Length
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-windows-x64
           path: dist/${{ env.PKG }}.zip
@@ -275,11 +325,14 @@ jobs:
     name: Docker image (linux/amd64 + linux/arm64)
     # Waits for windows too: this job pushes to GHCR (incl. latest), so it must
     # not run unless every binary passed, just like the GitHub Release.
-    needs: [meta, linux, windows]
+    needs: [meta, sbom, linux, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
+      # Keyless cosign signatures and the provenance attestation (published images only).
+      id-token: write
+      attestations: write
     services:
       postgres:
         image: postgres:17
@@ -291,15 +344,17 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: docker-linux-*
           path: dist/docker
           merge-multiple: true
       - run: find dist/docker -type f -exec ls -l {} +
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Test each platform's image against PostgreSQL
         run: |
@@ -312,7 +367,7 @@ jobs:
           done
 
       - if: needs.meta.outputs.publish == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -320,7 +375,7 @@ jobs:
       # 1.2.3 -> 1.2.3, 1.2, 1 (not for 0.x) and latest. A pre-release such as
       # 1.2.3-rc.1 gets only its own tag, never latest.
       - id: tags
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.IMAGE }}
           flavor: latest=auto
@@ -332,8 +387,10 @@ jobs:
           labels: |
             org.opencontainers.image.title=ShadouCMDB
             org.opencontainers.image.description=Self-hosted CMDB: REST API and web UI in one binary. PostgreSQL is external.
+      # BuildKit adds SLSA provenance (mode=max) and an SPDX SBOM to the image index.
       - name: Build both platforms${{ needs.meta.outputs.publish == 'true' && ' and push' || '' }}
-        uses: docker/build-push-action@v6
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: dist/docker
           file: deploy/docker/Dockerfile.release
@@ -341,28 +398,67 @@ jobs:
           push: ${{ needs.meta.outputs.publish == 'true' }}
           tags: ${{ steps.tags.outputs.tags }}
           labels: ${{ steps.tags.outputs.labels }}
-          provenance: false
+          provenance: mode=max
+          sbom: true
 
-      - name: Pull and run the pushed image on both platforms
+      # Everything below signs by digest, never by tag, so a tag moved in the
+      # meantime cannot get a signature.
+      - if: needs.meta.outputs.publish == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-sbom
+          path: sbom
+      - if: needs.meta.outputs.publish == 'true'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: cosign sign the image, attest the CycloneDX SBOM
         if: needs.meta.outputs.publish == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ needs.meta.outputs.version }}
         run: |
-          ref="$IMAGE:${{ needs.meta.outputs.version }}"
+          cosign sign --yes "$IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx --predicate "sbom/shadoucmdb-$VERSION.cdx.json" "$IMAGE@$DIGEST"
+      - name: SLSA build provenance for the image
+        if: needs.meta.outputs.publish == 'true'
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify the signatures, pull and run the pushed image on both platforms
+        if: needs.meta.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          ref="$IMAGE:$VERSION"
           docker buildx imagetools inspect "$ref"
+          id=(--certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" --certificate-oidc-issuer https://token.actions.githubusercontent.com)
+          cosign verify "${id[@]}" "$ref" > /dev/null
+          cosign verify-attestation --type cyclonedx "${id[@]}" "$ref" > /dev/null
+          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --source-ref "$GITHUB_REF"
           for arch in amd64 arm64; do
             docker rmi -f "$ref" >/dev/null 2>&1 || true
             docker pull --platform linux/$arch "$ref"
             docker run --rm --platform linux/$arch "$ref" --version
           done
 
-  release:
-    name: GitHub Release
-    needs: [meta, linux, windows, docker]
-    if: needs.meta.outputs.publish == 'true'
+  sign:
+    name: Sign, checksums and provenance
+    needs: [meta, sbom, linux, windows]
+    if: needs.meta.outputs.sign == 'true'
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-*
           path: dist
@@ -372,13 +468,72 @@ jobs:
         run: |
           sha256sum shadoucmdb-* > SHA256SUMS
           cat SHA256SUMS
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      # One Sigstore bundle (signature + Fulcio certificate + Rekor entry) per file.
+      - name: cosign sign-blob (keyless)
+        working-directory: dist
+        run: |
+          for f in shadoucmdb-* SHA256SUMS; do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f" > /dev/null
+          done
+      - name: SLSA build provenance for the archives and the SBOM
+        id: provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: |
+            dist/shadoucmdb-*.tar.gz
+            dist/shadoucmdb-*.zip
+            dist/shadoucmdb-*.cdx.json
+      - name: Attach the provenance bundle (offline verification)
+        env:
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/shadoucmdb-$VERSION.provenance.jsonl"
+
+      # The same checks docs/supply-chain.md gives users, run before anything is published.
+      - name: Verify every signature and the provenance
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum -c SHA256SUMS
+          for f in shadoucmdb-*.tar.gz shadoucmdb-*.zip shadoucmdb-*.cdx.json SHA256SUMS; do
+            cosign verify-blob --bundle "$f.sigstore.json" \
+              --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com "$f"
+          done
+          for f in shadoucmdb-*.tar.gz shadoucmdb-*.zip shadoucmdb-*.cdx.json; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" --bundle "shadoucmdb-$VERSION.provenance.jsonl" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --source-ref "$GITHUB_REF" > /dev/null
+            echo "$f: provenance OK"
+          done
+          ls -l
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-release
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: GitHub Release
+    needs: [meta, sign, docker]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-release
+          path: dist
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.meta.outputs.version }}
+          PRERELEASE: ${{ needs.meta.outputs.prerelease }}
         run: |
           flags=()
-          [ "${{ needs.meta.outputs.prerelease }}" = true ] && flags+=(--prerelease) || flags+=(--latest)
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease) || flags+=(--latest)
           cat > notes.md <<EOF
           | Platform | Download |
           | --- | --- |
@@ -386,8 +541,11 @@ jobs:
           | Linux ARM64 (static, any distribution) | \`shadoucmdb-$VERSION-linux-arm64.tar.gz\` |
           | Windows Server x64 | \`shadoucmdb-$VERSION-windows-x64.zip\` |
           | Docker (linux/amd64, linux/arm64) | \`docker pull $IMAGE:$VERSION\` |
+          | SBOM (CycloneDX JSON) | \`shadoucmdb-$VERSION.cdx.json\` |
 
           Check downloads with \`sha256sum --ignore-missing -c SHA256SUMS\`. Each archive has a README.txt with install steps; see also [docs/deployment.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/docs/deployment.md).
+
+          Every file has a cosign keyless signature (\`<file>.sigstore.json\`) and SLSA build provenance (\`shadoucmdb-$VERSION.provenance.jsonl\`, also in the repository's attestations); the image is signed and carries provenance and the SBOM. How to verify: [docs/supply-chain.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/docs/supply-chain.md).
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
