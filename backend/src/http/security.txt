@@ -1,0 +1,10 @@
+# security.txt (RFC 9116) for the ShadouCMDB software.
+#
+# These contacts are for vulnerabilities in ShadouCMDB itself. For a problem
+# with this particular installation (its hosting, accounts or data), contact
+# the organisation that runs it.
+#
+# Disclosure policy: SECURITY.md in the ShadouCMDB repository.
+Contact: https://github.com/Shadoukita/ShadouCMDB/security/advisories/new
+Policy: https://github.com/Shadoukita/ShadouCMDB/blob/main/SECURITY.md
+Preferred-Languages: en, de

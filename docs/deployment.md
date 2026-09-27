@@ -80,6 +80,9 @@ Administration in the UI (`/api/v1/admin/users`, `/api/v1/admin/profiles`). See
 
 ## HTTPS and session cookies
 
+For TLS settings, network layout, database roles and backups, see the
+[hardening guide](security/hardening.md).
+
 `shadoucmdb` serves plain HTTP; put a TLS-terminating reverse proxy (nginx, Caddy, Traefik,
 a cloud load balancer) in front of it for anything beyond a lab. Sessions are cookies:
 

@@ -1,0 +1,237 @@
+# Hardening guide
+
+A CMDB is a map of your network: every server, its owner, its location and how it connects to
+everything else. Treat a ShadouCMDB installation, its database and its backups as confidential.
+This guide is the secure configuration we recommend for production. [deployment.md](../deployment.md)
+covers installation; this page covers what to change and why.
+
+## Checklist
+
+- [ ] HTTPS only, terminated by a reverse proxy with TLS 1.2 or 1.3 ([TLS](#tls-reverse-proxy))
+- [ ] `shadoucmdb` reachable only from the proxy; the database only from `shadoucmdb` ([network](#network-segmentation))
+- [ ] `DATABASE_SSL=verify-full` ([database TLS](#database-tls))
+- [ ] A dedicated, non-superuser database role; no other application shares it ([roles](#database-roles))
+- [ ] The env file readable only by the service account ([secrets](#secrets-and-configuration))
+- [ ] First administrator created by you, before the server is reachable by others ([first run](#first-run))
+- [ ] Encrypted, tested backups ([backup](#backup-and-restore))
+- [ ] Logs collected centrally, sign-in failures alerted on ([logging](#logging-and-monitoring))
+- [ ] Subscribed to security releases ([updates](#updates))
+
+## TLS reverse proxy
+
+`shadoucmdb` speaks plain HTTP. Always put a TLS-terminating reverse proxy in front of it; it
+carries passwords and session cookies. Requirements for the proxy:
+
+- **TLS 1.2 and 1.3 only.** Disable SSL 3, TLS 1.0 and 1.1. With TLS 1.2 use only AEAD cipher
+  suites with forward secrecy (ECDHE with AES-GCM or ChaCha20-Poly1305), as in Mozilla's
+  "intermediate" profile. If every client supports it, allow TLS 1.3 only ("modern").
+- **Redirect HTTP to HTTPS**, and don't serve the application on port 80.
+- **Pass the scheme:** `X-Forwarded-Proto: https`. Without it the server doesn't mark the session
+  cookies `Secure` and doesn't send HSTS. If the proxy can't, set `COOKIE_SECURE=always`.
+- **Replace `X-Forwarded-For`** with the client address; never append to what the client sent.
+  The audit log records that address.
+- **Don't add `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`
+  or `Referrer-Policy`**: the server sends them. Do add `Permissions-Policy`.
+- **Don't cache `/api/`** (see [deployment.md](../deployment.md#https-and-session-cookies)).
+- Use a certificate from a CA your clients trust (ACME or your internal PKI). Monitor its expiry.
+
+nginx:
+
+```nginx
+server {
+    listen 80;
+    server_name cmdb.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name cmdb.example.com;
+
+    ssl_certificate     /etc/ssl/cmdb.example.com/fullchain.pem;
+    ssl_certificate_key /etc/ssl/cmdb.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_tickets off;
+
+    client_max_body_size 1m;   # the server rejects larger bodies anyway
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;   # replaces, not $proxy_add_x_forwarded_for
+        proxy_set_header Forwarded "";
+    }
+}
+```
+
+Caddy (automatic certificates; TLS 1.2+ by default):
+
+```caddyfile
+cmdb.example.com {
+    header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    reverse_proxy 127.0.0.1:3000 {
+        header_up X-Forwarded-For {remote_host}
+    }
+}
+```
+
+Check the result from outside: `curl -sI https://cmdb.example.com/ | grep -i strict-transport`
+should show the HSTS header, and `testssl.sh cmdb.example.com` (or `nmap --script ssl-enum-ciphers -p 443`)
+should list only TLS 1.2 and 1.3.
+
+## Network segmentation
+
+Three zones, each reachable only from the one in front of it:
+
+```
+users ──HTTPS──▶ reverse proxy ──HTTP──▶ shadoucmdb ──TLS 5432──▶ PostgreSQL
+```
+
+- **Bind `shadoucmdb` to the proxy's network only.** On the same host: `API_HOST=127.0.0.1`. On
+  separate hosts: bind to the internal interface and firewall port 3000 so only the proxy reaches
+  it. The default `API_HOST=0.0.0.0` listens everywhere.
+- **The database accepts connections only from the `shadoucmdb` hosts** (host firewall or
+  security group, plus `pg_hba.conf` below). Don't expose PostgreSQL to user networks or the
+  internet.
+- **Don't publish `/docs` and `/openapi.json` to untrusted networks.** They are public today and
+  can't be switched off yet (planned: SHAA-77 workstream 3); they reveal the API surface, not data.
+  If users reach the server from the internet, block both paths at the proxy.
+- **No outbound internet is needed.** The server only connects to PostgreSQL ([telemetry](telemetry.md)),
+  so deny its outbound traffic apart from the database and your log collector.
+- **Administration from a management network.** Run `migrate`, `create-admin` and database
+  maintenance from a jump host in the management zone, not from user workstations.
+
+## Database TLS
+
+Set `DATABASE_SSL=verify-full`. The default, `require`, encrypts the connection but doesn't check
+the server's certificate, so anyone who can intercept traffic between the server and the database
+can impersonate the database and read the credentials and data.
+
+```sh
+DATABASE_SSL=verify-full
+DATABASE_SSL_CA_FILE=/etc/shadoucmdb/db-ca.pem   # only for a private or managed-service CA
+```
+
+- The host name in `PGHOST` or `DATABASE_URL` must match the certificate (SAN). Connect by name,
+  not IP address, unless the certificate contains the IP.
+- Without `DATABASE_SSL_CA_FILE` the Mozilla root set built into the binary is used. For a private
+  CA, or managed services such as Amazon RDS or Azure Database for PostgreSQL, download the
+  provider's CA bundle and point `DATABASE_SSL_CA_FILE` at it.
+- On the PostgreSQL side: `ssl = on`, `ssl_min_protocol_version = 'TLSv1.2'`,
+  `password_encryption = 'scram-sha-256'`.
+- `DATABASE_SSL=disable` is only for a database on the same host over a Unix socket or loopback.
+
+## Database roles
+
+`shadoucmdb` needs one PostgreSQL role that owns its database. That role must not be able to do
+anything beyond it.
+
+- **Not a superuser**, and no `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS`.
+  [`sql/bootstrap/00_create_role_and_database.sql`](../../sql/bootstrap/00_create_role_and_database.sql)
+  creates it that way.
+- **One database, one role.** Don't share the role or the database with other applications.
+- **Keep other roles out of the database:**
+
+  ```sql
+  REVOKE ALL ON DATABASE shadoucmdb FROM PUBLIC;
+  \connect shadoucmdb
+  ALTER SCHEMA public OWNER TO shadoucmdb_app;     -- PostgreSQL 14 only; 15+ gives it to the database owner already
+  REVOKE ALL ON SCHEMA public FROM PUBLIC;
+  ALTER ROLE shadoucmdb_app CONNECTION LIMIT 40;   -- above DATABASE_POOL_MAX x instances, plus room for migrate
+  ```
+
+- **Restrict where it can log in from** in `pg_hba.conf`: TLS only, SCRAM, from the application
+  hosts only.
+
+  ```
+  # TYPE     DATABASE    USER            ADDRESS          METHOD
+  hostssl    shadoucmdb  shadoucmdb_app  10.0.20.0/28     scram-sha-256
+  hostnossl  all         all             0.0.0.0/0        reject
+  ```
+
+- **Separate roles for people.** DBAs use their own named roles for maintenance, never the
+  application's password. A long, random password for the application role, stored only in the
+  env file or your secret manager; rotate it when someone with access leaves.
+- **Reporting and BI** get a read-only role that can't see credentials:
+
+  ```sql
+  CREATE ROLE shadoucmdb_report LOGIN PASSWORD '…';
+  GRANT CONNECT ON DATABASE shadoucmdb TO shadoucmdb_report;
+  GRANT USAGE ON SCHEMA public TO shadoucmdb_report;
+  GRANT SELECT ON ALL TABLES IN SCHEMA public TO shadoucmdb_report;
+  REVOKE SELECT ON sessions, users FROM shadoucmdb_report;       -- session tokens, password hashes
+  GRANT SELECT (id, username, display_name, email, is_active, created_at, updated_at)
+    ON users TO shadoucmdb_report;                                 -- adjust to the columns you need
+  ```
+
+  Such a role bypasses the permission profiles of the application: it sees every class. Grant it
+  only to people who may see the whole CMDB.
+
+Planned: a separate migration role so that the running server cannot change the schema of the
+fixed tables, and database-level protection of `audit_log` against `TRUNCATE` (SHAA-77
+workstream 3). Until then, the application role owns every table, including the audit log, so
+protect its password accordingly.
+
+## Secrets and configuration
+
+- The env file holds the database password. Make it readable only by the service account:
+  `0640 root:shadoucmdb` on Linux, the ACL shown in [deployment.md](../deployment.md#windows-server-windows-service)
+  on Windows. Under Docker or Kubernetes, inject it from a secret store (Docker secrets,
+  Kubernetes Secrets with encryption at rest, Vault) rather than baking it into an image.
+- Never put the password in `DATABASE_URL` on a command line; it shows up in `ps` and shell
+  history. Use the env file.
+- Leave `CORS_ORIGINS` empty unless you serve the UI from another origin.
+- Keep `LOG_LEVEL` at `info` in production. `trace` logs every SQL statement.
+
+## First run
+
+Until the first administrator exists, anyone who can reach the server can create it through the
+first-run setup in the UI. Either create it with `shadoucmdb create-admin` before the server is
+reachable, or make sure only you can reach it until you have completed the setup.
+
+Then: give each person their own account, grant the smallest permission profile that fits
+their job, and keep the number of administrators small. Deactivate accounts of people who leave
+(it ends their sessions immediately).
+
+## Backup and restore
+
+The database is the whole state of ShadouCMDB: data, users, settings and audit log. The server
+holds no state of its own besides its env file.
+
+- **Back up with PostgreSQL's tools.** Logical: `pg_dump --format=custom --file=shadoucmdb-$(date +%F).dump`
+  with a role that can read every table (the application role works). For a point-in-time
+  recovery, use physical backups with WAL archiving (pgBackRest, Barman or your provider's
+  snapshots).
+- **Encrypt backups** at rest and in transit (e.g. `age` or `gpg` before the file leaves the host,
+  or an encrypted backup repository). A dump contains the password hashes and the whole CMDB.
+- **Keep them apart:** store backups outside the database host and outside the reach of the
+  application role, with at least one copy offline or immutable (object lock), so ransomware on
+  the server cannot delete them.
+- **Back up the env file** (or the secret-store entry) separately and just as carefully.
+- **Test a restore** at least every quarter into a separate database: `pg_restore --no-owner --role=shadoucmdb_app -d shadoucmdb_restore shadoucmdb-….dump`,
+  then run `shadoucmdb verify` and `shadoucmdb migrate` against it, and sign in.
+- **Retention:** keep backups only as long as you need them; they are copies of personal data
+  (user accounts, audit log IPs) too.
+
+Built-in `shadoucmdb backup` / `restore` commands and a decommission wipe are planned (SHAA-77
+workstream 7).
+
+## Logging and monitoring
+
+- Collect the JSON logs centrally (journald, Windows Event Log via the log file, your SIEM).
+- The audit log (`GET /api/v1/audit-log`, permission `audit.view`) records every change and every
+  sign-in success, failure and lockout with the client IP. Review it, and alert on bursts of
+  `login.failure` or `login.locked`.
+- Watch `/readyz` from your monitoring; it returns 503 if the database is unreachable or
+  migrations are pending.
+
+## Updates
+
+ShadouCMDB doesn't update itself or check for updates. Subscribe to security releases (see
+[support period](support-period.md#how-updates-reach-you)), verify downloads against `SHA256SUMS`,
+and apply security releases promptly: replace the binary or image, run `migrate`, restart.
