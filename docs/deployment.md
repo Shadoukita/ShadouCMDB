@@ -186,6 +186,13 @@ nothing from it. Migration 0008 stops with the `GRANT` to run if the membership 
 e.g. on an install split before this version: run `GRANT shadoucmdb_app TO shadoucmdb_owner;`
 as an administrator, or re-run `10_split_roles.sql`, then `migrate` again.
 
+Both bootstrap scripts pin `search_path = cmdb, public` for `shadoucmdb_owner` and
+`shadoucmdb_maintenance`. PostgreSQL's default `"$user", public` would look first in a schema
+named after the role, and creating schemas is what the API role does; the API also refuses area
+keys that start with `shadoucmdb_` or match any existing role. On an install bootstrapped before
+this, run the two `ALTER ROLE … SET search_path = cmdb, public;` lines from
+`00_create_role_and_database.sql` as an administrator.
+
 Only `shadoucmdb_owner` may create objects in schema `public`. PostgreSQL 14 lets every role
 do so by default, which would let the API role plant a function that owner-privileged code
 then runs; both bootstrap scripts revoke it, and `migrate` warns if it finds it still open
@@ -252,7 +259,8 @@ Recorded as an audit.purge entry in audit_log.
 - `--older-than` takes days (`180d` or `180`); anything under 30 days is refused, by the
   command and by the database function.
 - `--scope auth` (default): `login.success`, `login.failure`, `login.locked`, `logout` and
-  `session.revoke` rows, plus `sessions` rows that expired more than 30 days ago.
+  `session.revoke` rows, API token `token.use` rows, plus `sessions` rows that expired more
+  than 30 days ago.
   `--scope changes`: `create`, `update`, `delete` and `restore` rows, only if you decide to
   cut change history too.
 - The command needs `MAINTENANCE_DATABASE_URL` and refuses to run without it. Each executed
