@@ -26,6 +26,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use self::format::*;
+use super::areas::{Area, Areas, DEFAULT_AREA};
 use super::classes::{
     AttributeDataType, AttributeDefinition, AttributeDefinitions, CiClass, CiClasses, RelationshipRule,
     RelationshipRules, RelationshipType, RelationshipTypes, ValidationRules,
@@ -45,6 +46,8 @@ use crate::auth::permissions::{ClassRights, GlobalPermission};
 use crate::data::crud::{self, ColumnSet};
 use crate::data::ui_settings as ui_data;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
+use crate::schema::naming::{self, NameKind};
+use crate::schema::{self as engine, SchemaChange};
 
 const TAG: &str = "Configuration export/import";
 
@@ -134,6 +137,8 @@ pub struct ImportResult {
     pub mode: ImportMode,
     /// True only for mode=apply (a dry run never changes anything)
     pub applied: bool,
+    /// The DDL the import runs (would run, for a dry run): new schemas, tables, columns and changed columns
+    pub schema_changes: Vec<SchemaChange>,
     /// Per section, in import order
     pub summary: Vec<SectionSummary>,
     /// Every create, update and delete (unchanged rows are only counted)
@@ -189,6 +194,7 @@ fn normalise_profile(p: &mut ProfileSpec) {
 
 #[derive(Default)]
 struct Ids {
+    areas: HashMap<String, Uuid>,
     classes: HashMap<String, Uuid>,
     attributes: HashMap<(String, String), Uuid>,
     types: HashMap<String, Uuid>,
@@ -212,12 +218,29 @@ struct Snapshot {
 async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
     let mut ids = Ids::default();
 
+    let areas: Vec<Area> = crud::select_all(conn, Areas::TABLE, Areas::COLUMNS, "sort_order, key").await?;
+    let area_key: HashMap<Uuid, String> = areas.iter().map(|a| (a.id, a.key.clone())).collect();
+    ids.areas = areas.iter().map(|a| (a.key.clone(), a.id)).collect();
+    let area_specs: Vec<AreaSpec> = areas
+        .iter()
+        .map(|a| AreaSpec {
+            key: a.key.clone(),
+            name: a.name.clone(),
+            description: a.description.clone(),
+            icon: a.icon.clone(),
+            color: a.color.clone(),
+            sort_order: a.sort_order,
+            is_active: a.is_active,
+        })
+        .collect();
+
     let classes: Vec<CiClass> = crud::select_all(conn, CiClasses::TABLE, CiClasses::COLUMNS, "sort_order, key").await?;
     let class_key: HashMap<Uuid, String> = classes.iter().map(|c| (c.id, c.key.clone())).collect();
     let class_specs: Vec<ClassSpec> = classes
         .iter()
         .map(|c| ClassSpec {
             key: c.key.clone(),
+            area: area_key.get(&c.area_id).cloned(),
             name: c.name.clone(),
             description: c.description.clone(),
             parent: c.parent_id.and_then(|p| class_key.get(&p).cloned()),
@@ -423,6 +446,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         exported_at: Some(crate::api::schemas::iso(&chrono::Utc::now())),
         app_version: Some(env!("CARGO_PKG_VERSION").into()),
         data_model: Some(DataModelSection {
+            areas: area_specs,
             classes: class_specs,
             attributes: attr_specs,
             relationship_types: type_specs,
@@ -525,6 +549,7 @@ fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning
     }
 
     // Duplicates
+    duplicates(&dm.areas, "dataModel.areas", |a| a.key.clone(), &mut e);
     duplicates(&dm.classes, "dataModel.classes", |c| c.key.clone(), &mut e);
     duplicates(&dm.attributes, "dataModel.attributes", |a| format!("{}.{}", a.class, a.key), &mut e);
     duplicates(&dm.relationship_types, "dataModel.relationshipTypes", |t| t.key.clone(), &mut e);
@@ -544,6 +569,45 @@ fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning
     }
     if let Some(profiles) = &file.permission_profiles {
         duplicates(profiles, "permissionProfiles", |p| p.name.to_lowercase(), &mut e);
+    }
+
+    // Areas: usable technical names; classes stay in their area
+    let areas = known(dm.areas.iter().map(|a| a.key.as_str()), ids.areas.keys());
+    for (i, a) in dm.areas.iter().enumerate() {
+        if !ids.areas.contains_key(&a.key)
+            && let Err(p) = naming::validate(&a.key, NameKind::Area)
+        {
+            problem(&mut e, format!("dataModel.areas.{i}.key"), p.code, p.message);
+        }
+    }
+    let current_area: HashMap<&str, Option<&str>> = snap
+        .file
+        .data_model
+        .iter()
+        .flat_map(|d| d.classes.iter())
+        .map(|c| (c.key.as_str(), c.area.as_deref()))
+        .collect();
+    for (i, c) in dm.classes.iter().enumerate() {
+        match (&c.area, current_area.get(c.key.as_str())) {
+            (Some(a), Some(Some(now))) if a != now => problem(
+                &mut e,
+                format!("dataModel.classes.{i}.area"),
+                "immutable",
+                format!("Class \"{}\" is in area \"{now}\" here and cannot move to another area", c.key),
+            ),
+            (Some(a), _) if !areas.contains(a) => problem(
+                &mut e,
+                format!("dataModel.classes.{i}.area"),
+                "not_found",
+                format!("Area \"{a}\" does not exist"),
+            ),
+            _ => {}
+        }
+        if !ids.classes.contains_key(&c.key)
+            && let Err(p) = naming::validate(&c.key, NameKind::Type)
+        {
+            problem(&mut e, format!("dataModel.classes.{i}.key"), p.code, p.message);
+        }
     }
 
     // Classes: parents exist, no cycles in the file
@@ -1031,6 +1095,25 @@ async fn run(
 
     // ---- data model ----
     if let Some(dm) = &file.data_model {
+        let keys: HashSet<String> = dm.areas.iter().map(|a| a.key.clone()).collect();
+        im.section("areas", not_in_file(im.ids.areas.keys(), &keys));
+        let old: HashMap<&str, &AreaSpec> = cur_dm.areas.iter().map(|a| (a.key.as_str(), a)).collect();
+        for (i, a) in dm.areas.iter().enumerate() {
+            let existing = old.get(a.key.as_str()).map(|o| (im.ids.areas[&a.key], *o));
+            let mut c = ColumnSet::default();
+            c.opt("name", Some(a.name.clone()))
+                .opt("description", Some(a.description.clone()))
+                .opt("icon", Some(a.icon.clone()))
+                .opt("color", Some(a.color.clone()))
+                .opt("sort_order", Some(a.sort_order))
+                .opt("is_active", Some(a.is_active));
+            let mut create = c.clone();
+            create.opt("key", Some(a.key.clone()));
+            let path = format!("dataModel.areas.{i}");
+            let id = im.upsert::<Areas, _>("areas", &path, a.key.clone(), existing, a, create, c).await?;
+            im.ids.areas.insert(a.key.clone(), id);
+        }
+
         let keys: HashSet<String> = dm.classes.iter().map(|c| c.key.clone()).collect();
         im.section("classes", not_in_file(im.ids.classes.keys(), &keys));
         let old: HashMap<&str, &ClassSpec> = cur_dm.classes.iter().map(|c| (c.key.as_str(), c)).collect();
@@ -1038,6 +1121,15 @@ async fn run(
         let (ordered, _) = parents_first(indexed, |(_, c)| &c.key, |(_, c)| c.parent.as_deref());
         for (i, cls) in ordered {
             let existing = old.get(cls.key.as_str()).map(|o| (im.ids.classes[&cls.key], *o));
+            // A class without an area (version 1 files) stays where it is.
+            let with_area;
+            let cls = match (&cls.area, existing) {
+                (None, Some((_, o))) => {
+                    with_area = ClassSpec { area: o.area.clone(), ..cls.clone() };
+                    &with_area
+                }
+                _ => cls,
+            };
             let parent_id = cls.parent.as_ref().map(|p| im.ids.classes[p]);
             let mut c = ColumnSet::default();
             c.opt("name", Some(cls.name.clone()))
@@ -1049,8 +1141,24 @@ async fn run(
                 .opt("sort_order", Some(cls.sort_order))
                 .opt("is_active", Some(cls.is_active));
             let mut create = c.clone();
-            create.opt("key", Some(cls.key.clone()));
             let path = format!("dataModel.classes.{i}");
+            if existing.is_none() {
+                // Files without areas (version 1) put new classes where the upgrade put existing ones.
+                let area = cls.area.clone().unwrap_or_else(|| DEFAULT_AREA.0.to_owned());
+                let area_id = match im.ids.areas.get(&area) {
+                    Some(id) => *id,
+                    None => {
+                        let mut a = ColumnSet::default();
+                        a.opt("key", Some(area.clone())).opt("name", Some(DEFAULT_AREA.1.to_owned()));
+                        let row = simple::create_in::<Areas>(im.conn, im.ctx, a).await.map_err(|e| at(&path, e))?;
+                        im.record("areas", area.clone(), Some(ChangeAction::Create), Vec::new());
+                        im.ids.areas.insert(area.clone(), row.id);
+                        row.id
+                    }
+                };
+                create.opt("area_id", Some(area_id));
+            }
+            create.opt("key", Some(cls.key.clone()));
             let id = im.upsert::<CiClasses, _>("classes", &path, cls.key.clone(), existing, cls, create, c).await?;
             im.ids.classes.insert(cls.key.clone(), id);
         }
@@ -1262,14 +1370,22 @@ async fn run(
     }
 
     let Importer { summary, changes, .. } = im;
-    Ok(ImportResult { mode, applied: false, summary, changes, warnings, ui_settings_issues })
+    Ok(ImportResult {
+        mode,
+        applied: false,
+        schema_changes: Vec::new(),
+        summary,
+        changes,
+        warnings,
+        ui_settings_issues,
+    })
 }
 
 fn check_format(file: &ConfigFile) -> Result<(), AppError> {
-    if file.format != FORMAT || file.format_version != FORMAT_VERSION {
+    if file.format != FORMAT || !(1..=FORMAT_VERSION).contains(&file.format_version) {
         return Err(AppError::field(
             "formatVersion",
-            format!("This server reads {FORMAT} version {FORMAT_VERSION} files"),
+            format!("This server reads {FORMAT} versions 1 to {FORMAT_VERSION}"),
             "unsupported",
         ));
     }
@@ -1284,7 +1400,9 @@ pub async fn import(
 ) -> Result<ImportResult, AppError> {
     check_format(file)?;
     let mut tx = pool.begin().await?;
-    let mut result = run(&mut tx, ctx, file, mode).await?;
+    let (result, schema_changes) = engine::collect_previews(run(&mut tx, ctx, file, mode)).await;
+    let mut result = result?;
+    result.schema_changes = schema_changes;
     match mode {
         ImportMode::DryRun => tx.rollback().await?,
         ImportMode::Apply => {

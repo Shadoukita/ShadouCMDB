@@ -1,0 +1,178 @@
+//! The data model as the metadata tables describe it: areas, types and their
+//! fields, with the physical names each maps to. Loaded per request (three
+//! small queries); the DDL engine diffs it against the catalog, the CI service
+//! uses it to read and write the type tables.
+
+use sqlx::PgConnection;
+use sqlx::types::Json;
+use uuid::Uuid;
+
+use super::naming::{Ident, is_identifier};
+use crate::modules::classes::AttributeDataType;
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Area {
+    pub id: Uuid,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Class {
+    pub id: Uuid,
+    pub key: String,
+    pub area_id: Uuid,
+    pub parent_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Field {
+    pub id: Uuid,
+    pub class_id: Uuid,
+    pub key: String,
+    pub label: String,
+    pub data_type: AttributeDataType,
+    pub enum_values: Option<Json<Vec<String>>>,
+    pub is_required: bool,
+    pub is_active: bool,
+    pub sort_order: i32,
+}
+
+/// PostgreSQL column type of a field's data type.
+pub fn pg_type(t: AttributeDataType) -> &'static str {
+    use AttributeDataType as T;
+    match t {
+        T::Text | T::Enum => "text",
+        T::Number => "numeric",
+        T::Integer => "bigint",
+        T::Boolean => "boolean",
+        T::Date => "date",
+        T::Datetime => "timestamp with time zone",
+        T::Ip => "inet",
+        T::Cidr => "cidr",
+        T::Reference | T::Lookup => "uuid",
+    }
+}
+
+impl Field {
+    pub fn enum_list(&self) -> &[String] {
+        self.enum_values.as_ref().map(|v| v.0.as_slice()).unwrap_or_default()
+    }
+
+    /// A required, active field is NOT NULL in its table.
+    pub fn not_null(&self) -> bool {
+        self.is_required && self.is_active
+    }
+
+    pub fn column(&self) -> Ident {
+        Ident::trusted(&self.key)
+    }
+
+    /// Hex of the id: the stable part of the field's constraint and index names.
+    pub fn hex(&self) -> String {
+        self.id.simple().to_string()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Model {
+    pub areas: Vec<Area>,
+    pub classes: Vec<Class>,
+    pub fields: Vec<Field>,
+}
+
+/// Where a type's rows live.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableName {
+    pub schema: Ident,
+    pub table: Ident,
+}
+
+impl TableName {
+    /// `"bestand"."netzwerk"`
+    pub fn sql(&self) -> String {
+        format!("{}.{}", self.schema, self.table)
+    }
+
+    /// `bestand.netzwerk` (for people: every technical name is a plain identifier)
+    pub fn display(&self) -> String {
+        format!("{}.{}", self.schema.as_str(), self.table.as_str())
+    }
+}
+
+impl Model {
+    pub async fn load(conn: &mut PgConnection) -> sqlx::Result<Model> {
+        let areas = sqlx::query_as::<_, Area>("SELECT id, key FROM cmdb.areas ORDER BY sort_order, key")
+            .fetch_all(&mut *conn)
+            .await?;
+        let classes =
+            sqlx::query_as::<_, Class>("SELECT id, key, area_id, parent_id FROM cmdb.ci_classes ORDER BY key")
+                .fetch_all(&mut *conn)
+                .await?;
+        let fields = sqlx::query_as::<_, Field>(
+            "SELECT id, class_id, key, label, data_type, enum_values, is_required, is_active, sort_order
+             FROM cmdb.ci_attribute_definitions ORDER BY sort_order, key",
+        )
+        .fetch_all(&mut *conn)
+        .await?;
+        Ok(Model { areas, classes, fields })
+    }
+
+    pub fn area(&self, id: Uuid) -> Option<&Area> {
+        self.areas.iter().find(|a| a.id == id)
+    }
+
+    pub fn class(&self, id: Uuid) -> Option<&Class> {
+        self.classes.iter().find(|c| c.id == id)
+    }
+
+    /// The table of a type (None if its metadata is inconsistent, which the constraints prevent).
+    pub fn table(&self, class_id: Uuid) -> Option<TableName> {
+        let class = self.class(class_id)?;
+        let area = self.area(class.area_id)?;
+        (is_identifier(&area.key) && is_identifier(&class.key))
+            .then(|| TableName { schema: Ident::trusted(&area.key), table: Ident::trusted(&class.key) })
+    }
+
+    /// The reporting view of a type: `<area>.v_<type>` (None for a key too long for the prefix).
+    pub fn view(&self, class_id: Uuid) -> Option<TableName> {
+        let t = self.table(class_id)?;
+        let name = format!("v_{}", t.table.as_str());
+        is_identifier(&name).then(|| TableName { schema: t.schema, table: Ident::trusted(&name) })
+    }
+
+    /// Fields defined directly on a type, in form order.
+    pub fn own_fields(&self, class_id: Uuid) -> impl Iterator<Item = &Field> {
+        self.fields.iter().filter(move |f| f.class_id == class_id)
+    }
+
+    /// The type and its ancestors, root first.
+    pub fn lineage(&self, class_id: Uuid) -> Vec<&Class> {
+        let mut out = Vec::new();
+        let mut next = self.class(class_id);
+        while let Some(c) = next {
+            if out.len() > 64 || out.iter().any(|x: &&Class| x.id == c.id) {
+                break;
+            }
+            out.push(c);
+            next = c.parent_id.and_then(|p| self.class(p));
+        }
+        out.reverse();
+        out
+    }
+
+    /// The type and every type below it.
+    pub fn subtree(&self, class_id: Uuid) -> Vec<Uuid> {
+        let mut out = vec![class_id];
+        let mut i = 0;
+        while i < out.len() {
+            let parent = out[i];
+            for c in self.classes.iter().filter(|c| c.parent_id == Some(parent)) {
+                if !out.contains(&c.id) {
+                    out.push(c.id);
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+}

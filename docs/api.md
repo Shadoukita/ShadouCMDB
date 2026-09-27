@@ -57,6 +57,8 @@ Every non-2xx response has this shape:
 | 409 | `IN_USE` | A hard delete of a row that is still referenced. `details[]` names each kind of reference and its count (`field` is the kind, e.g. `configurationItems`; `code` is `in_use`). Retire the row with `PATCH {"isActive": false}` instead. |
 | 409 | `VERSION_CONFLICT` | A stale `version` on a CI `PATCH`. |
 | 409 | `LAST_ADMINISTRATOR` | The change would leave no active user holding the Administrator profile. |
+| 422 | `INVALID_NAME` | A technical name (area, type or field `key`) is malformed, reserved (SQL keyword, `pg_` prefix, system schema, registry column) or already taken. `details[]` names the field and the reason. |
+| 422 | `SCHEMA_CHANGE_REFUSED` | A data-loss guard stopped a schema change: a type change some stored values would not survive, `isRequired` while assets lack a value, removing stored enum values, or a purge that is not allowed yet (still active, wrong `confirm`, dependants). Nothing was changed. |
 | 429 | `RATE_LIMITED` | Too many failed sign-ins (for this username, or on the whole server), or too many wrong current passwords on `PUT /auth/password`; wait for `Retry-After` seconds. |
 | 413 / 415 | `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE` | The body is over 1 MiB (16 MiB for a configuration import), or is not JSON. |
 | 503 | `DATABASE_UNAVAILABLE` | PostgreSQL is unreachable. |
@@ -70,8 +72,10 @@ Every non-2xx response has this shape:
 | Graph | `GET /configuration-items/{id}/graph?depth=1..6&direction=both\|outgoing\|incoming&relationshipTypeId=&maxNodes=` | Returns `{ nodes[], edges[], truncated }` in one call. `nodes[].depth` is the number of hops from the root. Each edge embeds its type and labels. |
 | Search | `GET /search?q=` | Results are ranked, each with `matches[]` naming the field that hit (`hostname`, `attributes.url`, …). It takes the same filters as the CI list. |
 | Relationships | `GET/POST /relationships`, `GET/PATCH/DELETE /relationships/{id}` | Filters: `ciId` (either end), `sourceCiId`, `targetCiId`, `relationshipTypeId`, `deleted`. Each edge embeds `type`, `source` and `target`. PATCH changes only `notes` or `relationshipTypeId`. DELETE is a soft delete. |
-| CI classes | `GET/POST /ci-classes`, `GET/PATCH/DELETE /ci-classes/{id}`, `GET /ci-classes/{id}/attributes`, `GET /ci-classes/{id}/usage` | `/attributes` returns every attribute a CI of this class can carry, inherited ones included, so the UI can render the CI form from it. A class has `name`, `parentId`, `isAbstract`, `icon`, `color` (`#rrggbb`), `sortOrder` and `isActive` (archive). `key` is immutable. Filters: `parentId` (`none` for roots), `descendantOf`, `isAbstract`, `isActive`; `sort=sortOrder` for menus. |
-| Attribute definitions | `GET/POST /attribute-definitions`, `GET/PATCH/DELETE /attribute-definitions/{id}`, `GET /attribute-definitions/{id}/usage` | Filters: `classId`, `effectiveForClassId`, `dataType`. A definition carries `label`, `isRequired`, `enumValues`, `validation`, `groupName` (the form section), `sortOrder` (order within the section), `helpText` and `defaultValue`. `classId`, `key`, `dataType`, `referenceClassId` and `lookupListId` cannot change after creation. |
+| Areas | `GET/POST /areas`, `GET/PATCH/DELETE /areas/{id}`, `POST /areas/{id}/purge` | An area is a menu tab and a PostgreSQL schema ("Bestand" → `bestand`). `key` is derived from `name` unless given, and immutable. DELETE archives; purge (`{"confirm": "<key>"}`) drops the empty schema. Writes need `datamodel.manage`. |
+| CI classes (types) | `GET/POST /ci-classes`, `GET/PATCH/DELETE /ci-classes/{id}`, `GET /ci-classes/{id}/attributes`, `GET /ci-classes/{id}/usage`, `POST /ci-classes/{id}/purge` | Each type has a table `<area>.<key>` and a reporting view `<area>.v_<key>`. `areaId` is immutable; left out on create, the type goes into its parent's area, or a root type into `infrastruktur` (created if missing). DELETE archives; purge drops the table with the type's CIs. `/attributes` returns every attribute a CI of this class can carry, inherited ones included, so the UI can render the CI form from it. A class has `name`, `parentId`, `isAbstract`, `icon`, `color` (`#rrggbb`), `sortOrder` and `isActive` (archive). `key` is immutable. Filters: `parentId` (`none` for roots), `descendantOf`, `isAbstract`, `isActive`; `sort=sortOrder` for menus. |
+| Attribute definitions (fields) | `GET/POST /attribute-definitions`, `GET/PATCH/DELETE /attribute-definitions/{id}`, `GET /attribute-definitions/{id}/usage`, `POST /attribute-definitions/{id}/purge` | Each field is a typed column of its type's table. Filters: `classId`, `effectiveForClassId`, `dataType`. A definition carries `label`, `isRequired`, `enumValues`, `validation`, `groupName` (the form section), `sortOrder` (order within the section), `helpText` and `defaultValue`. `classId`, `key`, `referenceClassId` and `lookupListId` cannot change after creation; `dataType` can, between the scalar types, after a dry run of every stored value. DELETE archives; purge drops the column. |
+| Schema changes | `GET /schema-changes`, `GET /schema-changes/{id}`, `POST /schema-changes/preview`, `POST /schema-changes/reconcile`, `GET /technical-names?name=&kind=` | Needs `datamodel.manage`. The history of every DDL plan (actor, time, exact statements, impact). `preview` runs any data model operation in a transaction that is rolled back and returns its DDL and impact. `reconcile` brings the catalog and reporting grants in line with the metadata. `technical-names` previews the key a display name maps to. |
 | Relationship types | `GET/POST /relationship-types`, `GET/PATCH/DELETE /relationship-types/{id}`, `GET /relationship-types/{id}/usage` | `?sourceClassId=&targetClassId=` returns only the types legal between two classes, which is what the "add relationship" picker needs. |
 | Relationship rules | `GET/POST /relationship-rules`, `GET/PATCH/DELETE /relationship-rules/{id}`, `GET /relationship-rules/{id}/usage` | Define which classes each type may connect. A rule also covers the subclasses of its classes. Deleting a rule keeps existing relationships; its usage counts them. |
 | Statuses, environments, locations, owners | `GET/POST /{statuses\|environments\|locations\|owners}`, `GET/PATCH/DELETE /…/{id}`, `GET /…/{id}/usage` | Filters include `isActive`, `isOperational` (statuses), `parentId` and `locationType` (locations), and `kind` (owners). |
@@ -177,24 +181,27 @@ validated like a value when the definition is written; `reference` attributes ca
 
 ## Changing the data model safely
 
-A fresh install has no classes, attributes, relationship types or lookups (`shadoucmdb seed` loads system rows
-only). An administrator builds the model through the endpoints above or installs a starter template.
+A fresh install has no areas, classes, attributes, relationship types or lookups (`shadoucmdb seed` loads system
+rows only). An administrator builds the model through the endpoints above or installs a starter template.
 
-Changes that would orphan or invalidate CI data are refused, and archiving is the way out:
+Areas, types and fields are real database objects (schema, table, column; see
+[data-model.md](data-model.md#areas-type-tables-and-the-ddl-engine)). Every write that changes them runs its
+DDL in the same transaction, serialised by an advisory lock, and is recorded in `/schema-changes` and the audit
+log. Send the same body to `POST /schema-changes/preview` first to see the DDL and how many rows it touches.
 
-- **Delete** is allowed only while nothing refers to the row. Every data model and lookup resource has
-  `GET …/{id}/usage`, which returns `{ inUse, data: [{ kind, label, count, blocking }] }`. A blocking count makes
-  `DELETE` answer `409 IN_USE` with the same counts in `details[]`; non-blocking ones (e.g. a relationship type's
-  rules, a class's permission grants) are removed with the row. Deleted CIs and relationships count too: they are
-  kept for history.
-- **Archive** with `PATCH {"isActive": false}`. An archived class keeps its CIs but accepts no new ones; an
-  archived attribute keeps its stored values and accepts no new ones; an archived lookup value stays on the CIs
-  that hold it and cannot be chosen again.
-- **Tightening** an attribute is checked against stored data: removing an enum value that CIs hold is `400
-  enum_value_in_use`; making an attribute required (or reactivating a required one) while live CIs of the class
-  have no value is `409 CONFLICT` with `code: values_missing`; re-parenting a class whose CIs hold values of
-  attributes the new lineage does not provide is `400 attributes_outside_lineage`.
-- Keys and data types are immutable once created, because imports, reports and stored values depend on them.
+- **Delete archives** areas, types and fields (`isActive: false`): the schema, table or column and every value
+  stay; nothing new is accepted and the UI hides it. `PATCH {"isActive": true}` restores it. **Purge**
+  (`POST …/{id}/purge` with `{"confirm": "<key>"}`) is the only way to drop them, and only once archived.
+- Other data model and lookup resources are **deleted** only while nothing refers to them. `GET …/{id}/usage`
+  returns `{ inUse, data: [{ kind, label, count, blocking }] }`; a blocking count makes `DELETE` answer `409
+  IN_USE` with the same counts in `details[]`. Deleted CIs and relationships count too: they are kept for history.
+  Archive them with `PATCH {"isActive": false}` instead.
+- **Data-loss guards** answer `422 SCHEMA_CHANGE_REFUSED` and change nothing: a `dataType` change that some
+  stored value would not survive (up to five are named); `isRequired: true` (a `NOT NULL` column) while any
+  asset, deleted ones included, has no value; removing enum values that are stored; re-parenting a type whose CIs
+  hold values in a table they would leave.
+- Technical names (`key`) are immutable once created, because imports, reports and SQL depend on them; renaming
+  changes only the display name.
 
 ## Customization and configuration export/import
 

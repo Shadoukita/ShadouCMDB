@@ -1,4 +1,5 @@
 import type { Browser, Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { E2E_USER } from "./global-setup";
 import { apiGet, ciIdByName, classIdByName, expect, snap, test } from "./support";
 
@@ -185,4 +186,38 @@ test("disable, enable and reset the password; the audit log names who did it", a
   await expect(row).toHaveCount(1);
   await expect(row.getByRole("link", { name: E2E_USER.username, exact: true })).toBeVisible();
   await snap(page, "26-audit-log");
+});
+
+test("the audit log filters offer every OpenAPI value and show sign-in events as text", async ({ page, browser }) => {
+  const spec = JSON.parse(readFileSync(new URL("../../backend/openapi.json", import.meta.url), "utf8"));
+  const params: { name: string; schema: { enum: string[] } }[] = spec.paths["/api/v1/audit-log"].get.parameters;
+  const enumOf = (name: string) => params.find((p) => p.name === name)!.schema.enum;
+
+  await page.goto("/admin/audit");
+  const optionValues = (id: string) => page.locator(`${id} option`).evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value).filter(Boolean));
+  expect((await optionValues("#a-type")).sort()).toEqual([...enumOf("entityType")].sort());
+  expect((await optionValues("#a-action")).sort()).toEqual([...enumOf("action")].sort());
+
+  // A failed sign-in whose username is markup: the audit log must show it as text.
+  const hostile = `<img src=x onerror="window.__xss=1">${stamp}`;
+  const refused = await signInAs(browser, hostile, "not-the-password");
+  await expect(refused.getByRole("alert")).toContainText("Wrong username or password");
+  await refused.context().close();
+
+  await page.getByLabel("Record type").selectOption({ label: "Sign-in / session" });
+  await page.getByLabel("Action", { exact: true }).selectOption("login.failure");
+  await expect(page).toHaveURL(/entityType=sessions/);
+  await expect(page).toHaveURL(/action=login\.failure/);
+  const row = page.getByRole("row").filter({ hasText: hostile });
+  await expect(row).toHaveCount(1);
+  expect((await row.getByRole("cell").nth(4).textContent())?.startsWith(`${hostile} from `)).toBe(true);
+  await expect(row.locator("img")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as { __xss?: number }).__xss)).toBeUndefined();
+
+  // The earlier successful sign-in of the test user, by the same filters (they survive a reload).
+  await page.getByLabel("Action", { exact: true }).selectOption("login.success");
+  await page.reload();
+  await expect(page.getByLabel("Action", { exact: true })).toHaveValue("login.success");
+  await expect(page.getByRole("row").filter({ hasText: USERNAME }).first()).toBeVisible();
+  await snap(page, "27-audit-log-sign-ins");
 });

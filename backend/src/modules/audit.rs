@@ -39,6 +39,10 @@ pub enum EntityType {
     UiAssets,
     /// Authentication events: sign-in, sign-out, session revocation
     Sessions,
+    /// Operator purges (`audit.purge`)
+    AuditLog,
+    Areas,
+    SchemaChanges,
 }
 
 impl EntityType {
@@ -59,6 +63,9 @@ impl EntityType {
             EntityType::UiSettings => "ui_settings",
             EntityType::UiAssets => "ui_assets",
             EntityType::Sessions => "sessions",
+            EntityType::AuditLog => "audit_log",
+            EntityType::Areas => "areas",
+            EntityType::SchemaChanges => "schema_changes",
         }
     }
 }
@@ -195,7 +202,7 @@ pub fn routes() -> Vec<Route> {
             .tag("Audit log")
             .summary("Change history (read-only, paginated, newest first by default)")
             .description(
-                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. Passwords, session tokens and CSRF tokens are never recorded.",
+                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. Passwords, session tokens and CSRF tokens are never recorded. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned.",
             )
             .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<AuditQuery>, NoBody>| async move {

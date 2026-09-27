@@ -21,6 +21,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 | `frontend/` | Vue 3 + Vite + TanStack Query web UI. See [`frontend/README.md`](frontend/README.md). |
 | `docs/data-model.md` | Data model, integrity rules and soft-delete decisions. |
 | `.github/` | CI and release workflows, pull request template. Releases: see [CONTRIBUTING.md](CONTRIBUTING.md#cutting-a-release). |
+| `SECURITY.md`, `docs/security/` | Vulnerability reporting and disclosure policy, hardening guide, support period, telemetry statement, secure development lifecycle, CRA incident process, risk assessment. See [docs/security](docs/security/README.md). |
 | `docs/api.md` | API conventions, error envelope, endpoint overview, extension seams. |
 | `backend/openapi.json` | OpenAPI contract generated from the code (`shadoucmdb openapi --out backend/openapi.json`; CI fails if it is stale). |
 | `tools/` | `smoke/smoke.ts`: end-to-end check of every API operation against any API URL. `openapi-diff.mjs`: semantic diff of two specs. |
@@ -35,14 +36,18 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
 ## Pointing the app at an external PostgreSQL
 
-1. **Create a database and a role** on your PostgreSQL server (run as an admin there):
+1. **Create the database and its roles** on your PostgreSQL server (run as an admin there):
 
-   ```sql
-   CREATE ROLE shadoucmdb_app LOGIN PASSWORD '<a strong password>';
-   CREATE DATABASE shadoucmdb OWNER shadoucmdb_app;
+   ```sh
+   psql "<admin connection string>" -v owner_password='<pw 1>' -v app_password='<pw 2>' \
+        -v maintenance_password='<pw 3>' -f sql/bootstrap/00_create_role_and_database.sql
    ```
 
-   The role does not need superuser. Migrations run `CREATE EXTENSION IF NOT EXISTS pg_trgm`;
+   This creates `shadoucmdb_owner` (owns the schema, runs migrations), `shadoucmdb_app` (the API:
+   reads and writes data, cannot delete audit history) and `shadoucmdb_maintenance` (may only prune
+   the audit log). None needs superuser. See
+   [docs/deployment.md](docs/deployment.md#database-roles); an install made with the older single-role
+   setup is upgraded with `sql/bootstrap/10_split_roles.sql`. Migrations run `CREATE EXTENSION IF NOT EXISTS pg_trgm`;
    `pg_trgm` is a *trusted* extension, so the database owner can create it on PostgreSQL 13+ and
    on RDS / Cloud SQL / Azure Flexible Server. If your provider restricts extensions, have an admin
    run `CREATE EXTENSION pg_trgm;` in the database once beforehand.
@@ -59,7 +64,9 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
    DATABASE_URL=postgres://shadoucmdb_app:<password>@db.example.internal:5432/shadoucmdb
    ```
 
-   **or** the discrete `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` variables.
+   **or** the discrete `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` variables. Also set
+   `MIGRATION_DATABASE_URL` (as `shadoucmdb_owner`) for `migrate`, and `MAINTENANCE_DATABASE_URL`
+   (as `shadoucmdb_maintenance`) for `prune-audit`.
    Then choose TLS with `DATABASE_SSL`:
 
    | `DATABASE_SSL` | Use when |
@@ -82,7 +89,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
    ```
    Connected to database "shadoucmdb" (PostgreSQL 18.1), ssl=verify-full
-   Migrations: 7 in binary, 0 applied, 7 pending
+   Migrations: 10 in binary, 0 applied, 10 pending
      applied 0000_extensions
      applied 0001_core_schema
      applied 0002_integrity_triggers
@@ -90,7 +97,10 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
      applied 0004_data_model_admin
      applied 0005_ui_settings
      applied 0006_auth_audit
-   Database is at migration 7/7
+     applied 0007_audit_retention
+     applied 0008_cmdb_schema_and_areas
+     applied 0009_type_tables
+   Database is at migration 10/10
    ```
 
    Re-running is safe; it reports `nothing to do`. Applied migrations are tracked in `_sqlx_migrations`.
@@ -173,9 +183,18 @@ Every schema change is a migration. No hand-applied DDL.
    (`sqlx::query!`) is affected, refresh `backend/.sqlx` (see [docs/api.md](docs/api.md#layers-and-extension-seams)).
    Commit the migration, the code change and any ERD update together. See [`sql/README.md`](sql/README.md).
 
-Adding a CI class, attribute or relationship type is **data**, not a schema change. See
-[docs/data-model.md](docs/data-model.md#extending-the-model-without-migrations).
+Adding an area, CI type, field or relationship type is **data**, not a migration: the application's
+DDL engine creates the matching PostgreSQL schema, table or column (area "Bestand" + type "Netzwerk"
+→ table `bestand.netzwerk`), so the API role needs the `CREATE` privilege on its database and owns the area schemas (see
+[`sql/README.md`](sql/README.md) and [Database roles](docs/deployment.md#database-roles)). See
+[docs/data-model.md](docs/data-model.md#areas-type-tables-and-the-ddl-engine).
 
 ## Contributing
 
 Branching, pull request and schema-change rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), never in a public issue.
+For production deployments, follow the [hardening guide](docs/security/hardening.md). ShadouCMDB sends
+no telemetry ([details](docs/security/telemetry.md)).

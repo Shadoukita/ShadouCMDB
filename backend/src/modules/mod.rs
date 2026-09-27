@@ -1,5 +1,6 @@
 //! API modules: each declares its routes and implements its service on top of data/.
 
+pub mod areas;
 pub mod audit;
 pub mod auth;
 pub mod classes;
@@ -9,6 +10,7 @@ pub mod items;
 pub mod lookups;
 pub mod profiles;
 pub mod relationships;
+pub mod schema_changes;
 pub mod simple_resource;
 pub mod templates;
 pub mod ui_settings;

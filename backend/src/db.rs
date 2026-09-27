@@ -12,10 +12,19 @@ use crate::config::{DatabaseConfig, SslMode};
 
 /// `sql/migrations/*.sql`, embedded at compile time. The folder is the single
 /// source of truth for the schema; build.rs makes cargo rebuild when it changes.
-pub static MIGRATOR: Migrator = sqlx::migrate!("../sql/migrations");
+/// The bookkeeping table is named with its schema: the connection's search_path
+/// starts with `cmdb`, and the table has always lived in `public`.
+pub static MIGRATOR: Migrator = Migrator {
+    table_name: std::borrow::Cow::Borrowed("public._sqlx_migrations"),
+    ..sqlx::migrate!("../sql/migrations")
+};
 
-/// Where sqlx records applied migrations (its default table name).
-const MIGRATIONS_TABLE: &str = "_sqlx_migrations";
+/// Where sqlx records applied migrations.
+const MIGRATIONS_TABLE: &str = "public._sqlx_migrations";
+
+/// System tables live in `cmdb` (migration 0008); `public` holds the pg_trgm
+/// functions. Admin-defined areas are separate schemas, always schema-qualified.
+pub const SEARCH_PATH: &str = "cmdb, public";
 /// Where the Node/Drizzle runner recorded them before this binary existed.
 const DRIZZLE_TABLE: &str = "drizzle.__drizzle_migrations";
 
@@ -48,7 +57,7 @@ pub fn connect_options(cfg: &DatabaseConfig) -> anyhow::Result<PgConnectOptions>
         opts = opts.ssl_root_cert(ca);
     }
 
-    opts = opts.application_name("shadoucmdb");
+    opts = opts.application_name("shadoucmdb").options([("search_path", SEARCH_PATH)]);
     if !cfg.statement_timeout.is_zero() {
         opts = opts.options([("statement_timeout", cfg.statement_timeout.as_millis().to_string())]);
     }
@@ -84,7 +93,7 @@ pub async fn applied_versions(pool: &PgPool) -> sqlx::Result<HashSet<i64>> {
         return Ok(HashSet::new());
     }
     let rows: Vec<i64> =
-        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success").fetch_all(pool).await?;
+        sqlx::query_scalar("SELECT version FROM public._sqlx_migrations WHERE success").fetch_all(pool).await?;
     Ok(rows.into_iter().collect())
 }
 
@@ -135,13 +144,56 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
 
     // Each pending migration runs in its own transaction together with its
     // bookkeeping row, under an advisory lock; re-running is a no-op.
-    MIGRATOR.run(pool).await.context("migration failed")?;
+    MIGRATOR.run(pool).await.map_err(|e| {
+        let denied = e.to_string().contains("permission denied");
+        let err = anyhow::Error::new(e).context("migration failed");
+        if denied {
+            // The usual cause on a three-role install: migrating with the API's DATABASE_URL.
+            err.context("this database user may not change the schema; set MIGRATION_DATABASE_URL to the schema owner (shadoucmdb_owner), see docs/deployment.md")
+        } else {
+            err
+        }
+    })?;
 
     for m in &pending {
         println!("  applied {}", label(m));
     }
     let after = applied_count(pool).await?;
-    println!("Database is at migration {after}/{expected}{}", if pending.is_empty() { " (nothing to do)" } else { "" });
+
+    // Area schemas, type tables and reporting views follow the data model; bring
+    // anything missing (after migration 0009, or a new reporting role) in line.
+    let ctx = crate::api::context::RequestContext::system("migrate", "migrate");
+    let mut tx = pool.begin().await?;
+    // Three-role install: build them as the API role, which owns the area schemas
+    // and alters them at run time (migration 0008 checked the membership).
+    let as_api_role: bool = sqlx::query_scalar(
+        "SELECT current_user <> 'shadoucmdb_app' AND pg_has_role(current_user, 'shadoucmdb_app', 'MEMBER')
+         FROM pg_roles WHERE rolname = 'shadoucmdb_app'",
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .unwrap_or(false);
+    if as_api_role {
+        sqlx::query("SET LOCAL ROLE shadoucmdb_app").execute(&mut *tx).await?;
+    }
+    let change = crate::schema::reconcile(&mut tx, &ctx, "Reconcile after migrate")
+        .await
+        .map_err(|e| anyhow::anyhow!("reconciling the data model failed: {}", e.message))?;
+    tx.commit().await?;
+    let reconciled = match &change {
+        Some(c) => {
+            println!("Data model: {} statements applied (reporting views and grants)", c.statements.len());
+            for i in c.impact.0.iter().filter(|i| i.kind == "warning") {
+                println!("  warning: {}", i.message);
+            }
+            true
+        }
+        None => false,
+    };
+    println!(
+        "Database is at migration {after}/{expected}{}",
+        if pending.is_empty() && !reconciled { " (nothing to do)" } else { "" }
+    );
     Ok(())
 }
 
@@ -220,7 +272,9 @@ pub mod scratch {
         let mut c = admin.connect().await.expect("connect to SHADOUCMDB_TEST_DATABASE_URL");
         c.execute(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}"))).await.expect("CREATE DATABASE");
         c.close().await.ok();
-        let pool = PgPoolOptions::new().max_connections(8).connect_with(admin.clone().database(&name)).await.unwrap();
+        // The same search_path as the application's pool (system tables live in `cmdb`).
+        let opts = admin.clone().database(&name).options([("search_path", super::SEARCH_PATH)]);
+        let pool = PgPoolOptions::new().max_connections(8).connect_with(opts).await.unwrap();
         super::MIGRATOR.run(&pool).await.expect("migrations");
         Some(Scratch { admin, name, pool })
     }

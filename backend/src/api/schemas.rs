@@ -85,6 +85,22 @@ pub fn key_schema() -> Schema {
     string().pattern(Some(KEY_PATTERN)).description(Some("Stable machine key, lower_snake_case")).into()
 }
 
+/// A technical name on create: optional (derived from the display name when
+/// left out). Checked by the service rather than the schema so that a
+/// malformed, reserved or taken name gets one clear 422 INVALID_NAME.
+pub fn technical_name_schema() -> Schema {
+    string()
+        .min_length(Some(1))
+        .max_length(Some(200))
+        .description(Some(
+            "Technical name (PostgreSQL identifier): lower-case a-z, digits and \"_\", starting with a letter, at most \
+             63 characters (61 for types). Derived from the display name when left out (\"Größe\" -> \"groesse\"); \
+             cannot be changed later. Reserved SQL keywords, names starting with \"pg_\" and names the system uses are \
+             rejected with 422 INVALID_NAME.",
+        ))
+        .into()
+}
+
 fn name_builder() -> ObjectBuilder {
     string().min_length(Some(1)).max_length(Some(200)).pattern(Some(NOT_BLANK_PATTERN))
 }

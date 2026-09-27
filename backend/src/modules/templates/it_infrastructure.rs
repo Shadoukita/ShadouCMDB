@@ -4,7 +4,7 @@
 //! relationship types and rules, plus statuses, environments and a sample
 //! location tree.
 
-use super::{Class, Content, Location, RelationshipType, Rule, Status, Template, attr};
+use super::{AreaSpec, Class, Content, Location, RelationshipType, Rule, Status, Template, attr};
 
 pub const TEMPLATE: Template = Template {
     key: "it_infrastructure",
@@ -260,6 +260,11 @@ const RELATIONSHIP_RULES: &[Rule] = &[
 
 fn content() -> Content {
     Content {
+        area: AreaSpec {
+            key: "infrastruktur",
+            name: "Infrastruktur",
+            description: "IT infrastructure: hardware, virtual machines, applications, databases and services",
+        },
         statuses: STATUSES,
         environments: ENVIRONMENTS,
         locations: LOCATIONS,

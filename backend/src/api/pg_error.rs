@@ -115,6 +115,21 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
             return Some(AppError::new(ErrorCode::LastAdministrator, humanise(pg.message())));
         }
         Some("permission_profiles_builtin_protected") => return Some(AppError::conflict(humanise(pg.message()))),
+        // Technical names of areas, types and fields: a taken name is a naming problem, like a malformed one.
+        Some(c @ ("areas_key_unique" | "ci_classes_key_unique" | "ci_attribute_definitions_class_key_uq")) => {
+            let what = match c {
+                "areas_key_unique" => "an area",
+                "ci_classes_key_unique" => "a type (type names are unique across areas)",
+                _ => "a field of this type",
+            };
+            let message = format!("This technical name is already used by {what}; choose another");
+            return Some(AppError::new(ErrorCode::InvalidName, message.clone()).with_details(vec![FieldError {
+                location: FieldLocation::Body,
+                field: "key".into(),
+                message,
+                code: "name_taken".into(),
+            }]));
+        }
         _ => {}
     }
     match pg.code() {
