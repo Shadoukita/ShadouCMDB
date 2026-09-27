@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useCiList, useClassAttributes, useLookup, type CiClass, type CiListQuery } from "../../../api/queries";
 import type { UiSettingsDocument } from "../../../api/uiSettings";
 import CiCell from "../../../components/CiCell.vue";
@@ -49,10 +49,19 @@ function setSortField(field: string) {
   if (!view.value) return;
   view.value.defaultSort = field ? { field, direction: view.value.defaultSort?.direction ?? "asc" } : null;
 }
+// The typed page size is kept here until it is committed on change: a re-render
+// (the preview reloading) would otherwise put the stored value back into the box.
+const pageSizeText = ref("");
+watch(
+  () => [view.value, view.value?.pageSize] as const,
+  ([v]) => (pageSizeText.value = v?.pageSize == null ? "" : String(v.pageSize)),
+  { immediate: true },
+);
 function setPageSize(v: string) {
   if (!view.value) return;
   const n = Number.parseInt(v, 10);
   view.value.pageSize = Number.isFinite(n) ? Math.min(200, Math.max(10, n)) : null;
+  pageSizeText.value = view.value.pageSize == null ? "" : String(view.value.pageSize);
 }
 
 // ---------- Preview ----------
@@ -100,7 +109,7 @@ const columns = computed(() => (view.value?.columns?.length ? view.value.columns
             </div>
             <div class="field">
               <label for="lv-size">Rows per page (10-200)</label>
-              <input id="lv-size" type="number" min="10" max="200" placeholder="50" :value="view.pageSize ?? ''" @change="setPageSize(($event.target as HTMLInputElement).value)" />
+              <input id="lv-size" type="number" min="10" max="200" placeholder="50" :value="pageSizeText" @input="pageSizeText = ($event.target as HTMLInputElement).value" @change="setPageSize(pageSizeText)" />
             </div>
             <div class="field">
               <label for="lv-q">Default search text</label>
