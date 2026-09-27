@@ -46,14 +46,10 @@ async function exportConfig(request: APIRequestContext): Promise<ConfigFile> {
 }
 
 /**
- * What must survive the round trip: everything but when and by which build the file was written.
- * Relationship rules are compared as a set: the export orders them by creation time and then by random id, so two
- * installs with the same rules list them in different orders (GitHub #23).
+ * What must survive the round trip: everything but when and by which build the file was written, in the same order
+ * (the export sorts every section by stable keys).
  */
-const comparable = ({ exportedAt: _at, appVersion: _v, ...rest }: ConfigFile) => ({
-  ...rest,
-  dataModel: { ...rest.dataModel, relationshipRules: rest.dataModel.relationshipRules.map((r) => JSON.stringify(r)).sort() },
-});
+const comparable = ({ exportedAt: _at, appVersion: _v, ...rest }: ConfigFile) => rest;
 
 test.describe("a bare install", () => {
   test.use({ baseURL: bareURL, storageState: BARE_STATE });
