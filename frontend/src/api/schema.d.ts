@@ -502,7 +502,7 @@ export interface paths {
         head?: never;
         /**
          * Update a attribute definition (partial)
-         * @description Requires `datamodel.manage`. `dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert. Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. Preview any change with `POST /api/v1/schema-changes/preview`.
+         * @description Requires `datamodel.manage`. `dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. Preview any change with `POST /api/v1/schema-changes/preview`.
          */
         patch: operations["updateAttributeDefinition"];
         trace?: never;
