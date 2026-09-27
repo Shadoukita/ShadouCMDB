@@ -25,6 +25,10 @@ function headingFor(e: ApiError | null): string {
       return "The API rejected the request";
     case "VERSION_CONFLICT":
       return "Someone else changed this record";
+    case "SCHEMA_CHANGE_REFUSED":
+      return "The database change was refused";
+    case "INVALID_NAME":
+      return "The technical name cannot be used";
     case "CONFLICT":
     case "IN_USE":
       return "Conflict";

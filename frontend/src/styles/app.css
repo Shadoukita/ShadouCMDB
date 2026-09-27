@@ -1242,3 +1242,78 @@ select.inline-select {
   height: 24px;
   font-size: var(--fs-sm);
 }
+
+/* ---------- Data model: DDL preview, technical names, database change history ---------- */
+dialog.schema-change h3 {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--c-text-muted);
+  margin: var(--sp-4) 0 var(--sp-2);
+}
+dialog.schema-change section:first-of-type h3 {
+  margin-top: 0;
+}
+.sc-intro {
+  margin: 0 0 var(--sp-4);
+}
+.sc-summaries,
+.sc-impact {
+  margin: 0;
+  padding-left: var(--sp-5);
+}
+.sc-impact {
+  list-style: none;
+  padding-left: 0;
+}
+.sc-impact li {
+  padding: 2px 0;
+}
+.sc-impact li.destructive {
+  color: var(--c-danger);
+}
+.sc-ddl {
+  margin: 0;
+  padding-left: 28px;
+  font-size: var(--fs-sm);
+}
+.sc-ddl li::marker {
+  color: var(--c-text-muted);
+}
+.sc-ddl pre {
+  margin: 0 0 var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--c-surface-alt);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.sc-confirm {
+  margin-top: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--c-danger-bg);
+  border: 1px solid var(--c-danger-border);
+  border-radius: var(--radius);
+}
+.sc-confirm input {
+  max-width: 320px;
+}
+.technical-name .inline-control input {
+  flex: 1;
+}
+.tn-ok {
+  color: var(--c-ok);
+  font-weight: 700;
+}
+table.schema-changes summary {
+  cursor: pointer;
+}
+table.schema-changes .sc-ddl {
+  margin-top: var(--sp-2);
+}
+td.nowrap {
+  white-space: nowrap;
+}
