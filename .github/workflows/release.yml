@@ -65,10 +65,14 @@ jobs:
       publish: ${{ steps.v.outputs.publish }}
       prerelease: ${{ steps.v.outputs.prerelease }}
       sign: ${{ steps.v.outputs.sign }}
+      latest: ${{ steps.v.outputs.latest }}
+      latest_major: ${{ steps.v.outputs.latest_major }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          # All tags, to tell whether this release is the newest one (see below).
+          fetch-depth: 0
       - id: v
         env:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
@@ -86,10 +90,20 @@ jobs:
             publish=false
           fi
           [[ "$version" == *-* ]] && prerelease=true || prerelease=false
+          # Patch releases also come from maintenance branches (release/X.Y.x,
+          # CONTRIBUTING.md). Only the highest stable version overall moves
+          # `latest`, and only the highest within its major moves the bare
+          # major image tag, so a 0.1.5 fix after 0.2.0 never takes them over.
+          latest=false; latest_major=false
+          if [ "$publish" = true ] && [ "$prerelease" = false ]; then
+            stable=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V)
+            [ "$(tail -1 <<<"$stable")" = "$GITHUB_REF_NAME" ] && latest=true
+            [ "$(grep -F "v${version%%.*}." <<<"$stable" | tail -1)" = "$GITHUB_REF_NAME" ] && latest_major=true
+          fi
           # Keyless signing needs an OIDC token, which fork pull requests do not get.
           if [ "$GITHUB_EVENT_NAME" != pull_request ] || [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then sign=true; else sign=false; fi
-          echo "version=$version publish=$publish prerelease=$prerelease sign=$sign" | tee -a "$GITHUB_STEP_SUMMARY"
-          { echo "version=$version"; echo "publish=$publish"; echo "prerelease=$prerelease"; echo "sign=$sign"; } >> "$GITHUB_OUTPUT"
+          echo "version=$version publish=$publish prerelease=$prerelease sign=$sign latest=$latest latest_major=$latest_major" | tee -a "$GITHUB_STEP_SUMMARY"
+          { echo "version=$version"; echo "publish=$publish"; echo "prerelease=$prerelease"; echo "sign=$sign"; echo "latest=$latest"; echo "latest_major=$latest_major"; } >> "$GITHUB_OUTPUT"
 
   ui:
     name: Web UI (built once)
@@ -376,17 +390,18 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # 1.2.3 -> 1.2.3, 1.2, 1 (not for 0.x) and latest. A pre-release such as
-      # 1.2.3-rc.1 gets only its own tag, never latest.
+      # 1.2.3 -> 1.2.3, 1.2, 1 (not for 0.x, and only if it is the newest 1.x)
+      # and latest (only if it is the newest release overall). A pre-release
+      # such as 1.2.3-rc.1 gets only its own tag, never latest.
       - id: tags
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.IMAGE }}
-          flavor: latest=auto
+          flavor: latest=${{ needs.meta.outputs.latest }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') && needs.meta.outputs.latest_major == 'true' }}
             type=ref,event=pr
           labels: |
             org.opencontainers.image.title=ShadouCMDB
@@ -535,9 +550,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.meta.outputs.version }}
           PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+          LATEST: ${{ needs.meta.outputs.latest }}
         run: |
           flags=()
-          [ "$PRERELEASE" = true ] && flags+=(--prerelease) || flags+=(--latest)
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          [ "$LATEST" = true ] && flags+=(--latest) || flags+=(--latest=false)
           cat > notes.md <<EOF
           | Platform | Download |
           | --- | --- |
