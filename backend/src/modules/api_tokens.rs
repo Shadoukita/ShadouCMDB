@@ -433,6 +433,8 @@ mod tests {
                 statement_timeout: StdDuration::ZERO,
                 connect_timeout: StdDuration::from_secs(1),
             },
+            migration_url: None,
+            maintenance_url: None,
             auth: auth.clone(),
         };
         router(AppState::new(pool, auth), &cfg)
