@@ -43,6 +43,8 @@ pub enum EntityType {
     AuditLog,
     Areas,
     SchemaChanges,
+    /// API tokens: created, revoked, and every request made with one (`token.use`)
+    ApiTokens,
 }
 
 impl EntityType {
@@ -66,6 +68,7 @@ impl EntityType {
             EntityType::AuditLog => "audit_log",
             EntityType::Areas => "areas",
             EntityType::SchemaChanges => "schema_changes",
+            EntityType::ApiTokens => "api_tokens",
         }
     }
 }
@@ -202,7 +205,7 @@ pub fn routes() -> Vec<Route> {
             .tag("Audit log")
             .summary("Change history (read-only, paginated, newest first by default)")
             .description(
-                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. Passwords, session tokens and CSRF tokens are never recorded. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned.",
+                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, no_scope, session_only, forbidden), method, path, `operationId`, `ipAddress` and `userAgent`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. Passwords, session tokens, CSRF tokens and API token secrets are never recorded.",
             )
             .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<AuditQuery>, NoBody>| async move {
