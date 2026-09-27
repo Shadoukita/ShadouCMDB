@@ -5,6 +5,7 @@ import { useInstallTemplate, useTemplates } from "../../api/datamodel";
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import type { SchemaChange } from "../../api/schemaChanges";
 import LoadingState from "../../components/LoadingState.vue";
 import { useDocumentTitle } from "../../lib/composables";
 
@@ -19,7 +20,7 @@ const install = useInstallTemplate();
 const results = ref<Record<string, InstallResult>>({});
 const installing = ref<string | null>(null);
 
-type Part = "classes" | "attributeDefinitions" | "relationshipTypes" | "relationshipRules" | "statuses" | "environments" | "locations";
+type Part = "areas" | "classes" | "attributeDefinitions" | "relationshipTypes" | "relationshipRules" | "statuses" | "environments" | "locations";
 type Counts = Record<Part, number>;
 type Status = "not_installed" | "partial" | "installed";
 /** The fields of a template (and an install result) this page reads. */
@@ -32,8 +33,10 @@ interface InstallResult {
   created: Counts;
   existing: Counts;
   skipped: string[];
+  schemaChange: SchemaChange | null;
 }
 const PARTS: { key: Part; label: string }[] = [
+  { key: "areas", label: "Areas" },
   { key: "classes", label: "CI classes" },
   { key: "attributeDefinitions", label: "Attributes" },
   { key: "relationshipTypes", label: "Relationship types" },
@@ -115,6 +118,12 @@ const buttonLabel = (t: Template) =>
               <li v-for="s in results[t.key].skipped" :key="s">{{ s }}</li>
             </ul>
           </template>
+          <details v-if="results[t.key].schemaChange" class="import-changes">
+            <summary>Database changes: {{ results[t.key].schemaChange!.summary }}</summary>
+            <ol class="sc-ddl">
+              <li v-for="(sql, i) in results[t.key].schemaChange!.statements" :key="i"><pre>{{ sql }}</pre></li>
+            </ol>
+          </details>
           <div class="actions" style="margin-top: var(--sp-3)">
             <RouterLink class="btn btn-sm" to="/admin/classes">Review the CI classes</RouterLink>
             <RouterLink class="btn btn-sm" to="/cis/new">Create the first CI</RouterLink>
