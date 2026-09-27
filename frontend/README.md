@@ -202,6 +202,21 @@ then apply. Exporting the second install again must give the same file, no CIs o
 imported class, lookup list, menu, dashboard, list view, form layout and profile must work there. Give both
 newly created databases for each run (CI starts them on ports 3002 and 3003).
 
+`area-tables.spec.ts` checks that the data model is real PostgreSQL, by querying the database itself with `psql`
+(connection from the `PG*` environment variables, as the owner of the app's databases). It runs when
+`E2E_AREAS_BASE_URL` and `E2E_AREAS_IMPORT_BASE_URL` point at two more bare APIs like the ones above, and
+`E2E_AREAS_PGDATABASE` / `E2E_AREAS_IMPORT_PGDATABASE` name their databases. In the UI it creates the area
+“Bestand” and the types “Netzwerk” and “Virtuelle Maschinen” with typed fields, then asserts the schema
+`bestand`, the tables `bestand.netzwerk` and `bestand.virtuelle_maschinen` column by column (types, the id's
+`ON DELETE CASCADE` key to `cmdb.configuration_items`), the reporting views `bestand.v_*` and the
+`cmdb.schema_changes` history. Assets created in the UI must be rows of the type tables and views. It converts a
+field's type (text to whole number succeeds; a value that is no number refuses the other), is refused making a
+field required while an asset has no value, archives a field (the column stays) and purges it, typed to confirm
+(the column is gone). A user whose profile lacks `datamodel.manage` gets `403` from every one of these endpoints,
+and the database is unchanged. Finally the export is imported into the second install: the dry run shows the DDL
+and creates nothing, and applying it builds the same tables and views. Give both newly created databases for each
+run (CI starts them on ports 3004 and 3005).
+
 The tests expect the demo inventory (`shadoucmdb seed --demo`) and create their own uniquely named records.
 They run signed in: `e2e/global-setup.ts` completes first-run setup on a database without users, or signs in as
 `E2E_USERNAME` / `E2E_PASSWORD` (an Administrator account, e.g. from `shadoucmdb create-admin`).
@@ -213,6 +228,7 @@ API_PROXY_TARGET=http://<api-host>:3000 npm run test:e2e -w frontend      # star
 E2E_BASE_URL=http://localhost:4173 npm run test:e2e -w frontend           # or test an already-served build
 E2E_FRESH_BASE_URL=http://localhost:3001 ...                              # also run first-run.spec.ts
 E2E_BARE_BASE_URL=http://localhost:3002 E2E_IMPORT_BASE_URL=http://localhost:3003 ...  # also run fresh-install.spec.ts
+E2E_AREAS_BASE_URL=http://localhost:3004 E2E_AREAS_PGDATABASE=... E2E_AREAS_IMPORT_BASE_URL=http://localhost:3005 E2E_AREAS_IMPORT_PGDATABASE=... ...  # also run area-tables.spec.ts
 ```
 
 Set `E2E_SCREENSHOT_DIR=<dir>` to save a screenshot of each step.

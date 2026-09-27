@@ -17,6 +17,9 @@ export const E2E_USER = {
 export const FRESH_ADMIN = { username: "fresh-admin", displayName: "Fresh Administrator", password: "fresh-install-password-123" };
 export const BARE_STATE = join(import.meta.dirname, ".auth", "bare.json");
 export const IMPORT_TARGET_STATE = join(import.meta.dirname, ".auth", "import-target.json");
+/** The fresh installs of e2e/area-tables.spec.ts (E2E_AREAS_BASE_URL, E2E_AREAS_IMPORT_BASE_URL), also set up as FRESH_ADMIN. */
+export const AREAS_STATE = join(import.meta.dirname, ".auth", "areas.json");
+export const AREAS_IMPORT_STATE = join(import.meta.dirname, ".auth", "areas-import.json");
 
 /** Completes first-run setup on `baseURL` when no user exists yet, otherwise signs in; saves the cookies to `path`. */
 async function signIn(baseURL: string | undefined, user: { username: string; password: string; displayName: string }, path: string) {
@@ -44,4 +47,6 @@ export default async function globalSetup(config: FullConfig) {
   });
   if (process.env.E2E_BARE_BASE_URL) await signIn(process.env.E2E_BARE_BASE_URL, FRESH_ADMIN, BARE_STATE);
   if (process.env.E2E_IMPORT_BASE_URL) await signIn(process.env.E2E_IMPORT_BASE_URL, FRESH_ADMIN, IMPORT_TARGET_STATE);
+  if (process.env.E2E_AREAS_BASE_URL) await signIn(process.env.E2E_AREAS_BASE_URL, FRESH_ADMIN, AREAS_STATE);
+  if (process.env.E2E_AREAS_IMPORT_BASE_URL) await signIn(process.env.E2E_AREAS_IMPORT_BASE_URL, FRESH_ADMIN, AREAS_IMPORT_STATE);
 }
