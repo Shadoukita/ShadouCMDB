@@ -368,7 +368,7 @@ mod tests {
             );
         }
 
-        // The CHECK constraint (migration 0010) stops a write that bypasses the API.
+        // The CHECK constraint (migration 0011) stops a write that bypasses the API.
         let e = sqlx::query("INSERT INTO cmdb.areas (key, name) VALUES ('shadoucmdb_maintenance', 'x')")
             .execute(pool)
             .await
