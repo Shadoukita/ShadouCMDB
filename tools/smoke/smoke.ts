@@ -411,6 +411,12 @@ async function main() {
   await post('/api/v1/configuration-items', {
     classId: appClass, name: 'bad-attrs', statusId: inService, attributes: { url: 'ftp://x', criticality: 'extreme', primary_database: server.id, nope: 1 },
   }, 400);
+  const bothStages = await post('/api/v1/configuration-items', {
+    classId: serverClass, name: 'bad-both', statusId: inService, ipAddress: '999.1.1.1', attributes: { management_ip: 'abc', cpu_cores: 'x' },
+  }, 400);
+  const bothFields = (bothStages.json?.error?.details ?? []).map((d: Json) => d.field);
+  check(['ipAddress', 'attributes.management_ip', 'attributes.cpu_cores'].every((f) => bothFields.includes(f)),
+    'core-field and attribute errors are reported together');
   await post('/api/v1/configuration-items', { classId: lb.id, name: 'lb-missing-required', statusId: inService, attributes: { vip: '10.0.0.1' } }, 400);
   const lbItem = (await post('/api/v1/configuration-items', {
     classId: lb.id, name: `smoke-lb-${RUN}`, statusId: inService, attributes: { device_role: 'load_balancer', algorithm: 'round_robin', vip: '10.77.5.5', management_subnet: '10.77.5.0/24' },

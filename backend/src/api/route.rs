@@ -219,35 +219,66 @@ impl<T: ToSchema + DeserializeOwned + Check + Send + 'static> BodyInput for Body
     }
 
     fn parse(body: Option<Value>) -> Result<Self, AppError> {
-        let Some(value) = body else {
-            return Err(AppError::validation(vec![FieldError {
-                location: FieldLocation::Body,
-                field: "(root)".into(),
-                message: "Required".into(),
-                code: "required".into(),
-            }]));
-        };
-        // The body schema plus the components it references.
-        let spec = validate::cached_schema::<T>(|| {
-            let mut components = Vec::new();
-            T::schemas(&mut components);
-            let components: serde_json::Map<String, Value> = components
-                .into_iter()
-                .map(|(name, schema)| (name, serde_json::to_value(schema).unwrap_or(Value::Null)))
-                .collect();
-            serde_json::json!({ "schema": T::schema(), "components": components })
-        });
-        let errors = validate::check(&spec["schema"], &value, FieldLocation::Body, spec["components"].as_object());
-        if !errors.is_empty() {
-            return Err(AppError::validation(errors));
-        }
-        let parsed: T = deserialize(value, FieldLocation::Body)?;
-        let errors = parsed.check();
-        if !errors.is_empty() {
-            return Err(AppError::validation(errors));
-        }
-        Ok(Body(parsed))
+        parse_body(required_body(body)?).map(Body).map_err(|e| AppError::validation(e.errors))
     }
+}
+
+/// A body that failed validation: the raw JSON and what is wrong with it.
+pub struct InvalidBody {
+    pub raw: Value,
+    pub errors: Vec<FieldError>,
+}
+
+/// A JSON body of type `T` whose validation errors go to the handler instead
+/// of straight to a 400, so it can add the errors only it can find (rules that
+/// need the database) and report everything in one response.
+pub struct CheckedBody<T>(pub Result<T, InvalidBody>);
+
+impl<T: ToSchema + DeserializeOwned + Check + Send + 'static> BodyInput for CheckedBody<T> {
+    fn schema() -> Option<RefOr<Schema>> {
+        Some(T::schema())
+    }
+
+    fn parse(body: Option<Value>) -> Result<Self, AppError> {
+        Ok(CheckedBody(parse_body(required_body(body)?)))
+    }
+}
+
+fn required_body(body: Option<Value>) -> Result<Value, AppError> {
+    body.ok_or_else(|| {
+        AppError::validation(vec![FieldError {
+            location: FieldLocation::Body,
+            field: "(root)".into(),
+            message: "Required".into(),
+            code: "required".into(),
+        }])
+    })
+}
+
+fn parse_body<T: ToSchema + DeserializeOwned + Check + 'static>(value: Value) -> Result<T, InvalidBody> {
+    // The body schema plus the components it references.
+    let spec = validate::cached_schema::<T>(|| {
+        let mut components = Vec::new();
+        T::schemas(&mut components);
+        let components: serde_json::Map<String, Value> = components
+            .into_iter()
+            .map(|(name, schema)| (name, serde_json::to_value(schema).unwrap_or(Value::Null)))
+            .collect();
+        serde_json::json!({ "schema": T::schema(), "components": components })
+    });
+    let errors = validate::check(&spec["schema"], &value, FieldLocation::Body, spec["components"].as_object());
+    if !errors.is_empty() {
+        return Err(InvalidBody { raw: value, errors });
+    }
+    let parsed: T = match deserialize(value.clone(), FieldLocation::Body) {
+        Ok(parsed) => parsed,
+        Err(e) => return Err(InvalidBody { raw: value, errors: e.details.unwrap_or_default() }),
+    };
+    let errors = parsed.check();
+    if !errors.is_empty() {
+        return Err(InvalidBody { raw: value, errors });
+    }
+    Ok(parsed)
 }
 
 /// After schema validation deserialisation only fails in custom deserialisers,
