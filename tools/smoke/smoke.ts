@@ -662,7 +662,7 @@ async function permissions(x: Json) {
   console.log('\n# Reference attributes into classes the caller may not view (app editor, no database rights)');
   const appEditors = (await post('/api/v1/admin/profiles', {
     name: `smoke-app-editors-${RUN}`,
-    classPermissions: [{ classId: appClass, view: true, create: false, edit: true, delete: false }],
+    classPermissions: [{ classId: appClass, view: true, create: true, edit: true, delete: false }],
   })).json;
   const appEditor = (await post('/api/v1/admin/users', { username: `smoke-app-editor-${RUN}`, displayName: 'App editor', password, profileIds: [appEditors.id] })).json;
   const otherDb = (await post('/api/v1/configuration-items', { classId: dbClass, name: `smoke-db-hidden-${RUN}`, statusId: inService, attributes: { engine: 'postgresql' } })).json;
@@ -682,6 +682,24 @@ async function permissions(x: Json) {
     const missing = await patch(`/api/v1/configuration-items/${app.id}`, { attributes: { primary_database: '00000000-0000-4000-8000-000000000000' } }, 400);
     check(code(existing) === code(missing) && existing.json.error?.details?.[0]?.code === 'not_found' && !JSON.stringify(existing.json).includes(otherDb.name),
       'setting a reference to a CI in a hidden class fails exactly like a missing one (no existence oracle)');
+    // GH#45: a body that fails its schema still gets its attributes checked, with the same reference access.
+    const refFailed = (r: { json: Json }) => r.json.error?.details?.some((d: Json) => d.field === 'attributes.primary_database' && d.code === 'not_found');
+    const create = (ref: string) => post('/api/v1/configuration-items', {
+      classId: appClass, name: `smoke-app-bad-${RUN}`, statusId: inService, ipAddress: '999.1.1.1', attributes: { primary_database: ref },
+    }, 400);
+    const createExisting = await create(otherDb.id);
+    const createMissing = await create('00000000-0000-4000-8000-000000000000');
+    check(code(createExisting) === code(createMissing) && fields(createExisting).includes('ipAddress') && refFailed(createExisting) &&
+      !JSON.stringify(createExisting.json).includes(otherDb.name),
+      'create with an invalid body: a reference into a hidden class fails exactly like a missing one');
+    const update = (ref: string) => patch(`/api/v1/configuration-items/${app.id}`, { ipAddress: '999.1.1.1', attributes: { primary_database: ref } }, 400);
+    const updateExisting = await update(otherDb.id);
+    const updateMissing = await update('00000000-0000-4000-8000-000000000000');
+    check(code(updateExisting) === code(updateMissing) && fields(updateExisting).includes('ipAddress') && refFailed(updateExisting) &&
+      !JSON.stringify(updateExisting.json).includes(otherDb.name),
+      'update with an invalid body: a reference into a hidden class fails exactly like a missing one');
+    const unchanged = await update(database.id);
+    check(JSON.stringify(fields(unchanged)) === '["ipAddress"]', 'update with an invalid body: the unchanged hidden reference is not flagged');
   });
   const asAdmin = (await get(`/api/v1/configuration-items/${app.id}`)).json.attributeReferences?.primary_database;
   check(asAdmin?.name === database.name && asAdmin.hidden === false, 'an administrator still sees the referenced name');
