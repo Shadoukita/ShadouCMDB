@@ -250,6 +250,46 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   await page.context().close();
 });
 
+test("a reference into a class the user may not view shows a placeholder, not a name or a link", async ({ browser, page, request }) => {
+  // CRM (Application) → primary_database crm-db (Database, which the profile cannot see).
+  const crm = await ciIdByName(request, "CRM");
+  // Show the attribute as an inventory column for Application; the settings are restored at the end.
+  const before = await apiGet<{ version: number; settings: { listViews: { classKey: string }[] } }>(request, "/ui-settings");
+  const listViews = [...before.settings.listViews.filter((v) => v.classKey !== "application"), { classKey: "application", columns: ["name", "attributes.primary_database"] }];
+  const saved = await apiSend<{ version: number }>(request, "PUT", "/ui-settings", { version: before.version, settings: { ...before.settings, listViews } });
+
+  try {
+    // The administrator still sees the name, as a link.
+    await page.goto(`/cis/${crm}`);
+    await expect(page.getByRole("link", { name: "crm-db", exact: true }).first()).toBeVisible();
+
+    const restrictedPage = await signInUi(browser, USERNAME, PASSWORD);
+    const hiddenIn = async (where: string) => {
+      await expect(restrictedPage.getByText("Hidden CI", { exact: true }).first(), where).toBeVisible();
+      await expect(restrictedPage.getByRole("link", { name: "Hidden CI" }), where).toHaveCount(0);
+      await expect(restrictedPage.getByText("crm-db"), where).toHaveCount(0);
+    };
+    await restrictedPage.goto(`/cis?classId=${applicationId}&q=CRM`);
+    await expect(restrictedPage.getByRole("link", { name: "CRM", exact: true })).toBeVisible();
+    await hiddenIn("inventory");
+    await restrictedPage.goto(`/cis/${crm}`);
+    await expect(restrictedPage.getByRole("heading", { level: 1, name: "CRM" })).toBeVisible();
+    await hiddenIn("detail");
+    await restrictedPage.getByRole("link", { name: "Edit", exact: true }).click();
+    await expect(restrictedPage.getByRole("button", { name: "Clear Hidden CI" })).toBeVisible();
+    await hiddenIn("edit");
+    // Saving other fields keeps the hidden reference as it was.
+    await restrictedPage.locator("#f-notes").fill(`edited around a hidden reference ${stamp}`);
+    await restrictedPage.getByRole("button", { name: "Save changes" }).click();
+    await expect(restrictedPage).toHaveURL(at(`/cis/${crm}`));
+    await restrictedPage.context().close();
+    const after = await apiGet<{ attributes: Record<string, unknown> }>(request, `/configuration-items/${crm}`);
+    expect(after.attributes.primary_database).toBe(await ciIdByName(request, "crm-db"));
+  } finally {
+    await apiSend(request, "PUT", "/ui-settings", { version: saved.version, settings: before.settings });
+  }
+});
+
 test("signing out ends the session on the server, not only in the browser", async ({ playwright, baseURL }) => {
   const s = await apiSignIn(playwright, baseURL!, USERNAME, PASSWORD);
   const cookies = (await s.ctx.storageState()).cookies;

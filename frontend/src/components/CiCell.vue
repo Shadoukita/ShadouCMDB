@@ -15,7 +15,7 @@ const props = defineProps<{ ci: Ci; field: string; defs: readonly EffectiveAttri
 const attr = computed(() => attributeKey(props.field));
 const def = computed(() => (attr.value ? props.defs.find((d) => d.key === attr.value) : undefined));
 const values = computed(() => props.ci.attributes as Record<string, unknown>);
-const refs = computed(() => props.ci.attributeReferences as Record<string, { id: string; name: string; deleted?: boolean } | undefined>);
+const refs = computed(() => props.ci.attributeReferences);
 const self = computed(() => ({ id: props.ci.id, name: props.ci.name }));
 </script>
 
