@@ -73,3 +73,77 @@ ALTER TABLE audit_log ADD CONSTRAINT audit_log_values_present CHECK (
   OR (action IN ('login.success', 'login.failure', 'login.locked', 'logout', 'session.revoke', 'audit.purge', 'token.use')
       AND old_value IS NULL AND new_value IS NOT NULL)
 );
+--> statement-breakpoint
+
+-- ---------------------------------------------------------------------------
+-- prune_audit_log(): token.use rows are access events (they carry the
+-- caller's IP address and user agent), so they follow the 180-day policy of
+-- the auth scope. Same body as 0007 otherwise; CREATE OR REPLACE keeps the
+-- owner and the EXECUTE grants.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION prune_audit_log(p_older_than interval, p_scope text, p_dry_run boolean, p_operator text DEFAULT NULL)
+RETURNS TABLE (category text, total bigint)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  cutoff timestamptz := now() - p_older_than;
+  session_cutoff timestamptz := now() - interval '30 days';
+  actions text[];
+  counts jsonb;
+  sessions_count bigint := 0;
+BEGIN
+  IF p_older_than IS NULL OR cutoff > now() - interval '30 days' THEN
+    RAISE EXCEPTION 'prune_audit_log: the window must be at least 30 days (got %)', p_older_than
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  actions := CASE p_scope
+    WHEN 'auth' THEN ARRAY['login.success', 'login.failure', 'login.locked', 'logout', 'session.revoke', 'token.use']
+    WHEN 'changes' THEN ARRAY['create', 'update', 'delete', 'restore']
+  END;
+  IF actions IS NULL OR p_dry_run IS NULL THEN
+    RAISE EXCEPTION 'prune_audit_log: scope must be auth or changes, and dry_run true or false'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  IF p_dry_run THEN
+    SELECT coalesce(jsonb_object_agg(a.action, a.n), '{}') INTO counts
+    FROM (SELECT l.action, count(*) AS n FROM public.audit_log l
+          WHERE l.action = ANY (actions) AND l.occurred_at < cutoff GROUP BY l.action) a;
+    IF p_scope = 'auth' THEN
+      SELECT count(*) INTO sessions_count FROM public.sessions s WHERE s.expires_at < session_cutoff;
+    END IF;
+  ELSE
+    PERFORM set_config('shadoucmdb.audit_purge', 'on', true);
+    WITH gone AS (
+      DELETE FROM public.audit_log l WHERE l.action = ANY (actions) AND l.occurred_at < cutoff RETURNING l.action
+    )
+    SELECT coalesce(jsonb_object_agg(g.action, g.n), '{}') INTO counts
+    FROM (SELECT gone.action, count(*) AS n FROM gone GROUP BY gone.action) g;
+    PERFORM set_config('shadoucmdb.audit_purge', '', true);
+    IF p_scope = 'auth' THEN
+      DELETE FROM public.sessions s WHERE s.expires_at < session_cutoff;
+      GET DIAGNOSTICS sessions_count = ROW_COUNT;
+    END IF;
+
+    INSERT INTO public.audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+    VALUES ('system', session_user, 'audit.purge', 'audit_log', gen_random_uuid(), jsonb_build_object(
+      'scope', p_scope,
+      'olderThan', p_older_than::text,
+      'cutoff', cutoff,
+      'deleted', counts,
+      'sessionsDeleted', sessions_count,
+      'sessionsCutoff', CASE WHEN p_scope = 'auth' THEN session_cutoff END,
+      'databaseUser', session_user,
+      'clientAddress', host(inet_client_addr()),
+      'operator', left(p_operator, 128)
+    ));
+  END IF;
+
+  RETURN QUERY SELECT c.key, c.value::bigint FROM jsonb_each_text(counts) c ORDER BY c.key;
+  IF p_scope = 'auth' THEN
+    RETURN QUERY SELECT 'sessions'::text, sessions_count;
+  END IF;
+END;
+$$;
