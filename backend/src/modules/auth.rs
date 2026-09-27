@@ -546,12 +546,17 @@ mod tests {
         RequestContext::anonymous(String::new())
     }
 
+    /// The first administrator's password: random per test run, so no
+    /// hard-coded credential reaches the hasher or verifier.
+    static OWNER_PASSWORD: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| format!("owner passphrase {}", Uuid::new_v4()));
+
     fn body(username: &str) -> SetupBody {
         SetupBody {
             username: username.into(),
             display_name: "First admin".into(),
             email: None,
-            password: "correct horse battery".into(),
+            password: OWNER_PASSWORD.clone(),
         }
     }
 
@@ -618,7 +623,7 @@ mod tests {
         assert_eq!(auth.throttle.check("admin"), Gate::Slow);
         let started = std::time::Instant::now();
         let login_as = |password: &str| LoginBody { username: "admin".into(), password: password.into() };
-        let signed_in = login(pool, &auth, &HeaderMap::new(), &anon(), login_as("correct horse battery")).await;
+        let signed_in = login(pool, &auth, &HeaderMap::new(), &anon(), login_as(OWNER_PASSWORD.as_str())).await;
         assert!(signed_in.is_ok(), "refused: {:?}", signed_in.err().map(|e| e.code));
         assert!(started.elapsed() >= GLOBAL_PENALTY, "through the slow lane");
         let wrong = login(pool, &auth, &HeaderMap::new(), &anon(), login_as("wrong guess")).await;
@@ -631,10 +636,8 @@ mod tests {
     async fn guessing_the_current_password_is_throttled() {
         let Some(db) = scratch::database("guessing_the_current_password_is_throttled").await else { return };
         let (pool, auth) = (&db.pool, auth_state());
-        let owner = body("owner");
-        // Guesses derive from the fixture password rather than repeating literals.
-        let (right, wrong) = (owner.password.clone(), owner.password.to_uppercase());
-        setup(pool, &auth, &HeaderMap::new(), &anon(), owner).await.expect("setup");
+        let (right, wrong) = (OWNER_PASSWORD.as_str(), OWNER_PASSWORD.to_uppercase());
+        setup(pool, &auth, &HeaderMap::new(), &anon(), body("owner")).await.expect("setup");
         let user_id: Uuid = sqlx::query_scalar("SELECT id FROM users").fetch_one(pool).await.unwrap();
         let permissions = data::load_permissions(&mut pool.acquire().await.unwrap(), user_id).await.unwrap();
         let principal = Principal {
@@ -656,11 +659,11 @@ mod tests {
             let e = change_password(pool, &auth, &ctx, change(&wrong)).await.unwrap_err();
             assert_eq!(e.code, ErrorCode::ValidationError);
         }
-        let e = change_password(pool, &auth, &ctx, change(&right)).await.unwrap_err();
+        let e = change_password(pool, &auth, &ctx, change(right)).await.unwrap_err();
         assert_eq!(e.code, ErrorCode::RateLimited, "locked: not even the right password is checked");
         assert_eq!(e.retry_after, Some(1));
         let hash = data::password_hash(&mut pool.acquire().await.unwrap(), user_id).await.unwrap();
-        assert!(password::verify(&right, hash.as_deref()).await.unwrap(), "password unchanged");
+        assert!(password::verify(right, hash.as_deref()).await.unwrap(), "password unchanged");
         db.drop().await;
     }
 
@@ -808,7 +811,7 @@ mod tests {
                 .await
                 .unwrap();
         let mut secrets: Vec<String> =
-            ["correct horse battery", "alice correct horse", "wrong password", "argon2"].map(String::from).to_vec();
+            [OWNER_PASSWORD.as_str(), "alice correct horse", "wrong password", "argon2"].map(String::from).to_vec();
         secrets.extend(tokens.iter().map(hex::encode).chain(csrf).chain([owner.csrf_token.clone()]));
         for row in &all {
             for secret in &secrets {
@@ -866,7 +869,7 @@ mod tests {
         };
         let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
         setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
-        login(pool, &auth, &headers, &via("198.51.100.9", "10.0.0.2"), login_body("owner", "correct horse battery"))
+        login(pool, &auth, &headers, &via("198.51.100.9", "10.0.0.2"), login_body("owner", OWNER_PASSWORD.as_str()))
             .await
             .unwrap();
         login(pool, &auth, &headers, &via("198.51.100.9", "10.0.0.2"), login_body("owner", "wrong"))
