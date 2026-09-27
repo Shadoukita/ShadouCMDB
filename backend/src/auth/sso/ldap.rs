@@ -159,9 +159,10 @@ async fn find(ldap: &mut Ldap, s: &Settings, username: &str) -> Result<Result<Di
         .await
         .and_then(|r| r.success())
         .map_err(|e| fail("user search", e))?;
-    // Referrals come back as entries without attributes; they are not users.
-    let mut users: Vec<SearchEntry> =
-        entries.into_iter().map(SearchEntry::construct).filter(|e| !e.dn.is_empty()).collect();
+    // search() returns entries only: the referrals Active Directory adds when
+    // searching from the domain root (DomainDnsZones, ...) go to the result's
+    // refs and are not followed.
+    let mut users: Vec<SearchEntry> = entries.into_iter().map(SearchEntry::construct).collect();
     if users.len() != 1 {
         return Ok(Err(users.len()));
     }

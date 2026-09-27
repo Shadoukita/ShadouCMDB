@@ -474,7 +474,8 @@ fn principal(ctx: &RequestContext) -> Result<&Principal, AppError> {
 
 /// Checks the signed-in user's password before a sensitive change. Throttled
 /// per user like login, so a stolen session cannot be turned into a known
-/// password by guessing the current one.
+/// password by guessing the current one. An account of an identity provider
+/// has no password here: 409.
 pub(crate) async fn check_current_password(
     pool: &PgPool,
     auth: &AuthState,
@@ -482,9 +483,14 @@ pub(crate) async fn check_current_password(
     current_password: &str,
 ) -> Result<(), AppError> {
     let key = me.user_id.to_string();
+    let hash = data::password_hash(&mut *pool.acquire().await?, me.user_id).await?;
+    if let Some(None) = hash {
+        return Err(AppError::conflict(
+            "Your account signs in through an identity provider and has no password here; change it there",
+        ));
+    }
     throttle_gate(&auth.password_throttle, &key, "attempts at your current password").await?;
-    let hash = data::password_hash(&mut *pool.acquire().await?, me.user_id).await?.flatten();
-    if !password::verify(current_password, hash.as_deref()).await? {
+    if !password::verify(current_password, hash.flatten().as_deref()).await? {
         let locked = auth.password_throttle.failure(&key);
         tracing::warn!(user = %me.username, locked_secs = locked.map(|d| d.as_secs()), "wrong current password");
         return Err(AppError::field("currentPassword", "The current password is wrong", "invalid_credentials"));
@@ -500,11 +506,6 @@ async fn change_password(
     b: PasswordChange,
 ) -> Result<(), AppError> {
     let me = principal(ctx)?;
-    if data::password_hash(&mut *pool.acquire().await?, me.user_id).await?.flatten().is_none() {
-        return Err(AppError::conflict(
-            "Your account signs in through an identity provider; change your password there",
-        ));
-    }
     check_current_password(pool, auth, me, &b.current_password).await?;
     users::set_password(pool, ctx, me.user_id, &b.new_password).await?;
     Ok(())
