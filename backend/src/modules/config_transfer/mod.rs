@@ -352,7 +352,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         .collect();
     let rules: Vec<RelationshipRule> =
         crud::select_all(conn, RelationshipRules::TABLE, RelationshipRules::COLUMNS, "created_at, id").await?;
-    let rule_specs: Vec<RelationshipRuleSpec> = rules
+    let mut rule_specs: Vec<RelationshipRuleSpec> = rules
         .iter()
         .filter_map(|r| {
             Some(RelationshipRuleSpec {
@@ -362,6 +362,9 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             })
         })
         .collect();
+    // By keys, not insertion order: a template install or an import writes all
+    // rules in one transaction (same created_at), so the id tiebreak is random.
+    rule_specs.sort();
     ids.rules = rule_specs
         .iter()
         .map(|r| (r.relationship_type.clone(), r.source_class.clone(), r.target_class.clone()))
@@ -1674,5 +1677,44 @@ mod tests {
         let e = at("lookups.statuses.0", AppError::conflict("Duplicate"));
         assert_eq!(e.details.unwrap()[0].field, "lookups.statuses.0");
         assert_eq!(e.code, ErrorCode::Conflict);
+    }
+
+    fn comparable(file: &ConfigFile) -> Value {
+        let mut v = serde_json::to_value(file).unwrap();
+        let o = v.as_object_mut().unwrap();
+        o.remove("exportedAt");
+        o.remove("appVersion");
+        v
+    }
+
+    /// Same configuration, same file: export of a template install equals the
+    /// export of a second database that imported it (GH#23).
+    #[tokio::test]
+    async fn equal_installs_export_identical_files() {
+        const TEST: &str = "equal_installs_export_identical_files";
+        let Some(a) = scratch::database(TEST).await else { return };
+        let Some(b) = scratch::database(TEST).await else {
+            a.drop().await;
+            return;
+        };
+        let ctx = RequestContext::system("test", "test");
+        crate::seed::seed_system_rows(&a.pool).await.unwrap();
+        crate::seed::seed_system_rows(&b.pool).await.unwrap();
+        crate::modules::templates::install_by_key(&a.pool, &ctx, "it_infrastructure").await.unwrap();
+
+        let exported = export(&a.pool).await.unwrap();
+        let rules = &exported.data_model.as_ref().unwrap().relationship_rules;
+        assert!(rules.len() > 1);
+        assert!(rules.windows(2).all(|w| w[0] < w[1]), "rules not in key order: {rules:?}");
+        assert_eq!(comparable(&exported), comparable(&export(&a.pool).await.unwrap()));
+
+        import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
+        let reexported = export(&b.pool).await.unwrap();
+        assert_eq!(
+            serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
+            serde_json::to_string_pretty(&comparable(&reexported)).unwrap()
+        );
+        a.drop().await;
+        b.drop().await;
     }
 }

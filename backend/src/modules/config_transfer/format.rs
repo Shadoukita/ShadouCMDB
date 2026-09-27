@@ -189,8 +189,9 @@ pub struct RelationshipTypeSpec {
     pub is_active: bool,
 }
 
-/// Which classes a relationship type may connect (by keys)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+/// Which classes a relationship type may connect (by keys). Ordered by
+/// (type, source, target), the order export writes them in.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RelationshipRuleSpec {
     #[schema(schema_with = key_schema)]

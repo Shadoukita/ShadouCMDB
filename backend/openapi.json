@@ -19156,7 +19156,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Which classes a relationship type may connect (by keys)",
+              "description": "Which classes a relationship type may connect (by keys). Ordered by\n(type, source, target), the order export writes them in.",
               "required": [
                 "relationshipType",
                 "sourceClass",
