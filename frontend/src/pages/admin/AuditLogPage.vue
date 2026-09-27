@@ -36,6 +36,7 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   ui_settings: "UI settings",
   ui_assets: "UI asset",
   sessions: "Sign-in / session",
+  audit_log: "Audit log",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));
 const ACTION_SET: Record<Action, true> = {
@@ -48,6 +49,7 @@ const ACTION_SET: Record<Action, true> = {
   "login.locked": true,
   logout: true,
   "session.revoke": true,
+  "audit.purge": true,
 };
 const ACTIONS = Object.keys(ACTION_SET) as Action[];
 const entityLabel = (t: string) => ENTITY_TYPES.find((e) => e.value === t)?.label ?? t;
@@ -92,6 +94,12 @@ const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 function recordName(e: AuditEntry): string {
   const snap = (e.newValue ?? e.oldValue) as Record<string, unknown> | null;
   if (snap && typeof snap === "object") {
+    if (e.action === "audit.purge") {
+      // An operator's prune-audit run: which scope and how far back it reached.
+      const scope = str(snap.scope) ?? "?";
+      const window = str(snap.olderThan);
+      return window ? `Pruned ${scope} entries older than ${window}` : `Pruned ${scope} entries`;
+    }
     if (e.entityType === "sessions") {
       // Sign-in events: the (attempted) username and the client address. Both are
       // attacker-controlled text, so they are only ever interpolated, never v-html.
@@ -112,6 +120,7 @@ function recordName(e: AuditEntry): string {
 
 /** Hover text for sign-in events: the browser and, for revocations and lockouts, why. */
 function recordTitle(e: AuditEntry): string | undefined {
+  if (e.action === "audit.purge") return purgeTitle((e.newValue ?? {}) as Record<string, unknown>);
   if (e.entityType !== "sessions") return undefined;
   const snap = (e.newValue ?? {}) as Record<string, unknown>;
   const session = (snap.session ?? {}) as Record<string, unknown>;
@@ -123,6 +132,22 @@ function recordTitle(e: AuditEntry): string | undefined {
     (str(snap.userAgent) || str(session.userAgent)) && `Browser: ${str(snap.userAgent) ?? str(session.userAgent)}`,
   ].filter((p): p is string => typeof p === "string");
   return parts.length ? parts.join("\n") : undefined;
+}
+
+/** Hover text for a purge: the cutoff and how many rows each action lost. */
+function purgeTitle(snap: Record<string, unknown>): string | undefined {
+  const deleted = (snap.deleted ?? {}) as Record<string, unknown>;
+  const counts = Object.entries(deleted)
+    .filter(([, n]) => typeof n === "number")
+    .map(([action, n]) => `  ${action}: ${n}`);
+  const parts = [
+    str(snap.cutoff) && `Cutoff: ${formatDateTime(snap.cutoff as string)}`,
+    counts.length ? `Deleted:\n${counts.join("\n")}` : "Deleted: nothing",
+    typeof snap.sessionsDeleted === "number" && snap.sessionsDeleted > 0 && `Expired sessions deleted: ${snap.sessionsDeleted}`,
+    str(snap.operator) && `Operator: ${snap.operator}`,
+    str(snap.clientAddress) && `From: ${snap.clientAddress}`,
+  ].filter((p): p is string => typeof p === "string");
+  return parts.join("\n");
 }
 
 function recordLink(e: AuditEntry): RouteLocationRaw | undefined {
