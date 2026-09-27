@@ -698,7 +698,7 @@ mod tests {
         let signed_in = login(pool, &auth, &HeaderMap::new(), &anon(), login_as(OWNER_PASSWORD.as_str())).await;
         assert!(signed_in.is_ok(), "refused: {:?}", signed_in.err().map(|e| e.code));
         assert!(started.elapsed() >= GLOBAL_PENALTY, "through the slow lane");
-        let wrong = login(pool, &auth, &HeaderMap::new(), &anon(), login_as("wrong guess")).await;
+        let wrong = login(pool, &auth, &HeaderMap::new(), &anon(), login_as(&OWNER_PASSWORD.to_uppercase())).await;
         assert_eq!(wrong.err().map(|e| e.code), Some(ErrorCode::Unauthenticated), "slowed, then checked");
         db.drop().await;
     }

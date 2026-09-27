@@ -467,16 +467,17 @@ async fn oidc_start(
     id: Option<Uuid>,
     q: &NavigationQuery,
 ) -> Result<Redirect, AppError> {
-    let Some(redirect_uri) = redirect_uri(auth) else {
-        tracing::error!("OIDC sign-in needs PUBLIC_URL (the address users open the web UI at)");
-        return Ok(failed(auth, headers, "not_configured"));
-    };
     let provider = match id {
         Some(id) => data::get(&mut *pool.acquire().await?, id, false).await?,
         None => None,
     };
     let Some(provider) = provider.filter(|p| p.is_enabled && p.kind == OIDC) else {
         return Ok(failed(auth, headers, "unavailable"));
+    };
+    // A deployment setting, not a server fault: warn so the operator sees it.
+    let Some(redirect_uri) = redirect_uri(auth) else {
+        tracing::warn!(provider = %provider.name, "OIDC sign-in needs PUBLIC_URL (the address users open the web UI at)");
+        return Ok(failed(auth, headers, "not_configured"));
     };
     let settings = oidc_settings(&provider);
     let discovered = match auth.oidc.provider(provider.id, &provider.updated_at.to_rfc3339(), &settings).await {

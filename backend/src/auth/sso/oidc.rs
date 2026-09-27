@@ -457,12 +457,15 @@ mod tests {
 
     const NOW: i64 = 1_800_000_000;
 
+    /// Random per test run, so no hard-coded nonce reaches the check.
+    static NONCE: std::sync::LazyLock<String> = std::sync::LazyLock::new(random_value);
+
     fn good() -> Value {
-        json!({ "iss": "https://idp.example.test", "aud": "cmdb", "sub": "u1", "exp": NOW + 300, "iat": NOW, "nonce": "n1" })
+        json!({ "iss": "https://idp.example.test", "aud": "cmdb", "sub": "u1", "exp": NOW + 300, "iat": NOW, "nonce": *NONCE })
     }
 
     fn check(v: Value) -> Result<(), String> {
-        check_claims(&claims(v), "https://idp.example.test", "cmdb", "n1", NOW).map_err(|e| e.0)
+        check_claims(&claims(v), "https://idp.example.test", "cmdb", &NONCE, NOW).map_err(|e| e.0)
     }
 
     #[test]
@@ -489,7 +492,7 @@ mod tests {
         assert_eq!(check(with("exp", json!(NOW - 10))), Ok(()), "within the clock leeway");
         assert!(check(with("iat", json!(NOW + 3600))).unwrap_err().contains("future"));
         assert!(check(with("nbf", json!(NOW + 3600))).unwrap_err().contains("nbf"));
-        assert!(check(with("nonce", json!("n2"))).unwrap_err().contains("nonce"));
+        assert!(check(with("nonce", json!(random_value()))).unwrap_err().contains("nonce"));
         assert!(check(without("nonce")).unwrap_err().contains("nonce"));
         assert!(check(without("exp")).unwrap_err().contains("exp"));
         assert!(check(without("iat")).unwrap_err().contains("iat"));

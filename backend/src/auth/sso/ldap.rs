@@ -273,6 +273,7 @@ mod tests {
     async fn an_empty_password_never_reaches_the_directory() {
         // The URL points nowhere: an attempt to connect would fail, not "sign in".
         let s = Settings { url: "ldaps://unreachable.invalid".into(), ..settings() };
-        assert!(matches!(authenticate(&s, "alice", "").await, Ok(Outcome::WrongPassword)));
+        let empty = String::new();
+        assert!(matches!(authenticate(&s, "alice", &empty).await, Ok(Outcome::WrongPassword)));
     }
 }
