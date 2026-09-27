@@ -98,12 +98,13 @@ mod tests {
 
     #[tokio::test]
     async fn verifies_hashes_stored_by_argon2_0_5() {
-        // "correct horse battery" hashed by argon2 0.5.3: passwords stored before the 0.6
-        // upgrade must still sign in. Kept in testdata/ so the fixture is not a source literal.
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/argon2-0.5.3.phc");
-        let stored = std::fs::read_to_string(path).unwrap();
-        let stored = stored.trim();
-        assert!(verify("correct horse battery", Some(stored)).await.unwrap());
-        assert!(!verify("wrong horse battery", Some(stored)).await.unwrap());
+        // A password hashed by argon2 0.5.3: passwords stored before the 0.6 upgrade must
+        // still sign in. Hash and password live in testdata/ so neither is a source literal.
+        let testdata = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/");
+        let stored = std::fs::read_to_string(format!("{testdata}argon2-0.5.3.phc")).unwrap();
+        let password = std::fs::read_to_string(format!("{testdata}argon2-0.5.3.password")).unwrap();
+        let (stored, password) = (stored.trim(), password.trim());
+        assert!(verify(password, Some(stored)).await.unwrap());
+        assert!(!verify(&format!("{password}!"), Some(stored)).await.unwrap());
     }
 }
