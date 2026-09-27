@@ -108,6 +108,37 @@ pub async fn applied_count(pool: &PgPool) -> sqlx::Result<usize> {
     Ok(MIGRATOR.iter().filter(|m| applied.contains(&m.version)).count())
 }
 
+/// Remembers once the schema is known to be current, so the `/api` gate costs
+/// an atomic load per request after that. Until then (a `serve` started
+/// before `migrate`) each API request re-checks, so running `migrate` against
+/// a live server takes effect without a restart. Migrations only move
+/// forward while the server runs, so "current" is never unset.
+#[derive(Default)]
+pub struct SchemaState {
+    current: std::sync::atomic::AtomicBool,
+}
+
+/// Outcome of [`SchemaState::check`].
+pub enum SchemaCheck {
+    Current,
+    Pending { applied: usize, expected: usize },
+}
+
+impl SchemaState {
+    pub async fn check(&self, pool: &PgPool) -> sqlx::Result<SchemaCheck> {
+        use std::sync::atomic::Ordering;
+        if self.current.load(Ordering::Relaxed) {
+            return Ok(SchemaCheck::Current);
+        }
+        let (applied, expected) = (applied_count(pool).await?, expected_count());
+        if applied < expected {
+            return Ok(SchemaCheck::Pending { applied, expected });
+        }
+        self.current.store(true, Ordering::Relaxed);
+        Ok(SchemaCheck::Current)
+    }
+}
+
 fn label(m: &sqlx::migrate::Migration) -> String {
     format!("{:04}_{}", m.version, m.description.replace(' ', "_"))
 }
@@ -257,6 +288,13 @@ pub mod scratch {
     }
 
     pub async fn database(test: &str) -> Option<Scratch> {
+        let db = empty(test).await?;
+        super::MIGRATOR.run(&db.pool).await.expect("migrations");
+        Some(db)
+    }
+
+    /// A database with no migrations applied, as after `CREATE DATABASE`.
+    pub async fn empty(test: &str) -> Option<Scratch> {
         let Ok(url) = std::env::var("SHADOUCMDB_TEST_DATABASE_URL") else {
             let opted_out = std::env::var("SHADOUCMDB_SKIP_DB_TESTS").is_ok_and(|v| v == "1");
             if std::env::var_os("CI").is_some() && !opted_out {
@@ -275,7 +313,6 @@ pub mod scratch {
         // The same search_path as the application's pool (system tables live in `cmdb`).
         let opts = admin.clone().database(&name).options([("search_path", super::SEARCH_PATH)]);
         let pool = PgPoolOptions::new().max_connections(8).connect_with(opts).await.unwrap();
-        super::MIGRATOR.run(&pool).await.expect("migrations");
         Some(Scratch { admin, name, pool })
     }
 

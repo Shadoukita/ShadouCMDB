@@ -132,7 +132,9 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
 6. **Start the backend.** `shadoucmdb serve` serves the API, `/healthz`, `/readyz` and the embedded web UI on
    `API_HOST:API_PORT` (default `0.0.0.0:3000`). `GET /healthz` reports liveness. `GET /readyz` returns 200 only
-   when the database is reachable and all migrations are applied, and 503 otherwise. During development,
+   when the database is reachable and all migrations are applied, and 503 otherwise. If migrations are pending,
+   `serve` logs a warning at startup and API calls answer 503 `SCHEMA_NOT_MIGRATED` until you run
+   `shadoucmdb migrate`. During development,
    `cargo run -- serve` in `backend/` does the same. To run as a systemd service, a Windows Service or a
    container, see [docs/deployment.md](docs/deployment.md).
 

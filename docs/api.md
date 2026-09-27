@@ -62,6 +62,7 @@ Every non-2xx response has this shape:
 | 429 | `RATE_LIMITED` | Too many failed sign-ins (for this username, or on the whole server), or too many wrong current passwords on `PUT /auth/password`; wait for `Retry-After` seconds. |
 | 413 / 415 | `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE` | The body is over 1 MiB (16 MiB for a configuration import), or is not JSON. |
 | 503 | `DATABASE_UNAVAILABLE` | PostgreSQL is unreachable. |
+| 503 | `SCHEMA_NOT_MIGRATED` | The database has migrations pending (the message says how many are applied). Run `shadoucmdb migrate`; the server picks the change up without a restart. |
 | 500 | `INTERNAL_ERROR` | A bug. The message is generic and the log carries `requestId`. |
 
 ## Endpoints
@@ -88,7 +89,7 @@ Every non-2xx response has this shape:
 | Authentication | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` | `login` and `me` return `{ user, permissions, csrfToken }`. `permissions` is the union of the user's profiles: `administrator`, `global[]`, `allClasses` and per-class `classes[]`. Changing your own password needs `currentPassword` and ends your other sessions. |
 | Users | `GET/POST /admin/users`, `GET/PATCH/DELETE /admin/users/{id}`, `PUT /admin/users/{id}/password` | Needs `users.manage`. `PATCH` renames, disables (`isActive: false`, which ends the user's sessions) and assigns profiles (`profileIds` replaces the set). `PUT …/password` sets a new password and ends the user's sessions. Filters: `q`, `isActive`, `profileId`. |
 | Permission profiles | `GET/POST /admin/profiles`, `GET/PATCH/DELETE /admin/profiles/{id}`, `POST /admin/profiles/{id}/clone` | Writes need `profiles.manage`; reading also works with `users.manage`. A profile is `{ name, description, globalPermissions[], classPermissions[] }`; `PATCH` replaces whichever list it sends. The built-in Administrator profile is read-only (`409`) and listed first. |
-| Health | `GET /healthz`, `GET /readyz` | `/readyz` returns `503` when the database is unreachable or migrations are pending, and reports `migrations: { applied, expected, upToDate }`. |
+| Health | `GET /healthz`, `GET /readyz` | `/readyz` returns `503` when the database is unreachable or migrations are pending, and reports `migrations: { applied, expected, upToDate }`. `database` is `ok`, `unreachable` (no connection), `authentication_failed` (credentials refused), `permission_denied` (connected, but the role may not read the schema) or `error` (see the server log). |
 
 ## Authentication and permissions
 
