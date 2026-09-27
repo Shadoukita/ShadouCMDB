@@ -1503,8 +1503,8 @@ pub fn routes() -> Vec<Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::{Credential, Principal};
     use crate::auth::permissions::Permissions;
+    use crate::auth::{Credential, Principal};
     use crate::db::scratch;
 
     async fn user_ctx(pool: &PgPool, username: &str, global: &[GlobalPermission]) -> RequestContext {
