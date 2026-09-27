@@ -115,8 +115,9 @@ jobs:
           persist-credentials: false
       # Dependency review needs the repository's Dependency graph. Until the owner turns it on,
       # skip with a warning instead of failing every PR; cargo-deny and npm audit still gate
-      # advisories. Only the exact "not enabled" answer skips; any other error still runs the
-      # action, so it fails closed.
+      # advisories. Only a "not enabled" answer or a 404 (what the compare endpoint returns while
+      # the graph is off, even though the repository itself is readable) skips; auth, rate limit
+      # and server errors still run the action, so it fails closed.
       - name: Check that the Dependency graph is enabled
         id: graph
         env:
@@ -127,11 +128,12 @@ jobs:
         run: |
           if out=$(gh api "repos/$REPO/dependency-graph/compare/$BASE...$HEAD" 2>&1 >/dev/null); then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
-          elif grep -qiE 'dependency (review|graph).*(not supported|not enabled|disabled)|ensure that dependency graph is enabled' <<<"$out"; then
-            echo "::warning title=Dependency review skipped::Dependency graph is off for this repository. Enable it in Settings -> Code security (see docs/supply-chain.md)."
+          elif grep -qiE 'dependency (review|graph).*(not supported|not enabled|disabled)|ensure that dependency graph is enabled|\(HTTP 404\)' <<<"$out"; then
+            reason=$(tr -s '\n\r:' '   ' <<<"$out" | cut -c1-200)
+            echo "::warning title=Dependency review skipped::Dependency graph is off for this repository (API said: $reason). Enable it in Settings -> Code security (see docs/supply-chain.md)."
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           else
-            echo "$out"
+            echo "::notice title=Dependency graph probe::$(tr -s '\n\r:' '   ' <<<"$out" | cut -c1-200)"
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.graph.outputs.enabled == 'true'
