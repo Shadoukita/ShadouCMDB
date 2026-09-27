@@ -75,7 +75,9 @@ test.describe("a bare install", () => {
     await expect(panel.locator(".badge", { hasText: "Not installed" })).toBeVisible();
     await panel.getByRole("button", { name: "Install IT infrastructure starter" }).click();
     await expect(panel.getByRole("status")).toContainText("Installed IT infrastructure.");
-    await expect(panel.getByRole("status")).toContainText("Added 76 rows");
+    // 76 data model rows and the area the classes live in.
+    await expect(panel.getByRole("status")).toContainText("Added 77 rows");
+    await expect(panel.getByRole("status")).toContainText('CREATE SCHEMA "infrastruktur"');
     await expect(panel.locator(".badge", { hasText: "Installed" })).toBeVisible();
     await expect(panel.getByRole("button", { name: "Installed" })).toBeDisabled();
     await expect(page.getByRole("heading", { name: "Your CMDB is empty" })).toHaveCount(0);
