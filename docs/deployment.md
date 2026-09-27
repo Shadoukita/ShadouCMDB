@@ -337,8 +337,10 @@ A hardened sample unit is in [`deploy/systemd/shadoucmdb.service`](../deploy/sys
 sudo install -m 0755 shadoucmdb /usr/local/bin/shadoucmdb
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin shadoucmdb
 sudo install -d -m 0750 -o root -g shadoucmdb /etc/shadoucmdb
-sudo install -m 0640 -o root -g shadoucmdb .env /etc/shadoucmdb/shadoucmdb.env   # your settings
-sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+sudo install -m 0640 -o root -g shadoucmdb .env /etc/shadoucmdb/shadoucmdb.env   # your settings, as shadoucmdb_app
+# migrate as shadoucmdb_owner, passed to this one command only (see Database roles):
+sudo -u shadoucmdb env MIGRATION_DATABASE_URL='postgres://shadoucmdb_owner:…@db.example.internal/shadoucmdb' \
+  shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
 sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin   # or use first-run setup in the UI
 sudo cp deploy/systemd/shadoucmdb.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
@@ -349,7 +351,7 @@ journalctl -u shadoucmdb -f
 The unit runs as an unprivileged user and has no capabilities or writable
 paths. To upgrade:
 1. replace the binary;
-2. run `migrate`;
+2. run `migrate` with `MIGRATION_DATABASE_URL` as above;
 3. `systemctl restart shadoucmdb`.
 
 ## Windows Server (Windows Service)
@@ -361,13 +363,16 @@ $bin  = 'C:\Program Files\ShadouCMDB'
 $data = 'C:\ProgramData\ShadouCMDB'
 New-Item -ItemType Directory -Force $bin, $data | Out-Null
 Copy-Item .\shadoucmdb.exe $bin
-Copy-Item .\.env "$data\shadoucmdb.env"          # your settings (DATABASE_URL or PG*)
+Copy-Item .\.env "$data\shadoucmdb.env"          # your settings (DATABASE_URL or PG*), as shadoucmdb_app
 
 # The service runs as the low-privilege LocalService account: let it read the
 # settings and write its log. Keep the env file away from other users.
 icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'NT AUTHORITY\LocalService:(OI)(CI)M'
 
+# migrate as shadoucmdb_owner, set for this session only (see Database roles):
+$env:MIGRATION_DATABASE_URL = 'postgres://shadoucmdb_owner:…@db.example.internal/shadoucmdb'
 & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" migrate
+Remove-Item Env:MIGRATION_DATABASE_URL
 & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
 Start-Service ShadouCMDB
 Invoke-RestMethod http://127.0.0.1:3000/readyz
