@@ -7,7 +7,7 @@ pub use service::value_schema;
 
 use axum::http::{Method, StatusCode};
 
-use crate::api::route::{Body, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
+use crate::api::route::{CheckedBody, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::http::error::ErrorCode;
 use schemas::{CreateItemBody, GraphQuery, ListItemsQuery, SearchQuery, UpdateItemBody};
 
@@ -41,8 +41,11 @@ pub fn routes() -> Vec<Route> {
             .description("Needs create on the class.")
             .status(StatusCode::CREATED)
             .class_checked()
-            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<CreateItemBody>>| async move {
-                Ok(Json(service::create(&api.pool, &api.ctx, &b).await?))
+            .handle(|api, In(NoPath, NoQuery, CheckedBody(b)): In<NoPath, NoQuery, CheckedBody<CreateItemBody>>| async move {
+                match b {
+                    Ok(b) => Ok(Json(service::create(&api.pool, &api.ctx, &b).await?)),
+                    Err(invalid) => Err(service::create_errors(&api.pool, &api.ctx, invalid).await),
+                }
             }),
         route(Method::PATCH, BY_ID, "updateConfigurationItem")
             .tag(TAG)
@@ -50,8 +53,11 @@ pub fn routes() -> Vec<Route> {
             .description("Needs edit on the CI's class (and create on the new class when `classId` changes).")
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::VersionConflict])
             .class_checked()
-            .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<UpdateItemBody>>| async move {
-                Ok(Json(service::update(&api.pool, &api.ctx, id, &b).await?))
+            .handle(|api, In(IdPath(id), NoQuery, CheckedBody(b)): In<IdPath, NoQuery, CheckedBody<UpdateItemBody>>| async move {
+                match b {
+                    Ok(b) => Ok(Json(service::update(&api.pool, &api.ctx, id, &b).await?)),
+                    Err(invalid) => Err(service::update_errors(&api.pool, &api.ctx, id, invalid).await),
+                }
             }),
         route(Method::DELETE, BY_ID, "deleteConfigurationItem")
             .tag(TAG)

@@ -158,8 +158,11 @@ const notFound = computed(() => {
           <span v-if="isSelf" class="badge">You</span>
         </template>
       </div>
-      <div v-if="user.data.value && !isNew && session.can('audit.view')" class="actions">
-        <RouterLink class="btn" :to="{ path: '/admin/audit', query: { actorId: user.data.value.id } }">Changes by this user</RouterLink>
+      <div v-if="user.data.value && !isNew" class="actions">
+        <RouterLink class="btn" :to="{ path: '/admin/api-tokens', query: { userId: user.data.value.id } }">API tokens of this user</RouterLink>
+        <RouterLink v-if="session.can('audit.view')" class="btn" :to="{ path: '/admin/audit', query: { actorId: user.data.value.id } }">
+          Changes by this user
+        </RouterLink>
       </div>
     </div>
     <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>

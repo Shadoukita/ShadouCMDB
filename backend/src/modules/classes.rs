@@ -12,6 +12,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::areas;
+use super::items::service as items_service;
 use super::schema_changes::{PurgeRequest, PurgeResult, check_purge};
 use super::simple_resource::{self as simple, BoxFuture, ListQuery, Resource, Usage, Writable, bool_filter, non_empty};
 use crate::api::context::RequestContext;
@@ -480,12 +481,34 @@ pub async fn purge_class_in(
         ));
     }
     let items = items_data::ids_of_classes(conn, &[id]).await?;
-    let edges: u64 =
-        sqlx::query("DELETE FROM cmdb.ci_relationships WHERE source_ci_id = ANY($1) OR target_ci_id = ANY($1)")
-            .bind(&items)
-            .execute(&mut *conn)
-            .await?
-            .rows_affected();
+    // Every destroyed CI and relationship gets its own delete entry with its
+    // last state, so the audit log shows what the purge took with it.
+    for batch in items.chunks(crud::AUDIT_BATCH) {
+        let before = items_service::details(conn, &model, batch).await?;
+        let entries = before
+            .iter()
+            .map(|ci| AuditEntry {
+                action: AuditAction::Delete,
+                entity_type: "configuration_items",
+                entity_id: ci.summary.id,
+                old_value: Some(crud::json(ci)),
+                new_value: None,
+            })
+            .collect();
+        crud::write_audit(conn, ctx, entries).await?;
+    }
+    let edges = items_data::delete_edges_of(conn, &items).await?;
+    let entries = edges
+        .iter()
+        .map(|e| AuditEntry {
+            action: AuditAction::Delete,
+            entity_type: "ci_relationships",
+            entity_id: e.id,
+            old_value: Some(crud::json(e)),
+            new_value: None,
+        })
+        .collect();
+    crud::write_audit(conn, ctx, entries).await?;
     // Type rows first, so that references between these CIs are gone before
     // their registry rows are deleted (the foreign keys check at statement end).
     for c in model.lineage(id) {
@@ -514,7 +537,7 @@ pub async fn purge_class_in(
         .await?;
     sqlx::query("DELETE FROM cmdb.ci_attribute_definitions WHERE class_id = $1").bind(id).execute(&mut *conn).await?;
     crud::delete_row(conn, CiClasses::TABLE, id).await?;
-    let summary = format!("Purge type {} ({} CIs, {edges} relationships deleted)", row.table_name, items.len());
+    let summary = format!("Purge type {} ({} CIs, {} relationships deleted)", row.table_name, items.len(), edges.len());
     let purge = Purge { tables: vec![table], ..Purge::default() };
     let parent_scope = row.parent_id.map(|p| vec![p]).unwrap_or_default();
     let change = engine::apply(conn, ctx, &summary, Scope::Classes(parent_scope), purge).await?;
@@ -1656,4 +1679,108 @@ pub fn routes() -> Vec<Route> {
     r.extend(simple::routes::<RelationshipTypes>());
     r.extend(simple::routes::<RelationshipRules>());
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::db::scratch;
+    use crate::modules::items::schemas::CreateItemBody;
+    use crate::modules::relationships::{self, RelationshipCreate};
+
+    fn body<T: serde::de::DeserializeOwned>(value: Value) -> T {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[tokio::test]
+    async fn purging_a_type_audits_each_deleted_ci_and_relationship() {
+        let Some(db) = scratch::database("purging_a_type_audits_each_deleted_ci_and_relationship").await else {
+            return;
+        };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("purge-test", "purge-test");
+
+        let class: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Purge Box"}))).await.unwrap();
+        let field: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "label": "Rack", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        let status: Uuid = sqlx::query_scalar("INSERT INTO statuses (key, name) VALUES ('live', 'Live') RETURNING id")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let rel_type: Uuid = sqlx::query_scalar(
+            "INSERT INTO relationship_types (key, name, forward_label, reverse_label)
+             VALUES ('feeds', 'Feeds', 'feeds', 'fed by') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id) VALUES ($1, $2, $2)",
+        )
+        .bind(rel_type)
+        .bind(class.id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let mut cis = Vec::new();
+        for (name, rack) in [("box-a", "R1"), ("box-b", "R2")] {
+            let item = body::<CreateItemBody>(json!({
+                "classId": class.id, "name": name, "statusId": status, "attributes": {field.key.clone(): rack}
+            }));
+            cis.push(items_service::create(pool, &ctx, &item).await.unwrap().summary.id);
+        }
+        let edge = relationships::create(
+            pool,
+            &ctx,
+            &body::<RelationshipCreate>(
+                json!({"relationshipTypeId": rel_type, "sourceCiId": cis[0], "targetCiId": cis[1]}),
+            ),
+        )
+        .await
+        .unwrap()
+        .id;
+
+        simple::update::<CiClasses>(pool, &ctx, class.id, &body(json!({"isActive": false}))).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        purge_class_in(&mut tx, &ctx, class.id, &class.key).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let rows: Vec<(String, Uuid, Value)> = sqlx::query_as(
+            "SELECT entity_type, entity_id, old_value FROM audit_log
+             WHERE action = 'delete' AND entity_type IN ('configuration_items', 'ci_relationships')
+             ORDER BY entity_type, old_value->>'name'",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        let (kind, id, old) = &rows[0];
+        assert_eq!((kind.as_str(), *id), ("ci_relationships", edge));
+        assert_eq!(old["sourceCiId"], json!(cis[0]));
+        assert_eq!(old["targetCiId"], json!(cis[1]));
+        for (row, (ci, rack)) in rows[1..].iter().zip([(cis[0], "R1"), (cis[1], "R2")]) {
+            let (kind, id, old) = row;
+            assert_eq!((kind.as_str(), *id), ("configuration_items", ci));
+            assert_eq!(old["attributes"][&field.key], json!(rack), "{old}");
+            assert_eq!(old["classId"], json!(class.id));
+        }
+        let class_entries: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM audit_log WHERE action = 'delete' AND entity_type = 'ci_classes' AND entity_id = $1",
+        )
+        .bind(class.id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(class_entries, 1);
+        db.drop().await;
+    }
 }
