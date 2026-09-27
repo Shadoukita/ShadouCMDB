@@ -115,8 +115,9 @@ jobs:
           persist-credentials: false
       # Dependency review needs the repository's Dependency graph. Until the owner turns it on,
       # skip with a warning instead of failing every PR; cargo-deny and npm audit still gate
-      # advisories. Only a "not enabled" answer or a 404 (what the compare endpoint returns while
-      # the graph is off, even though the repository itself is readable) skips; auth, rate limit
+      # advisories. Only a "not enabled" answer, a 404 or a bare "Forbidden" 403 (what the compare
+      # endpoint returns while the graph is off; this job's token has contents: read, which is all
+      # it needs) skips. Missing-permission ("Resource not accessible"), bad-credential, rate-limit
       # and server errors still run the action, so it fails closed.
       - name: Check that the Dependency graph is enabled
         id: graph
@@ -128,7 +129,7 @@ jobs:
         run: |
           if out=$(gh api "repos/$REPO/dependency-graph/compare/$BASE...$HEAD" 2>&1 >/dev/null); then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
-          elif grep -qiE 'dependency (review|graph).*(not supported|not enabled|disabled)|ensure that dependency graph is enabled|\(HTTP 404\)' <<<"$out"; then
+          elif grep -qiE 'dependency (review|graph).*(not supported|not enabled|disabled)|ensure that dependency graph is enabled|\(HTTP 404\)|^gh: Forbidden \(HTTP 403\)$' <<<"$out"; then
             reason=$(tr -s '\n\r:' '   ' <<<"$out" | cut -c1-200)
             echo "::warning title=Dependency review skipped::Dependency graph is off for this repository (API said: $reason). Enable it in Settings -> Code security (see docs/supply-chain.md)."
             echo "enabled=false" >> "$GITHUB_OUTPUT"
