@@ -11,7 +11,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, KeyInit, Mac};
-use password_hash::rand_core::{OsRng, RngCore};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
@@ -28,7 +27,7 @@ const BASE32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 pub fn new_secret() -> Vec<u8> {
     let mut bytes = vec![0u8; SECRET_BYTES];
-    OsRng.fill_bytes(&mut bytes);
+    getrandom::fill(&mut bytes).expect("OS random number generator");
     bytes
 }
 
@@ -112,7 +111,7 @@ pub fn new_recovery_codes() -> Vec<String> {
     (0..RECOVERY_CODES)
         .map(|_| {
             let mut bytes = [0u8; RECOVERY_CHARS];
-            OsRng.fill_bytes(&mut bytes);
+            getrandom::fill(&mut bytes).expect("OS random number generator");
             let chars: Vec<char> =
                 bytes.iter().map(|b| BASE32[(b & 31) as usize].to_ascii_lowercase() as char).collect();
             chars.chunks(4).map(|c| c.iter().collect::<String>()).collect::<Vec<_>>().join("-")
