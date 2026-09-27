@@ -45,6 +45,50 @@
         "security": []
       }
     },
+    "/api/v1/version": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Version of the running server",
+        "description": "Public, like /healthz: monitoring and vulnerability scanners need it without a session. Does not touch the database.",
+        "operationId": "getVersion",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionInfo"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
     "/readyz": {
       "get": {
         "tags": [
@@ -17361,6 +17405,7 @@
                   "RATE_LIMITED",
                   "UNSUPPORTED_MEDIA_TYPE",
                   "PAYLOAD_TOO_LARGE",
+                  "REQUEST_TIMEOUT",
                   "DATABASE_UNAVAILABLE",
                   "INTERNAL_ERROR"
                 ]
@@ -17675,7 +17720,8 @@
       "Liveness": {
         "type": "object",
         "required": [
-          "status"
+          "status",
+          "version"
         ],
         "properties": {
           "status": {
@@ -17683,6 +17729,10 @@
             "enum": [
               "ok"
             ]
+          },
+          "version": {
+            "type": "string",
+            "description": "Version of the running server, e.g. 0.1.0"
           }
         },
         "additionalProperties": false
@@ -20871,6 +20921,30 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "VersionInfo": {
+        "type": "object",
+        "required": [
+          "version",
+          "apiVersion",
+          "migrations"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "Version of the running server (SemVer), e.g. 0.1.0; compare it with security advisories"
+          },
+          "apiVersion": {
+            "type": "string",
+            "description": "REST API major version this server speaks"
+          },
+          "migrations": {
+            "type": "integer",
+            "description": "Database migrations shipped with this build",
+            "minimum": 0
           }
         },
         "additionalProperties": false

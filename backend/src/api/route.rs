@@ -547,11 +547,13 @@ impl RouteBuilder {
             let f = f.clone();
             async move {
                 let run = async move {
-                    let peer_ip = peer.map(|Extension(ConnectInfo(a))| a.ip());
+                    // AUDIT_CAPTURE_*: what is not captured is never stored (sessions, audit_log) or logged.
+                    let capture = state.capture;
+                    let peer_ip = peer.map(|Extension(ConnectInfo(a))| a.ip()).filter(|_| capture.ip);
                     let client = ClientInfo {
-                        ip: auth::session::client_ip(&headers, peer_ip),
+                        ip: auth::session::client_ip(&headers, peer_ip).filter(|_| capture.ip),
                         peer_ip,
-                        user_agent: auth::session::user_agent(&headers),
+                        user_agent: auth::session::user_agent(&headers).filter(|_| capture.user_agent),
                     };
                     let ctx = authorise(&state, &headers, access, safe_method).await?.with_client(client);
                     let body = read_body(&headers, body)?;

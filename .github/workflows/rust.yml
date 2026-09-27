@@ -72,7 +72,7 @@ jobs:
 
       - name: serve, /healthz, /readyz, smoke suite (every operation), graceful shutdown
         run: |
-          API_HOST=127.0.0.1 API_PORT=3000 ./target/release/shadoucmdb serve > serve.log &
+          API_HOST=127.0.0.1 API_PORT=3000 API_DOCS=public ./target/release/shadoucmdb serve > serve.log &
           PID=$!
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/healthz && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/readyz | tee readyz.json

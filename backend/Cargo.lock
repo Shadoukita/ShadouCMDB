@@ -1545,6 +1545,8 @@ dependencies = [
  "clap",
  "dotenvy",
  "hex",
+ "hyper",
+ "hyper-util",
  "ipnetwork",
  "mimalloc",
  "mime_guess",

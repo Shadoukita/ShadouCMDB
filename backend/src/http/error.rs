@@ -39,6 +39,8 @@ pub enum ErrorCode {
     RateLimited,
     UnsupportedMediaType,
     PayloadTooLarge,
+    /// The request was not completed within HTTP_REQUEST_TIMEOUT_SECS
+    RequestTimeout,
     DatabaseUnavailable,
     InternalError,
 }
@@ -57,6 +59,7 @@ impl ErrorCode {
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            ErrorCode::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
             ErrorCode::DatabaseUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         }

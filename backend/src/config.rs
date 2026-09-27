@@ -63,6 +63,82 @@ pub struct AuthConfig {
     pub cookie_secure: CookieSecure,
 }
 
+/// Who may read `/openapi.json` and the Swagger UI at `/docs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiDocs {
+    /// Not served (404).
+    Off,
+    /// Any signed-in user (the browser's session cookie).
+    Authenticated,
+    /// Anyone who can reach the server.
+    Public,
+}
+
+impl ApiDocs {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ApiDocs::Off => "off",
+            ApiDocs::Authenticated => "authenticated",
+            ApiDocs::Public => "public",
+        }
+    }
+}
+
+/// Transport timeouts; they bound how long one client can hold a connection
+/// or a request task (slowloris, stalled uploads).
+#[derive(Debug, Clone)]
+pub struct HttpConfig {
+    /// Time allowed to send the request line and headers (HTTP/1).
+    pub header_read_timeout: Duration,
+    /// Time allowed for a whole request, body upload included, until the response starts.
+    pub request_timeout: Duration,
+}
+
+/// Where exported audit events go.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditSink {
+    Stdout,
+    /// Appended to, one event per line.
+    File(PathBuf),
+    /// Syslog over UDP (RFC 5426): one event per datagram.
+    Udp(String),
+    /// Syslog over TCP (RFC 6587 octet counting).
+    Tcp(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditFormat {
+    /// One JSON object per event.
+    Json,
+    /// RFC 5424 syslog message, the event as JSON in MSG.
+    Rfc5424,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuditExportConfig {
+    pub sink: AuditSink,
+    pub format: AuditFormat,
+    /// Syslog facility (0-23) for RFC 5424; 13 is "log audit".
+    pub facility: u8,
+    pub poll_interval: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuditConfig {
+    /// Record the client IP (sessions and sign-in events).
+    pub capture_client_ip: bool,
+    /// Record the browser's User-Agent (sessions and sign-in events).
+    pub capture_user_agent: bool,
+    /// `None`: events stay in the database only.
+    pub export: Option<AuditExportConfig>,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        AuditConfig { capture_client_ip: true, capture_user_agent: true, export: None }
+    }
+}
+
 const DEFAULT_SESSION_IDLE_MINUTES: u64 = 12 * 60;
 const DEFAULT_SESSION_MAX_AGE_HOURS: u64 = 7 * 24;
 
@@ -73,12 +149,15 @@ pub struct Config {
     pub cors_origins: Vec<String>,
     /// Where browsers send CSP violation reports; `None` sends none.
     pub csp_report_uri: Option<String>,
+    pub api_docs: ApiDocs,
+    pub http: HttpConfig,
     pub database: DatabaseConfig,
     /// `shadoucmdb migrate` connects with this instead of `database` (the schema owner role).
     pub migration_url: Option<String>,
     /// `shadoucmdb prune-audit` connects only with this (the maintenance role).
     pub maintenance_url: Option<String>,
     pub auth: AuthConfig,
+    pub audit: AuditConfig,
 }
 
 impl DatabaseConfig {
@@ -112,6 +191,10 @@ impl Reader<'_> {
             self.errors.push(format!("{key}: expected one of {}, got \"{value}\"", allowed.join(" | ")));
             default.to_owned()
         }
+    }
+
+    fn bool(&mut self, key: &str, default: bool) -> bool {
+        self.one_of(key, &["true", "false"], if default { "true" } else { "false" }) == "true"
     }
 
     fn int<T>(&mut self, key: &str, min: T, max: T) -> Option<T>
@@ -200,6 +283,33 @@ fn parse_csp_report_uri(raw: &str) -> Result<String, String> {
     Ok(raw.to_owned())
 }
 
+/// Parses `AUDIT_EXPORT`: `stdout`, `file:<path>`, `udp://host:port` or `tcp://host:port`.
+fn parse_audit_sink(raw: &str) -> Result<AuditSink, String> {
+    const EXPECTED: &str = "expected off, stdout, file:/path/to/audit.log, udp://host:port or tcp://host:port";
+    if raw == "stdout" {
+        return Ok(AuditSink::Stdout);
+    }
+    if let Some(path) = raw.strip_prefix("file:") {
+        return if path.is_empty() {
+            Err(format!("file: needs a path; {EXPECTED}"))
+        } else {
+            Ok(AuditSink::File(path.into()))
+        };
+    }
+    let (scheme, addr) = raw.split_once("://").ok_or_else(|| format!("\"{raw}\" is not recognised; {EXPECTED}"))?;
+    let valid = addr.rsplit_once(':').is_some_and(|(host, port)| {
+        !host.is_empty() && !addr.contains('/') && port.parse::<u16>().is_ok_and(|p| p > 0)
+    });
+    if !valid {
+        return Err(format!("\"{raw}\" needs a host and a port, e.g. {scheme}://siem.example.com:514"));
+    }
+    match scheme {
+        "udp" => Ok(AuditSink::Udp(addr.to_owned())),
+        "tcp" => Ok(AuditSink::Tcp(addr.to_owned())),
+        _ => Err(format!("scheme \"{scheme}://\" is not supported; {EXPECTED}")),
+    }
+}
+
 impl Config {
     pub fn from_env() -> anyhow::Result<Config> {
         Config::from_lookup(&|key| std::env::var(key).ok())
@@ -213,6 +323,13 @@ impl Config {
         r.one_of("LOG_LEVEL", &["fatal", "error", "warn", "info", "debug", "trace", "silent"], "info");
         let api_host = r.string("API_HOST", "0.0.0.0");
         let api_port = r.int::<u16>("API_PORT", 1, 65535).unwrap_or(3000);
+        let api_docs = match r.one_of("API_DOCS", &["off", "authenticated", "public"], "off").as_str() {
+            "authenticated" => ApiDocs::Authenticated,
+            "public" => ApiDocs::Public,
+            _ => ApiDocs::Off,
+        };
+        let header_read_timeout_secs = r.int::<u64>("HTTP_HEADER_READ_TIMEOUT_SECS", 1, 3600).unwrap_or(10);
+        let request_timeout_secs = r.int::<u64>("HTTP_REQUEST_TIMEOUT_SECS", 1, 86_400).unwrap_or(120);
 
         let url = r.raw("DATABASE_URL");
         let migration_url = r.raw("MIGRATION_DATABASE_URL");
@@ -262,6 +379,29 @@ impl Config {
             _ => CookieSecure::Auto,
         };
 
+        let capture_client_ip = r.bool("AUDIT_CAPTURE_CLIENT_IP", true);
+        let capture_user_agent = r.bool("AUDIT_CAPTURE_USER_AGENT", true);
+        let sink = match r.string("AUDIT_EXPORT", "off").as_str() {
+            "off" => None,
+            raw => parse_audit_sink(raw).map_err(|e| r.errors.push(format!("AUDIT_EXPORT: {e}"))).ok(),
+        };
+        let network_sink = matches!(sink, Some(AuditSink::Udp(_) | AuditSink::Tcp(_)));
+        let format = match r
+            .one_of("AUDIT_EXPORT_FORMAT", &["json", "rfc5424"], if network_sink { "rfc5424" } else { "json" })
+            .as_str()
+        {
+            "rfc5424" => AuditFormat::Rfc5424,
+            _ => AuditFormat::Json,
+        };
+        let facility = r.int::<u8>("AUDIT_SYSLOG_FACILITY", 0, 23).unwrap_or(13);
+        let poll_ms = r.int::<u64>("AUDIT_EXPORT_POLL_MS", 100, 3_600_000).unwrap_or(2_000);
+        let export = sink.map(|sink| AuditExportConfig {
+            sink,
+            format,
+            facility,
+            poll_interval: Duration::from_millis(poll_ms),
+        });
+
         if !r.errors.is_empty() {
             let detail: Vec<String> = r.errors.iter().map(|e| format!("  - {e}")).collect();
             anyhow::bail!(
@@ -275,6 +415,11 @@ impl Config {
             api_port,
             cors_origins,
             csp_report_uri,
+            api_docs,
+            http: HttpConfig {
+                header_read_timeout: Duration::from_secs(header_read_timeout_secs),
+                request_timeout: Duration::from_secs(request_timeout_secs),
+            },
             database: DatabaseConfig {
                 url,
                 host,
@@ -295,6 +440,7 @@ impl Config {
                 session_max_age: Duration::from_secs(session_max_age_hours * 3600),
                 cookie_secure,
             },
+            audit: AuditConfig { capture_client_ip, capture_user_agent, export },
         })
     }
 }
@@ -340,11 +486,59 @@ mod tests {
     }
 
     fn load(csp_report_uri: &str) -> anyhow::Result<Config> {
+        load_with(&[("CSP_REPORT_URI", csp_report_uri)])
+    }
+
+    fn load_with(vars: &[(&str, &str)]) -> anyhow::Result<Config> {
         Config::from_lookup(&|key| match key {
             "DATABASE_URL" => Some("postgres://cmdb@db/cmdb".into()),
-            "CSP_REPORT_URI" => Some(csp_report_uri.into()),
-            _ => None,
+            _ => vars.iter().find(|(k, _)| *k == key).map(|(_, v)| (*v).to_owned()),
         })
+    }
+
+    #[test]
+    fn hardened_defaults() {
+        let cfg = load_with(&[]).unwrap();
+        assert_eq!(cfg.api_docs, ApiDocs::Off);
+        assert_eq!(cfg.http.header_read_timeout, Duration::from_secs(10));
+        assert_eq!(cfg.http.request_timeout, Duration::from_secs(120));
+        assert!(cfg.audit.capture_client_ip && cfg.audit.capture_user_agent);
+        assert!(cfg.audit.export.is_none());
+    }
+
+    #[test]
+    fn api_docs_switch() {
+        assert_eq!(load_with(&[("API_DOCS", "public")]).unwrap().api_docs, ApiDocs::Public);
+        assert_eq!(load_with(&[("API_DOCS", "authenticated")]).unwrap().api_docs, ApiDocs::Authenticated);
+        assert!(load_with(&[("API_DOCS", "yes")]).unwrap_err().to_string().contains("API_DOCS"));
+    }
+
+    #[test]
+    fn audit_capture_switches() {
+        let cfg = load_with(&[("AUDIT_CAPTURE_CLIENT_IP", "false"), ("AUDIT_CAPTURE_USER_AGENT", "false")]).unwrap();
+        assert!(!cfg.audit.capture_client_ip && !cfg.audit.capture_user_agent);
+        assert!(load_with(&[("AUDIT_CAPTURE_CLIENT_IP", "no")]).is_err());
+    }
+
+    #[test]
+    fn audit_export_targets() {
+        let export = |v: &str| load_with(&[("AUDIT_EXPORT", v)]).map(|c| c.audit.export);
+        assert!(export("off").unwrap().is_none());
+        let e = export("udp://siem.example.com:514").unwrap().unwrap();
+        assert_eq!(e.sink, AuditSink::Udp("siem.example.com:514".into()));
+        assert_eq!(e.format, AuditFormat::Rfc5424, "syslog transports default to RFC 5424");
+        assert_eq!(e.facility, 13);
+        let e = export("tcp://[2001:db8::1]:6514").unwrap().unwrap();
+        assert_eq!(e.sink, AuditSink::Tcp("[2001:db8::1]:6514".into()));
+        let e = export("file:/var/log/shadoucmdb/audit.jsonl").unwrap().unwrap();
+        assert_eq!(e.sink, AuditSink::File("/var/log/shadoucmdb/audit.jsonl".into()));
+        assert_eq!(e.format, AuditFormat::Json);
+        assert_eq!(export("stdout").unwrap().unwrap().sink, AuditSink::Stdout);
+        for bad in ["syslog", "udp://siem.example.com", "http://siem:514", "tcp://:514", "udp://h:0", "file:"] {
+            assert!(export(bad).unwrap_err().to_string().contains("AUDIT_EXPORT: "), "{bad}");
+        }
+        let cfg = load_with(&[("AUDIT_EXPORT", "stdout"), ("AUDIT_EXPORT_FORMAT", "rfc5424")]).unwrap();
+        assert_eq!(cfg.audit.export.unwrap().format, AuditFormat::Rfc5424);
     }
 
     #[test]

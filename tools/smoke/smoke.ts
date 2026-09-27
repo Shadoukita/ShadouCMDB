@@ -10,6 +10,8 @@
  * The API can run anywhere (a local binary, a container, a remote host); the
  * script only needs its URL. It only creates rows with a unique run suffix and
  * never deletes seed data (`shadoucmdb seed --demo` must have been run).
+ * It reads the contract from GET /openapi.json, so start the server with
+ * API_DOCS=public (the default, off, serves no contract).
  *
  * Signing in: on a database without users the script completes first-run
  * setup itself (as SMOKE_USERNAME, default "smoke-admin"). Otherwise set
@@ -218,13 +220,15 @@ async function main() {
   );
   schemas = spec.components?.schemas ?? {};
   console.log(`# OpenAPI ${spec.openapi}: ${ops.length} operations`);
-  await get('/healthz');
+  const live = await get('/healthz');
+  const version = await get('/api/v1/version');
+  check(typeof live.json.version === 'string' && live.json.version === version.json.version, 'healthz and /api/v1/version report the same version');
   const ready = await get('/readyz');
   check(ready.json.migrations?.upToDate === true, 'readyz reports migrations up to date');
 
   // --- Without a session, everything but health, login and setup is 401 ----------
   console.log('\n# Unauthenticated');
-  const PUBLIC = ['getLiveness', 'getReadiness', 'getSetupStatus', 'completeSetup', 'login', 'getPublicBranding', 'getUiAsset'];
+  const PUBLIC = ['getLiveness', 'getReadiness', 'getVersion', 'getSetupStatus', 'completeSetup', 'login', 'getPublicBranding', 'getUiAsset'];
   const specPublic = Object.values(spec.paths as Record<string, Record<string, Json>>)
     .flatMap((m) => Object.values(m))
     .filter((op) => Array.isArray(op.security) && op.security.length === 0)
