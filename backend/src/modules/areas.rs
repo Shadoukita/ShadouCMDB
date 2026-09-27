@@ -363,7 +363,9 @@ mod tests {
                 .unwrap();
             assert!(!schema, "no schema named after role {role}");
         } else {
-            eprintln!("area_keys_may_not_match_database_roles: role {role:?} is not a valid area key, name_taken not checked");
+            eprintln!(
+                "area_keys_may_not_match_database_roles: role {role:?} is not a valid area key, name_taken not checked"
+            );
         }
 
         // The CHECK constraint (migration 0012) stops a write that bypasses the API.
