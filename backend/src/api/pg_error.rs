@@ -146,14 +146,12 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
     }
     match pg.code() {
         "23505" => {
-            Some(AppError::new(ErrorCode::Conflict, unique_message(pg, &field)).with_details(vec![
-                FieldError {
-                    location: FieldLocation::Body,
-                    field,
-                    message: "Already exists".into(),
-                    code: "unique".into(),
-                },
-            ]))
+            Some(AppError::new(ErrorCode::Conflict, unique_message(pg, &field)).with_details(vec![FieldError {
+                location: FieldLocation::Body,
+                field,
+                message: "Already exists".into(),
+                code: "unique".into(),
+            }]))
         }
         // restrict_violation (ON DELETE RESTRICT) and foreign-key violations
         code @ ("23001" | "23503") => {
