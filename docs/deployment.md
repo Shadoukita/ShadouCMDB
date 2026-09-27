@@ -23,6 +23,12 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
                             Create a user holding the built-in Administrator profile
   prune-audit --older-than 180d [--scope auth|changes] [--execute]
                             Delete audit_log rows past the retention window; a dry run without --execute
+  backup [--out F]          Write a consistent backup of all data and settings, then check it
+  restore FILE [--replace] [--dry-run] [--yes]
+                            Check a backup and restore it in one transaction
+  factory-reset [--yes]     Delete everything and return to first-run setup
+  decommission [--yes]      Remove every ShadouCMDB table, row and setting before retiring the database
+                            (backup, restore and reset: see docs/backup-and-reset.md)
   openapi [--out F|--check F]  Print the OpenAPI document, write it, or fail if F is stale
   service install|uninstall|run   Windows Service management (Windows only)
 ```
