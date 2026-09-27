@@ -9,6 +9,7 @@ mod data;
 mod db;
 mod http;
 mod logging;
+mod maintenance;
 mod modules;
 mod prune;
 mod schema;
@@ -75,6 +76,14 @@ enum Command {
     CreateAdmin(auth::cli::CreateAdminArgs),
     /// Delete audit_log rows past the retention window (a dry run unless --execute).
     PruneAudit(prune::PruneAuditArgs),
+    /// Write a consistent backup of all data and settings to a file (checked after writing).
+    Backup(maintenance::backup::BackupArgs),
+    /// Check a backup file and restore it, all or nothing.
+    Restore(maintenance::restore::RestoreArgs),
+    /// Delete all data, users and settings and start again at first-run setup.
+    FactoryReset(maintenance::ConfirmArgs),
+    /// Remove every ShadouCMDB table, row and setting from the database before retiring it.
+    Decommission(maintenance::ConfirmArgs),
     /// Print the OpenAPI document generated from the code, or compare it with a file.
     Openapi {
         /// Write the document to this file instead of stdout.
@@ -99,6 +108,10 @@ impl Command {
             Command::AuditVerify { .. } => "audit-verify",
             Command::CreateAdmin(_) => "create-admin",
             Command::PruneAudit(_) => "prune-audit",
+            Command::Backup(_) => "backup",
+            Command::Restore(_) => "restore",
+            Command::FactoryReset(_) => "factory-reset",
+            Command::Decommission(_) => "decommission",
             Command::Openapi { .. } => "openapi",
             Command::Service(_) => "service",
         }
@@ -150,11 +163,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             runtime()?.block_on(http::serve(cfg, http::shutdown_signal()))
         }
         Command::Migrate { adopt_drizzle } => {
-            let cfg = Config::from_env()?;
-            let db = match &cfg.migration_url {
-                Some(url) => cfg.database.with_url(url),
-                None => cfg.database,
-            };
+            let db = Config::from_env()?.schema_owner_database();
             runtime()?.block_on(db::migrate(&db, adopt_drizzle))
         }
         Command::Seed { templates, demo } => {
@@ -176,6 +185,24 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Command::PruneAudit(args) => {
             let cfg = Config::from_env()?;
             runtime()?.block_on(prune::run(&cfg, args))
+        }
+        Command::Backup(args) => {
+            let cfg = Config::from_env()?;
+            runtime()?.block_on(maintenance::backup::run(&cfg.database, args))
+        }
+        // These rebuild or drop the schema: like `migrate`, they connect as the
+        // schema owner when MIGRATION_DATABASE_URL is set.
+        Command::Restore(args) => {
+            let db = Config::from_env()?.schema_owner_database();
+            runtime()?.block_on(maintenance::restore::run(&db, args))
+        }
+        Command::FactoryReset(args) => {
+            let db = Config::from_env()?.schema_owner_database();
+            runtime()?.block_on(maintenance::reset::factory_reset_cmd(&db, args))
+        }
+        Command::Decommission(args) => {
+            let db = Config::from_env()?.schema_owner_database();
+            runtime()?.block_on(maintenance::reset::decommission_cmd(&db, args))
         }
         Command::Service(cmd) => service::run(cmd, launch),
         Command::Openapi { .. } => unreachable!("handled above"),

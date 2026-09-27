@@ -56,7 +56,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     install -D -m 0755 "target/$TRIPLE/release/shadoucmdb" /out/shadoucmdb
 
 # --- Runtime: glibc + CA certificates, no shell, non-root (uid 65532) ----------
-FROM gcr.io/distroless/cc-debian12:nonroot
+# Pinned by digest; Dependabot (.github/dependabot.yml) proposes updates.
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 COPY --from=build /out/shadoucmdb /usr/local/bin/shadoucmdb
 ENV API_HOST=0.0.0.0 \
     API_PORT=3000

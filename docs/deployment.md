@@ -25,6 +25,12 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
                             Create a user holding the built-in Administrator profile
   prune-audit --older-than 180d [--scope auth|changes] [--execute]
                             Delete audit_log rows past the retention window; a dry run without --execute
+  backup [--out F]          Write a consistent backup of all data and settings, then check it
+  restore FILE [--replace] [--dry-run] [--yes]
+                            Check a backup and restore it in one transaction
+  factory-reset [--yes]     Delete everything and return to first-run setup
+  decommission [--yes]      Remove every ShadouCMDB table, row and setting before retiring the database
+                            (backup, restore and reset: see docs/backup-and-reset.md)
   openapi [--out F|--check F]  Print the OpenAPI document, write it, or fail if F is stale
   service install|uninstall|run   Windows Service management (Windows only)
 ```
@@ -36,7 +42,8 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
 - Logs are one JSON object per line. Every request is logged with its
   `request_id`, which comes from `X-Request-Id` or is generated, and is echoed in
   the response.
-- `migrate` connects with `MIGRATION_DATABASE_URL` when it is set, `prune-audit` only with
+- `migrate`, `restore`, `factory-reset` and `decommission` connect with `MIGRATION_DATABASE_URL`
+  when it is set, `prune-audit` only with
   `MAINTENANCE_DATABASE_URL`; everything else uses `DATABASE_URL` / `PG*`. See
   [Database roles](#database-roles).
 - `serve` does **not** migrate on start. Run `migrate` as an explicit step when
@@ -161,7 +168,7 @@ creates three roles. None is a superuser.
 
 | Role | Used by | Variable | May |
 | --- | --- | --- | --- |
-| `shadoucmdb_owner` | `shadoucmdb migrate` | `MIGRATION_DATABASE_URL` | Own the database and the `cmdb` system schema; run migrations. Member of `shadoucmdb_app`. |
+| `shadoucmdb_owner` | `shadoucmdb migrate`, `restore`, `factory-reset`, `decommission` | `MIGRATION_DATABASE_URL` | Own the database and the `cmdb` system schema; run migrations. Member of `shadoucmdb_app`. |
 | `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log` and `schema_changes`; no `EXECUTE` on the purge. Owns the area schemas (`CREATE` on the database). |
 | `shadoucmdb_maintenance` | `shadoucmdb prune-audit` | `MAINTENANCE_DATABASE_URL` | Execute `cmdb.prune_audit_log()`, nothing else. |
 
@@ -293,7 +300,9 @@ Each [GitHub Release](https://github.com/Shadoukita/ShadouCMDB/releases) has:
 | `shadoucmdb-<version>-linux-arm64.tar.gz` | The same for `aarch64-unknown-linux-musl` (Graviton, Ampere, Raspberry Pi 4/5 with a 64-bit OS). |
 | `shadoucmdb-<version>-windows-x64.zip` | `shadoucmdb.exe` (`x86_64-pc-windows-msvc`, static C runtime, so no Visual C++ Redistributable), `shadoucmdb.env.example`, and a `README.txt` with the Windows Service install steps. |
 | `SHA256SUMS` | `sha256sum --ignore-missing -c SHA256SUMS` |
-| image `ghcr.io/shadoukita/shadoucmdb:<version>` | `linux/amd64` + `linux/arm64`, made from the two Linux binaries above. |
+| `shadoucmdb-<version>.cdx.json` | CycloneDX SBOM: every Rust crate and web UI package in the binaries. |
+| `*.sigstore.json`, `shadoucmdb-<version>.provenance.jsonl` | cosign keyless signature per file and SLSA build provenance. How to check them: [supply-chain.md](supply-chain.md#verifying-a-download). |
+| image `ghcr.io/shadoukita/shadoucmdb:<version>` | `linux/amd64` + `linux/arm64`, made from the two Linux binaries above. Signed with cosign, with provenance and SBOM attestations ([supply-chain.md](supply-chain.md#verifying-the-image)). |
 
 All three binaries embed the same web UI build. The Linux builds are static musl
 executables. musl's own allocator serialises threads on a single lock, so those
