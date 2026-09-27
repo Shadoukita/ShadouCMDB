@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import type { EffectiveAttribute } from "../../api/queries";
+import type { AttributeReference, EffectiveAttribute } from "../../api/queries";
 import CiLink from "../../components/CiLink.vue";
 import LookupValueName from "../../components/LookupValueName.vue";
-import { formatDate, formatDateTime } from "../../lib/format";
+import { formatDate, formatDateTime, HIDDEN_CI } from "../../lib/format";
 import type { TrailStep } from "../../lib/trail";
 
-/** Read-only rendering of one attribute value by dataType. Reference values are links. */
+/**
+ * Read-only rendering of one attribute value by dataType. Reference values are links,
+ * except into a class the caller cannot view: that CI would answer 403, so no link.
+ */
 defineProps<{
   def: EffectiveAttribute;
   value: unknown;
-  refInfo?: { id: string; name: string; deleted?: boolean };
+  refInfo?: AttributeReference;
   self: TrailStep;
   trail: TrailStep[];
 }>();
@@ -22,6 +25,7 @@ const isUrl = (v: unknown) => /^https?:\/\//.test(String(v));
   <template v-else-if="def.dataType === 'date'">{{ formatDate(String(value)) }}</template>
   <template v-else-if="def.dataType === 'datetime'">{{ formatDateTime(String(value)) }}</template>
   <span v-else-if="def.dataType === 'ip' || def.dataType === 'cidr'" class="mono">{{ String(value) }}</span>
+  <span v-else-if="def.dataType === 'reference' && refInfo?.hidden" class="muted" title="You do not have permission to view this configuration item's class">{{ HIDDEN_CI }}</span>
   <CiLink v-else-if="def.dataType === 'reference'" :id="String(value)" :from="self" :trail="trail">
     {{ refInfo?.name ?? String(value) }}{{ refInfo?.deleted ? " (deleted)" : "" }}
   </CiLink>
