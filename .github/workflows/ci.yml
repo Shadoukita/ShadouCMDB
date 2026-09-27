@@ -136,6 +136,23 @@ jobs:
             curl -sf http://127.0.0.1:300$i/api/v1/setup | grep -q '"setupRequired":true'
           done
 
+      # Two more bare instances for e2e/area-tables.spec.ts: the area "Bestand" and its type tables are built on the
+      # first and checked in PostgreSQL with psql; its export is imported into the second, whose tables must match.
+      - name: migrate, seed and serve two bare instances for the per-type tables walk
+        run: |
+          B=backend/target/release/shadoucmdb
+          for i in 4 5; do
+            db=shadoucmdb_areas$i
+            psql -d postgres -c "CREATE DATABASE $db"
+            PGDATABASE=$db $B migrate
+            PGDATABASE=$db $B seed
+            PGDATABASE=$db API_PORT=300$i $B serve > serve-areas$i.log 2>&1 &
+          done
+          for i in 4 5; do
+            for n in $(seq 1 30); do curl -sf http://127.0.0.1:300$i/readyz && break; sleep 1; done
+            curl -sf http://127.0.0.1:300$i/api/v1/setup | grep -q '"setupRequired":true'
+          done
+
       - name: npx playwright test
         working-directory: frontend
         env:
@@ -143,13 +160,17 @@ jobs:
           E2E_FRESH_BASE_URL: http://127.0.0.1:3001
           E2E_BARE_BASE_URL: http://127.0.0.1:3002
           E2E_IMPORT_BASE_URL: http://127.0.0.1:3003
+          E2E_AREAS_BASE_URL: http://127.0.0.1:3004
+          E2E_AREAS_PGDATABASE: shadoucmdb_areas4
+          E2E_AREAS_IMPORT_BASE_URL: http://127.0.0.1:3005
+          E2E_AREAS_IMPORT_PGDATABASE: shadoucmdb_areas5
         run: npx playwright test
 
       - name: No error-level server log lines
         run: |
-          errors=$(cat serve.log serve-fresh.log serve-bare2.log serve-bare3.log | grep -c '"level":"ERROR"' || true)
+          errors=$(cat serve.log serve-fresh.log serve-bare2.log serve-bare3.log serve-areas4.log serve-areas5.log | grep -c '"level":"ERROR"' || true)
           echo "error-level log lines: $errors"
-          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log serve-fresh.log serve-bare2.log serve-bare3.log; exit 1; fi
+          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log serve-fresh.log serve-bare2.log serve-bare3.log serve-areas4.log serve-areas5.log; exit 1; fi
 
       - if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -162,5 +183,7 @@ jobs:
             serve-fresh.log
             serve-bare2.log
             serve-bare3.log
+            serve-areas4.log
+            serve-areas5.log
           if-no-files-found: ignore
           retention-days: 14
