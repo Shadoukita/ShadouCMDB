@@ -1,5 +1,7 @@
 //! Administration > Permission profiles: named sets of global and per-class
-//! permissions. The built-in Administrator profile is read-only.
+//! permissions, each of which may require two-factor authentication of its
+//! holders. The built-in Administrator profile is read-only except for that
+//! requirement.
 
 use std::collections::{HashMap, HashSet};
 
@@ -56,8 +58,11 @@ pub struct PermissionProfile {
     pub name: String,
     #[schema(required = true)]
     pub description: Option<String>,
-    /// The Administrator profile: every permission, read-only, cannot be deleted
+    /// The Administrator profile: every permission, read-only (except requireMfa), cannot be deleted
     pub is_builtin: bool,
+    /// Holders must set up two-factor authentication; until they do, their
+    /// session only reaches the MFA set-up routes
+    pub require_mfa: bool,
     #[schema(inline)]
     pub global_permissions: Vec<GlobalPermission>,
     pub class_permissions: Vec<ClassPermission>,
@@ -100,6 +105,9 @@ pub struct ProfileCreate {
     #[schema(schema_with = class_permissions_schema)]
     #[serde(default)]
     class_permissions: Vec<ClassPermission>,
+    /// Holders must set up two-factor authentication (default false)
+    #[serde(default)]
+    require_mfa: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -115,6 +123,9 @@ pub struct ProfileUpdate {
     global_permissions: Option<Vec<GlobalPermission>>,
     #[schema(schema_with = class_permissions_schema)]
     class_permissions: Option<Vec<ClassPermission>>,
+    /// Holders must set up two-factor authentication. The only field the
+    /// built-in Administrator profile accepts.
+    require_mfa: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -154,6 +165,7 @@ impl Check for ProfileUpdate {
             && self.description.is_none()
             && self.global_permissions.is_none()
             && self.class_permissions.is_none()
+            && self.require_mfa.is_none()
         {
             return vec![FieldError {
                 location: FieldLocation::Body,
@@ -219,6 +231,7 @@ async fn dtos(conn: &mut PgConnection, rows: Vec<ProfileRow>) -> Result<Vec<Perm
                 name: r.name,
                 description: r.description,
                 is_builtin: r.is_builtin,
+                require_mfa: r.require_mfa,
                 global_permissions,
                 class_permissions,
                 user_count: r.user_count,
@@ -301,7 +314,7 @@ async fn check_classes(conn: &mut PgConnection, classes: &[ClassPermission]) -> 
 }
 
 fn builtin_is_read_only() -> AppError {
-    AppError::conflict("The built-in Administrator profile cannot be changed or deleted")
+    AppError::conflict("The built-in Administrator profile cannot be changed (except requireMfa) or deleted")
 }
 
 pub async fn list(pool: &PgPool, q: &ProfileList) -> Result<Page<PermissionProfile>, AppError> {
@@ -348,10 +361,11 @@ pub(crate) async fn insert(
     description: Option<&str>,
     global: &[GlobalPermission],
     classes: &[ClassPermission],
+    require_mfa: bool,
 ) -> Result<PermissionProfile, AppError> {
     must_cover(ctx, &grants(global, classes), "This profile")?;
     check_classes(conn, classes).await?;
-    let id = data::insert_profile(conn, name, description).await?;
+    let id = data::insert_profile(conn, name, description, require_mfa).await?;
     data::set_global_permissions(conn, id, global).await?;
     let class_grants: Vec<(Option<Uuid>, ClassRights)> = classes.iter().map(|c| (c.class_id, c.rights())).collect();
     data::set_class_permissions(conn, id, &class_grants).await?;
@@ -369,8 +383,16 @@ pub(crate) async fn insert(
 
 pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ProfileCreate) -> Result<PermissionProfile, AppError> {
     let mut tx = pool.begin().await?;
-    let dto =
-        insert(&mut tx, ctx, &b.name, b.description.as_deref(), &b.global_permissions, &b.class_permissions).await?;
+    let dto = insert(
+        &mut tx,
+        ctx,
+        &b.name,
+        b.description.as_deref(),
+        &b.global_permissions,
+        &b.class_permissions,
+        b.require_mfa,
+    )
+    .await?;
     tx.commit().await?;
     Ok(dto)
 }
@@ -386,7 +408,16 @@ pub async fn clone(
     let mut tx = pool.begin().await?;
     let source = load(&mut tx, id).await?;
     let description = source.description.as_deref().filter(|_| !source.is_builtin);
-    let dto = insert(&mut tx, ctx, &b.name, description, &source.global_permissions, &source.class_permissions).await?;
+    let dto = insert(
+        &mut tx,
+        ctx,
+        &b.name,
+        description,
+        &source.global_permissions,
+        &source.class_permissions,
+        source.require_mfa,
+    )
+    .await?;
     tx.commit().await?;
     Ok(dto)
 }
@@ -398,6 +429,7 @@ pub(crate) async fn all_editable(conn: &mut PgConnection) -> Result<Vec<Permissi
 }
 
 /// Changes a profile in the caller's transaction; `None` leaves a part as it is.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn update_in(
     conn: &mut PgConnection,
     ctx: &RequestContext,
@@ -406,9 +438,12 @@ pub(crate) async fn update_in(
     description: Option<Option<&str>>,
     global_permissions: Option<&[GlobalPermission]>,
     class_permissions: Option<&[ClassPermission]>,
+    require_mfa: Option<bool>,
 ) -> Result<PermissionProfile, AppError> {
     let row = data::get_profile(conn, id, true).await?.ok_or_else(|| AppError::missing("Permission profile", id))?;
-    if row.is_builtin {
+    let only_mfa =
+        name.is_none() && description.is_none() && global_permissions.is_none() && class_permissions.is_none();
+    if row.is_builtin && !only_mfa {
         return Err(builtin_is_read_only());
     }
     let before = dtos(conn, vec![row]).await?.remove(0);
@@ -417,7 +452,7 @@ pub(crate) async fn update_in(
     let classes = class_permissions.unwrap_or(&before.class_permissions);
     must_cover(ctx, &grants(global, classes), "The updated profile")?;
 
-    data::update_profile(conn, id, name, description).await?;
+    data::update_profile(conn, id, name, description, require_mfa).await?;
     if let Some(g) = global_permissions {
         data::set_global_permissions(conn, id, g).await?;
     }
@@ -453,6 +488,7 @@ pub async fn update(
         b.description.as_ref().map(|d| d.as_deref()),
         b.global_permissions.as_deref(),
         b.class_permissions.as_deref(),
+        b.require_mfa,
     )
     .await?;
     tx.commit().await?;
@@ -522,7 +558,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::PATCH, BY_ID, "updatePermissionProfile")
             .tag(TAG)
             .summary("Update a permission profile (partial; permission lists replace the current ones)")
-            .description("The built-in Administrator profile cannot be changed (409). Takes effect on the holders' next request.")
+            .description("The built-in Administrator profile accepts only `requireMfa` (409 for anything else). Takes effect on the holders' next request.")
             .requires(manage)
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<ProfileUpdate>>| async move {

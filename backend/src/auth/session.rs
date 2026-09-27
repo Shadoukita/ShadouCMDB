@@ -9,6 +9,10 @@
 //!
 //! Both are `Secure` when the request reached the proxy over HTTPS (see
 //! [`CookieSecure`]).
+//!
+//! A sign-in whose password was right but whose second factor is due sets
+//! `shadoucmdb_mfa` instead: a random token naming the pending challenge,
+//! HttpOnly, sent only to `/api/v1/auth`, gone after a few minutes.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -21,6 +25,8 @@ use crate::config::{AuthConfig, CookieSecure};
 pub const SESSION_COOKIE: &str = "shadoucmdb_session";
 pub const CSRF_COOKIE: &str = "shadoucmdb_csrf";
 pub const CSRF_HEADER: &str = "x-csrf-token";
+pub const MFA_COOKIE: &str = "shadoucmdb_mfa";
+const MFA_COOKIE_PATH: &str = "/api/v1/auth";
 
 /// 256 random bits, hex-encoded.
 pub fn new_token() -> String {
@@ -126,7 +132,11 @@ pub(crate) fn secure_cookies(cfg: &AuthConfig, headers: &HeaderMap) -> bool {
 }
 
 fn build(name: &str, value: &str, max_age_secs: u64, http_only: bool, secure: bool) -> HeaderValue {
-    let mut c = format!("{name}={value}; Path=/; Max-Age={max_age_secs}; SameSite=Lax");
+    build_at("/", name, value, max_age_secs, http_only, secure)
+}
+
+fn build_at(path: &str, name: &str, value: &str, max_age_secs: u64, http_only: bool, secure: bool) -> HeaderValue {
+    let mut c = format!("{name}={value}; Path={path}; Max-Age={max_age_secs}; SameSite=Lax");
     if http_only {
         c.push_str("; HttpOnly");
     }
@@ -140,6 +150,16 @@ fn build(name: &str, value: &str, max_age_secs: u64, http_only: bool, secure: bo
 pub fn login_cookies(cfg: &AuthConfig, secure: bool, token: &str, csrf: &str) -> Vec<HeaderValue> {
     let max_age = cfg.session_max_age.as_secs();
     vec![build(SESSION_COOKIE, token, max_age, true, secure), build(CSRF_COOKIE, csrf, max_age, false, secure)]
+}
+
+/// Set-Cookie header naming a pending second-factor challenge.
+pub fn mfa_cookie(secure: bool, token: &str, ttl: std::time::Duration) -> HeaderValue {
+    build_at(MFA_COOKIE_PATH, MFA_COOKIE, token, ttl.as_secs(), true, secure)
+}
+
+/// Set-Cookie header that deletes the challenge cookie.
+pub fn clear_mfa_cookie(secure: bool) -> HeaderValue {
+    build_at(MFA_COOKIE_PATH, MFA_COOKIE, "", 0, true, secure)
 }
 
 /// Set-Cookie headers that delete both cookies.
@@ -226,6 +246,10 @@ mod tests {
         let c = login_cookies(&cfg, true, "tok", "csrf");
         assert_eq!(c[0], "shadoucmdb_session=tok; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly; Secure");
         assert_eq!(c[1], "shadoucmdb_csrf=csrf; Path=/; Max-Age=3600; SameSite=Lax; Secure");
+        assert_eq!(
+            mfa_cookie(false, "tok", Duration::from_secs(300)),
+            "shadoucmdb_mfa=tok; Path=/api/v1/auth; Max-Age=300; SameSite=Lax; HttpOnly"
+        );
         let c = logout_cookies(false);
         assert_eq!(c[0], "shadoucmdb_session=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly");
         assert!(secure_cookies(&AuthConfig { cookie_secure: CookieSecure::Always, ..cfg.clone() }, &HeaderMap::new()));

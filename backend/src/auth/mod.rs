@@ -1,6 +1,6 @@
 //! Authentication and authorisation: local users with argon2id passwords,
-//! server-side sessions, CSRF protection, login backoff, permission profiles
-//! and API tokens.
+//! TOTP two-factor sign-in, server-side sessions, CSRF protection, login
+//! backoff, permission profiles and API tokens.
 //!
 //! [`authenticate`] turns the session cookie into a [`Principal`]
 //! ([`token::authenticate`] does the same for `Authorization: Bearer`); the route
@@ -15,6 +15,7 @@ pub mod permissions;
 pub mod session;
 pub mod throttle;
 pub mod token;
+pub mod totp;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -42,7 +43,9 @@ pub struct Principal {
 #[derive(Debug, Clone)]
 pub enum Credential {
     /// The session cookie; state-changing requests must echo `csrf_token`.
-    Session { id: Uuid, csrf_token: String },
+    /// While `mfa_enrolment_required`, only the routes marked
+    /// `before_mfa_enrolment` answer (a profile requires MFA, none is set up).
+    Session { id: Uuid, csrf_token: String, mfa_enrolment_required: bool },
     /// `Authorization: Bearer`; not sent by browsers on their own, so no CSRF token.
     Token,
 }
@@ -53,6 +56,10 @@ impl Principal {
             Credential::Session { id, .. } => Some(*id),
             Credential::Token => None,
         }
+    }
+
+    pub fn mfa_enrolment_required(&self) -> bool {
+        matches!(self.credential, Credential::Session { mfa_enrolment_required: true, .. })
     }
 
     pub fn csrf_token(&self) -> Option<&str> {
@@ -119,7 +126,11 @@ pub async fn authenticate(pool: &PgPool, cfg: &AuthConfig, headers: &HeaderMap) 
     Ok(Some(Principal {
         user_id: s.user_id,
         username: s.username,
-        credential: Credential::Session { id: s.session_id, csrf_token: s.csrf_token },
+        credential: Credential::Session {
+            id: s.session_id,
+            csrf_token: s.csrf_token,
+            mfa_enrolment_required: s.mfa_enrolment_required,
+        },
         permissions,
     }))
 }

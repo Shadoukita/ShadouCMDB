@@ -275,6 +275,23 @@ pub enum AuditAction {
     #[serde(rename = "token.use")]
     #[sqlx(rename = "token.use")]
     TokenUse,
+    // Two-factor sign-in (entity type `users`, the user's id).
+    #[serde(rename = "mfa.enrol")]
+    #[sqlx(rename = "mfa.enrol")]
+    MfaEnrol,
+    #[serde(rename = "mfa.disable")]
+    #[sqlx(rename = "mfa.disable")]
+    MfaDisable,
+    #[serde(rename = "mfa.failure")]
+    #[sqlx(rename = "mfa.failure")]
+    MfaFailure,
+    #[serde(rename = "mfa.recovery_code_used")]
+    #[sqlx(rename = "mfa.recovery_code_used")]
+    MfaRecoveryCodeUsed,
+    /// New recovery codes replaced the old ones.
+    #[serde(rename = "mfa.recovery_codes")]
+    #[sqlx(rename = "mfa.recovery_codes")]
+    MfaRecoveryCodes,
 }
 
 impl AuditAction {
@@ -291,6 +308,11 @@ impl AuditAction {
             AuditAction::SessionRevoke => "session.revoke",
             AuditAction::AuditPurge => "audit.purge",
             AuditAction::TokenUse => "token.use",
+            AuditAction::MfaEnrol => "mfa.enrol",
+            AuditAction::MfaDisable => "mfa.disable",
+            AuditAction::MfaFailure => "mfa.failure",
+            AuditAction::MfaRecoveryCodeUsed => "mfa.recovery_code_used",
+            AuditAction::MfaRecoveryCodes => "mfa.recovery_codes",
         }
     }
 }

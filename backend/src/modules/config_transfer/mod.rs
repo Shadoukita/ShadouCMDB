@@ -1282,6 +1282,7 @@ async fn run(
                         spec.description.as_deref(),
                         &spec.global_permissions,
                         &grants,
+                        false,
                     )
                     .await
                     .map_err(|e| at(&path, e))?;
@@ -1302,6 +1303,7 @@ async fn run(
                         Some(spec.description.as_deref()),
                         Some(&spec.global_permissions),
                         Some(&grants),
+                        None,
                     )
                     .await
                     .map_err(|e| at(&path, e))?;

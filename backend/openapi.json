@@ -256,7 +256,7 @@
           "Authentication"
         ],
         "summary": "Sign in with username and password",
-        "description": "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429.",
+        "description": "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429.",
         "operationId": "login",
         "parameters": [],
         "requestBody": {
@@ -278,6 +278,112 @@
                     "type": "string",
                     "maxLength": 256,
                     "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong credentials (code UNAUTHENTICATED), or the password was right and the second factor is due (code MFA_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/login/mfa": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Finish signing in with an authenticator code or a recovery code",
+        "description": "After POST /api/v1/auth/login answered MFA_REQUIRED: reads the `shadoucmdb_mfa` cookie it set and, for a right code, sets the session cookies like login. Each authenticator code works once; each recovery code works once and is then used up. 401 for a wrong code; after 5 wrong codes, or 5 minutes, the password is asked for again (401). Wrong codes count as failed sign-ins for the username: the same lock applies as for wrong passwords (429 RATE_LIMITED with Retry-After).",
+        "operationId": "loginSecondFactor",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "description": "The 6-digit code from the authenticator app, or an unused recovery code",
+                    "maxLength": 64,
+                    "minLength": 6
                   }
                 },
                 "additionalProperties": false
@@ -385,7 +491,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -428,7 +534,7 @@
         "tags": [
           "Authentication"
         ],
-        "summary": "The signed-in user, their effective permissions and the CSRF token",
+        "summary": "The signed-in user, their effective permissions, MFA status and the CSRF token",
         "description": "Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "getCurrentSession",
         "parameters": [],
@@ -454,7 +560,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -553,7 +659,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -574,6 +680,684 @@
           },
           "429": {
             "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/mfa": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Your two-factor authentication status",
+        "description": "Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "getMfaStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/totp": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Start setting up an authenticator app: returns a new secret to confirm",
+        "description": "Nothing changes at sign-in until the secret is confirmed (POST /api/v1/auth/mfa/totp/confirm); calling this again replaces an unconfirmed secret. 409 when an authenticator is already set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "startTotpEnrolment",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "currentPassword"
+                ],
+                "properties": {
+                  "currentPassword": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotpEnrolment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Turn your two-factor authentication off (or cancel an unfinished set-up)",
+        "description": "Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "disableTotp",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "The password and a current second factor, to change MFA settings.",
+                "required": [
+                  "currentPassword",
+                  "code"
+                ],
+                "properties": {
+                  "currentPassword": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 1
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "The 6-digit code from the authenticator app, or an unused recovery code",
+                    "maxLength": 64,
+                    "minLength": 6
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/totp/confirm": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)",
+        "description": "From now on sign-in asks for a code after the password. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "confirmTotpEnrolment",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "description": "The 6-digit code the app shows for the new secret",
+                    "maxLength": 16,
+                    "minLength": 6
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/recovery-codes": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Replace your recovery codes with 10 new ones (shown once)",
+        "description": "Needs the password and a current code. The old codes stop working. 409 when MFA is not set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "regenerateRecoveryCodes",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "The password and a current second factor, to change MFA settings.",
+                "required": [
+                  "currentPassword",
+                  "code"
+                ],
+                "properties": {
+                  "currentPassword": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 1
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "The 6-digit code from the authenticator app, or an unused recovery code",
+                    "maxLength": 64,
+                    "minLength": 6
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/mfa": {
+      "delete": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Turn a user's two-factor authentication off (lost authenticator and recovery codes)",
+        "description": "Requires `users.manage`. Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "resetUserMfa",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -808,6 +1592,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -1018,7 +1812,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1120,7 +1914,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1212,7 +2006,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1452,7 +2246,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1624,7 +2418,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1843,6 +2637,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -2025,6 +2829,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -2137,7 +2951,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2249,7 +3063,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2341,7 +3155,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2469,7 +3283,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2652,6 +3466,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -2792,7 +3616,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2912,6 +3736,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -2995,7 +3829,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3167,7 +4001,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3322,7 +4156,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3556,6 +4390,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -3715,7 +4559,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3835,6 +4679,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -3918,7 +4772,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4103,7 +4957,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4234,6 +5088,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -4330,6 +5194,16 @@
           },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4453,7 +5327,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4680,6 +5554,16 @@
           },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4949,7 +5833,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5069,6 +5953,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -5152,7 +6046,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5416,7 +6310,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5547,6 +6441,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -5662,7 +6566,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5865,6 +6769,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -5999,7 +6913,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6109,6 +7023,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -6192,7 +7116,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6352,7 +7276,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6465,6 +7389,16 @@
           },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6625,6 +7559,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -6725,7 +7669,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6835,6 +7779,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -6918,7 +7872,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7053,7 +8007,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7166,6 +8120,16 @@
           },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7308,7 +8272,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7399,7 +8363,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7543,7 +8507,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7655,7 +8619,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7804,7 +8768,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7968,6 +8932,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -8088,7 +9062,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8198,6 +9172,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -8281,7 +9265,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8437,7 +9421,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8550,6 +9534,16 @@
           },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8711,6 +9705,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -8828,7 +9832,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8938,6 +9942,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -9021,7 +10035,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9174,7 +10188,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9287,6 +10301,16 @@
           },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9486,6 +10510,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -9639,7 +10673,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9749,6 +10783,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -9832,7 +10876,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10020,7 +11064,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10133,6 +11177,16 @@
           },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10315,6 +11369,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -10443,7 +11507,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10553,6 +11617,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -10636,7 +11710,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10800,7 +11874,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10913,6 +11987,16 @@
           },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11074,6 +12158,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -11191,7 +12285,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11301,6 +12395,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -11384,7 +12488,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11537,7 +12641,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11650,6 +12754,16 @@
           },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11820,6 +12934,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error (code INTERNAL_ERROR)",
             "content": {
@@ -11954,7 +13078,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12064,6 +13188,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -12147,7 +13281,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12312,7 +13446,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12433,6 +13567,16 @@
               }
             }
           },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (code NOT_FOUND)",
             "content": {
@@ -12505,7 +13649,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12597,7 +13741,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12670,6 +13814,16 @@
           },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12787,7 +13941,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12960,7 +14114,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13052,7 +14206,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13189,7 +14343,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13428,7 +14582,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13524,7 +14678,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13581,7 +14735,7 @@
           "Audit log"
         ],
         "summary": "Change history (read-only, paginated, newest first by default)",
-        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, no_scope, session_only, forbidden), method, path, `operationId`, `ipAddress` and `userAgent`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. Passwords, session tokens, CSRF tokens and API token secrets are never recorded.",
+        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, no_scope, session_only, forbidden), method, path, `operationId`, `ipAddress` and `userAgent`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code or setup in `login.success`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. Passwords, session tokens, CSRF tokens, API token secrets, TOTP secrets and authenticator or recovery codes are never recorded.",
         "operationId": "listAuditLog",
         "parameters": [
           {
@@ -13679,7 +14833,12 @@
                 "logout",
                 "session.revoke",
                 "audit.purge",
-                "token.use"
+                "token.use",
+                "mfa.enrol",
+                "mfa.disable",
+                "mfa.failure",
+                "mfa.recovery_code_used",
+                "mfa.recovery_codes"
               ]
             }
           },
@@ -13766,7 +14925,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13926,7 +15085,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14065,7 +15224,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14177,7 +15336,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14269,7 +15428,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14428,7 +15587,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14572,7 +15731,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14730,7 +15889,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14859,6 +16018,10 @@
                     },
                     "description": "Replaces all class grants. Entries granting nothing are dropped; one entry per class.",
                     "maxItems": 1000
+                  },
+                  "requireMfa": {
+                    "type": "boolean",
+                    "description": "Holders must set up two-factor authentication (default false)"
                   }
                 },
                 "additionalProperties": false
@@ -14899,7 +16062,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15011,7 +16174,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15103,7 +16266,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15168,7 +16331,7 @@
           "Permission profiles"
         ],
         "summary": "Update a permission profile (partial; permission lists replace the current ones)",
-        "description": "Requires `profiles.manage`. The built-in Administrator profile cannot be changed (409). Takes effect on the holders' next request.",
+        "description": "Requires `profiles.manage`. The built-in Administrator profile accepts only `requireMfa` (409 for anything else). Takes effect on the holders' next request.",
         "operationId": "updatePermissionProfile",
         "parameters": [
           {
@@ -15260,6 +16423,13 @@
                     },
                     "description": "Replaces all class grants. Entries granting nothing are dropped; one entry per class.",
                     "maxItems": 1000
+                  },
+                  "requireMfa": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ],
+                    "description": "Holders must set up two-factor authentication. The only field the\nbuilt-in Administrator profile accepts."
                   }
                 },
                 "additionalProperties": false
@@ -15300,7 +16470,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15444,7 +16614,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15636,7 +16806,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15752,7 +16922,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15851,7 +17021,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15940,7 +17110,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16019,7 +17189,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16280,7 +17450,7 @@
             }
           },
           "403": {
-            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID)",
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16808,7 +17978,12 @@
               "logout",
               "session.revoke",
               "audit.purge",
-              "token.use"
+              "token.use",
+              "mfa.enrol",
+              "mfa.disable",
+              "mfa.failure",
+              "mfa.recovery_code_used",
+              "mfa.recovery_codes"
             ]
           },
           "entityType": {
@@ -18320,6 +19495,8 @@
                   "SCHEMA_CHANGE_REFUSED",
                   "LAST_ADMINISTRATOR",
                   "RATE_LIMITED",
+                  "MFA_REQUIRED",
+                  "MFA_ENROLMENT_REQUIRED",
                   "UNSUPPORTED_MEDIA_TYPE",
                   "PAYLOAD_TOO_LARGE",
                   "DATABASE_UNAVAILABLE",
@@ -19247,6 +20424,36 @@
         },
         "additionalProperties": false
       },
+      "MfaStatus": {
+        "type": "object",
+        "description": "The user's two-factor state.",
+        "required": [
+          "totpEnabled",
+          "required",
+          "enrolmentRequired",
+          "recoveryCodesRemaining"
+        ],
+        "properties": {
+          "totpEnabled": {
+            "type": "boolean",
+            "description": "An authenticator app is set up: sign-in asks for its code after the password"
+          },
+          "required": {
+            "type": "boolean",
+            "description": "A permission profile the user holds requires MFA"
+          },
+          "enrolmentRequired": {
+            "type": "boolean",
+            "description": "Required but not set up: until it is, the session only reaches sign-out,\n/auth/me and the MFA set-up routes (others answer 403 MFA_ENROLMENT_REQUIRED)"
+          },
+          "recoveryCodesRemaining": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unused recovery codes"
+          }
+        },
+        "additionalProperties": false
+      },
       "Owner": {
         "type": "object",
         "required": [
@@ -19376,6 +20583,7 @@
           "name",
           "description",
           "isBuiltin",
+          "requireMfa",
           "globalPermissions",
           "classPermissions",
           "userCount",
@@ -19398,7 +20606,11 @@
           },
           "isBuiltin": {
             "type": "boolean",
-            "description": "The Administrator profile: every permission, read-only, cannot be deleted"
+            "description": "The Administrator profile: every permission, read-only (except requireMfa), cannot be deleted"
+          },
+          "requireMfa": {
+            "type": "boolean",
+            "description": "Holders must set up two-factor authentication; until they do, their\nsession only reaches the MFA set-up routes"
           },
           "globalPermissions": {
             "type": "array",
@@ -19622,6 +20834,23 @@
                 "type": "null"
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "RecoveryCodes": {
+        "type": "object",
+        "description": "One-time recovery codes. Shown only in this response: only their hashes are kept.",
+        "required": [
+          "codes"
+        ],
+        "properties": {
+          "codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Each signs in once in place of an authenticator code (case, dashes and spaces do not matter)"
           }
         },
         "additionalProperties": false
@@ -20346,6 +21575,7 @@
         "required": [
           "user",
           "permissions",
+          "mfa",
           "csrfToken"
         ],
         "properties": {
@@ -20354,6 +21584,9 @@
           },
           "permissions": {
             "$ref": "#/components/schemas/EffectivePermissions"
+          },
+          "mfa": {
+            "$ref": "#/components/schemas/MfaStatus"
           },
           "csrfToken": {
             "type": "string",
@@ -20827,6 +22060,43 @@
                 "type": "null"
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "TotpEnrolment": {
+        "type": "object",
+        "description": "A new authenticator secret, to be confirmed with a code from the app.",
+        "required": [
+          "secret",
+          "otpauthUri",
+          "algorithm",
+          "digits",
+          "period"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "description": "Base32, for typing into the app by hand"
+          },
+          "otpauthUri": {
+            "type": "string",
+            "description": "`otpauth://totp/...`: show it as a QR code"
+          },
+          "algorithm": {
+            "type": "string",
+            "description": "HMAC algorithm (always SHA1, what every app supports)"
+          },
+          "digits": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "period": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Seconds per code",
+            "minimum": 0
           }
         },
         "additionalProperties": false
@@ -21757,6 +23027,7 @@
           "email",
           "isActive",
           "isAdministrator",
+          "mfaEnabled",
           "profiles",
           "passwordChangedAt",
           "lastLoginAt",
@@ -21788,6 +23059,10 @@
           "isAdministrator": {
             "type": "boolean",
             "description": "Holds the built-in Administrator profile"
+          },
+          "mfaEnabled": {
+            "type": "boolean",
+            "description": "Has set up two-factor authentication (an authenticator app)"
           },
           "profiles": {
             "type": "array",
@@ -21875,6 +23150,10 @@
       "description": "First-run setup, sign-in with a local username and password, sign-out, and the current user's permissions."
     },
     {
+      "name": "Users",
+      "description": "Administration: local user accounts, passwords and the permission profiles they hold."
+    },
+    {
       "name": "Configuration items",
       "description": "CIs: the tracked assets. Includes the relationship graph around a CI."
     },
@@ -21935,10 +23214,6 @@
     {
       "name": "Audit log",
       "description": "Read-only change history written in the same transaction as every change."
-    },
-    {
-      "name": "Users",
-      "description": "Administration: local user accounts, passwords and the permission profiles they hold."
     },
     {
       "name": "Permission profiles",
