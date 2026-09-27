@@ -1,7 +1,7 @@
 //! Ships audit_log rows to a SIEM or log collector (`AUDIT_EXPORT`).
 //!
 //! A background task follows the table by `chain_seq` (commit order, see
-//! migration 0008) and sends each committed row once, as a JSON line or an
+//! migration 0010) and sends each committed row once, as a JSON line or an
 //! RFC 5424 syslog message. Reading the table instead of hooking the insert
 //! calls means every writer is covered and a rolled-back change is never
 //! exported. Each event carries its `rowHash`, so the collector holds an
