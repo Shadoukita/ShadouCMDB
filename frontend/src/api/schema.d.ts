@@ -1915,8 +1915,12 @@ export interface components {
                 [key: string]: {
                     /** Format: uuid */
                     id: string;
-                    name: string;
+                    /** @description Null when `hidden` */
+                    name: string | null;
+                    /** @description Always false when `hidden` */
                     deleted: boolean;
+                    /** @description True when the caller may not view the referenced CI's class; its name and state are withheld */
+                    hidden: boolean;
                 };
             };
         };
