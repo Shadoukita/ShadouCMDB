@@ -1,11 +1,12 @@
 //! `shadoucmdb factory-reset` and `shadoucmdb decommission`.
 //!
-//! Factory reset: every table is dropped and the schema rebuilt by the
-//! migrations, which is exactly a fresh install. No users exist afterwards, so
+//! Factory reset: every area schema (type tables, reporting views) and the
+//! `cmdb` system schema are dropped and the schema rebuilt by the migrations,
+//! which is exactly a fresh install. No users exist afterwards, so
 //! the web UI forces first-run setup (or use `create-admin`).
 //!
-//! Decommission: every ShadouCMDB table, row, setting and the migration history
-//! are dropped and nothing is rebuilt. What is left outside the database
+//! Decommission: every ShadouCMDB schema, table, row, setting and the migration
+//! history are dropped and nothing is rebuilt. What is left outside the database
 //! (the database and role themselves, the env file, backups, logs) is listed
 //! for the operator; see docs/backup-and-reset.md.
 
