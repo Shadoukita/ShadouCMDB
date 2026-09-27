@@ -72,10 +72,10 @@ test("create a permission profile from the matrix", async ({ page, request }) =>
   expect(saved.classPermissions).toHaveLength(2);
 });
 
-test("the built-in Administrator profile is read-only; clone and delete a profile", async ({ page }) => {
+test("the built-in Administrator profile is read-only but for its two-factor requirement; clone and delete a profile", async ({ page }) => {
   await page.goto("/admin/profiles");
   await page.getByRole("link", { name: "Administrator", exact: true }).click();
-  await expect(page.getByRole("note")).toContainText("cannot be changed or deleted");
+  await expect(page.getByRole("note")).toContainText("Only its two-factor requirement can be changed.");
   await expect(page.getByLabel("delete on all classes")).toBeChecked();
   await expect(page.getByLabel("delete on all classes")).toBeDisabled();
   await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);

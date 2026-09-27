@@ -41,11 +41,13 @@ When the UI and API are on different origins, add the UI origin to the backend's
 | `/cis/:id` | Detail: general fields, class attributes (reference attributes are links), relationships (add/remove), relationship map (multi-hop graph), history (audit log with field diffs) |
 | `/cis/:id/edit` | Edit form (sends `version` for optimistic locking and handles `409 VERSION_CONFLICT`) |
 | `/search?q=…` | Global search results, ranked by the API with the field that matched. The header search box has type-ahead; press `/` to focus it. |
-| `/login` | Sign-in. `?redirect=/cis?…` returns there afterwards (only same-app paths are followed). |
+| `/login` | Sign-in. `?redirect=/cis?…` returns there afterwards (only same-app paths are followed). For users with two-factor authentication a second step asks for the authenticator code, or a recovery code. |
+| `/account` | My account (the name in the header): two-factor authentication. Set up an authenticator app (password, then a QR code of `otpauthUri` rendered in the browser plus the setup key, then a code), see the 10 recovery codes once (copy or download as `.txt`), replace them, or turn two-factor off. |
+| `/two-factor-setup` | Forced enrolment: while a profile the user holds requires two-factor authentication they have not set up (`/auth/me` `mfa.enrolmentRequired`), every other route leads here, without the app shell. `?redirect=` returns to the page they asked for afterwards. |
 | `/setup` | First-run setup: creates the first administrator and signs them in. Shown only while `GET /setup` says no user exists. |
 | `/admin` | Administration, with its own sub-navigation. Opens the first section the user may use. |
-| `/admin/users` | Users: search, status and profile filters, sortable columns, paging (all in the URL). `/admin/users/new` creates one; `/admin/users/:id` edits it, assigns profiles, disables/enables it, resets the password or deletes it. |
-| `/admin/profiles` | Permission profiles: list, clone. `/admin/profiles/new` and `/admin/profiles/:id` edit the global permissions and the per-class view/create/edit/delete matrix; delete confirms and names the users who lose the profile. |
+| `/admin/users` | Users: search, status and profile filters, sortable columns, paging (all in the URL). `/admin/users/new` creates one; `/admin/users/:id` edits it, assigns profiles, disables/enables it, resets the password or two-factor authentication, or deletes it. The list and the user page show whether two-factor is on. |
+| `/admin/profiles` | Permission profiles: list, clone. `/admin/profiles/new` and `/admin/profiles/:id` edit the global permissions, the per-class view/create/edit/delete matrix and "Require two-factor authentication" (the only setting the built-in Administrator profile accepts); delete confirms and names the users who lose the profile. |
 | `/admin/classes` | Data model › CI classes: the class tree in menu order. Drag a row (or use ↑/↓) to reorder among its siblings; archive/restore; `?archived=show` lists archived classes. |
 | `/admin/classes/new`, `/admin/classes/:id` | Class editor: name, key (fixed after creation), parent, abstract, icon, colour; archive, delete (refused with the usage counts while anything refers to it). Below it, the **attribute editor**: every attribute defined on the class by form section, with drag-and-drop (or ↑/↓) ordering that also moves an attribute into another section; add/edit type, required, enum values, lookup list, reference class, validation, default value, help text and section; archive/restore/delete. Inherited attributes are listed read-only with a link to the class that defines them. |
 | `/admin/relationships` | Relationship types (reorder, edit labels, archive, delete) and, for the selected type (`?type=…`), its rules: which source and target classes it may connect. |
@@ -81,6 +83,12 @@ administrator (`datamodel.manage`) to Templates or the class editor; everyone el
 - Any `401` to a signed-in request means the session ended (idle or absolute timeout, signed out elsewhere, account
   disabled). The UI goes to `/login?redirect=<current page>`, says the session ended, and returns there after
   sign-in. Signing in or out clears the query cache, so one user never sees another's data.
+- Two-factor authentication: `POST /auth/login` answering `401 MFA_REQUIRED` switches the sign-in page to the
+  code step (`POST /auth/login/mfa`); a challenge that expired or took too many wrong codes returns to the password
+  form with the API's message. When `/auth/me` says `mfa.enrolmentRequired`, or any request answers
+  `403 MFA_ENROLMENT_REQUIRED` (an administrator just made it mandatory), the UI re-reads the session and goes to
+  `/two-factor-setup`. The TOTP secret and recovery codes are held only in the component that shows them, never in
+  the query cache or the URL.
 - The permissions from `/auth/me` hide actions the user cannot use: "+ New CI" and create links per class,
   Edit and Delete on a CI, adding and removing relationships, the History tab (needs `audit.view`), and the
   Administration sections (Users: `users.manage`; Permission profiles: `profiles.manage`, or read-only with
@@ -171,6 +179,10 @@ use it without a frontend change, and check the empty, not-found and API-unreach
 admin specs sign in and out, follow an expired session to sign-in and back, walk first-run setup, build a
 permission profile in the matrix, clone and delete one, create a user holding it, sign in as that user to check
 which actions are hidden, disable/enable the account, reset its password, and read who did it in the audit log.
+`mfa.spec.ts` computes TOTP codes like an authenticator app: it sets one up from My account (QR code, setup key,
+a wrong code, recovery codes with download), signs in with a code and with a recovery code, replaces the codes and
+turns two-factor off; then it requires two-factor on a profile, follows a holder through forced enrolment, and
+resets their two-factor from user management.
 The data model spec builds a lookup list and a class with attributes in the editors (drag and arrow reordering,
 moving between sections, an API error at its field), creates a CI from the generated form, archives the class,
 adds a relationship type and rule, checks the lookup delete guards, and the fresh-install guidance. The
