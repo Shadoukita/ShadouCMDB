@@ -8,6 +8,12 @@ schema checks). The binary ships for **Linux x64**, **Linux ARM64** and
 PostgreSQL is always **external**. Configure it through `DATABASE_URL` or the
 `PG*` variables. Every variable is documented in [`.env.example`](../.env.example).
 
+The connection to PostgreSQL verifies the server certificate and host name by default
+(`DATABASE_SSL=verify-full`). If the certificate comes from a private CA or a managed service
+(Amazon RDS, Azure Database for PostgreSQL), set `DATABASE_SSL_CA_FILE` to that CA bundle. The host
+in `PGHOST` or `DATABASE_URL` must match a name in the certificate. `DATABASE_SSL=require` skips
+the certificate check and logs a warning at startup; use it only while you fix the certificate.
+
 ## Commands
 
 ```

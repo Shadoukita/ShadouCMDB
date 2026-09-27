@@ -6,6 +6,8 @@ import { ApiError } from "../api/client";
 const props = defineProps<{ error: unknown; title?: string; onRetry?: () => void }>();
 
 const apiError = computed(() => (props.error instanceof ApiError ? props.error : null));
+// Retrying a refused request cannot succeed until someone changes the user's profiles.
+const retry = computed(() => (apiError.value?.code === "FORBIDDEN" ? undefined : props.onRetry));
 const heading = computed(() => props.title ?? headingFor(apiError.value));
 const message = computed(() => {
   const e = props.error;
@@ -46,9 +48,9 @@ function headingFor(e: ApiError | null): string {
         <code v-if="d.field && d.field !== '(root)'">{{ d.field }}</code> {{ d.message }}
       </li>
     </ul>
-    <div v-if="apiError?.requestId || onRetry" class="meta">
+    <div v-if="apiError?.requestId || retry" class="meta">
       <template v-if="apiError?.requestId">Request id <code>{{ apiError.requestId }}</code>&#32;</template>
-      <button v-if="onRetry" type="button" class="btn btn-sm" @click="onRetry()">Retry</button>
+      <button v-if="retry" type="button" class="btn btn-sm" @click="retry()">Retry</button>
     </div>
   </div>
 </template>

@@ -80,7 +80,7 @@ controls.
 | T16 | Sensitive data in logs (I) | no secrets or tokens logged; SQL statements only at `trace` | 1 | 2 | 2 low | — |
 | T17 | Data loss / ransomware on the DB (D) | customer's PostgreSQL backups | 2 | 3 | 6 high | Backup guidance (hardening guide); `backup`/`restore` commands (workstream 7) |
 | T18 | Privilege misuse by an administrator (E, R) | permission profiles, audit log of all changes | 2 | 2 | 4 medium | Audit export to a system admins don't control (workstream 3) |
-| T19 | Malicious configuration file imported (`config.export_import`) to escalate privileges or plant markup (E, T) | needs `config.export_import`, plus `datamodel.manage` for data-model/lookup sections and `customization.manage` for UI settings (GH#59); same checks as the admin API; a profile can't grant more than the importer holds; dry run; audited; exports never contain users or passwords | 1 | 3 | 3 medium | Keep import on the admin-API code paths; requirements for CI data import in [feature requirements](feature-requirements.md#import-and-export) |
+| T19 | Malicious configuration file imported (`config.export_import`) to escalate privileges or plant markup (E, T) | needs `config.export_import`, plus `datamodel.manage` for data-model/lookup sections `customization.manage` for UI settings (GH#59) and `profiles.manage` for permission profiles (GH#80); same checks as the admin API; a profile can't grant more than the importer holds; dry run; audited; exports never contain users or passwords | 1 | 3 | 3 medium | Keep import on the admin-API code paths; requirements for CI data import in [feature requirements](feature-requirements.md#import-and-export) |
 
 ## 5. Annex I Part I mapping
 

@@ -36,6 +36,9 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
 ## Pointing the app at an external PostgreSQL
 
+Installing from a release? Follow the step-by-step [operator setup guide](docs/operator-setup.md),
+from an empty directory to a verified install. The steps below are the same flow for a source checkout.
+
 1. **Create the database and its roles** on your PostgreSQL server (run as an admin there):
 
    ```sh
@@ -71,8 +74,8 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
    | `DATABASE_SSL` | Use when |
    | --- | --- |
-   | `verify-full` | Production and managed databases. Add `DATABASE_SSL_CA_FILE` if the CA is not publicly trusted (e.g. the RDS CA bundle). |
-   | `require` (default) | Encrypted, but the server certificate is not verified. |
+   | `verify-full` (default) | Production and managed databases. Add `DATABASE_SSL_CA_FILE` if the CA is not publicly trusted (e.g. the RDS CA bundle). |
+   | `require` | Encrypted, but the server certificate is not verified. Logs a warning at startup unless the host is loopback. |
    | `disable` | Only for a database on a trusted private network without TLS. |
 
    There is no default host. If nothing is configured, the backend exits with an error naming
