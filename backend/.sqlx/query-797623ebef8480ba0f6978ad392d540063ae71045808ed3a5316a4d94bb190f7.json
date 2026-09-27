@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM ci_relationships\n           WHERE source_ci_id = ANY($1) OR target_ci_id = ANY($1)\n           RETURNING id, relationship_type_id, source_ci_id, target_ci_id, notes, created_at, updated_at, deleted_at",
+  "query": "DELETE FROM ci_relationships\n           WHERE id IN (SELECT id FROM ci_relationships\n                        WHERE source_ci_id = ANY($1) OR target_ci_id = ANY($1)\n                        LIMIT $2)\n           RETURNING id, relationship_type_id, source_ci_id, target_ci_id, notes, created_at, updated_at, deleted_at",
   "describe": {
     "columns": [
       {
@@ -94,7 +94,8 @@
     ],
     "parameters": {
       "Left": [
-        "UuidArray"
+        "UuidArray",
+        "Int8"
       ]
     },
     "nullable": [
@@ -108,5 +109,5 @@
       true
     ]
   },
-  "hash": "1149290f9478a65ab7b51b11c6b93e2aeb3aba6b2139089f7605f1a9d96a3342"
+  "hash": "797623ebef8480ba0f6978ad392d540063ae71045808ed3a5316a4d94bb190f7"
 }

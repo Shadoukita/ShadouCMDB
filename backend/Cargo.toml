@@ -10,7 +10,7 @@ build = "build.rs"
 [dependencies]
 anyhow = "1"
 # Password hashing: argon2id with the crate defaults (OWASP: m=19 MiB, t=2, p=1).
-argon2 = { version = "0.5", features = ["std"] }
+argon2 = "0.6"
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "query", "tokio", "tracing"] }
 # Logo and favicon travel base64-encoded in JSON (uploads and config export files).
 base64 = "0.23"
@@ -20,10 +20,11 @@ dotenvy = "0.15"
 # Backup files are gzip-compressed JSON Lines (zlib-rs: pure Rust, already in the tree, no C zlib to link).
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 futures-util = { version = "0.3", default-features = false }
+# Session and CSRF tokens straight from the OS random number generator.
+getrandom = "0.4"
 hex = "0.4"
 ipnetwork = "0.21"
 mime_guess = "2"
-password-hash = { version = "0.5", features = ["getrandom"] }
 regex = "1"
 # Reads the password for `create-admin` without echoing it.
 rpassword = "7"

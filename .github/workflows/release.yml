@@ -220,6 +220,8 @@ jobs:
           cp deploy/linux/README.txt "dist/$PKG/"
           cp deploy/systemd/shadoucmdb.service "dist/$PKG/"
           cp .env.example "dist/$PKG/shadoucmdb.env.example"
+          install -d "dist/$PKG/sql/bootstrap"
+          install -m 0644 sql/bootstrap/*.sql "dist/$PKG/sql/bootstrap/"
           tar -C dist -czf "dist/$PKG.tar.gz" --owner=0 --group=0 "$PKG"
           tar -tvzf "dist/$PKG.tar.gz"
           cp "dist/$PKG/shadoucmdb" dist/docker/linux-${{ matrix.docker_arch }}/
@@ -312,8 +314,10 @@ jobs:
           Copy-Item backend\target\release\shadoucmdb.exe "dist\$env:PKG\"
           Copy-Item deploy\windows\README.txt "dist\$env:PKG\"
           Copy-Item .env.example "dist\$env:PKG\shadoucmdb.env.example"
+          New-Item -ItemType Directory -Force "dist\$env:PKG\sql\bootstrap" | Out-Null
+          Copy-Item sql\bootstrap\*.sql "dist\$env:PKG\sql\bootstrap\"
           Compress-Archive -Path "dist\$env:PKG" -DestinationPath "dist\$env:PKG.zip"
-          Get-ChildItem "dist\$env:PKG" | Format-Table Name, Length
+          Get-ChildItem -Recurse "dist\$env:PKG" | Format-Table FullName, Length
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-windows-x64

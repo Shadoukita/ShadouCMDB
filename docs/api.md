@@ -63,13 +63,14 @@ Every non-2xx response has this shape:
 | 429 | `RATE_LIMITED` | Too many failed sign-ins (for this username, or on the whole server), or too many wrong current passwords on `PUT /auth/password`; wait for `Retry-After` seconds. |
 | 413 / 415 | `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE` | The body is over 1 MiB (16 MiB for a configuration import), or is not JSON. |
 | 503 | `DATABASE_UNAVAILABLE` | PostgreSQL is unreachable. |
+| 503 | `SCHEMA_NOT_MIGRATED` | The database has migrations pending (the message says how many are applied). Run `shadoucmdb migrate`; the server picks the change up without a restart. |
 | 500 | `INTERNAL_ERROR` | A bug. The message is generic and the log carries `requestId`. |
 
 ## Endpoints
 
 | Resource | Endpoints | Notes |
 | --- | --- | --- |
-| Configuration items | `GET/POST /configuration-items`, `GET/PATCH/DELETE /configuration-items/{id}` | Filters: `classId` (includes subclasses unless `includeSubclasses=false`), `statusId`, `environmentId`, `ownerId`, `locationId`, `ipWithin` (CIDR), `deleted=exclude\|include\|only`. Items embed `class`, `status`, `environment`, `owner` and `location`, and carry `attributes` (a key → value map; unset attributes are absent) and `attributeReferences` (`{id, name, deleted}` for reference attributes) in both the list and the detail view, so a list view can show attribute columns. DELETE is a soft delete and also soft-deletes the CI's relationships. |
+| Configuration items | `GET/POST /configuration-items`, `GET/PATCH/DELETE /configuration-items/{id}` | Filters: `classId` (includes subclasses unless `includeSubclasses=false`), `statusId`, `environmentId`, `ownerId`, `locationId`, `ipWithin` (CIDR), `deleted=exclude\|include\|only`. Items embed `class`, `status`, `environment`, `owner` and `location`, and carry `attributes` (a key → value map; unset attributes are absent) and `attributeReferences` (`{id, name, deleted, hidden}` for reference attributes) in both the list and the detail view, so a list view can show attribute columns. A reference into a class the caller may not view comes back with `hidden: true`, `name: null` and `deleted: false`; setting a reference to such a CI fails with the same `not_found` as a missing one. DELETE is a soft delete and also soft-deletes the CI's relationships. |
 | Graph | `GET /configuration-items/{id}/graph?depth=1..6&direction=both\|outgoing\|incoming&relationshipTypeId=&maxNodes=` | Returns `{ nodes[], edges[], truncated }` in one call. `nodes[].depth` is the number of hops from the root. Each edge embeds its type and labels. |
 | Search | `GET /search?q=` | Results are ranked, each with `matches[]` naming the field that hit (`hostname`, `attributes.url`, …). It takes the same filters as the CI list. |
 | Relationships | `GET/POST /relationships`, `GET/PATCH/DELETE /relationships/{id}` | Filters: `ciId` (either end), `sourceCiId`, `targetCiId`, `relationshipTypeId`, `deleted`. Each edge embeds `type`, `source` and `target`. PATCH changes only `notes` or `relationshipTypeId`. DELETE is a soft delete. |
@@ -90,7 +91,7 @@ Every non-2xx response has this shape:
 | Users | `GET/POST /admin/users`, `GET/PATCH/DELETE /admin/users/{id}`, `PUT /admin/users/{id}/password` | Needs `users.manage`. `PATCH` renames, disables (`isActive: false`, which ends the user's sessions) and assigns profiles (`profileIds` replaces the set). `PUT …/password` sets a new password and ends the user's sessions. Filters: `q`, `isActive`, `profileId`. |
 | API tokens | `GET/POST /admin/api-tokens`, `GET/DELETE /admin/api-tokens/{id}` | Needs `users.manage` and a session. `POST {name, profileId, expiresAt, userId?}` answers `201 { token, secret }`; the secret is in that response only. `DELETE` revokes (the token stays listed with `status: revoked`). Filters: `q`, `userId`, `status` (`active`, `expired`, `revoked`). See [API tokens](#api-tokens). |
 | Permission profiles | `GET/POST /admin/profiles`, `GET/PATCH/DELETE /admin/profiles/{id}`, `POST /admin/profiles/{id}/clone` | Writes need `profiles.manage`; reading also works with `users.manage`. A profile is `{ name, description, globalPermissions[], classPermissions[] }`; `PATCH` replaces whichever list it sends. The built-in Administrator profile is read-only (`409`) and listed first. |
-| Health | `GET /healthz`, `GET /readyz` | `/readyz` returns `503` when the database is unreachable or migrations are pending, and reports `migrations: { applied, expected, upToDate }`. |
+| Health | `GET /healthz`, `GET /readyz` | `/readyz` returns `503` when the database is unreachable or migrations are pending, and reports `migrations: { applied, expected, upToDate }`. `database` is `ok`, `unreachable` (no connection), `authentication_failed` (credentials refused), `permission_denied` (connected, but the role may not read the schema) or `error` (see the server log). |
 
 ## Authentication and permissions
 
