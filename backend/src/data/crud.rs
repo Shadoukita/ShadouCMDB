@@ -271,6 +271,10 @@ pub enum AuditAction {
     #[serde(rename = "audit.purge")]
     #[sqlx(rename = "audit.purge")]
     AuditPurge,
+    /// A request made with an API token (entity type `api_tokens`).
+    #[serde(rename = "token.use")]
+    #[sqlx(rename = "token.use")]
+    TokenUse,
 }
 
 impl AuditAction {
@@ -286,6 +290,7 @@ impl AuditAction {
             AuditAction::Logout => "logout",
             AuditAction::SessionRevoke => "session.revoke",
             AuditAction::AuditPurge => "audit.purge",
+            AuditAction::TokenUse => "token.use",
         }
     }
 }
