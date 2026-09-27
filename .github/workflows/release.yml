@@ -90,7 +90,7 @@ jobs:
             publish=false
           fi
           [[ "$version" == *-* ]] && prerelease=true || prerelease=false
-          # Patch releases also come from maintenance branches (release/X.Y,
+          # Patch releases also come from maintenance branches (release/X.Y.x,
           # CONTRIBUTING.md). Only the highest stable version overall moves
           # `latest`, and only the highest within its major moves the bare
           # major image tag, so a 0.1.5 fix after 0.2.0 never takes them over.
