@@ -1,7 +1,9 @@
-//! `shadoucmdb backup`: every table of the application schema, read in one
-//! REPEATABLE READ snapshot, so the file is consistent even while the server
-//! keeps writing. Needs no pg_dump and no superuser: the application role reads
-//! its own tables.
+//! `shadoucmdb backup`: every system table (schema `cmdb`) and the type table
+//! of every area, read in one REPEATABLE READ snapshot, so the file is
+//! consistent even while the server keeps writing. Needs no pg_dump and no
+//! superuser: the application role reads its own tables. The structure of the
+//! type tables is not stored: it follows from the data model (areas, types and
+//! fields) in the system tables, and restore rebuilds it from there.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -13,7 +15,7 @@ use sqlx::Connection;
 use sqlx::postgres::PgConnection;
 
 use super::archive::{self, FORMAT, FORMAT_VERSION, Header, MigrationEntry, SequenceEntry, TableEntry};
-use super::{EXCLUDED_TABLES, app_tables, ident, stored_columns};
+use super::{Table, app_schemas, app_tables, ident, stored_columns};
 use crate::config::DatabaseConfig;
 
 #[derive(Debug, Args)]
@@ -94,12 +96,12 @@ pub async fn write<W: Write>(conn: &mut PgConnection, out: W) -> anyhow::Result<
     let mut tx = conn.begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY").await?;
 
     let exists: bool =
-        sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NOT NULL").fetch_one(&mut *tx).await?;
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL").fetch_one(&mut *tx).await?;
     if !exists {
         bail!("this database has no ShadouCMDB schema (no migrations applied); nothing to back up");
     }
     let migrations: Vec<(i64, String, String)> = sqlx::query_as(
-        "SELECT version, description, encode(checksum, 'hex') FROM _sqlx_migrations WHERE success ORDER BY version",
+        "SELECT version, description, encode(checksum, 'hex') FROM public._sqlx_migrations WHERE success ORDER BY version",
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -108,20 +110,24 @@ pub async fn write<W: Write>(conn: &mut PgConnection, out: W) -> anyhow::Result<
 
     let mut tables = Vec::new();
     let mut excluded = Vec::new();
-    for name in app_tables(&mut tx).await? {
-        if EXCLUDED_TABLES.contains(&name.as_str()) {
-            excluded.push(name);
+    // System tables first: restore needs the data model before it can rebuild the type tables.
+    for table in app_tables(&mut tx).await? {
+        if table.is_excluded() {
+            excluded.push(table.display());
             continue;
         }
-        let columns = stored_columns(&mut tx, &name).await?;
-        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {}", ident(&name))))
+        let columns = stored_columns(&mut tx, &table).await?;
+        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {}", table.sql())))
             .fetch_one(&mut *tx)
             .await?;
-        tables.push(TableEntry { name, columns, rows: rows as u64 });
+        tables.push(TableEntry { schema: table.schema, name: table.name, columns, rows: rows as u64 });
     }
-    let sequences: Vec<(String, Option<i64>)> = sqlx::query_as(
-        "SELECT sequencename::text, last_value FROM pg_sequences WHERE schemaname = current_schema() ORDER BY 1",
+    let schemas = app_schemas(&mut tx).await?;
+    let sequences: Vec<(String, String, Option<i64>)> = sqlx::query_as(
+        "SELECT schemaname::text, sequencename::text, last_value FROM pg_sequences
+         WHERE schemaname = ANY ($1) ORDER BY 1, 2",
     )
+    .bind(&schemas)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -137,7 +143,10 @@ pub async fn write<W: Write>(conn: &mut PgConnection, out: W) -> anyhow::Result<
             .map(|(version, description, checksum)| MigrationEntry { version, description, checksum })
             .collect(),
         tables,
-        sequences: sequences.into_iter().map(|(name, last_value)| SequenceEntry { name, last_value }).collect(),
+        sequences: sequences
+            .into_iter()
+            .map(|(schema, name, last_value)| SequenceEntry { schema, name, last_value })
+            .collect(),
         excluded_tables: excluded,
     };
 
@@ -145,13 +154,14 @@ pub async fn write<W: Write>(conn: &mut PgConnection, out: W) -> anyhow::Result<
     for t in &header.tables {
         w.section(t)?;
         let cols = t.columns.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ");
-        let order = primary_key(&mut tx, &t.name).await?;
+        let table = Table::new(&t.schema, &t.name);
+        let order = primary_key(&mut tx, &table).await?;
         let order = if order.is_empty() {
             String::new()
         } else {
             format!(" ORDER BY {}", order.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", "))
         };
-        let sql = format!("SELECT row_to_json(x)::text FROM (SELECT {cols} FROM {}{order}) x", ident(&t.name));
+        let sql = format!("SELECT row_to_json(x)::text FROM (SELECT {cols} FROM {}{order}) x", table.sql());
         let mut written = 0u64;
         let mut rows = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql)).fetch(&mut *tx);
         while let Some(row) = rows.try_next().await? {
@@ -159,22 +169,23 @@ pub async fn write<W: Write>(conn: &mut PgConnection, out: W) -> anyhow::Result<
             written += 1;
         }
         // Same snapshot, so this cannot differ; checked because the file depends on it.
-        anyhow::ensure!(written == t.rows, "table {} yielded {written} rows, counted {}", t.name, t.rows);
+        anyhow::ensure!(written == t.rows, "table {} yielded {written} rows, counted {}", table.display(), t.rows);
     }
     w.finish()?.flush()?;
     tx.commit().await?;
     Ok(header)
 }
 
-async fn primary_key(conn: &mut PgConnection, table: &str) -> sqlx::Result<Vec<String>> {
+async fn primary_key(conn: &mut PgConnection, table: &Table) -> sqlx::Result<Vec<String>> {
     sqlx::query_scalar(
         "SELECT a.attname::text FROM pg_index i
          CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
          JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
-         WHERE i.indrelid = to_regclass(quote_ident($1)) AND i.indisprimary
+         WHERE i.indrelid = to_regclass(format('%I.%I', $1, $2)) AND i.indisprimary
          ORDER BY k.ord",
     )
-    .bind(table)
+    .bind(&table.schema)
+    .bind(&table.name)
     .fetch_all(conn)
     .await
 }

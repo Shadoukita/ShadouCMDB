@@ -2,8 +2,8 @@
 //! independent of the PostgreSQL version and of pg_dump.
 //!
 //! ```text
-//! {"format":"shadoucmdb-backup","format_version":1,...,"tables":[{"name":"owners","columns":[...],"rows":3},...]}
-//! {"table":"owners","rows":3}          one section line per table, in header order
+//! {"format":"shadoucmdb-backup","format_version":1,...,"tables":[{"schema":"cmdb","name":"owners","columns":[...],"rows":3},...]}
+//! {"table":"cmdb.owners","rows":3}     one section line per table, in header order
 //! {"id":"...","name":"...",...}        exactly `rows` row lines (row_to_json of the table's columns)
 //! ...
 //! {"end":{"rows":1234,"sha256":"..."}} SHA-256 of every uncompressed byte above this line
@@ -42,7 +42,7 @@ pub struct Header {
     pub migrations: Vec<MigrationEntry>,
     pub tables: Vec<TableEntry>,
     pub sequences: Vec<SequenceEntry>,
-    /// Tables deliberately left out (their rows are not worth restoring, e.g. sessions).
+    /// Tables deliberately left out (their rows are not worth restoring, e.g. cmdb.sessions).
     pub excluded_tables: Vec<String>,
 }
 
@@ -56,6 +56,8 @@ pub struct MigrationEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TableEntry {
+    /// `cmdb` (system tables; `public` before migration 0008) or an area.
+    pub schema: String,
     pub name: String,
     /// Stored columns in table order (generated columns are recomputed on restore).
     pub columns: Vec<String>,
@@ -64,9 +66,17 @@ pub struct TableEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SequenceEntry {
+    pub schema: String,
     pub name: String,
     /// `None`: the sequence was never used.
     pub last_value: Option<i64>,
+}
+
+impl TableEntry {
+    /// `schema.name`, as on the section line.
+    pub fn qualified(&self) -> String {
+        format!("{}.{}", self.schema, self.name)
+    }
 }
 
 impl Header {
@@ -118,7 +128,7 @@ impl<W: Write> Writer<W> {
     }
 
     pub fn section(&mut self, table: &TableEntry) -> anyhow::Result<()> {
-        let s = serde_json::to_string(&Section { table: table.name.clone(), rows: table.rows })?;
+        let s = serde_json::to_string(&Section { table: table.qualified(), rows: table.rows })?;
         Ok(self.line(&s)?)
     }
 
@@ -228,13 +238,13 @@ impl<R: Read> Reader<R> {
         let line = self.read_line(true)?;
         let s: Section = serde_json::from_str(&line)
             .with_context(|| format!("backup is damaged: line {} is not a table section", self.line_no))?;
-        if s.table != table.name || s.rows != table.rows {
+        if s.table != table.qualified() || s.rows != table.rows {
             bail!(
                 "backup is damaged: line {} starts table \"{}\" ({} rows), the header expects \"{}\" ({} rows)",
                 self.line_no,
                 s.table,
                 s.rows,
-                table.name,
+                table.qualified(),
                 table.rows
             );
         }
@@ -309,11 +319,11 @@ mod tests {
             database: "db".into(),
             migrations: vec![MigrationEntry { version: 1, description: "one".into(), checksum: "00".into() }],
             tables: vec![
-                TableEntry { name: "a".into(), columns: vec!["id".into()], rows: 2 },
-                TableEntry { name: "b".into(), columns: vec!["table".into()], rows: 1 },
+                TableEntry { schema: "cmdb".into(), name: "a".into(), columns: vec!["id".into()], rows: 2 },
+                TableEntry { schema: "cmdb".into(), name: "b".into(), columns: vec!["table".into()], rows: 1 },
             ],
             sequences: vec![],
-            excluded_tables: vec!["sessions".into()],
+            excluded_tables: vec!["cmdb.sessions".into()],
         }
     }
 
@@ -325,7 +335,7 @@ mod tests {
         w.row("{\"id\":\n2}").unwrap();
         w.section(&h.tables[1]).unwrap();
         // A row whose only column is called "table" is still a row.
-        w.row(r#"{"table":"a","rows":2}"#).unwrap();
+        w.row(r#"{"table":"cmdb.a","rows":2}"#).unwrap();
         w.finish().unwrap()
     }
 
