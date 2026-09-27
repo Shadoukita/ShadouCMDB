@@ -25,7 +25,30 @@
    PRs that touch the pipeline, **Release** as a dry run. Squash-merge, then delete the branch.
    What each check does and how to fix a failure: [docs/supply-chain.md](docs/supply-chain.md).
 
-Never push directly to `main`, force-push a shared branch, or rewrite merged history.
+Never push directly to `main` or a `release/*` branch, force-push a shared branch, or rewrite merged
+history.
+
+## Branches
+
+| Branch | Purpose |
+| --- | --- |
+| `main` | Always the newest code. All features and fixes land here first. |
+| `release/X.Y.x` | Permanent maintenance branch for one minor version, e.g. `release/0.1.x` holds `0.1.0`, `0.1.1`, … for as long as 0.1 is supported. Never deleted or renamed; each shipped version is a tag (`v0.1.1`), not a branch. |
+| `shaa-<n>-<slug>` | Short-lived work branches, deleted after merge. |
+
+- **Cutting a release branch.** When a minor version is feature-complete, branch `release/X.Y.x` from
+  `main`. From then on `main` is the next minor version and its `backend/Cargo.toml` version is
+  bumped to it (e.g. `0.2.0-dev`) once `X.Y.0` is tagged. `release/0.1.x` was cut from `main` at
+  `ce37bd2`.
+- **What goes on a release branch.** Only bug fixes, security fixes, dependency security updates
+  and release/version bumps. No features, no schema changes without a migration, no breaking API
+  changes.
+- **Backports.** Fix on `main` first, then cherry-pick the squash commit onto a branch from
+  `release/X.Y.x` (`shaa-<n>-backport-X.Y`, `git cherry-pick -x <sha>`) and open a PR against
+  `release/X.Y.x`. A fix that only applies to an old line (the code is gone on `main`) goes straight to
+  the release branch and says so in the PR. The same CI checks run on release-branch PRs and pushes.
+- Dependabot only opens PRs against `main`; security updates for a supported line are backported by
+  hand.
 
 ## Rules
 
@@ -67,13 +90,17 @@ SHADOUCMDB_TEST_DATABASE_URL=postgres://user:password@host:5432/postgres cargo t
 Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml) when a tag
 `v<version>` is pushed. Nobody builds release binaries by hand.
 
-1. **Bump the version** in `backend/Cargo.toml` (`version = "1.2.0"`, or `"1.2.0-rc.1"` for a
+Every version is released from its maintenance branch: `X.Y.0` and all `X.Y.Z` patches are tagged on
+`release/X.Y.x`, never on `main`. The steps below use `1.2.0`; for a patch, replace the branch and the
+version accordingly.
+
+1. **Bump the version** on `release/X.Y.x` in `backend/Cargo.toml` (`version = "1.2.0"`, or `"1.2.0-rc.1"` for a
    pre-release) and refresh the lockfile with `cargo update -p shadoucmdb --offline`. Open a PR
-   (`shaa-<n>-release-1.2.0`) and squash-merge it once CI is green.
-2. **Tag the merge commit on `main`** and push the tag:
+   (`shaa-<n>-release-1.2.0`) against `release/1.2.x` and squash-merge it once CI is green.
+2. **Tag the merge commit on `release/1.2.x`** and push the tag:
 
    ```sh
-   git switch main && git pull --ff-only
+   git switch release/1.2.x && git pull --ff-only
    git tag -a v1.2.0 -m "ShadouCMDB 1.2.0"
    git push origin v1.2.0
    ```
@@ -106,6 +133,8 @@ Releases are built by [`.github/workflows/release.yml`](.github/workflows/releas
    [docs/supply-chain.md](docs/supply-chain.md#verifying-a-download) pass for one archive and the image.
 
 Image tags: `1.2.0` gets `1.2.0`, `1.2`, `1` and `latest` (`0.x` versions get no bare major tag). A
+patch on an older line (e.g. `1.1.4` after `1.2.0`) gets `1.1.4` and `1.1` only: `latest`, the bare
+major tag and the GitHub "Latest release" badge move only for the highest stable version. A
 pre-release such as `1.2.0-rc.1` gets only `1.2.0-rc.1`, is marked as a pre-release on GitHub and
 never moves `latest`.
 
