@@ -1395,6 +1395,35 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
     Ok(())
 }
 
+/// `config.export_import` lets a file in, not past the permission each section
+/// needs on its own admin API: the data model and lookups (which run DDL) need
+/// `datamodel.manage`, UI settings need `customization.manage`. Checked for dry
+/// runs too, before anything touches the database. Profiles are bounded per
+/// profile by what the importing user holds.
+fn check_sections(ctx: &RequestContext, file: &ConfigFile) -> Result<(), AppError> {
+    let data_model = file.data_model.as_ref().is_some_and(|d| {
+        !(d.areas.is_empty()
+            && d.classes.is_empty()
+            && d.attributes.is_empty()
+            && d.relationship_types.is_empty()
+            && d.relationship_rules.is_empty())
+    });
+    let lookups = file.lookups.as_ref().is_some_and(|l| {
+        !(l.statuses.is_empty()
+            && l.environments.is_empty()
+            && l.locations.is_empty()
+            && l.owners.is_empty()
+            && l.lists.is_empty())
+    });
+    if data_model || lookups {
+        ctx.require(GlobalPermission::DatamodelManage)?;
+    }
+    if file.ui_settings.is_some() {
+        ctx.require(GlobalPermission::CustomizationManage)?;
+    }
+    Ok(())
+}
+
 pub async fn import(
     pool: &PgPool,
     ctx: &RequestContext,
@@ -1402,6 +1431,7 @@ pub async fn import(
     mode: ImportMode,
 ) -> Result<ImportResult, AppError> {
     check_format(file)?;
+    check_sections(ctx, file)?;
     let mut tx = pool.begin().await?;
     let (result, schema_changes) = engine::collect_previews(run(&mut tx, ctx, file, mode)).await;
     let mut result = result?;
@@ -1453,7 +1483,9 @@ pub fn routes() -> Vec<Route> {
                  and the logo and favicon. All sections are optional. Problems in the file are reported together as \
                  400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making \
                  an attribute required while CIs lack a value) fails with the same error the admin API gives, with \
-                 the file path prefixed. Profiles cannot grant more than the importing user holds (403). Every \
+                 the file path prefixed. A non-empty `dataModel` or `lookups` section also requires \
+                 `datamodel.manage`, and a `uiSettings` section `customization.manage` (403 otherwise, dry run \
+                 included). Profiles cannot grant more than the importing user holds (403). Every \
                  applied change is audited.",
             )
             .requires(GlobalPermission::ConfigExportImport)
@@ -1470,7 +1502,80 @@ pub fn routes() -> Vec<Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::Principal;
+    use crate::auth::permissions::Permissions;
     use crate::db::scratch;
+
+    async fn user_ctx(pool: &PgPool, username: &str, global: &[GlobalPermission]) -> RequestContext {
+        let user_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO users (username, display_name, password_hash) VALUES ($1, $1, '$argon2id$v=19$test')
+             RETURNING id",
+        )
+        .bind(username)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let permissions = Permissions { global: global.iter().copied().collect(), ..Default::default() };
+        let principal = Principal {
+            user_id,
+            username: username.into(),
+            session_id: Uuid::new_v4(),
+            csrf_token: String::new(),
+            permissions,
+        };
+        RequestContext::user(std::sync::Arc::new(principal), "test".into())
+    }
+
+    async fn schema_change_count(pool: &PgPool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM cmdb.schema_changes").fetch_one(pool).await.unwrap()
+    }
+
+    /// GH#59: `config.export_import` alone must not run data-model DDL (or touch
+    /// lookups or UI settings) through the import.
+    #[tokio::test]
+    async fn import_sections_need_their_own_permission() {
+        let Some(src) = scratch::database("import_sections_src").await else { return };
+        let Some(dst) = scratch::database("import_sections_dst").await else { return };
+        crate::seed::install_template(&src.pool, "it_infrastructure").await.unwrap();
+        let file = export(&src.pool).await.unwrap();
+        assert!(!file.data_model.as_ref().unwrap().classes.is_empty());
+
+        let before = schema_change_count(&dst.pool).await;
+        let only_import = user_ctx(&dst.pool, "importer", &[GlobalPermission::ConfigExportImport]).await;
+        for mode in [ImportMode::DryRun, ImportMode::Apply] {
+            let err = import(&dst.pool, &only_import, &file, mode).await.unwrap_err();
+            assert_eq!(err.code, ErrorCode::Forbidden, "{mode:?}: {err}");
+            assert!(err.message.contains("datamodel.manage"), "{err}");
+        }
+        let lookups_only = ConfigFile { data_model: None, ui_settings: None, ..file.clone() };
+        let err = import(&dst.pool, &only_import, &lookups_only, ImportMode::Apply).await.unwrap_err();
+        assert!(err.message.contains("datamodel.manage"), "{err}");
+        let ui_only = ConfigFile { data_model: None, lookups: None, ..file.clone() };
+        let err = import(&dst.pool, &only_import, &ui_only, ImportMode::Apply).await.unwrap_err();
+        assert!(err.message.contains("customization.manage"), "{err}");
+        assert_eq!(schema_change_count(&dst.pool).await, before);
+
+        // Profiles alone stay open to the permission (bounded by what the user holds).
+        let profiles_only = ConfigFile { data_model: None, lookups: None, ui_settings: None, ..file.clone() };
+        import(&dst.pool, &only_import, &profiles_only, ImportMode::DryRun).await.unwrap();
+
+        let full = user_ctx(
+            &dst.pool,
+            "configurator",
+            &[
+                GlobalPermission::ConfigExportImport,
+                GlobalPermission::DatamodelManage,
+                GlobalPermission::CustomizationManage,
+            ],
+        )
+        .await;
+        let res = import(&dst.pool, &full, &file, ImportMode::Apply).await.unwrap();
+        assert!(res.applied);
+        assert!(schema_change_count(&dst.pool).await > before);
+
+        src.drop().await;
+        dst.drop().await;
+    }
 
     #[test]
     fn parents_come_first_and_cycles_are_left_over() {
