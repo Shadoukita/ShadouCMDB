@@ -17,7 +17,6 @@
 use std::net::{IpAddr, SocketAddr};
 
 use axum::http::{HeaderMap, HeaderValue, header};
-use password_hash::rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 
 use crate::config::{AuthConfig, CookieSecure};
@@ -31,7 +30,7 @@ const MFA_COOKIE_PATH: &str = "/api/v1/auth";
 /// 256 random bits, hex-encoded.
 pub fn new_token() -> String {
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
+    getrandom::fill(&mut bytes).expect("OS random number generator");
     hex::encode(bytes)
 }
 

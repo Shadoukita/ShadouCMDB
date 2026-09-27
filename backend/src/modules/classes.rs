@@ -497,18 +497,26 @@ pub async fn purge_class_in(
             .collect();
         crud::write_audit(conn, ctx, entries).await?;
     }
-    let edges = items_data::delete_edges_of(conn, &items).await?;
-    let entries = edges
-        .iter()
-        .map(|e| AuditEntry {
-            action: AuditAction::Delete,
-            entity_type: "ci_relationships",
-            entity_id: e.id,
-            old_value: Some(crud::json(e)),
-            new_value: None,
-        })
-        .collect();
-    crud::write_audit(conn, ctx, entries).await?;
+    let mut edge_count = 0;
+    loop {
+        let edges = items_data::delete_edges_of(conn, &items, crud::AUDIT_BATCH as i64).await?;
+        edge_count += edges.len();
+        let done = edges.len() < crud::AUDIT_BATCH;
+        let entries = edges
+            .iter()
+            .map(|e| AuditEntry {
+                action: AuditAction::Delete,
+                entity_type: "ci_relationships",
+                entity_id: e.id,
+                old_value: Some(crud::json(e)),
+                new_value: None,
+            })
+            .collect();
+        crud::write_audit(conn, ctx, entries).await?;
+        if done {
+            break;
+        }
+    }
     // Type rows first, so that references between these CIs are gone before
     // their registry rows are deleted (the foreign keys check at statement end).
     for c in model.lineage(id) {
@@ -537,7 +545,7 @@ pub async fn purge_class_in(
         .await?;
     sqlx::query("DELETE FROM cmdb.ci_attribute_definitions WHERE class_id = $1").bind(id).execute(&mut *conn).await?;
     crud::delete_row(conn, CiClasses::TABLE, id).await?;
-    let summary = format!("Purge type {} ({} CIs, {} relationships deleted)", row.table_name, items.len(), edges.len());
+    let summary = format!("Purge type {} ({} CIs, {} relationships deleted)", row.table_name, items.len(), edge_count);
     let purge = Purge { tables: vec![table], ..Purge::default() };
     let parent_scope = row.parent_id.map(|p| vec![p]).unwrap_or_default();
     let change = engine::apply(conn, ctx, &summary, Scope::Classes(parent_scope), purge).await?;
@@ -1732,46 +1740,55 @@ mod tests {
         .unwrap();
 
         let mut cis = Vec::new();
-        for (name, rack) in [("box-a", "R1"), ("box-b", "R2")] {
+        for (name, rack) in [("box-a", "R1"), ("box-b", "R2"), ("box-c", "R3")] {
             let item = body::<CreateItemBody>(json!({
                 "classId": class.id, "name": name, "statusId": status, "attributes": {field.key.clone(): rack}
             }));
             cis.push(items_service::create(pool, &ctx, &item).await.unwrap().summary.id);
         }
-        let edge = relationships::create(
-            pool,
-            &ctx,
-            &body::<RelationshipCreate>(
-                json!({"relationshipTypeId": rel_type, "sourceCiId": cis[0], "targetCiId": cis[1]}),
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
+        let mut edges = Vec::new();
+        for (source, target) in [(0, 1), (1, 0), (0, 2)] {
+            let input = json!({"relationshipTypeId": rel_type, "sourceCiId": cis[source], "targetCiId": cis[target]});
+            edges.push(relationships::create(pool, &ctx, &body::<RelationshipCreate>(input)).await.unwrap().id);
+        }
+        // A soft-deleted edge between live CIs, and a soft-deleted CI (which
+        // soft-deletes its edge to box-a): the purge must audit them too.
+        relationships::remove(pool, &ctx, edges[1]).await.unwrap();
+        items_service::remove(pool, &ctx, cis[2]).await.unwrap();
 
         simple::update::<CiClasses>(pool, &ctx, class.id, &body(json!({"isActive": false}))).await.unwrap();
+        let purge_ctx = RequestContext::system("purge-test", "purge");
         let mut tx = pool.begin().await.unwrap();
-        purge_class_in(&mut tx, &ctx, class.id, &class.key).await.unwrap();
+        purge_class_in(&mut tx, &purge_ctx, class.id, &class.key).await.unwrap();
         tx.commit().await.unwrap();
 
         let rows: Vec<(String, Uuid, Value)> = sqlx::query_as(
             "SELECT entity_type, entity_id, old_value FROM audit_log
-             WHERE action = 'delete' AND entity_type IN ('configuration_items', 'ci_relationships')
-             ORDER BY entity_type, old_value->>'name'",
+             WHERE action = 'delete' AND request_id = 'purge'
+               AND entity_type IN ('configuration_items', 'ci_relationships')",
         )
         .fetch_all(pool)
         .await
         .unwrap();
-        assert_eq!(rows.len(), 3, "{rows:?}");
-        let (kind, id, old) = &rows[0];
-        assert_eq!((kind.as_str(), *id), ("ci_relationships", edge));
-        assert_eq!(old["sourceCiId"], json!(cis[0]));
-        assert_eq!(old["targetCiId"], json!(cis[1]));
-        for (row, (ci, rack)) in rows[1..].iter().zip([(cis[0], "R1"), (cis[1], "R2")]) {
-            let (kind, id, old) = row;
-            assert_eq!((kind.as_str(), *id), ("configuration_items", ci));
+        assert_eq!(rows.len(), 6, "{rows:?}");
+        let entry = |kind: &str, id: Uuid| {
+            let found = rows.iter().filter(|(k, i, _)| k == kind && *i == id).collect::<Vec<_>>();
+            assert_eq!(found.len(), 1, "one {kind} delete entry for {id}: {rows:?}");
+            found[0].2.clone()
+        };
+        for (edge, (source, target), soft_deleted) in
+            [(edges[0], (0, 1), false), (edges[1], (1, 0), true), (edges[2], (0, 2), true)]
+        {
+            let old = entry("ci_relationships", edge);
+            assert_eq!(old["sourceCiId"], json!(cis[source]));
+            assert_eq!(old["targetCiId"], json!(cis[target]));
+            assert_eq!(!old["deletedAt"].is_null(), soft_deleted, "{old}");
+        }
+        for (ci, rack, soft_deleted) in [(cis[0], "R1", false), (cis[1], "R2", false), (cis[2], "R3", true)] {
+            let old = entry("configuration_items", ci);
             assert_eq!(old["attributes"][&field.key], json!(rack), "{old}");
             assert_eq!(old["classId"], json!(class.id));
+            assert_eq!(!old["deletedAt"].is_null(), soft_deleted, "{old}");
         }
         let class_entries: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM audit_log WHERE action = 'delete' AND entity_type = 'ci_classes' AND entity_id = $1",
