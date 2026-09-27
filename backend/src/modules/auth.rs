@@ -1,5 +1,6 @@
-//! Sign-in: first-run setup, login, logout, the current user and their
-//! effective permissions, and changing one's own password.
+//! Sign-in: first-run setup, login (with the second factor when MFA is set
+//! up), logout, the current user and their effective permissions, and
+//! changing one's own password.
 
 use std::time::Duration;
 
@@ -10,16 +11,21 @@ use utoipa::ToSchema;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use uuid::Uuid;
 
+use super::mfa::{self, MfaStatus};
 use super::profiles::ClassPermission;
 use super::users::{self, User, UserCreate, password_problem, password_schema, username_schema};
 use crate::api::context::{RequestContext, unauthenticated};
-use crate::api::route::{Body, Check, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, WithCookies, route};
+use crate::api::route::{
+    Body, Check, Either, ErrorWithCookies, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, WithCookies, route,
+};
 use crate::api::schemas::{name_schema, trimmed};
 use crate::auth::events::{self, LoginMethod, RevokeReason};
 use crate::auth::permissions::{ClassRights, GlobalPermission, Permissions};
 use crate::auth::throttle::{GLOBAL_PENALTY, Gate, LoginThrottle, SLOW_LANE_WAITERS};
 use crate::auth::{AuthState, Principal, password, session};
 use crate::data::auth as data;
+use crate::data::crud::AuditAction;
+use crate::data::mfa as mfa_data;
 use crate::http::error::{AppError, ErrorCode, FieldError};
 use crate::modules::lookups::email_schema;
 
@@ -55,7 +61,7 @@ impl Check for SetupBody {
     }
 }
 
-fn login_field_schema() -> Schema {
+pub(crate) fn login_field_schema() -> Schema {
     ObjectBuilder::new().schema_type(Type::String).min_length(Some(1)).max_length(Some(password::MAX_LENGTH)).into()
 }
 
@@ -69,6 +75,14 @@ pub struct LoginBody {
     password: String,
 }
 impl Check for LoginBody {}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MfaLoginBody {
+    #[schema(schema_with = mfa::code_schema)]
+    code: String,
+}
+impl Check for MfaLoginBody {}
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -124,6 +138,7 @@ impl From<&Permissions> for EffectivePermissions {
 pub struct Session {
     pub user: User,
     pub permissions: EffectivePermissions,
+    pub mfa: MfaStatus,
     /// Send as the X-CSRF-Token header on every POST, PUT, PATCH and DELETE
     /// (also readable from the shadoucmdb_csrf cookie)
     pub csrf_token: String,
@@ -137,7 +152,8 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, csrf_token: String) -> Result
     let mut conn = pool.acquire().await?;
     let user = users::load(&mut conn, user_id).await?;
     let permissions = data::load_permissions(&mut conn, user_id).await?;
-    Ok(Session { user, permissions: EffectivePermissions::from(&permissions), csrf_token })
+    let mfa = mfa::status(&mut conn, user_id).await?;
+    Ok(Session { user, permissions: EffectivePermissions::from(&permissions), mfa, csrf_token })
 }
 
 /// Opens a session for the user and records `login.success`; returns the session and its cookies.
@@ -267,13 +283,20 @@ async fn record_failure(
     Ok(())
 }
 
+/// How long the second factor may take after the password.
+const MFA_CHALLENGE_TTL: Duration = Duration::from_secs(5 * 60);
+/// Wrong codes per challenge before the password is asked for again.
+const MFA_CHALLENGE_ATTEMPTS: i32 = 5;
+
+type LoginAnswer = Either<WithCookies<Json<Session>>, ErrorWithCookies>;
+
 async fn login(
     pool: &PgPool,
     auth: &AuthState,
     headers: &HeaderMap,
     ctx: &RequestContext,
     b: LoginBody,
-) -> Result<WithCookies<Json<Session>>, AppError> {
+) -> Result<LoginAnswer, AppError> {
     throttle_gate(&auth.throttle, &b.username, "sign-ins for this username").await?;
     let row = data::find_for_login(pool, &b.username).await?;
     if !password::verify(&b.password, row.as_ref().map(|r| r.password_hash.as_str())).await? {
@@ -292,11 +315,82 @@ async fn login(
         record_failure(pool, ctx, &b.username, locked).await?;
         return Err(AppError::new(ErrorCode::Unauthenticated, "This account is disabled"));
     }
+    if mfa_data::get_totp(&mut *pool.acquire().await?, user.id, false).await?.is_some_and(|t| t.confirmed) {
+        // The username's failure count is left alone: were a right password
+        // to clear it, each one would buy a fresh set of guesses at the code.
+        mfa_data::purge_challenges(pool).await?;
+        let token = session::new_token();
+        mfa_data::create_challenge(
+            &mut *pool.acquire().await?,
+            user.id,
+            &session::token_hash(&token),
+            MFA_CHALLENGE_TTL,
+        )
+        .await?;
+        tracing::info!(user = %user.username, ip = ?ctx.client.ip, "password accepted, second factor due");
+        let err = AppError::new(
+            ErrorCode::MfaRequired,
+            "Enter the code from your authenticator app, or a recovery code (POST /api/v1/auth/login/mfa)",
+        );
+        let cookie = session::mfa_cookie(auth.session_cookie_secure(headers), &token, MFA_CHALLENGE_TTL);
+        return Ok(Either::Right(ErrorWithCookies(err, vec![cookie])));
+    }
     auth.throttle.success(&b.username);
     let purged = data::purge_sessions(pool, auth.config.session_idle).await?;
     data::record_login(pool, user.id).await?;
     tracing::info!(user = %user.username, ip = ?ctx.client.ip, purged_sessions = purged, "signed in");
-    start_session(pool, auth, headers, ctx, user.id, &user.username, LoginMethod::Password).await
+    Ok(Either::Left(start_session(pool, auth, headers, ctx, user.id, &user.username, LoginMethod::Password).await?))
+}
+
+fn sign_in_expired() -> AppError {
+    AppError::new(ErrorCode::Unauthenticated, "The sign-in has expired; enter your username and password again")
+}
+
+/// The second step of a sign-in: the code for the challenge in the MFA cookie.
+/// Throttled with the password, per username: a wrong code is a failed sign-in.
+async fn login_mfa(
+    pool: &PgPool,
+    auth: &AuthState,
+    headers: &HeaderMap,
+    ctx: &RequestContext,
+    b: MfaLoginBody,
+) -> Result<WithCookies<Json<Session>>, AppError> {
+    let Some(token) = session::cookie(headers, session::MFA_COOKIE) else { return Err(sign_in_expired()) };
+    let hash = session::token_hash(token);
+    // Wait for the username's turn before locking anything.
+    let Some(pending) = mfa_data::take_challenge(&mut *pool.acquire().await?, &hash).await? else {
+        return Err(sign_in_expired());
+    };
+    throttle_gate(&auth.throttle, &pending.username, "sign-ins for this username").await?;
+
+    let mut tx = pool.begin().await?;
+    let Some(challenge) = mfa_data::take_challenge(&mut tx, &hash).await? else { return Err(sign_in_expired()) };
+    let (user_id, username) = (challenge.user_id, challenge.username.as_str());
+    let as_user = ctx.acting_as_user(user_id, username);
+    let Some(method) = mfa::verify_second_factor(&mut tx, user_id, &b.code).await? else {
+        mfa_data::challenge_failed(&mut tx, challenge.id, MFA_CHALLENGE_ATTEMPTS).await?;
+        let locked = auth.throttle.failure(username);
+        tracing::warn!(user = %username, ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in: wrong second factor");
+        let extra = serde_json::json!({ "stage": "login" });
+        events::mfa(&mut tx, ctx, AuditAction::MfaFailure, user_id, username, extra).await?;
+        if let Some(lock) = locked {
+            events::login_locked(&mut tx, ctx, Uuid::new_v4(), username, lock).await?;
+        }
+        tx.commit().await?;
+        return Err(AppError::new(ErrorCode::Unauthenticated, "The code is wrong or was already used"));
+    };
+    mfa_data::delete_challenge(&mut tx, challenge.id).await?;
+    if matches!(method, LoginMethod::RecoveryCode) {
+        mfa::audit_recovery_code_used(&mut tx, &as_user, user_id, username, "login").await?;
+    }
+    tx.commit().await?;
+    auth.throttle.success(username);
+    let purged = data::purge_sessions(pool, auth.config.session_idle).await?;
+    data::record_login(pool, user_id).await?;
+    tracing::info!(user = %username, ip = ?ctx.client.ip, purged_sessions = purged, "signed in with a second factor");
+    let WithCookies(session, mut cookies) = start_session(pool, auth, headers, ctx, user_id, username, method).await?;
+    cookies.push(session::clear_mfa_cookie(session::secure_cookies(&auth.config, headers)));
+    Ok(WithCookies(session, cookies))
 }
 
 async fn logout(pool: &PgPool, ctx: &RequestContext) -> Result<(), AppError> {
@@ -313,8 +407,27 @@ fn principal(ctx: &RequestContext) -> Result<&Principal, AppError> {
     ctx.principal().ok_or_else(unauthenticated)
 }
 
-/// Throttled per user like login, so a stolen session cannot be turned into a
-/// known password by guessing the current one.
+/// Checks the signed-in user's password before a sensitive change. Throttled
+/// per user like login, so a stolen session cannot be turned into a known
+/// password by guessing the current one.
+pub(crate) async fn check_current_password(
+    pool: &PgPool,
+    auth: &AuthState,
+    me: &Principal,
+    current_password: &str,
+) -> Result<(), AppError> {
+    let key = me.user_id.to_string();
+    throttle_gate(&auth.password_throttle, &key, "attempts at your current password").await?;
+    let hash = data::password_hash(&mut *pool.acquire().await?, me.user_id).await?;
+    if !password::verify(current_password, hash.as_deref()).await? {
+        let locked = auth.password_throttle.failure(&key);
+        tracing::warn!(user = %me.username, locked_secs = locked.map(|d| d.as_secs()), "wrong current password");
+        return Err(AppError::field("currentPassword", "The current password is wrong", "invalid_credentials"));
+    }
+    auth.password_throttle.success(&key);
+    Ok(())
+}
+
 async fn change_password(
     pool: &PgPool,
     auth: &AuthState,
@@ -322,15 +435,7 @@ async fn change_password(
     b: PasswordChange,
 ) -> Result<(), AppError> {
     let me = principal(ctx)?;
-    let key = me.user_id.to_string();
-    throttle_gate(&auth.password_throttle, &key, "attempts at your current password").await?;
-    let hash = data::password_hash(&mut *pool.acquire().await?, me.user_id).await?;
-    if !password::verify(&b.current_password, hash.as_deref()).await? {
-        let locked = auth.password_throttle.failure(&key);
-        tracing::warn!(user = %me.username, locked_secs = locked.map(|d| d.as_secs()), "password change: wrong current password");
-        return Err(AppError::field("currentPassword", "The current password is wrong", "invalid_credentials"));
-    }
-    auth.password_throttle.success(&key);
+    check_current_password(pool, auth, me, &b.current_password).await?;
     users::set_password(pool, ctx, me.user_id, &b.new_password).await?;
     Ok(())
 }
@@ -366,17 +471,29 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Sign in with username and password")
             .description(
-                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429.",
+                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429.",
+            )
+            .public()
+            .errors(&[ErrorCode::MfaRequired, ErrorCode::RateLimited])
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<LoginBody>>| async move {
+                login(&api.pool, &api.auth, &api.headers, &api.ctx, b).await
+            }),
+        route(Method::POST, "/api/v1/auth/login/mfa", "loginSecondFactor")
+            .tag(TAG)
+            .summary("Finish signing in with an authenticator code or a recovery code")
+            .description(
+                "After POST /api/v1/auth/login answered MFA_REQUIRED: reads the `shadoucmdb_mfa` cookie it set and, for a right code, sets the session cookies like login. Each authenticator code works once; each recovery code works once and is then used up. 401 for a wrong code; after 5 wrong codes, or 5 minutes, the password is asked for again (401). Wrong codes count as failed sign-ins for the username: the same lock applies as for wrong passwords (429 RATE_LIMITED with Retry-After).",
             )
             .public()
             .errors(&[ErrorCode::Unauthenticated, ErrorCode::RateLimited])
-            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<LoginBody>>| async move {
-                login(&api.pool, &api.auth, &api.headers, &api.ctx, b).await
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<MfaLoginBody>>| async move {
+                login_mfa(&api.pool, &api.auth, &api.headers, &api.ctx, b).await
             }),
         route(Method::POST, "/api/v1/auth/logout", "logout")
             .tag(TAG)
             .summary("Sign out: end this session and clear its cookies")
             .session_only()
+            .before_mfa_enrolment()
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 logout(&api.pool, &api.ctx).await?;
                 let secure = session::secure_cookies(&api.auth.config, &api.headers);
@@ -384,8 +501,9 @@ pub fn routes() -> Vec<Route> {
             }),
         route(Method::GET, "/api/v1/auth/me", "getCurrentSession")
             .tag(TAG)
-            .summary("The signed-in user, their effective permissions and the CSRF token")
+            .summary("The signed-in user, their effective permissions, MFA status and the CSRF token")
             .session_only()
+            .before_mfa_enrolment()
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 let me = principal(&api.ctx)?;
                 let csrf_token = me.csrf_token().ok_or_else(unauthenticated)?.to_owned();
@@ -395,6 +513,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Change your own password (ends your other sessions)")
             .session_only()
+            .before_mfa_enrolment()
             .description(
                 "400 when `currentPassword` is wrong. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
             )
@@ -427,12 +546,17 @@ mod tests {
         RequestContext::anonymous(String::new())
     }
 
+    /// The first administrator's password: random per test run, so no
+    /// hard-coded credential reaches the hasher or verifier.
+    static OWNER_PASSWORD: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| format!("owner passphrase {}", Uuid::new_v4()));
+
     fn body(username: &str) -> SetupBody {
         SetupBody {
             username: username.into(),
             display_name: "First admin".into(),
             email: None,
-            password: "correct horse battery".into(),
+            password: OWNER_PASSWORD.clone(),
         }
     }
 
@@ -499,7 +623,7 @@ mod tests {
         assert_eq!(auth.throttle.check("admin"), Gate::Slow);
         let started = std::time::Instant::now();
         let login_as = |password: &str| LoginBody { username: "admin".into(), password: password.into() };
-        let signed_in = login(pool, &auth, &HeaderMap::new(), &anon(), login_as("correct horse battery")).await;
+        let signed_in = login(pool, &auth, &HeaderMap::new(), &anon(), login_as(OWNER_PASSWORD.as_str())).await;
         assert!(signed_in.is_ok(), "refused: {:?}", signed_in.err().map(|e| e.code));
         assert!(started.elapsed() >= GLOBAL_PENALTY, "through the slow lane");
         let wrong = login(pool, &auth, &HeaderMap::new(), &anon(), login_as("wrong guess")).await;
@@ -512,13 +636,18 @@ mod tests {
     async fn guessing_the_current_password_is_throttled() {
         let Some(db) = scratch::database("guessing_the_current_password_is_throttled").await else { return };
         let (pool, auth) = (&db.pool, auth_state());
+        let (right, wrong) = (OWNER_PASSWORD.as_str(), OWNER_PASSWORD.to_uppercase());
         setup(pool, &auth, &HeaderMap::new(), &anon(), body("owner")).await.expect("setup");
         let user_id: Uuid = sqlx::query_scalar("SELECT id FROM users").fetch_one(pool).await.unwrap();
         let permissions = data::load_permissions(&mut pool.acquire().await.unwrap(), user_id).await.unwrap();
         let principal = Principal {
             user_id,
             username: "owner".into(),
-            credential: Credential::Session { id: Uuid::nil(), csrf_token: String::new() },
+            credential: Credential::Session {
+                id: Uuid::nil(),
+                csrf_token: String::new(),
+                mfa_enrolment_required: false,
+            },
             permissions,
         };
         let ctx = RequestContext::user(std::sync::Arc::new(principal), String::new());
@@ -527,14 +656,14 @@ mod tests {
             new_password: "a brand new passphrase".into(),
         };
         for _ in 0..crate::auth::throttle::FREE_FAILURES {
-            let e = change_password(pool, &auth, &ctx, change("wrong guess")).await.unwrap_err();
+            let e = change_password(pool, &auth, &ctx, change(&wrong)).await.unwrap_err();
             assert_eq!(e.code, ErrorCode::ValidationError);
         }
-        let e = change_password(pool, &auth, &ctx, change("correct horse battery")).await.unwrap_err();
+        let e = change_password(pool, &auth, &ctx, change(right)).await.unwrap_err();
         assert_eq!(e.code, ErrorCode::RateLimited, "locked: not even the right password is checked");
         assert_eq!(e.retry_after, Some(1));
         let hash = data::password_hash(&mut pool.acquire().await.unwrap(), user_id).await.unwrap();
-        assert!(password::verify("correct horse battery", hash.as_deref()).await.unwrap(), "password unchanged");
+        assert!(password::verify(right, hash.as_deref()).await.unwrap(), "password unchanged");
         db.drop().await;
     }
 
@@ -651,7 +780,11 @@ mod tests {
         let principal = Principal {
             user_id: owner.user.id,
             username: "owner".into(),
-            credential: Credential::Session { id: Uuid::nil(), csrf_token: String::new() },
+            credential: Credential::Session {
+                id: Uuid::nil(),
+                csrf_token: String::new(),
+                mfa_enrolment_required: false,
+            },
             permissions,
         };
         let admin =
@@ -678,7 +811,7 @@ mod tests {
                 .await
                 .unwrap();
         let mut secrets: Vec<String> =
-            ["correct horse battery", "alice correct horse", "wrong password", "argon2"].map(String::from).to_vec();
+            [OWNER_PASSWORD.as_str(), "alice correct horse", "wrong password", "argon2"].map(String::from).to_vec();
         secrets.extend(tokens.iter().map(hex::encode).chain(csrf).chain([owner.csrf_token.clone()]));
         for row in &all {
             for secret in &secrets {
@@ -736,7 +869,7 @@ mod tests {
         };
         let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
         setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
-        login(pool, &auth, &headers, &via("198.51.100.9", "10.0.0.2"), login_body("owner", "correct horse battery"))
+        login(pool, &auth, &headers, &via("198.51.100.9", "10.0.0.2"), login_body("owner", OWNER_PASSWORD.as_str()))
             .await
             .unwrap();
         login(pool, &auth, &headers, &via("198.51.100.9", "10.0.0.2"), login_body("owner", "wrong"))

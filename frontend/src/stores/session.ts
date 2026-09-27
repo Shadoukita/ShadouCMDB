@@ -25,6 +25,8 @@ export const useSessionStore = defineStore("session", () => {
 
   const user = computed(() => session.value?.user ?? null);
   const permissions = computed(() => session.value?.permissions);
+  /** A profile the user holds requires two-factor authentication and they have not set it up: only the set-up screen works. */
+  const enrolmentRequired = computed(() => !!session.value?.mfa.enrolmentRequired);
 
   /** A different user may sign in next: never show them the previous user's cached data. */
   function signIn(s: Session) {
@@ -65,8 +67,23 @@ export const useSessionStore = defineStore("session", () => {
     return loading;
   }
 
-  async function login(body: LoginBody) {
-    signIn(await authApi.login(body));
+  /**
+   * Signs in with the password. "mfa" means the password was right and the API
+   * now wants a code from the user's authenticator (it set the challenge cookie).
+   */
+  async function login(body: LoginBody): Promise<"signedIn" | "mfa"> {
+    try {
+      signIn(await authApi.login(body));
+      return "signedIn";
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "MFA_REQUIRED") return "mfa";
+      throw e;
+    }
+  }
+
+  /** The second sign-in step: an authenticator code or a recovery code. */
+  async function loginMfa(code: string) {
+    signIn(await authApi.loginMfa(code));
   }
 
   async function setup(body: SetupBody) {
@@ -106,5 +123,23 @@ export const useSessionStore = defineStore("session", () => {
   const canOnClass = (classId: string | undefined, right: ClassRight) => canClass(permissions.value, classId, right);
   const canOnAnyClass = (right: ClassRight) => canAnyClass(permissions.value, right);
 
-  return { status, session, user, permissions, expired, bootError, ensureLoaded, login, setup, logout, markExpired, refresh, can, canOnClass, canOnAnyClass };
+  return {
+    status,
+    session,
+    user,
+    permissions,
+    enrolmentRequired,
+    expired,
+    bootError,
+    ensureLoaded,
+    login,
+    loginMfa,
+    setup,
+    logout,
+    markExpired,
+    refresh,
+    can,
+    canOnClass,
+    canOnAnyClass,
+  };
 });

@@ -54,6 +54,11 @@ const ACTION_SET: Record<Action, true> = {
   "session.revoke": true,
   "audit.purge": true,
   "token.use": true,
+  "mfa.enrol": true,
+  "mfa.disable": true,
+  "mfa.failure": true,
+  "mfa.recovery_code_used": true,
+  "mfa.recovery_codes": true,
 };
 const ACTIONS = Object.keys(ACTION_SET) as Action[];
 const entityLabel = (t: string) => ENTITY_TYPES.find((e) => e.value === t)?.label ?? t;

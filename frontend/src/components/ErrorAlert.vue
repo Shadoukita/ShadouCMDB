@@ -6,7 +6,11 @@ import { ApiError } from "../api/client";
 const props = defineProps<{ error: unknown; title?: string; onRetry?: () => void }>();
 
 const apiError = computed(() => (props.error instanceof ApiError ? props.error : null));
+// Retrying a refused request cannot succeed until someone changes the user's profiles.
+const retry = computed(() => (apiError.value?.code === "FORBIDDEN" ? undefined : props.onRetry));
 const heading = computed(() => props.title ?? headingFor(apiError.value));
+/** Details that only repeat the message (a guard naming one field) add nothing. */
+const details = computed(() => (apiError.value?.details ?? []).filter((d) => d.message !== apiError.value?.message));
 const message = computed(() => {
   const e = props.error;
   return e instanceof Error ? e.message : String(e);
@@ -19,12 +23,18 @@ function headingFor(e: ApiError | null): string {
       return "API unreachable";
     case "DATABASE_UNAVAILABLE":
       return "The CMDB database is unavailable";
+    case "SCHEMA_NOT_MIGRATED":
+      return "The database is not migrated yet";
     case "NOT_FOUND":
       return "Not found";
     case "VALIDATION_ERROR":
       return "The API rejected the request";
     case "VERSION_CONFLICT":
       return "Someone else changed this record";
+    case "SCHEMA_CHANGE_REFUSED":
+      return "The database change was refused";
+    case "INVALID_NAME":
+      return "The technical name cannot be used";
     case "CONFLICT":
     case "IN_USE":
       return "Conflict";
@@ -41,14 +51,14 @@ function headingFor(e: ApiError | null): string {
   <div class="alert alert-error" role="alert">
     <strong>{{ heading }}</strong>
     <div>{{ message }}</div>
-    <ul v-if="apiError && apiError.details.length > 0">
-      <li v-for="(d, i) in apiError.details" :key="i">
+    <ul v-if="details.length > 0">
+      <li v-for="(d, i) in details" :key="i">
         <code v-if="d.field && d.field !== '(root)'">{{ d.field }}</code> {{ d.message }}
       </li>
     </ul>
-    <div v-if="apiError?.requestId || onRetry" class="meta">
+    <div v-if="apiError?.requestId || retry" class="meta">
       <template v-if="apiError?.requestId">Request id <code>{{ apiError.requestId }}</code>&#32;</template>
-      <button v-if="onRetry" type="button" class="btn btn-sm" @click="onRetry()">Retry</button>
+      <button v-if="retry" type="button" class="btn btn-sm" @click="retry()">Retry</button>
     </div>
   </div>
 </template>

@@ -206,6 +206,25 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
     await expect(page.getByRole("navigation", { name: "Administration" }), path).toHaveCount(0);
   }
 
+  // "Browse by class" lists only the classes the user may view, so no class shows a false count of 0.
+  await expect(nav.getByRole("link", { name: /^Application\b/ })).toBeVisible();
+  await expect(nav.getByRole("link", { name: /^Server\b/ })).toBeVisible();
+  await expect(nav.getByRole("link", { name: /^Database\b/ })).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: /^Location\b/ })).toHaveCount(0);
+  // A class the user may not view, opened by URL, explains itself instead of looking empty.
+  await page.goto(`/cis?classId=${databaseId}`);
+  await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
+  await expect(page.getByText("None of your permission profiles allows viewing Database")).toBeVisible();
+  // The class filter offers the viewable classes and their abstract parents (Hardware lists Servers), plus the one in the URL.
+  // Roots follow the classes' sort order, so only the denied class's place and Server under Hardware are fixed.
+  const classOptions = page.locator("#f-class option");
+  await expect(classOptions).toHaveCount(5);
+  await expect(classOptions.nth(0)).toHaveText("All classes");
+  await expect(classOptions.nth(1)).toHaveText("Database");
+  const optionTexts = (await classOptions.allTextContents()).map((t) => t.trim());
+  expect([...optionTexts].sort()).toEqual(["All classes", "Application", "Database", "Hardware (incl. subclasses)", "Server"]);
+  expect(optionTexts.indexOf("Server")).toBe(optionTexts.indexOf("Hardware (incl. subclasses)") + 1);
+
   // "New CI" offers only the classes the profile may create.
   await page.goto("/");
   await page.getByRole("banner").getByRole("link", { name: "+ New CI" }).click();
@@ -232,7 +251,10 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
 
   // A Database CI opened by URL: refused, not rendered.
   await page.goto(`/cis/${await ciIdByName(request, "crm-db")}`);
-  await expect(page.getByRole("alert")).toContainText("You do not have the view permission on this CI class");
+  await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Permission denied");
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).not.toContainText("Not found");
+  await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 1, name: "crm-db" })).toHaveCount(0);
   await snap(page, "31-restricted-denied");
 
@@ -248,6 +270,46 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
     `e2e-app-${stamp}.example.internal`,
   );
   await page.context().close();
+});
+
+test("a reference into a class the user may not view shows a placeholder, not a name or a link", async ({ browser, page, request }) => {
+  // CRM (Application) → primary_database crm-db (Database, which the profile cannot see).
+  const crm = await ciIdByName(request, "CRM");
+  // Show the attribute as an inventory column for Application; the settings are restored at the end.
+  const before = await apiGet<{ version: number; settings: { listViews: { classKey: string }[] } }>(request, "/ui-settings");
+  const listViews = [...before.settings.listViews.filter((v) => v.classKey !== "application"), { classKey: "application", columns: ["name", "attributes.primary_database"] }];
+  const saved = await apiSend<{ version: number }>(request, "PUT", "/ui-settings", { version: before.version, settings: { ...before.settings, listViews } });
+
+  try {
+    // The administrator still sees the name, as a link.
+    await page.goto(`/cis/${crm}`);
+    await expect(page.getByRole("link", { name: "crm-db", exact: true }).first()).toBeVisible();
+
+    const restrictedPage = await signInUi(browser, USERNAME, PASSWORD);
+    const hiddenIn = async (where: string) => {
+      await expect(restrictedPage.getByText("Hidden CI", { exact: true }).first(), where).toBeVisible();
+      await expect(restrictedPage.getByRole("link", { name: "Hidden CI" }), where).toHaveCount(0);
+      await expect(restrictedPage.getByText("crm-db"), where).toHaveCount(0);
+    };
+    await restrictedPage.goto(`/cis?classId=${applicationId}&q=CRM`);
+    await expect(restrictedPage.getByRole("link", { name: "CRM", exact: true })).toBeVisible();
+    await hiddenIn("inventory");
+    await restrictedPage.goto(`/cis/${crm}`);
+    await expect(restrictedPage.getByRole("heading", { level: 1, name: "CRM" })).toBeVisible();
+    await hiddenIn("detail");
+    await restrictedPage.getByRole("link", { name: "Edit", exact: true }).click();
+    await expect(restrictedPage.getByRole("button", { name: "Clear Hidden CI" })).toBeVisible();
+    await hiddenIn("edit");
+    // Saving other fields keeps the hidden reference as it was.
+    await restrictedPage.locator("#f-notes").fill(`edited around a hidden reference ${stamp}`);
+    await restrictedPage.getByRole("button", { name: "Save changes" }).click();
+    await expect(restrictedPage).toHaveURL(at(`/cis/${crm}`));
+    await restrictedPage.context().close();
+    const after = await apiGet<{ attributes: Record<string, unknown> }>(request, `/configuration-items/${crm}`);
+    expect(after.attributes.primary_database).toBe(await ciIdByName(request, "crm-db"));
+  } finally {
+    await apiSend(request, "PUT", "/ui-settings", { version: saved.version, settings: before.settings });
+  }
 });
 
 test("signing out ends the session on the server, not only in the browser", async ({ playwright, baseURL }) => {

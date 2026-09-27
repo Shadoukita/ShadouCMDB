@@ -1,4 +1,4 @@
-import { apiGet, classIdByName, snap, expect, test } from "./support";
+import { apiGet, applySchemaChange, classIdByName, snap, expect, test } from "./support";
 
 // Administration › Data model, Lookups and Templates, in order: a lookup list, a class
 // built in the editor, a CI of that class, archiving, relationship rules and lookups.
@@ -34,7 +34,7 @@ test("the sub-navigation groups Access, Data model and System", async ({ page })
   await page.goto("/admin/templates");
   const sub = page.getByRole("navigation", { name: "Administration" });
   await expect(sub.getByRole("heading")).toHaveText(["Access", "Data model", "System"]);
-  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "CI classes", "Relationship types", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
+  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "API tokens", "Areas", "CI classes", "Relationship types", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
   await expect(sub.getByRole("link", { name: "Templates" })).toHaveAttribute("aria-current", "page");
 });
 
@@ -84,8 +84,11 @@ test("a class and its attributes are built in the editor", async ({ page, reques
   await page.locator("#class-parent").selectOption({ label: "Hardware" });
   await page.locator("#class-icon").selectOption({ label: "Device" });
   await page.locator("#class-color").fill("#aa3377");
+  // The class's table goes into its parent's area; the preview shows the DDL before anything runs.
+  await expect(page.locator("#class-key-hint")).toContainText(`infrastruktur.${CLASS_KEY}`);
   await page.getByRole("button", { name: "Create class" }).click();
-  await expect(page.getByRole("status").filter({ hasText: `Created class ${CLASS}.` })).toBeVisible();
+  await applySchemaChange(page, "Create class", `CREATE TABLE "infrastruktur"."${CLASS_KEY}"`);
+  await expect(page.getByRole("status").filter({ hasText: `Created class ${CLASS} (table infrastruktur.${CLASS_KEY}).` })).toBeVisible();
   classId = page.url().split("/").pop()!;
   const cls = await apiGet<{ key: string; icon: string; color: string; parentId: string }>(request, `/ci-classes/${classId}`);
   expect(cls).toMatchObject({ key: CLASS_KEY, icon: "device", color: "#aa3377", parentId: await classIdByName(request, "Hardware") });
@@ -98,7 +101,8 @@ test("a class and its attributes are built in the editor", async ({ page, reques
     await page.getByRole("button", { name: "+ Add attribute" }).click();
     await page.locator("#ad-label").fill(label);
     await fill();
-    await page.getByRole("button", { name: "Add attribute", exact: true }).click();
+    await page.getByRole("button", { name: "Preview and add…" }).click();
+    await applySchemaChange(page, "Add attribute", "ADD COLUMN");
     await expect(page.getByRole("status").filter({ hasText: `Added attribute ${label}.` })).toBeVisible();
   };
   await add(async () => {
@@ -123,8 +127,11 @@ test("a class and its attributes are built in the editor", async ({ page, reques
   // An API validation error lands next to its field, and nothing is saved.
   await page.getByRole("button", { name: "+ Add attribute" }).click();
   await page.locator("#ad-label").fill("Rack units");
-  await page.getByRole("button", { name: "Add attribute", exact: true }).click();
+  // The technical name is checked live: rack_units is taken in this class.
   await expect(page.locator("#ad-key-err")).toBeVisible();
+  await page.getByRole("button", { name: "Preview and add…" }).click();
+  await expect(page.locator("#ad-key-err")).toBeVisible();
+  await expect(page.locator("dialog.schema-change[open]")).toHaveCount(0);
   await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
 
   const table = page.locator("table.attributes");
@@ -175,15 +182,19 @@ test("the CI form and detail page follow the new definitions", async ({ page }) 
 test("an archived class keeps its CIs but takes no new ones", async ({ page }) => {
   await page.goto(`/admin/classes/${classId}`);
   await page.getByRole("button", { name: "Archive", exact: true }).click();
+  await applySchemaChange(page, "Archive class");
   await expect(page.getByRole("status").filter({ hasText: `Archived ${CLASS}` })).toBeVisible();
   await expect(page.getByText("This class is archived")).toBeVisible();
-  // Delete is refused while CIs exist; the dialog says why and what would break.
-  await page.getByRole("button", { name: `Delete class “${CLASS}”` }).click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("cannot be deleted while it is in use");
-  await expect(dialog).toContainText("1 configuration items");
-  await snap(page, "34-class-delete-in-use");
-  await dialog.getByRole("button", { name: "Close" }).click();
+  // Purging drops the table with its CIs: the dialog shows the DDL and wants the technical name typed.
+  await page.getByRole("button", { name: "Purge…" }).click();
+  const dialog = page.locator("dialog.schema-change[open]");
+  await expect(dialog.locator(".sc-ddl")).toContainText(`DROP TABLE "infrastruktur"."${CLASS_KEY}"`);
+  const purge = dialog.getByRole("button", { name: "Purge class and its CIs" });
+  await expect(purge).toBeDisabled();
+  await dialog.getByLabel(/Type .* to confirm/).fill("wrong");
+  await expect(purge).toBeDisabled();
+  await snap(page, "34-class-purge-preview");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
 
   await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: new RegExp(`^${CLASS}`) })).toHaveCount(0);
   await page.goto(`/cis/new?classId=${classId}`);
@@ -196,6 +207,7 @@ test("an archived class keeps its CIs but takes no new ones", async ({ page }) =
   await page.getByLabel(/Show archived classes/).check();
   await expect(page).toHaveURL(/archived=show/);
   await list.getByRole("row", { name: new RegExp(CLASS) }).getByRole("button", { name: "Restore" }).click();
+  // Restoring runs no DDL, so it applies without a preview.
   await expect(page.getByRole("status").filter({ hasText: `Restored ${CLASS}` })).toBeVisible();
 });
 

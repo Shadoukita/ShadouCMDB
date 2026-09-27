@@ -61,6 +61,8 @@ pub struct User {
     pub is_active: bool,
     /// Holds the built-in Administrator profile
     pub is_administrator: bool,
+    /// Has set up two-factor authentication (an authenticator app)
+    pub mfa_enabled: bool,
     pub profiles: Vec<ProfileRef>,
     #[serde(serialize_with = "ts::serialize")]
     pub password_changed_at: DateTime<Utc>,
@@ -218,6 +220,7 @@ paged!(UserList);
 async fn dtos(conn: &mut PgConnection, rows: Vec<UserRow>) -> Result<Vec<User>, AppError> {
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
     let held = data::profiles_of_users(conn, &ids).await?;
+    let mfa = crate::data::mfa::enabled_among(conn, &ids).await?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -233,6 +236,7 @@ async fn dtos(conn: &mut PgConnection, rows: Vec<UserRow>) -> Result<Vec<User>, 
                 email: r.email,
                 is_active: r.is_active,
                 is_administrator: profiles.iter().any(|p| p.is_builtin),
+                mfa_enabled: mfa.contains(&r.id),
                 profiles,
                 password_changed_at: r.password_changed_at,
                 last_login_at: r.last_login_at,

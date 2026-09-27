@@ -41,11 +41,13 @@ When the UI and API are on different origins, add the UI origin to the backend's
 | `/cis/:id` | Detail: general fields, class attributes (reference attributes are links), relationships (add/remove), relationship map (multi-hop graph), history (audit log with field diffs) |
 | `/cis/:id/edit` | Edit form (sends `version` for optimistic locking and handles `409 VERSION_CONFLICT`) |
 | `/search?q=…` | Global search results, ranked by the API with the field that matched. The header search box has type-ahead; press `/` to focus it. |
-| `/login` | Sign-in. `?redirect=/cis?…` returns there afterwards (only same-app paths are followed). |
+| `/login` | Sign-in. `?redirect=/cis?…` returns there afterwards (only same-app paths are followed). For users with two-factor authentication a second step asks for the authenticator code, or a recovery code. |
+| `/account` | My account (the name in the header): two-factor authentication. Set up an authenticator app (password, then a QR code of `otpauthUri` rendered in the browser plus the setup key, then a code), see the 10 recovery codes once (copy or download as `.txt`), replace them, or turn two-factor off. |
+| `/two-factor-setup` | Forced enrolment: while a profile the user holds requires two-factor authentication they have not set up (`/auth/me` `mfa.enrolmentRequired`), every other route leads here, without the app shell. `?redirect=` returns to the page they asked for afterwards. |
 | `/setup` | First-run setup: creates the first administrator and signs them in. Shown only while `GET /setup` says no user exists. |
 | `/admin` | Administration, with its own sub-navigation. Opens the first section the user may use. |
-| `/admin/users` | Users: search, status and profile filters, sortable columns, paging (all in the URL). `/admin/users/new` creates one; `/admin/users/:id` edits it, assigns profiles, disables/enables it, resets the password or deletes it. |
-| `/admin/profiles` | Permission profiles: list, clone. `/admin/profiles/new` and `/admin/profiles/:id` edit the global permissions and the per-class view/create/edit/delete matrix; delete confirms and names the users who lose the profile. |
+| `/admin/users` | Users: search, status and profile filters, sortable columns, paging (all in the URL). `/admin/users/new` creates one; `/admin/users/:id` edits it, assigns profiles, disables/enables it, resets the password or two-factor authentication, or deletes it. The list and the user page show whether two-factor is on. |
+| `/admin/profiles` | Permission profiles: list, clone. `/admin/profiles/new` and `/admin/profiles/:id` edit the global permissions, the per-class view/create/edit/delete matrix and "Require two-factor authentication" (the only setting the built-in Administrator profile accepts); delete confirms and names the users who lose the profile. |
 | `/admin/classes` | Data model › CI classes: the class tree in menu order. Drag a row (or use ↑/↓) to reorder among its siblings; archive/restore; `?archived=show` lists archived classes. |
 | `/admin/classes/new`, `/admin/classes/:id` | Class editor: name, key (fixed after creation), parent, abstract, icon, colour; archive, delete (refused with the usage counts while anything refers to it). Below it, the **attribute editor**: every attribute defined on the class by form section, with drag-and-drop (or ↑/↓) ordering that also moves an attribute into another section; add/edit type, required, enum values, lookup list, reference class, validation, default value, help text and section; archive/restore/delete. Inherited attributes are listed read-only with a link to the class that defines them. |
 | `/admin/relationships` | Relationship types (reorder, edit labels, archive, delete) and, for the selected type (`?type=…`), its rules: which source and target classes it may connect. |
@@ -81,6 +83,12 @@ administrator (`datamodel.manage`) to Templates or the class editor; everyone el
 - Any `401` to a signed-in request means the session ended (idle or absolute timeout, signed out elsewhere, account
   disabled). The UI goes to `/login?redirect=<current page>`, says the session ended, and returns there after
   sign-in. Signing in or out clears the query cache, so one user never sees another's data.
+- Two-factor authentication: `POST /auth/login` answering `401 MFA_REQUIRED` switches the sign-in page to the
+  code step (`POST /auth/login/mfa`); a challenge that expired or took too many wrong codes returns to the password
+  form with the API's message. When `/auth/me` says `mfa.enrolmentRequired`, or any request answers
+  `403 MFA_ENROLMENT_REQUIRED` (an administrator just made it mandatory), the UI re-reads the session and goes to
+  `/two-factor-setup`. The TOTP secret and recovery codes are held only in the component that shows them, never in
+  the query cache or the URL.
 - The permissions from `/auth/me` hide actions the user cannot use: "+ New CI" and create links per class,
   Edit and Delete on a CI, adding and removing relationships, the History tab (needs `audit.view`), and the
   Administration sections (Users: `users.manage`; Permission profiles: `profiles.manage`, or read-only with
@@ -171,6 +179,10 @@ use it without a frontend change, and check the empty, not-found and API-unreach
 admin specs sign in and out, follow an expired session to sign-in and back, walk first-run setup, build a
 permission profile in the matrix, clone and delete one, create a user holding it, sign in as that user to check
 which actions are hidden, disable/enable the account, reset its password, and read who did it in the audit log.
+`mfa.spec.ts` computes TOTP codes like an authenticator app: it sets one up from My account (QR code, setup key,
+a wrong code, recovery codes with download), signs in with a code and with a recovery code, replaces the codes and
+turns two-factor off; then it requires two-factor on a profile, follows a holder through forced enrolment, and
+resets their two-factor from user management.
 The data model spec builds a lookup list and a class with attributes in the editors (drag and arrow reordering,
 moving between sections, an API error at its field), creates a CI from the generated form, archives the class,
 adds a relationship type and rule, checks the lookup delete guards, and the fresh-install guidance. The
@@ -202,6 +214,21 @@ then apply. Exporting the second install again must give the same file, no CIs o
 imported class, lookup list, menu, dashboard, list view, form layout and profile must work there. Give both
 newly created databases for each run (CI starts them on ports 3002 and 3003).
 
+`area-tables.spec.ts` checks that the data model is real PostgreSQL, by querying the database itself with `psql`
+(connection from the `PG*` environment variables, as the owner of the app's databases). It runs when
+`E2E_AREAS_BASE_URL` and `E2E_AREAS_IMPORT_BASE_URL` point at two more bare APIs like the ones above, and
+`E2E_AREAS_PGDATABASE` / `E2E_AREAS_IMPORT_PGDATABASE` name their databases. In the UI it creates the area
+“Bestand” and the types “Netzwerk” and “Virtuelle Maschinen” with typed fields, then asserts the schema
+`bestand`, the tables `bestand.netzwerk` and `bestand.virtuelle_maschinen` column by column (types, the id's
+`ON DELETE CASCADE` key to `cmdb.configuration_items`), the reporting views `bestand.v_*` and the
+`cmdb.schema_changes` history. Assets created in the UI must be rows of the type tables and views. It converts a
+field's type (text to whole number succeeds; a value that is no number refuses the other), is refused making a
+field required while an asset has no value, archives a field (the column stays) and purges it, typed to confirm
+(the column is gone). A user whose profile lacks `datamodel.manage` gets `403` from every one of these endpoints,
+and the database is unchanged. Finally the export is imported into the second install: the dry run shows the DDL
+and creates nothing, and applying it builds the same tables and views. Give both newly created databases for each
+run (CI starts them on ports 3004 and 3005).
+
 The tests expect the demo inventory (`shadoucmdb seed --demo`) and create their own uniquely named records.
 They run signed in: `e2e/global-setup.ts` completes first-run setup on a database without users, or signs in as
 `E2E_USERNAME` / `E2E_PASSWORD` (an Administrator account, e.g. from `shadoucmdb create-admin`).
@@ -213,6 +240,7 @@ API_PROXY_TARGET=http://<api-host>:3000 npm run test:e2e -w frontend      # star
 E2E_BASE_URL=http://localhost:4173 npm run test:e2e -w frontend           # or test an already-served build
 E2E_FRESH_BASE_URL=http://localhost:3001 ...                              # also run first-run.spec.ts
 E2E_BARE_BASE_URL=http://localhost:3002 E2E_IMPORT_BASE_URL=http://localhost:3003 ...  # also run fresh-install.spec.ts
+E2E_AREAS_BASE_URL=http://localhost:3004 E2E_AREAS_PGDATABASE=... E2E_AREAS_IMPORT_BASE_URL=http://localhost:3005 E2E_AREAS_IMPORT_PGDATABASE=... ...  # also run area-tables.spec.ts
 ```
 
 Set `E2E_SCREENSHOT_DIR=<dir>` to save a screenshot of each step.

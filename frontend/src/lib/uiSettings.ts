@@ -137,17 +137,43 @@ export interface NavClass {
   color: string | null;
   isActive: boolean;
   isAbstract: boolean;
+  /** The area (menu tab) the class belongs to. */
+  areaId?: string;
 }
 
-/** Classes the menu offers: active ones (abstract ones list their subclasses' CIs). */
-export const menuClasses = <T extends NavClass>(classes: readonly T[]) => classes.filter((c) => c.isActive);
+/** An area: a tab of the main menu that holds its classes. */
+export interface NavArea {
+  id: string;
+  key: string;
+  name: string;
+  icon: string | null;
+  color: string | null;
+  isActive: boolean;
+  sortOrder: number;
+}
+
+/**
+ * Classes the menu offers: active ones (abstract ones list their subclasses' CIs)
+ * whose area is not archived. Without areas (not loaded yet) no class is left out for its area.
+ */
+export function menuClasses<T extends NavClass>(classes: readonly T[], areas: readonly NavArea[] = []): T[] {
+  const archived = new Set(areas.filter((a) => !a.isActive).map((a) => a.id));
+  return classes.filter((c) => c.isActive && !(c.areaId && archived.has(c.areaId)));
+}
+
+/** Classes ordered by their area's tab position (stable: the class order is kept within an area). */
+function byArea<T extends NavClass>(classes: readonly T[], areas: readonly NavArea[]): T[] {
+  const rank = new Map([...areas].sort((a, b) => a.sortOrder - b.sortOrder).map((a, i) => [a.id, i]));
+  const at = (c: T) => (c.areaId && rank.has(c.areaId) ? rank.get(c.areaId)! : rank.size);
+  return classes.map((c, i) => ({ c, i })).sort((x, y) => at(x.c) - at(y.c) || x.i - y.i).map((x) => x.c);
+}
 
 /**
  * The stored entries followed by every page and class they leave out, in the
- * built-in order (pages first, the rest of the classes before the System pages).
- * The editor starts from this, so it always saves the complete menu.
+ * built-in order (pages first, the rest of the classes, by area, before the
+ * System pages). The editor starts from this, so it always saves the complete menu.
  */
-export function completeNavEntries(entries: readonly UiNavEntry[], classes: readonly NavClass[]): UiNavEntry[] {
+export function completeNavEntries(entries: readonly UiNavEntry[], classes: readonly NavClass[], areas: readonly NavArea[] = []): UiNavEntry[] {
   const pages = new Set<UiPage>();
   const listed = new Set<string>();
   for (const e of entries) {
@@ -160,7 +186,7 @@ export function completeNavEntries(entries: readonly UiNavEntry[], classes: read
     if (!pages.has(p.page)) out.push({ type: "page", page: p.page, label: null, hidden: !!p.hiddenByDefault });
   };
   for (const p of PAGES) if (!SYSTEM_PAGES.has(p.page)) addPage(p);
-  for (const c of menuClasses(classes)) {
+  for (const c of byArea(menuClasses(classes, areas), areas)) {
     // New classes show up in the menu; abstract ones only when an administrator adds them.
     if (!listed.has(c.key)) out.push({ type: "class", classKey: c.key, label: null, hidden: c.isAbstract });
   }
@@ -178,12 +204,26 @@ export interface NavLinkItem {
 export interface NavGroup {
   id: string;
   heading: string | null;
+  /** Set for an area's tab: the classes of one area that no section claims. */
+  area?: NavArea;
   items: NavLinkItem[];
 }
 
-/** The sidebar: visible entries grouped under headings. `showPage` applies permissions. */
-export function buildNav(entries: readonly UiNavEntry[], classes: readonly NavClass[], showPage: (p: UiPage) => boolean): NavGroup[] {
-  const byKey = new Map(menuClasses(classes).map((c) => [c.key, c]));
+/**
+ * The sidebar: visible entries grouped under headings. `showPage` applies
+ * permissions. Classes that are not in an administrator's section are grouped
+ * under their area's tab, one tab per area, placed where the area's first class
+ * is in the menu order; classes without a known area fall back to "Browse by class".
+ */
+export function buildNav(
+  entries: readonly UiNavEntry[],
+  classes: readonly NavClass[],
+  showPage: (p: UiPage) => boolean,
+  areas: readonly NavArea[] = [],
+): NavGroup[] {
+  const byKey = new Map(menuClasses(classes, areas).map((c) => [c.key, c]));
+  const areaById = new Map(areas.map((a) => [a.id, a]));
+  const areaGroups = new Map<string, NavGroup>();
   const groups: NavGroup[] = [];
   /** Consecutive pages and loose classes share a group; a section always starts its own. */
   let open: NavGroup | null = null;
@@ -198,7 +238,7 @@ export function buildNav(entries: readonly UiNavEntry[], classes: readonly NavCl
     const c = byKey.get(key);
     return c ? { id: `class:${c.key}`, label: label || c.name, to: `/cis?classId=${c.id}`, cls: c } : null;
   };
-  for (const e of completeNavEntries(entries, classes)) {
+  for (const e of completeNavEntries(entries, classes, areas)) {
     if (e.hidden) continue;
     if (e.type === "page" && e.page) {
       const p = PAGE.get(e.page);
@@ -206,7 +246,17 @@ export function buildNav(entries: readonly UiNavEntry[], classes: readonly NavCl
       push(SYSTEM_PAGES.has(e.page) ? "System" : null, { id: `page:${e.page}`, label: e.label || p.label, to: p.to, page: e.page });
     } else if (e.type === "class" && e.classKey) {
       const item = classItem(e.classKey, e.label);
-      if (item) push("Browse by class", item);
+      const area = item?.cls?.areaId ? areaById.get(item.cls.areaId) : undefined;
+      if (item && area) {
+        let g = areaGroups.get(area.id);
+        if (!g) {
+          g = { id: `area:${area.key}`, heading: area.name, area, items: [] };
+          areaGroups.set(area.id, g);
+          groups.push(g);
+        }
+        g.items.push(item);
+        open = null;
+      } else if (item) push("Browse by class", item);
     } else if (e.type === "section") {
       const items = (e.items ?? []).filter((i) => !i.hidden).map((i) => classItem(i.classKey, i.label)).filter((i): i is NavLinkItem => !!i);
       if (items.length === 0) continue;
@@ -214,6 +264,10 @@ export function buildNav(entries: readonly UiNavEntry[], classes: readonly NavCl
       open = null;
     }
   }
+  // The tabs keep their places in the menu, but follow the areas' order among themselves (Administration › Areas).
+  const slots = groups.flatMap((g, i) => (g.area ? [i] : []));
+  const tabs = slots.map((i) => groups[i]).sort((a, b) => a.area!.sortOrder - b.area!.sortOrder);
+  slots.forEach((slot, i) => (groups[slot] = tabs[i]));
   return groups;
 }
 

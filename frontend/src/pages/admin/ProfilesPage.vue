@@ -96,6 +96,7 @@ const cloning = ref<PermissionProfile | null>(null);
               <td :title="p.description ?? undefined">
                 <RouterLink :to="`/admin/profiles/${p.id}`">{{ p.name }}</RouterLink>
                 <span v-if="p.isBuiltin" class="badge" style="margin-left: 6px">Built-in</span>
+                <span v-if="p.requireMfa" class="badge warn" style="margin-left: 6px" title="Holders must set up two-factor authentication">Two-factor required</span>
               </td>
               <td :title="summarise(p)">{{ summarise(p) }}</td>
               <td class="num">

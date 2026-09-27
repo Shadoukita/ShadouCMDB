@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO audit_log (actor_type, actor_id, actor_name, action, entity_type, entity_id, old_value, new_value, request_id)\n             SELECT $1, $2, $3, u.action, u.entity_type, u.entity_id, u.old_value, u.new_value, $4\n             FROM UNNEST($5::text[], $6::text[], $7::uuid[], $8::jsonb[], $9::jsonb[])\n                  WITH ORDINALITY AS u(action, entity_type, entity_id, old_value, new_value, n)\n             ORDER BY u.n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "TextArray",
+        "TextArray",
+        "UuidArray",
+        "JsonbArray",
+        "JsonbArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "25ad532ddb40908cf2f83f8b1fe61c6d40a3311cbee65ec39d2c5958c8f0c275"
+}

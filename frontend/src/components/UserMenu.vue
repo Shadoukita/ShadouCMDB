@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { useRouter } from "vue-router";
+import { RouterLink, useRouter } from "vue-router";
 import { useBrandingStore } from "../stores/branding";
 import { useSessionStore } from "../stores/session";
 import ErrorAlert from "./ErrorAlert.vue";
@@ -29,11 +29,11 @@ async function signOut() {
 
 <template>
   <div v-if="session.user" class="user-menu">
-    <span class="who" :title="`Signed in as ${session.user.username}`">
+    <RouterLink class="who" to="/account" :title="`Signed in as ${session.user.username}: my account and two-factor authentication`">
       <span class="sr-only">Signed in as</span>
       {{ session.user.displayName }}
       <span v-if="session.user.isAdministrator" class="badge">Administrator</span>
-    </span>
+    </RouterLink>
     <label class="sr-only" for="user-theme">Theme</label>
     <select
       id="user-theme"

@@ -1,22 +1,26 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
-import { useLookupLists, useOwnAttributes, usePatch, useReorder, type AttributeDefinition } from "../../../api/datamodel";
+import { useLookupLists, useOwnAttributes, usePatch, useRemove, useReorder, type AttributeDefinition } from "../../../api/datamodel";
+import { usePurge } from "../../../api/schemaChanges";
 import { useCiClasses, useClassAttributes, type CiClass } from "../../../api/queries";
-import DeleteRowButton from "../../../components/DeleteRowButton.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import LookupValueName from "../../../components/LookupValueName.vue";
+import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
 import { DEFAULT_SECTION, groupAttributes } from "../../../lib/attributes";
 import { dataTypeLabel } from "../../../lib/dataTypes";
 import { formatDate, formatDateTime } from "../../../lib/format";
 import { moveItem, useDragReorder } from "../../../lib/reorder";
+import { useSchemaChangeFlow } from "../../../lib/schemaChange";
 import AttributeDialog from "./AttributeDialog.vue";
 
 /**
  * The attributes defined on one class, by form section, in form order. Drag a
  * row (or use the arrows) to reorder; dropping it into another section moves it
  * there. Attributes inherited from parent classes are listed read-only below.
+ * Each attribute is a column of the class's table: archiving hides it and keeps
+ * the column; purging (typed to confirm) drops the column and its values.
  */
 const props = defineProps<{ cls: CiClass }>();
 const own = useOwnAttributes(() => props.cls.id);
@@ -25,7 +29,11 @@ const classes = useCiClasses();
 const lists = useLookupLists();
 const reorder = useReorder("attribute-definitions");
 const patch = usePatch<AttributeDefinition>("attribute-definitions");
+const remove = useRemove("attribute-definitions");
+const purge = usePurge("attribute-definitions");
+const flow = useSchemaChangeFlow();
 const notice = ref<string | null>(null);
+const failure = ref<unknown>(null);
 
 type Placed = { id: string; groupName: string | null };
 /** The order and sections being saved, shown until the refetch arrives. */
@@ -94,17 +102,45 @@ function step(d: AttributeDefinition, delta: -1 | 1) {
 
 const dnd = useDragReorder(commit, () => !reorder.isPending.value);
 
-function setActive(d: AttributeDefinition, isActive: boolean) {
+async function setActive(d: AttributeDefinition, isActive: boolean) {
   notice.value = null;
-  patch.mutate(
-    { id: d.id, body: { isActive } },
-    {
-      onSuccess: () =>
-        (notice.value = isActive
-          ? `Restored ${d.label}: it shows on forms again.`
-          : `Archived ${d.label}: stored values are kept and still shown, but it is no longer on forms.`),
-    },
-  );
+  failure.value = null;
+  const outcome = isActive
+    ? await flow.run({
+        title: `Restore attribute “${d.label}”`,
+        preview: { operation: "updateField", id: d.id, body: { isActive: true } },
+        apply: () => patch.mutateAsync({ id: d.id, body: { isActive: true } }),
+        applyLabel: "Restore attribute",
+      })
+    : await flow.run({
+        title: `Archive attribute “${d.label}”?`,
+        intro: `The column ${props.cls.tableName}.${d.key} and its stored values are kept and still shown on CIs that have one, but the attribute leaves the forms and accepts no new values. Only a purge drops the column.`,
+        preview: { operation: "deleteField", id: d.id },
+        apply: () => remove.mutateAsync(d.id),
+        applyLabel: "Archive attribute",
+        alwaysShow: true,
+      });
+  if (outcome.status === "applied")
+    notice.value = isActive
+      ? `Restored ${d.label}: it shows on forms again.`
+      : `Archived ${d.label}: stored values are kept and still shown, but it is no longer on forms.`;
+  else if (outcome.status === "refused") failure.value = outcome.error;
+}
+
+async function purgeField(d: AttributeDefinition) {
+  notice.value = null;
+  failure.value = null;
+  const outcome = await flow.run({
+    title: `Purge attribute “${d.label}”?`,
+    intro: `Drops the column ${props.cls.tableName}.${d.key} with every value stored in it, and rebuilds the reporting views. The audit log keeps the history of past values.`,
+    preview: { operation: "purgeField", id: d.id, body: { confirm: d.key } },
+    apply: (confirm) => purge.mutateAsync({ id: d.id, confirm }),
+    applyLabel: "Purge attribute",
+    danger: true,
+    confirmName: d.key,
+  });
+  if (outcome.status === "applied") notice.value = `Purged ${d.label}: column ${d.key} was dropped.`;
+  else if (outcome.status === "refused") failure.value = outcome.error;
 }
 
 // ---------- Add / edit dialog ----------
@@ -151,10 +187,10 @@ function defaultText(d: AttributeDefinition): string {
       <span class="muted">Drag a row, or use the arrows, to change the form order. Drop on a section to move it there.</span>
       <button type="button" class="btn btn-primary btn-sm" style="margin-left: auto" @click="openNew()">+ Add attribute</button>
     </div>
-    <div v-if="notice || reorder.isError.value || patch.isError.value" class="panel-body">
+    <div v-if="notice || reorder.isError.value || failure" class="panel-body">
       <div v-if="notice" class="alert" role="status">{{ notice }}</div>
       <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
-      <ErrorAlert v-if="patch.isError.value" :error="patch.error.value" title="Not saved" />
+      <ErrorAlert v-if="failure" :error="failure" title="Not saved" />
     </div>
     <LoadingState v-if="own.isLoading.value" label="Loading attributes…" />
     <div v-else-if="own.isError.value" class="panel-body">
@@ -172,7 +208,7 @@ function defaultText(d: AttributeDefinition): string {
           <tr>
             <th scope="col" class="drag-col"><span class="sr-only">Drag to reorder</span></th>
             <th scope="col">Label</th>
-            <th scope="col">Key</th>
+            <th scope="col">Column</th>
             <th scope="col">Type</th>
             <th scope="col">Required</th>
             <th scope="col">Default</th>
@@ -209,18 +245,11 @@ function defaultText(d: AttributeDefinition): string {
               <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || flat.indexOf(d) === flat.length - 1" :aria-label="`Move ${d.label} down`" @click="step(d, 1)">↓</button>
             </td>
             <td class="row-actions">
-              <button v-if="d.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Archive ${d.label}`" @click="setActive(d, false)">Archive</button>
-              <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Restore ${d.label}`" @click="setActive(d, true)">Restore</button>
-              <DeleteRowButton
-                resource="attribute-definitions"
-                :id="d.id"
-                :label="`attribute “${d.label}”`"
-                archivable
-                :archived="!d.isActive"
-                small
-                @archive="setActive(d, false)"
-                @deleted="notice = `Deleted attribute ${d.label}.`"
-              />
+              <button v-if="d.isActive" type="button" class="btn btn-sm" :aria-label="`Archive ${d.label}`" @click="setActive(d, false)">Archive</button>
+              <template v-else>
+                <button type="button" class="btn btn-sm" :aria-label="`Restore ${d.label}`" @click="setActive(d, true)">Restore</button>
+                <button type="button" class="btn btn-sm btn-quiet-danger" :aria-label="`Purge ${d.label}`" @click="purgeField(d)">Purge…</button>
+              </template>
             </td>
           </tr>
         </tbody>
@@ -269,4 +298,5 @@ function defaultText(d: AttributeDefinition): string {
     @close="dialogOpen = false"
     @saved="(m) => (notice = m)"
   />
+  <SchemaChangeDialog :flow="flow" />
 </template>
