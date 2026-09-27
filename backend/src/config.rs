@@ -74,7 +74,8 @@ pub struct Config {
     /// Where browsers send CSP violation reports; `None` sends none.
     pub csp_report_uri: Option<String>,
     pub database: DatabaseConfig,
-    /// `shadoucmdb migrate` connects with this instead of `database` (the schema owner role).
+    /// `shadoucmdb migrate`, `restore`, `factory-reset` and `decommission` connect with
+    /// this instead of `database` (the schema owner role).
     pub migration_url: Option<String>,
     /// `shadoucmdb prune-audit` connects only with this (the maintenance role).
     pub maintenance_url: Option<String>,
@@ -201,6 +202,15 @@ fn parse_csp_report_uri(raw: &str) -> Result<String, String> {
 }
 
 impl Config {
+    /// The connection for commands that change the schema: MIGRATION_DATABASE_URL
+    /// when set, else the API's.
+    pub fn schema_owner_database(self) -> DatabaseConfig {
+        match &self.migration_url {
+            Some(url) => self.database.with_url(url),
+            None => self.database,
+        }
+    }
+
     pub fn from_env() -> anyhow::Result<Config> {
         Config::from_lookup(&|key| std::env::var(key).ok())
     }
