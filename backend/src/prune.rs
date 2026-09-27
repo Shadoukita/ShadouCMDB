@@ -288,6 +288,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_api_role_cannot_change_the_system_schema() {
+        const TEST: &str = "the_api_role_cannot_change_the_system_schema";
+        if !ensure_roles().await {
+            scratch::database(TEST).await;
+            return;
+        }
+        let Some(db) = scratch::database(TEST).await else { return };
+        let mut c = db.pool.acquire().await.unwrap();
+
+        // After migrate, the API role owns only the area schemas and what is in them. Owning
+        // anything else would let it drop, alter or disable the triggers on a system table.
+        let owned: Vec<String> = sqlx::query_scalar(
+            "WITH r AS (SELECT 'shadoucmdb_app'::regrole AS oid)
+             SELECT kind || ' ' || name FROM (
+               SELECT 'schema', nspname::text, nspname FROM pg_namespace, r WHERE nspowner = r.oid
+               UNION ALL SELECT 'relation', c.oid::regclass::text, n.nspname
+                 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, r WHERE c.relowner = r.oid
+               UNION ALL SELECT 'routine', p.oid::regprocedure::text, n.nspname
+                 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace, r WHERE p.proowner = r.oid
+               UNION ALL SELECT 'type', t.oid::regtype::text, n.nspname
+                 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace, r WHERE t.typowner = r.oid
+               UNION ALL SELECT 'database', datname::text, NULL
+                 FROM pg_database, r WHERE datname = current_database() AND datdba = r.oid
+             ) o(kind, name, nsp)
+             WHERE nsp IS NULL OR nsp::text NOT IN (SELECT key FROM cmdb.areas)
+             ORDER BY 1",
+        )
+        .fetch_all(&mut *c)
+        .await
+        .unwrap();
+        assert!(owned.is_empty(), "owned by shadoucmdb_app outside the area schemas: {owned:?}");
+
+        c.execute("BEGIN; SET LOCAL ROLE shadoucmdb_app").await.unwrap();
+        for stmt in [
+            "DROP TABLE cmdb.audit_log",
+            "ALTER TABLE cmdb.audit_log DISABLE TRIGGER USER",
+            "ALTER TABLE cmdb.audit_log DISABLE TRIGGER audit_log_append_only",
+            "DROP TRIGGER audit_log_no_truncate ON cmdb.audit_log",
+            "CREATE OR REPLACE FUNCTION cmdb.audit_log_append_only() RETURNS trigger
+               LANGUAGE plpgsql AS $$ BEGIN RETURN OLD; END $$",
+            "DROP FUNCTION cmdb.prune_audit_log(interval, text, boolean, text)",
+            "DROP TABLE cmdb.configuration_items",
+            "ALTER TABLE cmdb.users ADD COLUMN x int",
+            "ALTER TABLE cmdb.users OWNER TO shadoucmdb_app",
+            "DROP SCHEMA cmdb CASCADE",
+            "CREATE TABLE cmdb.planted (x int)",
+            "CREATE FUNCTION public.planted() RETURNS int LANGUAGE sql AS 'SELECT 1'",
+            "DROP TABLE public._sqlx_migrations",
+        ] {
+            c.execute("SAVEPOINT sp").await.unwrap();
+            let r = c.execute(sqlx::AssertSqlSafe(stmt)).await;
+            assert_eq!(sqlstate(&mut c, r).await, "42501", "API role: {stmt}");
+        }
+        c.execute("ROLLBACK").await.unwrap();
+
+        drop(c);
+        db.drop().await;
+    }
+
+    #[tokio::test]
     async fn a_function_planted_in_public_does_not_run_with_the_owners_rights() {
         const TEST: &str = "a_function_planted_in_public_does_not_run_with_the_owners_rights";
         if !ensure_roles().await {
