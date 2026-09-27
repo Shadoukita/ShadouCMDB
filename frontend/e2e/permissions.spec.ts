@@ -216,7 +216,14 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
   await expect(page.getByText("None of your permission profiles allows viewing Database")).toBeVisible();
   // The class filter offers the viewable classes and their abstract parents (Hardware lists Servers), plus the one in the URL.
-  await expect(page.locator("#f-class option")).toHaveText(["All classes", "Database", "Application", "Hardware (incl. subclasses)", "Server"]);
+  // Roots follow the classes' sort order, so only the denied class's place and Server under Hardware are fixed.
+  const classOptions = page.locator("#f-class option");
+  await expect(classOptions).toHaveCount(5);
+  await expect(classOptions.nth(0)).toHaveText("All classes");
+  await expect(classOptions.nth(1)).toHaveText("Database");
+  const optionTexts = (await classOptions.allTextContents()).map((t) => t.trim());
+  expect([...optionTexts].sort()).toEqual(["All classes", "Application", "Database", "Hardware (incl. subclasses)", "Server"]);
+  expect(optionTexts.indexOf("Server")).toBe(optionTexts.indexOf("Hardware (incl. subclasses)") + 1);
 
   // "New CI" offers only the classes the profile may create.
   await page.goto("/");
