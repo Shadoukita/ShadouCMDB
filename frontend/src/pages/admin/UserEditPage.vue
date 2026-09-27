@@ -155,6 +155,7 @@ const notFound = computed(() => {
           <span v-if="user.data.value.isActive" class="badge ok">Active</span>
           <span v-else class="badge off">Disabled</span>
           <span v-if="user.data.value.isAdministrator" class="badge">Administrator</span>
+          <span v-if="user.data.value.mfaEnabled" class="badge ok" title="Signs in with a password and an authenticator code">Two-factor on</span>
           <span v-if="isSelf" class="badge">You</span>
         </template>
       </div>
@@ -223,6 +224,8 @@ const notFound = computed(() => {
             <dl class="props">
               <dt>Last sign-in</dt>
               <dd>{{ user.data.value.lastLoginAt ? formatDateTime(user.data.value.lastLoginAt) : "Never" }}</dd>
+              <dt>Two-factor authentication</dt>
+              <dd>{{ user.data.value.mfaEnabled ? "On (authenticator app)" : "Off" }}</dd>
               <dt>Password changed</dt>
               <dd>{{ formatDateTime(user.data.value.passwordChangedAt) }}</dd>
               <dt>Created</dt>
