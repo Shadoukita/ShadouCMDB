@@ -7,8 +7,7 @@
 use std::sync::LazyLock;
 
 use argon2::Argon2;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use password_hash::rand_core::OsRng;
+use argon2::password_hash::{PasswordHasher, PasswordVerifier};
 use tokio::sync::Semaphore;
 
 use crate::http::error::AppError;
@@ -41,15 +40,13 @@ pub fn policy_error(password: &str) -> Option<String> {
 }
 
 fn hash_blocking(password: &str) -> Result<String, argon2::password_hash::Error> {
-    let salt = SaltString::generate(&mut OsRng);
-    Ok(Argon2::default().hash_password(password.as_bytes(), &salt)?.to_string())
+    // A fresh 16-byte salt from the OS generator.
+    Ok(Argon2::default().hash_password(password.as_bytes())?.to_string())
 }
 
+/// False for a wrong password and for a hash that is not a valid PHC string.
 fn verify_blocking(password: &str, hash: &str) -> bool {
-    match PasswordHash::new(hash) {
-        Ok(parsed) => Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok(),
-        Err(_) => false,
-    }
+    Argon2::default().verify_password(password.as_bytes(), hash).is_ok()
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, AppError> {
@@ -97,5 +94,14 @@ mod tests {
         assert!(!verify("wrong horse battery", Some(&a)).await.unwrap());
         assert!(!verify("correct horse battery", None).await.unwrap());
         assert!(!verify("x", Some("not a phc string")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn verifies_hashes_stored_by_argon2_0_5() {
+        // Hashed by argon2 0.5.3: passwords stored before the 0.6 upgrade must still sign in.
+        let stored =
+            "$argon2id$v=19$m=19456,t=2,p=1$SJXWUV+khabsaCPQFVcKuA$Lvunqw2hvrZvZVz2CJ4I7Wt64NYABOSJxuP1+fCpmrU";
+        assert!(verify("correct horse battery", Some(stored)).await.unwrap());
+        assert!(!verify("wrong horse battery", Some(stored)).await.unwrap());
     }
 }
