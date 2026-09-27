@@ -30,6 +30,10 @@ CREATE ROLE shadoucmdb_owner LOGIN PASSWORD :'owner_password';
 CREATE ROLE shadoucmdb_app LOGIN PASSWORD :'app_password';
 CREATE ROLE shadoucmdb_maintenance LOGIN PASSWORD :'maintenance_password';
 GRANT shadoucmdb_app TO shadoucmdb_owner;
+-- Pin the search_path: the default "$user", public would look first in a
+-- schema named after the role, and schemas are what the API role creates.
+ALTER ROLE shadoucmdb_owner SET search_path = cmdb, public;
+ALTER ROLE shadoucmdb_maintenance SET search_path = cmdb, public;
 CREATE DATABASE shadoucmdb OWNER shadoucmdb_owner ENCODING 'UTF8';
 REVOKE ALL ON DATABASE shadoucmdb FROM PUBLIC;
 GRANT CONNECT ON DATABASE shadoucmdb TO shadoucmdb_app, shadoucmdb_maintenance;

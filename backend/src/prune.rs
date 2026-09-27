@@ -1,6 +1,6 @@
 //! `shadoucmdb prune-audit`: apply the audit_log retention window.
 //!
-//! The deletion itself is `cmdb.prune_audit_log()` (migrations 0007, 0008), a SECURITY
+//! The deletion itself is `cmdb.prune_audit_log()` (migrations 0007, 0008, 0010), a SECURITY
 //! DEFINER function that only the maintenance role may execute. It deletes by
 //! age only, refuses windows under 30 days, and records every real run as an
 //! `audit.purge` row. This command connects with MAINTENANCE_DATABASE_URL and
@@ -20,8 +20,8 @@ pub const MIN_DAYS: u32 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Scope {
-    /// Sign-in, sign-out and session events (IP address, user agent), plus
-    /// sessions that expired more than 30 days ago.
+    /// Sign-in, sign-out, session and API token use events (IP address, user
+    /// agent), plus sessions that expired more than 30 days ago.
     Auth,
     /// CI and configuration change history (create, update, delete, restore).
     Changes,
@@ -206,6 +206,7 @@ mod tests {
             "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, new_value, occurred_at) VALUES
                ('system', 'login.failure', 'sessions', gen_random_uuid(), '{\"ipAddress\":\"192.0.2.1\"}', now() - interval '200 days'),
                ('system', 'login.success', 'sessions', gen_random_uuid(), '{\"ipAddress\":\"192.0.2.2\"}', now() - interval '10 days'),
+               ('system', 'token.use', 'api_tokens', gen_random_uuid(), '{\"ipAddress\":\"192.0.2.3\"}', now() - interval '200 days'),
                ('system', 'create', 'configuration_items', gen_random_uuid(), '{}', now() - interval '400 days'),
                ('system', 'create', 'configuration_items', gen_random_uuid(), '{}', now());
              INSERT INTO users (username, display_name, password_hash) VALUES ('p', 'p', '$argon2id$v=19$test');
@@ -244,9 +245,9 @@ mod tests {
         c.execute("COMMIT").await.unwrap();
 
         let dry = prune(&mut c, 180, Scope::Auth, true, Some("tester")).await.unwrap();
-        assert_eq!(dry, vec![("login.failure".into(), 1), ("sessions".into(), 1)]);
+        assert_eq!(dry, vec![("login.failure".into(), 1), ("token.use".into(), 1), ("sessions".into(), 1)]);
         c.execute("RESET ROLE").await.unwrap();
-        assert_eq!(count(&mut c, "true").await, 4, "a dry run deletes nothing and records nothing");
+        assert_eq!(count(&mut c, "true").await, 5, "a dry run deletes nothing and records nothing");
 
         c.execute("SET ROLE shadoucmdb_maintenance").await.unwrap();
         let done = prune(&mut c, 180, Scope::Auth, false, Some("tester")).await.unwrap();
@@ -256,6 +257,7 @@ mod tests {
         c.execute("RESET ROLE").await.unwrap();
 
         assert_eq!(count(&mut c, "action = 'login.failure'").await, 0);
+        assert_eq!(count(&mut c, "action = 'token.use'").await, 0, "token use is an access event");
         assert_eq!(count(&mut c, "action = 'login.success'").await, 1, "inside the window");
         assert_eq!(count(&mut c, "action = 'create'").await, 1, "inside the window");
         let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions").fetch_one(&mut *c).await.unwrap();
@@ -269,7 +271,7 @@ mod tests {
         let login: String = sqlx::query_scalar("SELECT session_user::text").fetch_one(&mut *c).await.unwrap();
         assert_eq!(purges.len(), 2, "one audit.purge row per executed run, none for the dry run");
         assert_eq!(purges[0]["scope"], "auth");
-        assert_eq!(purges[0]["deleted"], serde_json::json!({ "login.failure": 1 }));
+        assert_eq!(purges[0]["deleted"], serde_json::json!({ "login.failure": 1, "token.use": 1 }));
         assert_eq!(purges[0]["sessionsDeleted"], serde_json::json!(1));
         assert_eq!(purges[0]["operator"], "tester");
         assert_eq!(purges[0]["databaseUser"], login.as_str());
