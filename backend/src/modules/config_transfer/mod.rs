@@ -1394,9 +1394,10 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
 
 /// `config.export_import` lets a file in, not past the permission each section
 /// needs on its own admin API: the data model and lookups (which run DDL) need
-/// `datamodel.manage`, UI settings need `customization.manage`. Checked for dry
-/// runs too, before anything touches the database. Profiles are bounded per
-/// profile by what the importing user holds.
+/// `datamodel.manage`, UI settings need `customization.manage`, permission
+/// profiles need `profiles.manage`. Checked for dry runs too, before anything
+/// touches the database. Each profile is still bounded by what the importing
+/// user holds.
 fn check_sections(ctx: &RequestContext, file: &ConfigFile) -> Result<(), AppError> {
     let data_model = file.data_model.as_ref().is_some_and(|d| {
         !(d.areas.is_empty()
@@ -1417,6 +1418,9 @@ fn check_sections(ctx: &RequestContext, file: &ConfigFile) -> Result<(), AppErro
     }
     if file.ui_settings.is_some() {
         ctx.require(GlobalPermission::CustomizationManage)?;
+    }
+    if file.permission_profiles.as_ref().is_some_and(|p| !p.is_empty()) {
+        ctx.require(GlobalPermission::ProfilesManage)?;
     }
     Ok(())
 }
@@ -1481,9 +1485,9 @@ pub fn routes() -> Vec<Route> {
                  400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making \
                  an attribute required while CIs lack a value) fails with the same error the admin API gives, with \
                  the file path prefixed. A non-empty `dataModel` or `lookups` section also requires \
-                 `datamodel.manage`, and a `uiSettings` section `customization.manage` (403 otherwise, dry run \
-                 included). Profiles cannot grant more than the importing user holds (403). Every \
-                 applied change is audited.",
+                 `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty \
+                 `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot \
+                 grant more than the importing user holds (403). Every applied change is audited.",
             )
             .requires(GlobalPermission::ConfigExportImport)
             .body_limit(IMPORT_BODY_LIMIT)
@@ -1527,8 +1531,8 @@ mod tests {
         sqlx::query_scalar("SELECT count(*) FROM cmdb.schema_changes").fetch_one(pool).await.unwrap()
     }
 
-    /// GH#59: `config.export_import` alone must not run data-model DDL (or touch
-    /// lookups or UI settings) through the import.
+    /// GH#59, GH#80: `config.export_import` alone must not run data-model DDL (or
+    /// touch lookups, UI settings or permission profiles) through the import.
     #[tokio::test]
     async fn import_sections_need_their_own_permission() {
         let Some(src) = scratch::database("import_sections_src").await else { return };
@@ -1552,9 +1556,37 @@ mod tests {
         assert!(err.message.contains("customization.manage"), "{err}");
         assert_eq!(schema_change_count(&dst.pool).await, before);
 
-        // Profiles alone stay open to the permission (bounded by what the user holds).
-        let profiles_only = ConfigFile { data_model: None, lookups: None, ui_settings: None, ..file.clone() };
-        import(&dst.pool, &only_import, &profiles_only, ImportMode::DryRun).await.unwrap();
+        // GH#80: profiles need `profiles.manage`; an empty section needs nothing extra.
+        let no_profiles = ConfigFile { data_model: None, lookups: None, ui_settings: None, ..file.clone() };
+        assert_eq!(no_profiles.permission_profiles.as_deref().map(<[_]>::len), Some(0));
+        import(&dst.pool, &only_import, &no_profiles, ImportMode::DryRun).await.unwrap();
+        let empty_profile = ProfileSpec {
+            name: "Service Desk".into(),
+            description: None,
+            global_permissions: Vec::new(),
+            class_permissions: Vec::new(),
+        };
+        let profiles_only = ConfigFile { permission_profiles: Some(vec![empty_profile]), ..no_profiles };
+        for mode in [ImportMode::DryRun, ImportMode::Apply] {
+            let err = import(&dst.pool, &only_import, &profiles_only, mode).await.unwrap_err();
+            assert_eq!(err.code, ErrorCode::Forbidden, "{mode:?}: {err}");
+            assert!(err.message.contains("profiles.manage"), "{err}");
+        }
+        let profile_count = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM permission_profiles WHERE name = 'Service Desk'")
+                .fetch_one(&dst.pool)
+                .await
+                .unwrap()
+        };
+        assert_eq!(profile_count().await, 0);
+        let profile_admin = user_ctx(
+            &dst.pool,
+            "profile_admin",
+            &[GlobalPermission::ConfigExportImport, GlobalPermission::ProfilesManage],
+        )
+        .await;
+        assert!(import(&dst.pool, &profile_admin, &profiles_only, ImportMode::Apply).await.unwrap().applied);
+        assert_eq!(profile_count().await, 1);
 
         let full = user_ctx(
             &dst.pool,
