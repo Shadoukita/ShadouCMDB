@@ -411,6 +411,12 @@ async function main() {
   await post('/api/v1/configuration-items', {
     classId: appClass, name: 'bad-attrs', statusId: inService, attributes: { url: 'ftp://x', criticality: 'extreme', primary_database: server.id, nope: 1 },
   }, 400);
+  const bothStages = await post('/api/v1/configuration-items', {
+    classId: serverClass, name: 'bad-both', statusId: inService, ipAddress: '999.1.1.1', attributes: { management_ip: 'abc', cpu_cores: 'x' },
+  }, 400);
+  const bothFields = (bothStages.json?.error?.details ?? []).map((d: Json) => d.field);
+  check(['ipAddress', 'attributes.management_ip', 'attributes.cpu_cores'].every((f) => bothFields.includes(f)),
+    'core-field and attribute errors are reported together');
   await post('/api/v1/configuration-items', { classId: lb.id, name: 'lb-missing-required', statusId: inService, attributes: { vip: '10.0.0.1' } }, 400);
   const lbItem = (await post('/api/v1/configuration-items', {
     classId: lb.id, name: `smoke-lb-${RUN}`, statusId: inService, attributes: { device_role: 'load_balancer', algorithm: 'round_robin', vip: '10.77.5.5', management_subnet: '10.77.5.0/24' },
@@ -773,6 +779,64 @@ async function permissions(x: Json) {
     return [token, createHash('sha256').update(token).digest('hex'), s.csrf];
   }).concat([password, `${password}-2`, `${password}-3`, `${password}-4`, 'wrong password', 'argon2']);
   check(events.every((e) => secrets.every((s) => s && !JSON.stringify(e).includes(s))), 'no password, hash, session token or CSRF token in the authentication audit rows');
+
+  console.log('\n# API tokens');
+  const inDays = (d: number) => new Date(Date.now() + d * 86_400_000).toISOString();
+  const tokens = '/api/v1/admin/api-tokens';
+  // The reader's token, scoped to Administrator: it still only gets what the reader holds (view servers).
+  const readerToken = (await post(tokens, { name: `smoke-token-${RUN}`, userId: reader.id, profileId: builtin.id, expiresAt: inDays(30) })).json;
+  check(/^scmdb_[0-9a-f]{64}$/.test(readerToken.secret) && readerToken.token.tokenPrefix === readerToken.secret.slice(0, 14) &&
+    readerToken.token.status === 'active' && readerToken.token.userId === reader.id, 'a new token: the secret, its prefix, active, owned by the reader');
+  await post(tokens, { name: 'x', profileId: readers.id, expiresAt: inDays(-1) }, 400);
+  await post(tokens, { name: 'x', profileId: readers.id, expiresAt: inDays(400) }, 400);
+  await post(tokens, { name: 'x', profileId: '00000000-0000-4000-8000-000000000000', expiresAt: inDays(1) }, 400);
+  const listed = (await get(`${tokens}?userId=${reader.id}&status=active&q=smoke-token&sort=-createdAt`)).json;
+  check(listed.page.total === 1 && !JSON.stringify(listed).includes(readerToken.secret), 'tokens are listed, never with their secret');
+  await get(`${tokens}/${readerToken.token.id}`);
+  await get(`${tokens}/00000000-0000-4000-8000-000000000000`, 404);
+  const readerBearer = { authorization: `Bearer ${readerToken.secret}` };
+  await as(null, async () => {
+    const list = (await call('GET', '/api/v1/configuration-items?limit=200', undefined, 200, readerBearer)).json;
+    check(list.data.length > 0 && list.data.every((c: Json) => c.classId === serverClass), 'a token sees what its owner may see, not what its scope alone allows');
+    await call('GET', `/api/v1/configuration-items/${app.id}`, undefined, 403, readerBearer);
+    await call('GET', '/api/v1/admin/users', undefined, 403, readerBearer);
+    await call('GET', tokens, undefined, 403, readerBearer, { cover: false }); // token administration needs a session
+    await call('GET', '/api/v1/auth/me', undefined, 403, readerBearer);
+    await call('GET', '/api/v1/statuses?limit=1', undefined, 401, { authorization: 'Bearer scmdb_not-a-token' });
+  });
+  // A bad Bearer next to a live session is 401 (the cookie is ignored), not a way around the CSRF check.
+  await call('POST', '/api/v1/statuses', { key: `nope_${RUN}`, name: 'Nope' }, 401, { 'x-csrf-token': '', authorization: 'Bearer scmdb_x' });
+  // The administrator's token scoped to editors (create/edit servers): writes without a CSRF token, audited as api_client.
+  const editorToken = (await post(tokens, { name: `smoke-editor-token-${RUN}`, profileId: editors.id, expiresAt: inDays(1) })).json;
+  const editorBearer = { authorization: `Bearer ${editorToken.secret}` };
+  const made = await as(null, () => call('POST', '/api/v1/configuration-items', { classId: serverClass, name: `smoke-token-srv-${RUN}`, statusId: inService }, 201, editorBearer));
+  await as(null, () => call('PATCH', `/api/v1/configuration-items/${made.json.id}`, { notes: 'edited by token' }, 200, editorBearer));
+  await as(null, () => call('DELETE', `/api/v1/configuration-items/${made.json.id}`, undefined, 403, editorBearer));
+  await del(`/api/v1/configuration-items/${made.json.id}`);
+  const requestId = made.headers.get('x-request-id');
+  const byToken = (await get(`/api/v1/audit-log?requestId=${requestId}`)).json.data;
+  check(byToken.some((e: Json) => e.action === 'create' && e.entityType === 'configuration_items' && e.actorType === 'api_client' && e.actorId === adminMe.user.id) &&
+    byToken.some((e: Json) => e.action === 'token.use' && e.entityId === editorToken.token.id && e.newValue.outcome === 'accepted' && e.newValue.method === 'POST'),
+    'a change made with a token: actor api_client (the owner), and a token.use row with the same request id');
+  // Escalation: a user manager without other rights cannot mint tokens for users who hold more.
+  await as(asNobody, async () => {
+    await post(tokens, { name: 'x', userId: adminMe.user.id, profileId: readers.id, expiresAt: inDays(1) }, 403);
+    await post(tokens, { name: 'x', userId: reader.id, profileId: readers.id, expiresAt: inDays(1) }, 403);
+    await del(`${tokens}/${readerToken.token.id}`, 403);
+    await post(tokens, { name: `smoke-own-${RUN}`, profileId: readers.id, expiresAt: inDays(1) }); // their own is fine
+  });
+  // Revoke: at once, idempotent, kept as history.
+  await del(`${tokens}/${readerToken.token.id}`);
+  await del(`${tokens}/${readerToken.token.id}`);
+  await del(`${tokens}/${editorToken.token.id}`);
+  await as(null, () => call('GET', '/api/v1/configuration-items?limit=1', undefined, 401, readerBearer));
+  const gone = (await get(`${tokens}/${readerToken.token.id}`)).json;
+  check(gone.status === 'revoked' && gone.revokedBy === ADMIN_USERNAME && gone.lastUsedAt, 'a revoked token stays listed with who revoked it and when it was last used');
+  const tokenTrail: Json[] = (await get(`/api/v1/audit-log?entityType=api_tokens&entityId=${readerToken.token.id}&sort=occurredAt&limit=50`)).json.data;
+  const outcomes = tokenTrail.map((e) => (e.action === 'token.use' ? `use:${e.newValue.outcome}` : e.action)).join(',');
+  check(outcomes === 'create,use:accepted,use:accepted,use:forbidden,use:session_only,use:session_only,update,use:revoked', `token create, every use and revoke are audited (${outcomes})`);
+  check(tokenTrail.every((e) => !JSON.stringify(e).includes(readerToken.secret.slice(6)) &&
+    !JSON.stringify(e).includes(createHash('sha256').update(readerToken.secret).digest('hex'))), 'no token secret or hash in the audit log');
 
   // Clean up what only this run uses.
   await del(`/api/v1/admin/users/${reader.id}`);

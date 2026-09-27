@@ -271,6 +271,10 @@ pub enum AuditAction {
     #[serde(rename = "audit.purge")]
     #[sqlx(rename = "audit.purge")]
     AuditPurge,
+    /// A request made with an API token (entity type `api_tokens`).
+    #[serde(rename = "token.use")]
+    #[sqlx(rename = "token.use")]
+    TokenUse,
 }
 
 impl AuditAction {
@@ -286,6 +290,7 @@ impl AuditAction {
             AuditAction::Logout => "logout",
             AuditAction::SessionRevoke => "session.revoke",
             AuditAction::AuditPurge => "audit.purge",
+            AuditAction::TokenUse => "token.use",
         }
     }
 }
@@ -300,21 +305,41 @@ pub struct AuditEntry {
     pub new_value: Option<Value>,
 }
 
+/// Audit rows per INSERT; a type purge can audit tens of thousands of CIs.
+pub const AUDIT_BATCH: usize = 1000;
+
 /// Append audit rows in the caller's transaction so a change and its audit commit together.
 pub async fn write_audit(conn: &mut PgConnection, ctx: &RequestContext, entries: Vec<AuditEntry>) -> sqlx::Result<()> {
-    for e in entries {
+    let mut rest = entries;
+    while !rest.is_empty() {
+        let batch: Vec<AuditEntry> = rest.drain(..rest.len().min(AUDIT_BATCH)).collect();
+        let mut actions = Vec::with_capacity(batch.len());
+        let mut entity_types = Vec::with_capacity(batch.len());
+        let mut entity_ids = Vec::with_capacity(batch.len());
+        let mut old_values = Vec::with_capacity(batch.len());
+        let mut new_values = Vec::with_capacity(batch.len());
+        for e in batch {
+            actions.push(e.action.as_str());
+            entity_types.push(e.entity_type);
+            entity_ids.push(e.entity_id);
+            old_values.push(e.old_value);
+            new_values.push(e.new_value);
+        }
         sqlx::query!(
             "INSERT INTO audit_log (actor_type, actor_id, actor_name, action, entity_type, entity_id, old_value, new_value, request_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             SELECT $1, $2, $3, u.action, u.entity_type, u.entity_id, u.old_value, u.new_value, $4
+             FROM UNNEST($5::text[], $6::text[], $7::uuid[], $8::jsonb[], $9::jsonb[])
+                  WITH ORDINALITY AS u(action, entity_type, entity_id, old_value, new_value, n)
+             ORDER BY u.n",
             ctx.actor.actor_type.as_str(),
             ctx.actor.id,
             ctx.actor.name,
-            e.action.as_str(),
-            e.entity_type,
-            e.entity_id,
-            e.old_value,
-            e.new_value,
             ctx.request_id,
+            &actions as &[&str],
+            &entity_types as &[&str],
+            &entity_ids,
+            &old_values as &[Option<Value>],
+            &new_values as &[Option<Value>],
         )
         .execute(&mut *conn)
         .await?;
