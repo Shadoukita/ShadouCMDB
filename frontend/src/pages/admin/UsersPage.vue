@@ -21,6 +21,7 @@ const COLUMNS: { key: string; label: string; sort?: string }[] = [
   { key: "email", label: "Email" },
   { key: "profiles", label: "Permission profiles" },
   { key: "status", label: "Status" },
+  { key: "signIn", label: "Signs in with" },
   { key: "mfa", label: "Two-factor" },
   { key: "lastLogin", label: "Last sign-in", sort: "lastLoginAt" },
   { key: "created", label: "Created", sort: "createdAt" },
@@ -130,6 +131,12 @@ function clearFilters() {
               <td>
                 <span v-if="u.isActive" class="badge ok">Active</span>
                 <span v-else class="badge off">Disabled</span>
+              </td>
+              <td>
+                <span v-if="u.identityProvider" class="badge" :title="`Account of ${u.identityProvider.name}: name, e-mail and profiles come from it`">
+                  {{ u.identityProvider.name }}
+                </span>
+                <span v-else class="muted">Local password</span>
               </td>
               <td>
                 <span v-if="u.mfaEnabled" class="badge ok">On</span>
