@@ -237,15 +237,20 @@ impl Resource for Areas {
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
             if previous.is_none() {
-                let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
-                    .bind(&row.key)
-                    .fetch_one(&mut *conn)
-                    .await?;
-                if taken {
+                // A schema named after a role is first on that role's default
+                // search_path ("$user", public), so role names are refused too.
+                let taken: Option<String> = sqlx::query_scalar(
+                    "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1) THEN 'A schema'
+                                 WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) THEN 'A database role' END",
+                )
+                .bind(&row.key)
+                .fetch_one(&mut *conn)
+                .await?;
+                if let Some(what) = taken {
                     return Err(engine::invalid_name(
                         "key",
                         "name_taken",
-                        format!("A schema named \"{}\" already exists in the database", row.key),
+                        format!("{what} named \"{}\" already exists in the database", row.key),
                     ));
                 }
                 engine::apply(conn, ctx, &format!("Create area {}", row.key), Scope::Areas, Purge::default()).await?;
@@ -307,4 +312,67 @@ pub fn routes() -> Vec<Route> {
             }),
     );
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::scratch;
+    use crate::modules::schema_changes::{TechnicalNameQuery, technical_name};
+
+    fn create(key: &str) -> AreaCreate {
+        serde_json::from_value(serde_json::json!({ "key": key, "name": "Role clash" })).unwrap()
+    }
+
+    fn reason(e: &AppError) -> Option<&str> {
+        e.details.as_ref()?.first().map(|d| d.code.as_str())
+    }
+
+    async fn preview(pool: &sqlx::PgPool, key: &str) -> Option<String> {
+        let q: TechnicalNameQuery =
+            serde_json::from_value(serde_json::json!({ "kind": "area", "name": "Role clash", "key": key })).unwrap();
+        technical_name(pool, &q).await.unwrap().code
+    }
+
+    /// GH#62: a schema named after a role is first on that role's default
+    /// search_path, so area keys may not match a role or the role prefix.
+    #[tokio::test]
+    async fn area_keys_may_not_match_database_roles() {
+        let Some(db) = scratch::database("area_keys_may_not_match_database_roles").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("test", "test");
+
+        assert_eq!(preview(pool, "shadoucmdb_owner").await.as_deref(), Some("reserved_prefix"));
+        let mut tx = pool.begin().await.unwrap();
+        let e = simple::create_in::<Areas>(&mut tx, &ctx, create("shadoucmdb_owner").columns()).await.unwrap_err();
+        assert_eq!((e.code, reason(&e)), (ErrorCode::InvalidName, Some("reserved_prefix")));
+        tx.rollback().await.unwrap();
+
+        // Any existing role, not only ShadouCMDB's: the one these tests connect as.
+        let role: String = sqlx::query_scalar("SELECT current_user::text").fetch_one(pool).await.unwrap();
+        if naming::validate(&role, NameKind::Area).is_ok() {
+            assert_eq!(preview(pool, &role).await.as_deref(), Some("name_taken"));
+            let mut tx = pool.begin().await.unwrap();
+            let e = simple::create_in::<Areas>(&mut tx, &ctx, create(&role).columns()).await.unwrap_err();
+            assert_eq!((e.code, reason(&e)), (ErrorCode::InvalidName, Some("name_taken")), "{}", e.message);
+            tx.rollback().await.unwrap();
+            let schema: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
+                .bind(&role)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            assert!(!schema, "no schema named after role {role}");
+        } else {
+            eprintln!("area_keys_may_not_match_database_roles: role {role:?} is not a valid area key, name_taken not checked");
+        }
+
+        // The CHECK constraint (migration 0012) stops a write that bypasses the API.
+        let e = sqlx::query("INSERT INTO cmdb.areas (key, name) VALUES ('shadoucmdb_maintenance', 'x')")
+            .execute(pool)
+            .await
+            .unwrap_err();
+        let constraint = e.as_database_error().and_then(|d| d.constraint()).map(str::to_owned);
+        assert_eq!(constraint.as_deref(), Some("areas_key_not_reserved"));
+        db.drop().await;
+    }
 }

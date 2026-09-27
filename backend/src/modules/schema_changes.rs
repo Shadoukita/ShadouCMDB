@@ -345,7 +345,8 @@ pub async fn technical_name(pool: &PgPool, q: &TechnicalNameQuery) -> Result<Tec
     let taken: Option<String> = match q.kind {
         NameKind::Area => sqlx::query_scalar(
             "SELECT CASE WHEN EXISTS (SELECT 1 FROM cmdb.areas WHERE key = $1) THEN 'an existing area'
-                         WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1) THEN 'a schema in the database' END",
+                         WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1) THEN 'a schema in the database'
+                         WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) THEN 'a database role' END",
         )
         .bind(&name)
         .fetch_one(&mut *conn)
