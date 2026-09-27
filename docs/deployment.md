@@ -161,7 +161,9 @@ part of the policy.
 ## Database roles
 
 The bootstrap script [`sql/bootstrap/00_create_role_and_database.sql`](../sql/bootstrap/00_create_role_and_database.sql)
-creates three roles. None is a superuser.
+creates three roles. None is a superuser. Generate their passwords with
+`openssl rand -hex 24`: they go into connection URLs, where characters such as `@ : / # % ?`
+must be percent-encoded (`@` becomes `%40`), and hex needs none.
 
 | Role | Used by | Variable | May |
 | --- | --- | --- | --- |
@@ -186,12 +188,15 @@ and cannot revoke it itself (run `REVOKE CREATE ON SCHEMA public FROM PUBLIC` as
 owner). PostgreSQL 15 and later withhold it already.
 
 The owner can change anything, including the audit log's trigger, so keep its connection
-string out of the running server's environment. For example, pass it only to the command
-that needs it (variables already set win over the env file):
+string out of the running server's environment. For example, prompt for the password and
+pass it only to the command that needs it (variables already set win over the env file).
+Prompting also keeps it out of shell history, the sudo log and `ps`:
 
 ```sh
-MIGRATION_DATABASE_URL='postgres://shadoucmdb_owner:…@db.example.internal/shadoucmdb' \
+read -rsp 'shadoucmdb_owner password: ' PW; echo
+MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$PW@db.example.internal:5432/shadoucmdb" \
   shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+unset PW
 ```
 
 Running `migrate` as `shadoucmdb_app` on a three-role install fails with a hint to set
@@ -208,7 +213,7 @@ purge itself. To split it, once:
 
    ```sh
    psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
-        -v owner_password='<strong password>' -v maintenance_password='<strong password>' \
+        -v owner_password='<password>' -v maintenance_password='<password>' \
         -f sql/bootstrap/10_split_roles.sql
    ```
 
@@ -339,8 +344,11 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin shadoucmdb
 sudo install -d -m 0750 -o root -g shadoucmdb /etc/shadoucmdb
 sudo install -m 0640 -o root -g shadoucmdb .env /etc/shadoucmdb/shadoucmdb.env   # your settings, as shadoucmdb_app
 # migrate as shadoucmdb_owner, passed to this one command only (see Database roles):
-sudo -u shadoucmdb env MIGRATION_DATABASE_URL='postgres://shadoucmdb_owner:…@db.example.internal/shadoucmdb' \
+read -rsp 'shadoucmdb_owner password: ' PW; echo
+export MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$PW@db.example.internal:5432/shadoucmdb"
+sudo --preserve-env=MIGRATION_DATABASE_URL -u shadoucmdb \
   shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+unset PW MIGRATION_DATABASE_URL
 sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin   # or use first-run setup in the UI
 sudo cp deploy/systemd/shadoucmdb.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
@@ -351,7 +359,8 @@ journalctl -u shadoucmdb -f
 The unit runs as an unprivileged user and has no capabilities or writable
 paths. To upgrade:
 1. replace the binary;
-2. run `migrate` with `MIGRATION_DATABASE_URL` as above;
+2. run `migrate` with `MIGRATION_DATABASE_URL` as above (on a single-role install, split the
+   roles first: see [Upgrading a single-role install](#upgrading-a-single-role-install));
 3. `systemctl restart shadoucmdb`.
 
 ## Windows Server (Windows Service)
@@ -369,10 +378,11 @@ Copy-Item .\.env "$data\shadoucmdb.env"          # your settings (DATABASE_URL o
 # settings and write its log. Keep the env file away from other users.
 icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'NT AUTHORITY\LocalService:(OI)(CI)M'
 
-# migrate as shadoucmdb_owner, set for this session only (see Database roles):
-$env:MIGRATION_DATABASE_URL = 'postgres://shadoucmdb_owner:…@db.example.internal/shadoucmdb'
+# migrate as shadoucmdb_owner, prompted for and set for this session only (see Database roles):
+$pw = [uri]::EscapeDataString((Get-Credential shadoucmdb_owner).GetNetworkCredential().Password)
+$env:MIGRATION_DATABASE_URL = "postgres://shadoucmdb_owner:$pw@db.example.internal:5432/shadoucmdb"
 & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" migrate
-Remove-Item Env:MIGRATION_DATABASE_URL
+Remove-Item Env:MIGRATION_DATABASE_URL; Remove-Variable pw
 & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
 Start-Service ShadouCMDB
 Invoke-RestMethod http://127.0.0.1:3000/readyz

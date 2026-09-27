@@ -22,11 +22,18 @@ Full documentation: https://github.com/Shadoukita/ShadouCMDB/blob/main/docs/depl
 Create the database (once, as a PostgreSQL admin)
 -------------------------------------------------
 
+On any machine with psql (it need not be this server), from the directory you
+extracted this archive to (or copy sql/bootstrap/ there):
+
   psql "postgres://admin@db.example.internal:5432/postgres" \
-       -v owner_password='<strong password 1>' \
-       -v app_password='<strong password 2>' \
-       -v maintenance_password='<strong password 3>' \
+       -v owner_password='<password 1>' \
+       -v app_password='<password 2>' \
+       -v maintenance_password='<password 3>' \
        -f sql/bootstrap/00_create_role_and_database.sql
+
+Generate each password with `openssl rand -hex 24`. They go into connection
+URLs, where characters such as @ : / # % ? must be percent-encoded (@ -> %40);
+hex passwords need none.
 
 This creates the database shadoucmdb and three roles, none of them superuser:
 
@@ -36,8 +43,7 @@ This creates the database shadoucmdb and three roles, none of them superuser:
                           PGHOST/PGUSER/PGPASSWORD/...).
   shadoucmdb_maintenance  `shadoucmdb prune-audit` only (MAINTENANCE_DATABASE_URL).
 
-Upgrading an install that still has only shadoucmdb_app: see the header of
-sql/bootstrap/10_split_roles.sql, or "Database roles" in docs/deployment.md.
+Upgrading an install that still has only shadoucmdb_app: see "Upgrade" below.
 
 
 Install as a systemd service
@@ -48,10 +54,14 @@ Install as a systemd service
   sudo install -d -m 0750 -o root -g shadoucmdb /etc/shadoucmdb
   sudo install -m 0640 -o root -g shadoucmdb shadoucmdb.env.example /etc/shadoucmdb/shadoucmdb.env
   sudoedit /etc/shadoucmdb/shadoucmdb.env     # DATABASE_URL, or PGHOST/PGUSER/PGPASSWORD/..., as shadoucmdb_app
-  # Migrate as the owner. The variable is passed to this one command only and
-  # wins over the env file, so the owner's password never lands in it:
-  sudo -u shadoucmdb env MIGRATION_DATABASE_URL='postgres://shadoucmdb_owner:<password 1>@db.example.internal:5432/shadoucmdb' \
+  # Migrate as the owner. The password is prompted for, so it stays out of the
+  # env file, shell history, the sudo log and `ps`; the variable wins over the
+  # env file:
+  read -rsp 'shadoucmdb_owner password: ' PW; echo
+  export MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$PW@db.example.internal:5432/shadoucmdb"
+  sudo --preserve-env=MIGRATION_DATABASE_URL -u shadoucmdb \
     shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+  unset PW MIGRATION_DATABASE_URL
   sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env seed
   # Optional starter data model (or install it later under Administration > Templates):
   sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env seed --template it_infrastructure
@@ -67,9 +77,20 @@ Upgrade
 -------
 
   sudo install -m 0755 shadoucmdb /usr/local/bin/shadoucmdb
-  sudo -u shadoucmdb env MIGRATION_DATABASE_URL='postgres://shadoucmdb_owner:<password 1>@db.example.internal:5432/shadoucmdb' \
+  read -rsp 'shadoucmdb_owner password: ' PW; echo
+  export MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$PW@db.example.internal:5432/shadoucmdb"
+  sudo --preserve-env=MIGRATION_DATABASE_URL -u shadoucmdb \
     shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+  unset PW MIGRATION_DATABASE_URL
   sudo systemctl restart shadoucmdb
+
+If the database still has only shadoucmdb_app (installed before the three-role
+setup), shadoucmdb_owner does not exist yet. Split the roles once first, in the
+order given in the header of sql/bootstrap/10_split_roles.sql:
+  1. run migrate as before, without MIGRATION_DATABASE_URL:
+       sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+  2. stop the server and run 10_split_roles.sql as a PostgreSQL admin;
+  3. start the server. From then on, migrate as shown above.
 
 
 Audit log retention
@@ -78,8 +99,15 @@ Audit log retention
 Nothing is deleted automatically. Report, then delete, audit entries older than
 180 days as shadoucmdb_maintenance:
 
-  sudo -u shadoucmdb env MAINTENANCE_DATABASE_URL='postgres://shadoucmdb_maintenance:<password 3>@db.example.internal:5432/shadoucmdb' \
-    shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env prune-audit --older-than 180d [--execute]
+  read -rsp 'shadoucmdb_maintenance password: ' PW; echo
+  export MAINTENANCE_DATABASE_URL="postgres://shadoucmdb_maintenance:$PW@db.example.internal:5432/shadoucmdb"
+  # Report what would go (the default is a dry run):
+  sudo --preserve-env=MAINTENANCE_DATABASE_URL -u shadoucmdb \
+    shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env prune-audit --older-than 180d
+  # Delete it:
+  sudo --preserve-env=MAINTENANCE_DATABASE_URL -u shadoucmdb \
+    shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env prune-audit --older-than 180d --execute
+  unset PW MAINTENANCE_DATABASE_URL
 
 
 Verify the download
