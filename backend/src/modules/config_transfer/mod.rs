@@ -1499,8 +1499,8 @@ pub fn routes() -> Vec<Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::Principal;
     use crate::auth::permissions::Permissions;
+    use crate::auth::{Credential, Principal};
     use crate::db::scratch;
 
     async fn user_ctx(pool: &PgPool, username: &str, global: &[GlobalPermission]) -> RequestContext {
@@ -1516,8 +1516,7 @@ mod tests {
         let principal = Principal {
             user_id,
             username: username.into(),
-            session_id: Uuid::new_v4(),
-            csrf_token: String::new(),
+            credential: Credential::Session { id: Uuid::new_v4(), csrf_token: String::new() },
             permissions,
         };
         RequestContext::user(std::sync::Arc::new(principal), "test".into())
