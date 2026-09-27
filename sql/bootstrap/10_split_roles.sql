@@ -43,6 +43,9 @@ CREATE ROLE shadoucmdb_owner LOGIN PASSWORD :'owner_password';
 CREATE ROLE shadoucmdb_maintenance LOGIN PASSWORD :'maintenance_password';
 \endif
 GRANT shadoucmdb_app TO shadoucmdb_owner;
+-- See 00_create_role_and_database.sql: no "$user" schema lookup for these roles.
+ALTER ROLE shadoucmdb_owner SET search_path = cmdb, public;
+ALTER ROLE shadoucmdb_maintenance SET search_path = cmdb, public;
 
 -- Hand over the database and everything shadoucmdb_app created in it outside
 -- the area schemas: schemas, tables (their identity sequences follow), other

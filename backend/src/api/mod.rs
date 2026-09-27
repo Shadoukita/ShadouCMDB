@@ -37,6 +37,7 @@ pub fn routes() -> Vec<Route> {
         modules::audit::routes(),
         modules::users::routes(),
         modules::profiles::routes(),
+        modules::api_tokens::routes(),
         modules::config_transfer::routes(),
     ]
     .into_iter()

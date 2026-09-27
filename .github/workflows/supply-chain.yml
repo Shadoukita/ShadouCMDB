@@ -156,13 +156,21 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: No action or reusable workflow referenced by tag or branch
+      # The checker parses the YAML, so flow-style steps and quoted keys cannot slip past it.
+      # First prove it still catches every unpinned form in the fixture (8 refs) and passes
+      # the pinned one; the fixture's findings are printed without ::error:: so they do not
+      # show up as annotations on the PR.
+      - name: Self-test of the pin checker
         run: |
-          # Local actions (./...) and docker:// images with a digest are fine; anything
-          # else needs owner/repo@<40-hex SHA>, with the version in a trailing comment.
-          bad=$(grep -rnE '^\s*(-\s+)?uses:' .github/workflows .github/actions 2>/dev/null \
-            | grep -vE 'uses:\s*\./' \
-            | grep -vE 'uses:\s*docker://[^ ]+@sha256:[0-9a-f]{64}' \
-            | grep -vE 'uses:\s*[^ @]+@[0-9a-f]{40}(\s|$)' || true)
-          if [ -n "$bad" ]; then echo "::error::Unpinned actions:"; echo "$bad"; exit 1; fi
-          echo "all actions pinned"
+          fixtures=.github/scripts/testdata/actions-pinned
+          if out=$(python3 .github/scripts/check-actions-pinned.py "$fixtures/unpinned.yml"); then
+            echo "::error::check-actions-pinned.py passed $fixtures/unpinned.yml"; exit 1
+          fi
+          sed 's/^::error /  expected: /' <<<"$out"
+          n=$(grep -c '^::error file=.*Unpinned action' <<<"$out" || true)
+          if [ "$n" != 8 ]; then
+            echo "::error::check-actions-pinned.py found $n of 8 unpinned refs in the fixture"; exit 1
+          fi
+          python3 .github/scripts/check-actions-pinned.py "$fixtures/pinned.yml"
+      - name: No action or reusable workflow referenced by tag or branch
+        run: python3 .github/scripts/check-actions-pinned.py .github/workflows .github/actions
