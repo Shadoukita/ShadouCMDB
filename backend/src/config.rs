@@ -12,9 +12,9 @@ use std::time::Duration;
 pub enum SslMode {
     /// Plain TCP.
     Disable,
-    /// Encrypted, server certificate not verified.
+    /// Encrypted, server certificate not verified. Explicit opt-in only.
     Require,
-    /// Encrypted, certificate chain and hostname verified.
+    /// Encrypted, certificate chain and hostname verified. The default.
     VerifyFull,
 }
 
@@ -230,10 +230,10 @@ impl Config {
                 }
             }
         }
-        let ssl = match r.one_of("DATABASE_SSL", &["disable", "require", "verify-full"], "require").as_str() {
+        let ssl = match r.one_of("DATABASE_SSL", &["disable", "require", "verify-full"], "verify-full").as_str() {
             "disable" => SslMode::Disable,
-            "verify-full" => SslMode::VerifyFull,
-            _ => SslMode::Require,
+            "require" => SslMode::Require,
+            _ => SslMode::VerifyFull,
         };
         let ssl_ca_file = r.raw("DATABASE_SSL_CA_FILE").map(PathBuf::from);
         let pool_max = r.int::<u32>("DATABASE_POOL_MAX", 1, 200).unwrap_or(10);
@@ -345,6 +345,22 @@ mod tests {
             "CSP_REPORT_URI" => Some(csp_report_uri.into()),
             _ => None,
         })
+    }
+
+    #[test]
+    fn database_ssl_defaults_to_verify_full() {
+        assert_eq!(load("").unwrap().database.ssl, SslMode::VerifyFull);
+        for (value, mode) in
+            [("verify-full", SslMode::VerifyFull), ("require", SslMode::Require), ("disable", SslMode::Disable)]
+        {
+            let cfg = Config::from_lookup(&|key| match key {
+                "DATABASE_URL" => Some("postgres://cmdb@db/cmdb".into()),
+                "DATABASE_SSL" => Some(value.into()),
+                _ => None,
+            })
+            .unwrap();
+            assert_eq!(cfg.database.ssl, mode, "{value}");
+        }
     }
 
     #[test]

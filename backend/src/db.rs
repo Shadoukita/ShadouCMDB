@@ -56,12 +56,27 @@ pub fn connect_options(cfg: &DatabaseConfig) -> anyhow::Result<PgConnectOptions>
     if let Some(ca) = &cfg.ssl_ca_file {
         opts = opts.ssl_root_cert(ca);
     }
+    if cfg.ssl == SslMode::Require && opts.get_socket().is_none() && !is_loopback_host(opts.get_host()) {
+        tracing::warn!(
+            host = opts.get_host(),
+            "DATABASE_SSL=require does not verify the database server's certificate; anyone on the network path \
+             can impersonate it. Use DATABASE_SSL=verify-full (with DATABASE_SSL_CA_FILE for a private CA)"
+        );
+    }
 
     opts = opts.application_name("shadoucmdb").options([("search_path", SEARCH_PATH)]);
     if !cfg.statement_timeout.is_zero() {
         opts = opts.options([("statement_timeout", cfg.statement_timeout.as_millis().to_string())]);
     }
     Ok(opts)
+}
+
+/// A host that never leaves this machine: a Unix socket directory, `localhost` or a loopback address.
+fn is_loopback_host(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    host.starts_with('/')
+        || bare.eq_ignore_ascii_case("localhost")
+        || bare.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 fn pool_options(cfg: &DatabaseConfig) -> PgPoolOptions {
@@ -284,6 +299,21 @@ pub mod scratch {
             self.pool.close().await;
             let mut c = self.admin.connect().await.unwrap();
             c.execute(sqlx::AssertSqlSafe(format!("DROP DATABASE {} WITH (FORCE)", self.name))).await.unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_loopback_host;
+
+    #[test]
+    fn loopback_hosts_are_the_ones_that_never_leave_the_machine() {
+        for local in ["localhost", "LOCALHOST", "127.0.0.1", "127.8.9.10", "::1", "[::1]", "/var/run/postgresql"] {
+            assert!(is_loopback_host(local), "{local}");
+        }
+        for remote in ["db.example.internal", "10.0.0.5", "::ffff:10.0.0.5", "localhost.example.com", ""] {
+            assert!(!is_loopback_host(remote), "{remote}");
         }
     }
 }
