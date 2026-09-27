@@ -118,6 +118,14 @@ fn to_stored(def: &EffectiveAttributeRow, v: &Value) -> Option<StoredValue> {
     })
 }
 
+/// Which CIs a reference attribute may point at: those in `visible` classes
+/// (the caller's view scope; `None` is every class), plus the value the
+/// attribute already has in `current` (resending it discloses nothing).
+struct RefAccess<'a> {
+    visible: Option<&'a [Uuid]>,
+    current: Option<&'a Map<String, Value>>,
+}
+
 struct Prepared<'d> {
     set: Vec<(&'d EffectiveAttributeRow, StoredValue)>,
     clear: Vec<Uuid>,
@@ -129,7 +137,9 @@ fn body_error(field: String, message: impl Into<String>, code: &str) -> FieldErr
 
 /// Validates attribute input against the class's effective definitions.
 /// `lenient_clear` accepts `null` for keys the class does not define (they are
-/// being cleared as part of a class change).
+/// being cleared as part of a class change). A reference the caller may not
+/// make (see [`RefAccess`]) fails exactly like one to a missing CI, so writes
+/// are no existence oracle.
 async fn prepare_attributes<'d>(
     conn: &mut PgConnection,
     defs: &'d [EffectiveAttributeRow],
@@ -137,6 +147,7 @@ async fn prepare_attributes<'d>(
     class_key: &str,
     self_id: Option<Uuid>,
     lenient_clear: bool,
+    access: RefAccess<'_>,
 ) -> Result<Prepared<'d>, AppError> {
     let by_key: HashMap<&str, &EffectiveAttributeRow> = defs.iter().map(|d| (d.key.as_str(), d)).collect();
     let mut errors = Vec::new();
@@ -209,18 +220,25 @@ async fn prepare_attributes<'d>(
 
     if !refs.is_empty() {
         let ids: Vec<Uuid> = refs.iter().map(|(_, id)| *id).collect();
-        let live: HashSet<Uuid> = data::live_items(conn, &ids).await?.into_iter().collect();
+        let live: HashMap<Uuid, Uuid> = data::live_items(conn, &ids).await?.into_iter().collect();
         for (def, id) in refs {
             let field = format!("attributes.{}", def.key);
+            let current = access.current.and_then(|c| c.get(&def.key)).and_then(Value::as_str);
+            let unchanged = current.and_then(|c| Uuid::parse_str(c).ok()) == Some(id);
+            let allowed = live.get(&id).is_some_and(|class_id| unchanged || is_visible(access.visible, *class_id));
             if Some(id) == self_id {
                 errors.push(body_error(field, "A CI cannot reference itself", "reference_self"));
-            } else if !live.contains(&id) {
+            } else if !allowed {
                 errors.push(body_error(field, "Referenced CI does not exist or is deleted", "not_found"));
             }
         }
     }
 
     if errors.is_empty() { Ok(prepared) } else { Err(AppError::validation(errors)) }
+}
+
+fn is_visible(visible: Option<&[Uuid]>, class_id: Uuid) -> bool {
+    visible.is_none_or(|classes| classes.contains(&class_id))
 }
 
 /// A reference must point at a CI of the field's class (or a subclass); the
@@ -377,7 +395,8 @@ pub async fn list(
     let (rows, total) = data::list(pool, &f, &q.sort.field, q.sort.desc, q.limit, q.offset).await?;
     let mut conn = pool.acquire().await?;
     let model = Model::load(&mut conn).await?;
-    Ok(Page { data: with_attributes(&mut conn, &model, rows).await?, page: q.page_meta(total) })
+    let data = with_attributes(&mut conn, &model, rows, f.visible_class_ids.as_deref()).await?;
+    Ok(Page { data, page: q.page_meta(total) })
 }
 
 pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Result<SearchResults, AppError> {
@@ -442,11 +461,14 @@ pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Res
     Ok(SearchResults { data, page: q.page_meta(total) })
 }
 
-/// Summary rows plus their field values and reference names (batched reads for the page).
+/// Summary rows plus their field values and reference names (batched reads for
+/// the page). References into classes outside `visible` (the reader's view
+/// scope; `None` is every class, as for audit rows) come back hidden.
 async fn with_attributes(
     conn: &mut PgConnection,
     model: &Model,
     rows: Vec<SummaryRow>,
+    visible: Option<&[Uuid]>,
 ) -> Result<Vec<ConfigurationItem>, AppError> {
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
     let values = data::values(conn, model, &ids).await?;
@@ -465,8 +487,12 @@ async fn with_attributes(
         let Some(&i) = index.get(&v.ci_id) else { continue };
         let item = &mut items[i];
         if let Some(ref_id) = v.reference() {
-            let (name, deleted) = names.get(&ref_id).cloned().unwrap_or_default();
-            let reference = AttributeReference { id: ref_id, name, deleted };
+            let reference = match names.get(&ref_id) {
+                Some(r) if is_visible(visible, r.class_id) => {
+                    AttributeReference { id: ref_id, name: Some(r.name.clone()), deleted: r.deleted, hidden: false }
+                }
+                _ => AttributeReference { id: ref_id, name: None, deleted: false, hidden: true },
+            };
             item.attribute_references.insert(v.key.clone(), crud::json(&reference));
         }
         item.attributes.insert(v.key, v.value);
@@ -474,21 +500,49 @@ async fn with_attributes(
     Ok(items)
 }
 
-async fn detail(conn: &mut PgConnection, model: &Model, id: Uuid) -> Result<Option<ConfigurationItem>, AppError> {
+async fn detail(
+    conn: &mut PgConnection,
+    model: &Model,
+    id: Uuid,
+    visible: Option<&[Uuid]>,
+) -> Result<Option<ConfigurationItem>, AppError> {
     let Some(row) = data::summary(conn, id).await? else { return Ok(None) };
-    Ok(with_attributes(conn, model, vec![row]).await?.pop())
+    Ok(with_attributes(conn, model, vec![row], visible).await?.pop())
 }
 
-async fn must_detail(conn: &mut PgConnection, model: &Model, id: Uuid) -> Result<ConfigurationItem, AppError> {
-    detail(conn, model, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))
+async fn must_detail(
+    conn: &mut PgConnection,
+    model: &Model,
+    id: Uuid,
+    visible: Option<&[Uuid]>,
+) -> Result<ConfigurationItem, AppError> {
+    detail(conn, model, id, visible).await?.ok_or_else(|| AppError::missing("Configuration item", id))
+}
+
+/// The written CI as the caller may see it: `full` (the unredacted audit
+/// value) unless the caller's view scope is limited.
+async fn response_detail(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    model: &Model,
+    full: ConfigurationItem,
+) -> Result<ConfigurationItem, AppError> {
+    match ctx.class_scope(ClassOp::View) {
+        None => Ok(full),
+        Some(visible) => must_detail(conn, model, full.summary.id, Some(&visible)).await,
+    }
 }
 
 pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<ConfigurationItem, AppError> {
     let mut conn = pool.acquire().await?;
+    let Some(row) = data::summary(&mut conn, id).await? else {
+        return Err(AppError::missing("Configuration item", id));
+    };
+    ctx.require_class(row.class_id, ClassOp::View)?;
     let model = Model::load(&mut conn).await?;
-    let dto = must_detail(&mut conn, &model, id).await?;
-    ctx.require_class(dto.summary.class_id, ClassOp::View)?;
-    Ok(dto)
+    let visible = ctx.class_scope(ClassOp::View);
+    let dto = with_attributes(&mut conn, &model, vec![row], visible.as_deref()).await?.pop();
+    dto.ok_or_else(|| AppError::missing("Configuration item", id))
 }
 
 // ---------------------------------------------------------------------------
@@ -506,7 +560,9 @@ pub async fn create(
     let model = Model::load(&mut tx).await?;
     let defs = class_data::effective_attributes(&mut tx, input.class_id).await?;
     let attributes = with_defaults(&defs, input.attributes.as_ref());
-    let prepared = prepare_attributes(&mut tx, &defs, Some(&attributes), &key, None, false).await?;
+    let visible = ctx.class_scope(ClassOp::View);
+    let access = RefAccess { visible: visible.as_deref(), current: None };
+    let prepared = prepare_attributes(&mut tx, &defs, Some(&attributes), &key, None, false, access).await?;
     check_reference_classes(&mut tx, &prepared).await?;
     let given: HashSet<Uuid> = prepared.set.iter().map(|(d, _)| d.id).collect();
     let missing: Vec<FieldError> = defs
@@ -537,7 +593,7 @@ pub async fn create(
     let lineage: Vec<Uuid> = model.lineage(input.class_id).iter().map(|c| c.id).collect();
     write_type_rows(&mut tx, &model, id, input.class_id, &prepared.set, &[], &lineage).await?;
 
-    let dto = must_detail(&mut tx, &model, id).await?;
+    let dto = must_detail(&mut tx, &model, id, None).await?;
     let entry = AuditEntry {
         action: AuditAction::Create,
         entity_type: "configuration_items",
@@ -546,6 +602,7 @@ pub async fn create(
         new_value: Some(crud::json(&dto)),
     };
     crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    let dto = response_detail(&mut tx, ctx, &model, dto).await?;
     tx.commit().await?;
     Ok(dto)
 }
@@ -583,13 +640,16 @@ pub async fn update(
         )]));
     }
     let model = Model::load(&mut tx).await?;
-    let before_dto = must_detail(&mut tx, &model, id).await?;
+    let before_dto = must_detail(&mut tx, &model, id, None).await?;
 
     let class_id = input.class_id.unwrap_or(before.class_id);
     let class_changes = class_id != before.class_id;
     let key = class_key(&mut tx, class_id).await?;
     let defs = class_data::effective_attributes(&mut tx, class_id).await?;
-    let prepared = prepare_attributes(&mut tx, &defs, input.attributes.as_ref(), &key, Some(id), class_changes).await?;
+    let visible = ctx.class_scope(ClassOp::View);
+    let access = RefAccess { visible: visible.as_deref(), current: Some(&before_dto.attributes) };
+    let prepared =
+        prepare_attributes(&mut tx, &defs, input.attributes.as_ref(), &key, Some(id), class_changes, access).await?;
     check_reference_classes(&mut tx, &prepared).await?;
     let old_lineage: Vec<Uuid> = model.lineage(before.class_id).iter().map(|c| c.id).collect();
     let new_lineage: Vec<Uuid> = model.lineage(class_id).iter().map(|c| c.id).collect();
@@ -640,7 +700,7 @@ pub async fn update(
     write_type_rows(&mut tx, &model, id, class_id, &prepared.set, &prepared.clear, &entering).await?;
     check_required(&mut tx, &model, id, &defs).await?;
 
-    let dto = must_detail(&mut tx, &model, id).await?;
+    let dto = must_detail(&mut tx, &model, id, None).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
         entity_type: "configuration_items",
@@ -649,6 +709,7 @@ pub async fn update(
         new_value: Some(crud::json(&dto)),
     };
     crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    let dto = response_detail(&mut tx, ctx, &model, dto).await?;
     tx.commit().await?;
     Ok(dto)
 }
@@ -661,7 +722,7 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
         _ => return Err(AppError::missing("Configuration item", id)),
     }
     let model = Model::load(&mut tx).await?;
-    let before = must_detail(&mut tx, &model, id).await?;
+    let before = must_detail(&mut tx, &model, id, None).await?;
     let edges = data::soft_delete_edges_of(&mut tx, id).await?;
     data::soft_delete(&mut tx, id).await?;
 

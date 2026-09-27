@@ -16407,7 +16407,8 @@
               "required": [
                 "id",
                 "name",
-                "deleted"
+                "deleted",
+                "hidden"
               ],
               "properties": {
                 "id": {
@@ -16415,10 +16416,19 @@
                   "format": "uuid"
                 },
                 "name": {
-                  "type": "string"
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Null when `hidden`"
                 },
                 "deleted": {
-                  "type": "boolean"
+                  "type": "boolean",
+                  "description": "Always false when `hidden`"
+                },
+                "hidden": {
+                  "type": "boolean",
+                  "description": "True when the caller may not view the referenced CI's class; its name and state are withheld"
                 }
               },
               "additionalProperties": false
