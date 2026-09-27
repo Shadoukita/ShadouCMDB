@@ -1,7 +1,9 @@
 //! Authentication and authorisation: local users with argon2id passwords,
-//! server-side sessions, CSRF protection, login backoff and permission profiles.
+//! server-side sessions, CSRF protection, login backoff, permission profiles
+//! and API tokens.
 //!
-//! [`authenticate`] turns the session cookie into a [`Principal`]; the route
+//! [`authenticate`] turns the session cookie into a [`Principal`]
+//! ([`token::authenticate`] does the same for `Authorization: Bearer`); the route
 //! layer ([`crate::api::route`]) calls it for every non-public route, checks
 //! CSRF on state-changing requests and the route's global permission, and hands
 //! the principal to the service in its [`crate::api::context::RequestContext`].
@@ -12,6 +14,7 @@ pub mod password;
 pub mod permissions;
 pub mod session;
 pub mod throttle;
+pub mod token;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -25,14 +28,39 @@ use crate::http::error::AppError;
 use permissions::Permissions;
 use throttle::LoginThrottle;
 
-/// A signed-in user, resolved from their session for one request.
+/// A signed-in user, resolved from their session or API token for one request.
 #[derive(Debug, Clone)]
 pub struct Principal {
     pub user_id: Uuid,
     pub username: String,
-    pub session_id: Uuid,
-    pub csrf_token: String,
+    pub credential: Credential,
+    /// For a token: the owner's permissions narrowed to the token's profile.
     pub permissions: Permissions,
+}
+
+/// How the request authenticated.
+#[derive(Debug, Clone)]
+pub enum Credential {
+    /// The session cookie; state-changing requests must echo `csrf_token`.
+    Session { id: Uuid, csrf_token: String },
+    /// `Authorization: Bearer`; not sent by browsers on their own, so no CSRF token.
+    Token,
+}
+
+impl Principal {
+    pub fn session_id(&self) -> Option<Uuid> {
+        match &self.credential {
+            Credential::Session { id, .. } => Some(*id),
+            Credential::Token => None,
+        }
+    }
+
+    pub fn csrf_token(&self) -> Option<&str> {
+        match &self.credential {
+            Credential::Session { csrf_token, .. } => Some(csrf_token),
+            Credential::Token => None,
+        }
+    }
 }
 
 /// Process-wide authentication state, shared by every request.
@@ -91,18 +119,24 @@ pub async fn authenticate(pool: &PgPool, cfg: &AuthConfig, headers: &HeaderMap) 
     Ok(Some(Principal {
         user_id: s.user_id,
         username: s.username,
-        session_id: s.session_id,
-        csrf_token: s.csrf_token,
+        credential: Credential::Session { id: s.session_id, csrf_token: s.csrf_token },
         permissions,
     }))
 }
 
-/// A state-changing request must echo the session's CSRF token in `X-CSRF-Token`.
+/// A state-changing request with a session must echo its CSRF token in
+/// `X-CSRF-Token`. Token requests need none: the route layer only takes the
+/// token path when an `Authorization: Bearer` header is present, and then
+/// ignores the cookies, so a cross-site page (which cannot set that header)
+/// never reaches a session without the CSRF check.
 pub fn csrf_ok(principal: &Principal, headers: &HeaderMap) -> bool {
-    headers
-        .get(session::CSRF_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|sent| session::constant_time_eq(sent.as_bytes(), principal.csrf_token.as_bytes()))
+    match principal.csrf_token() {
+        None => true,
+        Some(expected) => headers
+            .get(session::CSRF_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|sent| session::constant_time_eq(sent.as_bytes(), expected.as_bytes())),
+    }
 }
 
 #[cfg(test)]

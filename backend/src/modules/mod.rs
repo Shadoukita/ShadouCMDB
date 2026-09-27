@@ -1,5 +1,6 @@
 //! API modules: each declares its routes and implements its service on top of data/.
 
+pub mod api_tokens;
 pub mod areas;
 pub mod audit;
 pub mod auth;

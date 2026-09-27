@@ -1,0 +1,15 @@
+# Fixture for check-actions-pinned.py: every uses: below must be reported (8).
+jobs:
+  reusable-branch:
+    uses: org/repo/.github/workflows/build.yml@main
+  steps:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+      - uses: "actions/setup-node@v4.4.0"
+      - {name: flow style, uses: evil/flow@v1}
+      - "uses": evil/quoted-key@v1
+      - uses: >-
+          evil/folded@v1
+      - uses: docker://alpine:3
+      - uses: actions/checkout@11d5960

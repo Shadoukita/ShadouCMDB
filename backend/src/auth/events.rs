@@ -1,10 +1,11 @@
-//! Authentication events in `audit_log` (entity type `sessions`).
+//! Authentication events in `audit_log`: sessions (entity type `sessions`)
+//! and API token use (entity type `api_tokens`, the token's id).
 //!
 //! Each row carries the request's id, the client IP (and the TCP peer when it
 //! differs) and user agent (see
 //! [`crate::api::context::ClientInfo`]) and, in `new_value`, the event's
 //! details. Never recorded: the password, the session token or its hash, the
-//! CSRF token.
+//! CSRF token, an API token's secret or its hash.
 //!
 //! A failed sign-in stores the username as typed (truncated) and nothing about
 //! whether it exists, so the audit log is not an enumeration oracle for those
@@ -18,11 +19,14 @@ use serde_json::{Value, json};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
+use super::token::{Refusal, Use};
 use crate::api::context::RequestContext;
+use crate::data::api_tokens::PresentedToken;
 use crate::data::auth::EndedSession;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 
 const ENTITY: &str = "sessions";
+pub const TOKEN_ENTITY: &str = "api_tokens";
 
 /// Longest attempted username kept (the real ones are at most 64 characters).
 const ATTEMPTED_USERNAME_MAX: usize = 64;
@@ -91,7 +95,18 @@ async fn write(
     entity_id: Uuid,
     new_value: Value,
 ) -> sqlx::Result<()> {
-    let entry = AuditEntry { action, entity_type: ENTITY, entity_id, old_value: None, new_value: Some(new_value) };
+    write_for(conn, ctx, action, ENTITY, entity_id, new_value).await
+}
+
+async fn write_for(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    action: AuditAction,
+    entity_type: &'static str,
+    entity_id: Uuid,
+    new_value: Value,
+) -> sqlx::Result<()> {
+    let entry = AuditEntry { action, entity_type, entity_id, old_value: None, new_value: Some(new_value) };
     crud::write_audit(conn, ctx, vec![entry]).await
 }
 
@@ -167,4 +182,28 @@ pub async fn revoked(
         write(conn, ctx, AuditAction::SessionRevoke, s.id, details(ctx, f)).await?;
     }
     Ok(())
+}
+
+/// A request was made with this API token; `refusal` is why it was turned away, if it was.
+pub async fn token_use(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    token: &PresentedToken,
+    refusal: Option<Refusal>,
+    used: &Use<'_>,
+) -> sqlx::Result<()> {
+    let v = details(
+        ctx,
+        fields(json!({
+            "tokenName": token.name,
+            "tokenPrefix": token.token_prefix,
+            "userId": token.user_id,
+            "username": token.username,
+            "outcome": refusal.map_or("accepted", Refusal::outcome),
+            "method": used.method.as_str(),
+            "path": used.path,
+            "operationId": used.operation_id,
+        })),
+    );
+    write_for(conn, ctx, AuditAction::TokenUse, TOKEN_ENTITY, token.id, v).await
 }
