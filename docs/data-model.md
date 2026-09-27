@@ -276,7 +276,7 @@ and never for an `audit.purge` row. Because the function runs with the owner's r
 aggregate another role planted in `public` can never be resolved in its place. For the same
 reason no role but the owner may create objects in `public` (PostgreSQL 14 allows it by
 default; the bootstrap scripts and migration 0007 revoke it). Migration 0008 moved the function into
-`cmdb` with the other system objects (`cmdb.prune_audit_log`). The schema owner remains able to change anything, which
+`cmdb` with the other system objects (`cmdb.prune_audit_log`); migration 0010 added `token.use` to the `auth` scope. The schema owner remains able to change anything, which
 is why its credentials belong to migrations only, not to the running server.
 
 **Erasure for one person (GDPR Art. 17) is not supported.** It conflicts with an append-only

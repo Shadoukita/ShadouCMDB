@@ -1,6 +1,6 @@
 //! `shadoucmdb prune-audit`: apply the audit_log retention window.
 //!
-//! The deletion itself is `cmdb.prune_audit_log()` (migrations 0007, 0008), a SECURITY
+//! The deletion itself is `cmdb.prune_audit_log()` (migrations 0007, 0008, 0010), a SECURITY
 //! DEFINER function that only the maintenance role may execute. It deletes by
 //! age only, refuses windows under 30 days, and records every real run as an
 //! `audit.purge` row. This command connects with MAINTENANCE_DATABASE_URL and

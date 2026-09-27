@@ -21,12 +21,12 @@
 -- 'api_tokens'; every request made with a token, accepted or not, is a
 -- 'token.use' row (details in new_value; never the secret or its hash).
 
-CREATE TABLE api_tokens (
+CREATE TABLE cmdb.api_tokens (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   name text NOT NULL,
-  user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES cmdb.users (id) ON DELETE CASCADE,
   -- NULL once the profile is deleted: the token then has no scope and is refused.
-  profile_id uuid REFERENCES permission_profiles (id) ON DELETE SET NULL,
+  profile_id uuid REFERENCES cmdb.permission_profiles (id) ON DELETE SET NULL,
   token_hash bytea NOT NULL,
   token_prefix text NOT NULL,
   expires_at timestamp with time zone NOT NULL,
@@ -45,27 +45,27 @@ CREATE TABLE api_tokens (
   CONSTRAINT api_tokens_revoked_consistent CHECK ((revoked_at IS NULL) = (revoked_by IS NULL))
 );
 --> statement-breakpoint
-CREATE INDEX api_tokens_user_idx ON api_tokens (user_id);
+CREATE INDEX api_tokens_user_idx ON cmdb.api_tokens (user_id);
 --> statement-breakpoint
-CREATE INDEX api_tokens_profile_idx ON api_tokens (profile_id) WHERE profile_id IS NOT NULL;
+CREATE INDEX api_tokens_profile_idx ON cmdb.api_tokens (profile_id) WHERE profile_id IS NOT NULL;
 --> statement-breakpoint
-CREATE INDEX api_tokens_created_idx ON api_tokens (created_at DESC, id);
+CREATE INDEX api_tokens_created_idx ON cmdb.api_tokens (created_at DESC, id);
 --> statement-breakpoint
 
 -- ---------------------------------------------------------------------------
 -- audit_log: the token.use action (keeps 0007's audit.purge)
 -- ---------------------------------------------------------------------------
-ALTER TABLE audit_log DROP CONSTRAINT audit_log_action_valid;
+ALTER TABLE cmdb.audit_log DROP CONSTRAINT audit_log_action_valid;
 --> statement-breakpoint
-ALTER TABLE audit_log ADD CONSTRAINT audit_log_action_valid CHECK (action IN (
+ALTER TABLE cmdb.audit_log ADD CONSTRAINT audit_log_action_valid CHECK (action IN (
   'create', 'update', 'delete', 'restore',
   'login.success', 'login.failure', 'login.locked', 'logout', 'session.revoke',
   'audit.purge', 'token.use'
 ));
 --> statement-breakpoint
-ALTER TABLE audit_log DROP CONSTRAINT audit_log_values_present;
+ALTER TABLE cmdb.audit_log DROP CONSTRAINT audit_log_values_present;
 --> statement-breakpoint
-ALTER TABLE audit_log ADD CONSTRAINT audit_log_values_present CHECK (
+ALTER TABLE cmdb.audit_log ADD CONSTRAINT audit_log_values_present CHECK (
   (action = 'create' AND old_value IS NULL AND new_value IS NOT NULL)
   OR (action = 'update' AND old_value IS NOT NULL AND new_value IS NOT NULL)
   OR (action IN ('delete', 'restore') AND old_value IS NOT NULL)
@@ -78,10 +78,10 @@ ALTER TABLE audit_log ADD CONSTRAINT audit_log_values_present CHECK (
 -- ---------------------------------------------------------------------------
 -- prune_audit_log(): token.use rows are access events (they carry the
 -- caller's IP address and user agent), so they follow the 180-day policy of
--- the auth scope. Same body as 0007 otherwise; CREATE OR REPLACE keeps the
+-- the auth scope. Same body as 0008 otherwise; CREATE OR REPLACE keeps the
 -- owner and the EXECUTE grants.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION prune_audit_log(p_older_than interval, p_scope text, p_dry_run boolean, p_operator text DEFAULT NULL)
+CREATE OR REPLACE FUNCTION cmdb.prune_audit_log(p_older_than interval, p_scope text, p_dry_run boolean, p_operator text DEFAULT NULL)
 RETURNS TABLE (category text, total bigint)
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -109,25 +109,25 @@ BEGIN
 
   IF p_dry_run THEN
     SELECT coalesce(jsonb_object_agg(a.action, a.n), '{}') INTO counts
-    FROM (SELECT l.action, count(*) AS n FROM public.audit_log l
+    FROM (SELECT l.action, count(*) AS n FROM cmdb.audit_log l
           WHERE l.action = ANY (actions) AND l.occurred_at < cutoff GROUP BY l.action) a;
     IF p_scope = 'auth' THEN
-      SELECT count(*) INTO sessions_count FROM public.sessions s WHERE s.expires_at < session_cutoff;
+      SELECT count(*) INTO sessions_count FROM cmdb.sessions s WHERE s.expires_at < session_cutoff;
     END IF;
   ELSE
     PERFORM set_config('shadoucmdb.audit_purge', 'on', true);
     WITH gone AS (
-      DELETE FROM public.audit_log l WHERE l.action = ANY (actions) AND l.occurred_at < cutoff RETURNING l.action
+      DELETE FROM cmdb.audit_log l WHERE l.action = ANY (actions) AND l.occurred_at < cutoff RETURNING l.action
     )
     SELECT coalesce(jsonb_object_agg(g.action, g.n), '{}') INTO counts
     FROM (SELECT gone.action, count(*) AS n FROM gone GROUP BY gone.action) g;
     PERFORM set_config('shadoucmdb.audit_purge', '', true);
     IF p_scope = 'auth' THEN
-      DELETE FROM public.sessions s WHERE s.expires_at < session_cutoff;
+      DELETE FROM cmdb.sessions s WHERE s.expires_at < session_cutoff;
       GET DIAGNOSTICS sessions_count = ROW_COUNT;
     END IF;
 
-    INSERT INTO public.audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+    INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
     VALUES ('system', session_user, 'audit.purge', 'audit_log', gen_random_uuid(), jsonb_build_object(
       'scope', p_scope,
       'olderThan', p_older_than::text,
