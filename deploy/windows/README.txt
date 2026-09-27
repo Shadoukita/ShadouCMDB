@@ -7,11 +7,47 @@ This archive contains:
                             Windows Service integration, in one file. It needs
                             no runtime, no Visual C++ Redistributable, no OpenSSL.
   shadoucmdb.env.example    Every setting, with a comment per variable.
+  sql\bootstrap\            One-time database setup for a PostgreSQL admin:
+                            00_create_role_and_database.sql for a new install,
+                            10_split_roles.sql to upgrade a single-role install.
   README.txt                This file.
 
 PostgreSQL is external: ShadouCMDB never installs or bundles a database. You need
-a reachable PostgreSQL 14 or newer and a database plus a login role for the app.
+a reachable PostgreSQL 14 or newer.
 Full documentation: https://github.com/Shadoukita/ShadouCMDB/blob/main/docs/deployment.md
+
+
+Create the database (once, as a PostgreSQL admin)
+-------------------------------------------------
+
+On any machine with psql (it need not be this server), in PowerShell, from the
+folder you extracted this archive to (or copy sql\bootstrap\ there). The
+passwords are prompted for, so they stay out of the PowerShell history:
+
+  $owner = (Get-Credential shadoucmdb_owner).GetNetworkCredential().Password
+  $app   = (Get-Credential shadoucmdb_app).GetNetworkCredential().Password
+  $maint = (Get-Credential shadoucmdb_maintenance).GetNetworkCredential().Password
+  psql "postgres://admin@db.example.internal:5432/postgres" `
+       -v "owner_password=$owner" `
+       -v "app_password=$app" `
+       -v "maintenance_password=$maint" `
+       -f sql\bootstrap\00_create_role_and_database.sql
+  Remove-Variable owner, app, maint
+
+Use long random passwords, e.g. 48 hex characters. They go into connection URLs,
+where characters such as @ : / # % ? must be percent-encoded (@ -> %40); the
+commands below encode the owner and maintenance passwords for you, but the
+shadoucmdb_app password in DATABASE_URL you encode yourself (or use PGPASSWORD).
+
+This creates the database shadoucmdb and three roles, none of them superuser:
+
+  shadoucmdb_owner        Runs `shadoucmdb migrate` (MIGRATION_DATABASE_URL).
+                          Keep it out of the service's environment.
+  shadoucmdb_app          The service and every other command (DATABASE_URL or
+                          PGHOST/PGUSER/PGPASSWORD/...).
+  shadoucmdb_maintenance  `shadoucmdb prune-audit` only (MAINTENANCE_DATABASE_URL).
+
+Upgrading an install that still has only shadoucmdb_app: see "Upgrade" below.
 
 
 Install as a Windows Service
@@ -24,13 +60,19 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
   New-Item -ItemType Directory -Force $bin, $data | Out-Null
   Copy-Item .\shadoucmdb.exe $bin
   Copy-Item .\shadoucmdb.env.example "$data\shadoucmdb.env"
-  notepad "$data\shadoucmdb.env"      # set DATABASE_URL, or PGHOST/PGUSER/PGPASSWORD/...
+  notepad "$data\shadoucmdb.env"      # DATABASE_URL, or PGHOST/PGUSER/PGPASSWORD/..., as shadoucmdb_app
 
   # The service runs as the low-privilege LocalService account: let it read the
   # settings and write its log, and keep the env file away from other users.
   icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'NT AUTHORITY\LocalService:(OI)(CI)M'
 
+  # Migrate as the owner. The password is prompted for, so it stays out of the
+  # env file and the PowerShell history; the variable is set for this session
+  # only and wins over the env file:
+  $pw = [uri]::EscapeDataString((Get-Credential shadoucmdb_owner).GetNetworkCredential().Password)
+  $env:MIGRATION_DATABASE_URL = "postgres://shadoucmdb_owner:$pw@db.example.internal:5432/shadoucmdb"
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" migrate
+  Remove-Item Env:MIGRATION_DATABASE_URL; Remove-Variable pw
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" seed
   # Optional starter data model (or install it later under Administration > Templates):
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" seed --template it_infrastructure
@@ -53,10 +95,36 @@ Then open http://<server>:3000/ in a browser.
 Upgrade
 -------
 
+If the database still has only shadoucmdb_app (installed before the three-role
+setup), shadoucmdb_owner does not exist yet. Split the roles once first, in the
+order given in the header of sql\bootstrap\10_split_roles.sql:
+  1. stop the service and copy the new binary (first two commands below),
+     then run migrate as before, without MIGRATION_DATABASE_URL:
+       & 'C:\Program Files\ShadouCMDB\shadoucmdb.exe' --env-file 'C:\ProgramData\ShadouCMDB\shadoucmdb.env' migrate
+  2. run 10_split_roles.sql as a PostgreSQL admin;
+  3. start the service. From then on, migrate as shown below.
+
   Stop-Service ShadouCMDB
   Copy-Item .\shadoucmdb.exe 'C:\Program Files\ShadouCMDB' -Force
+  $pw = [uri]::EscapeDataString((Get-Credential shadoucmdb_owner).GetNetworkCredential().Password)
+  $env:MIGRATION_DATABASE_URL = "postgres://shadoucmdb_owner:$pw@db.example.internal:5432/shadoucmdb"
   & 'C:\Program Files\ShadouCMDB\shadoucmdb.exe' --env-file 'C:\ProgramData\ShadouCMDB\shadoucmdb.env' migrate
+  Remove-Item Env:MIGRATION_DATABASE_URL; Remove-Variable pw
   Start-Service ShadouCMDB
+
+
+Audit log retention
+-------------------
+
+Nothing is deleted automatically. Report, then delete, audit entries older than
+180 days as shadoucmdb_maintenance:
+
+  $pw = [uri]::EscapeDataString((Get-Credential shadoucmdb_maintenance).GetNetworkCredential().Password)
+  $env:MAINTENANCE_DATABASE_URL = "postgres://shadoucmdb_maintenance:$pw@db.example.internal:5432/shadoucmdb"
+  # Report what would go (the default is a dry run), then delete it:
+  & 'C:\Program Files\ShadouCMDB\shadoucmdb.exe' --env-file 'C:\ProgramData\ShadouCMDB\shadoucmdb.env' prune-audit --older-than 180d
+  & 'C:\Program Files\ShadouCMDB\shadoucmdb.exe' --env-file 'C:\ProgramData\ShadouCMDB\shadoucmdb.env' prune-audit --older-than 180d --execute
+  Remove-Item Env:MAINTENANCE_DATABASE_URL; Remove-Variable pw
 
 
 Uninstall

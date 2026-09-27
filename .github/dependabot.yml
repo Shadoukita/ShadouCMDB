@@ -23,6 +23,11 @@ updates:
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # @types/node tracks the runtime major in .nvmrc (22). A newer major
+      # would type-check calls that do not exist at runtime; bump both together.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: npm
     directory: /tools/sbom

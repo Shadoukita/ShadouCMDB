@@ -13,7 +13,7 @@ import CoreFieldValue from "./CoreFieldValue.vue";
  */
 const props = defineProps<{ ci: Ci; panels: ResolvedPanel[]; defs: EffectiveAttribute[]; self: TrailStep; trail: TrailStep[] }>();
 const values = computed(() => props.ci.attributes as Record<string, unknown>);
-const refs = computed(() => props.ci.attributeReferences as Record<string, { id: string; name: string; deleted?: boolean } | undefined>);
+const refs = computed(() => props.ci.attributeReferences);
 const defFor = (field: string) => props.defs.find((d) => d.key === attributeKey(field));
 </script>
 
