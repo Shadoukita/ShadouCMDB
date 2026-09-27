@@ -3,17 +3,17 @@
  * older release, upgrade the database, then prove through the API of the new
  * release that every object is still there and unchanged.
  *
- *   API_URL=http://127.0.0.1:3000 node tools/upgrade/upgrade-check.ts seed  snapshot.json   # old release
- *   API_URL=http://127.0.0.1:3000 node tools/upgrade/upgrade-check.ts check snapshot.json   # after the upgrade
+ *   API_URL=http://127.0.0.1:3000 node tools/upgrade/upgrade-check.ts seed  > snapshot.json   # old release
+ *   API_URL=http://127.0.0.1:3000 node tools/upgrade/upgrade-check.ts check < snapshot.json   # after the upgrade
  *
  * Node.js 22.18+, no dependencies. Run against a migrated database without
  * users, ideally with the old release's demo inventory (`seed --demo`):
- * `seed` completes first-run setup as UPGRADE_USERNAME (default
- * "upgrade-admin") with UPGRADE_PASSWORD, and uses only API operations that
- * exist since v0.1.0-rc.1, so it works against every tag in the CI matrix
- * (.github/workflows/upgrade.yml).
+ * `seed` completes first-run setup as "upgrade-admin" with UPGRADE_PASSWORD,
+ * creates "upgrade-viewer" with UPGRADE_VIEWER_PASSWORD, and uses only API
+ * operations that exist since v0.1.0-rc.1, so it works against every tag in
+ * the CI matrix (.github/workflows/upgrade.yml).
  *
- * `seed` writes the snapshot: the ids it created, the full GET response of
+ * `seed` prints the snapshot to stdout (progress goes to stderr): the ids it created, the full GET response of
  * those objects and of every CI, class and relationship in the database, the
  * whole audit log, and what the restricted user could see.
  * `check` reads every object again and fails when a field that was there
@@ -22,15 +22,13 @@
  * listed in CHANGED_ON_PURPOSE, each with the reason.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
-
 const BASE = (process.env.API_URL ?? '').replace(/\/$/, '');
-const [MODE, FILE] = process.argv.slice(2);
-if (!BASE || !['seed', 'check'].includes(MODE ?? '') || !FILE) {
-  console.error('Usage: API_URL=http://127.0.0.1:3000 node tools/upgrade/upgrade-check.ts seed|check <snapshot.json>');
+const MODE = process.argv[2];
+if (!BASE || !['seed', 'check'].includes(MODE ?? '')) {
+  console.error('Usage: API_URL=http://127.0.0.1:3000 node tools/upgrade/upgrade-check.ts seed > snapshot.json | check < snapshot.json');
   process.exit(2);
 }
-const ADMIN = process.env.UPGRADE_USERNAME ?? 'upgrade-admin';
+const ADMIN = 'upgrade-admin';
 const ADMIN_PASSWORD = process.env.UPGRADE_PASSWORD ?? 'upgrade-admin-password';
 const VIEWER = 'upgrade-viewer';
 const VIEWER_PASSWORD = process.env.UPGRADE_VIEWER_PASSWORD ?? 'upgrade-viewer-password';
@@ -61,7 +59,7 @@ async function call(method: string, url: string, body?: unknown): Promise<{ stat
   } catch {
     json = text;
   }
-  console.log(`${method.padEnd(6)} ${url} -> ${res.status}`);
+  console.error(`${method.padEnd(6)} ${url} -> ${res.status}`);
   return { status: res.status, json, headers: res.headers };
 }
 
@@ -212,8 +210,8 @@ async function seed() {
   const inventory = await readInventory();
   const audit = await all('/api/v1/audit-log');
   const migrations = (await ok('GET', '/readyz')).migrations.applied;
-  writeFileSync(FILE!, JSON.stringify({ migrations, ids, objects, inventory, audit, viewer: viewerBefore }, null, 1));
-  console.log(`\nSnapshot: ${Object.keys(objects).length} objects, ${audit.length} audit rows, restricted user sees ${viewerBefore.visibleCiIds.length} CIs -> ${FILE}`);
+  process.stdout.write(JSON.stringify({ migrations, ids, objects, inventory, audit, viewer: viewerBefore }, null, 1));
+  console.error(`\nSnapshot: ${Object.keys(objects).length} objects, ${audit.length} audit rows, restricted user sees ${viewerBefore.visibleCiIds.length} CIs`);
 }
 
 /** The GET response of every seeded object, and of every CI, class and relationship in the lists, by URL. */
@@ -295,13 +293,15 @@ function compare(label: string, url: string, before: Json, after: Json) {
   diff(before, after, '$', found);
   const real = found.filter((f) => !CHANGED_ON_PURPOSE.some((c) => sourceMigrations < c.before && c.url.test(url) && c.diff.test(f)));
   for (const f of real) failures.push(`${label} ${url} ${f}`);
-  console.log(`${real.length ? 'FAIL' : 'ok  '} ${label} ${url}${real.length ? `\n       ${real.slice(0, 10).join('\n       ')}` : ''}`);
+  console.error(`${real.length ? 'FAIL' : 'ok  '} ${label} ${url}${real.length ? `\n       ${real.slice(0, 10).join('\n       ')}` : ''}`);
 }
 
 let sourceMigrations = 0;
 
 async function check() {
-  const snap = JSON.parse(readFileSync(FILE!, 'utf8'));
+  let input = '';
+  for await (const chunk of process.stdin) input += chunk;
+  const snap = JSON.parse(input);
   const { ids } = snap;
   sourceMigrations = snap.migrations;
 
@@ -333,23 +333,23 @@ async function check() {
     for (const f of found) failures.push(f);
     auditDiffs += found.length;
   }
-  console.log(`${auditDiffs ? 'FAIL' : 'ok  '} audit log: ${snap.audit.length} rows from before the upgrade, ${audit.length} now`);
+  console.error(`${auditDiffs ? 'FAIL' : 'ok  '} audit log: ${snap.audit.length} rows from before the upgrade, ${audit.length} now`);
 
   // 4. The restricted user signs in and sees exactly what they saw before.
   const view: ViewerView = await viewerView(ids);
   const found: string[] = [];
   diff(snap.viewer, view, 'restricted user', found);
   for (const f of found) failures.push(f);
-  console.log(`${found.length ? 'FAIL' : 'ok  '} restricted user: sees ${view.visibleCiIds.length} CIs, GET ${JSON.stringify(Object.values(view.getStatus))}, create ${view.createStatus}, audit ${view.auditStatus}`);
+  console.error(`${found.length ? 'FAIL' : 'ok  '} restricted user: sees ${view.visibleCiIds.length} CIs, GET ${JSON.stringify(Object.values(view.getStatus))}, create ${view.createStatus}, audit ${view.auditStatus}`);
 
   if (failures.length) {
     console.error(`\n${failures.length} difference(s) after the upgrade:\n  ${failures.join('\n  ')}`);
     process.exit(1);
   }
-  console.log(`\nUpgrade check passed: ${Object.keys(snap.objects).length} objects and ${snap.audit.length} audit rows unchanged, restricted user unchanged.`);
+  console.error(`\nUpgrade check passed: ${Object.keys(snap.objects).length} objects and ${snap.audit.length} audit rows unchanged, restricted user unchanged.`);
 }
 
-await (MODE === 'seed' ? seed() : check()).catch((e) => {
+(MODE === 'seed' ? seed() : check()).catch((e) => {
   console.error(`\n${e instanceof Error ? e.message : e}`);
   process.exit(1);
 });

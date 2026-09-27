@@ -63,7 +63,7 @@ jobs:
         # Not 5432: nothing may assume a default local install.
         ports: ["55432:5432"]
         options: >-
-          --health-cmd "pg_isready -U pgadmin" --health-interval 5s --health-timeout 5s --health-retries 20
+          --health-cmd "pg_isready -U pgadmin -d postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       FROM: ${{ matrix.from }}
       # Throwaway credentials for the CI-only PostgreSQL service container.
@@ -110,7 +110,7 @@ jobs:
           ./shadoucmdb --version
           ../head/shadoucmdb --version
 
-      - name: "${{ matrix.from }}: bootstrap the database with its own script, migrate, seed"
+      - name: "${{ matrix.from }}: bootstrap the database with its own script, migrate, seed --demo"
         run: |
           git show "$FROM:sql/bootstrap/00_create_role_and_database.sql" > bootstrap.sql
           # Older scripts create one role and ignore the other two passwords.
@@ -122,14 +122,14 @@ jobs:
           else
             "$OLD" migrate
           fi
-          "$OLD" seed
+          "$OLD" seed --demo
 
       - name: "${{ matrix.from }}: create data through its API (tools/upgrade/upgrade-check.ts seed)"
         run: |
           "$OLD" serve > old.log 2>&1 &
           PID=$!
           for i in $(seq 1 30); do curl -sf "$API_URL/readyz" && break; sleep 1; done
-          node tools/upgrade/upgrade-check.ts seed snapshot.json
+          node tools/upgrade/upgrade-check.ts seed > snapshot.json
           kill -TERM $PID && wait $PID
           grep -q "server stopped" old.log
           psql "$ADMIN_DB_URL" -tAc "SELECT version, description FROM _sqlx_migrations ORDER BY version"
@@ -158,8 +158,8 @@ jobs:
           for i in $(seq 1 30); do curl -sf "$API_URL/readyz" && break; sleep 1; done
           curl -sf "$API_URL/readyz" | tee readyz.json
           grep -q '"upToDate":true' readyz.json
-          node tools/upgrade/upgrade-check.ts check snapshot.json
-          # The smoke suite needs the demo inventory next to the upgraded data.
+          node tools/upgrade/upgrade-check.ts check < snapshot.json
+          # Brings the demo template up to date; the demo inventory came from the old release.
           "$NEW" seed --demo
           "$NEW" verify
           node tools/smoke/smoke.ts
