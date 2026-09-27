@@ -39,7 +39,6 @@ const CONSTRAINT_FIELDS: &[(&str, &str)] = &[
     ("ci_relationships_no_self_edge", "targetCiId"),
     ("ci_relationships_endpoint_rule", "relationshipTypeId"),
     ("ci_relationships_type_active", "relationshipTypeId"),
-    ("ci_relationships_live_endpoints", "sourceCiId"),
     ("ci_relationships_live_edge_uq", "targetCiId"),
     ("relationship_type_rules_uq", "targetClassId"),
     ("users_username_uq", "username"),
@@ -90,6 +89,19 @@ fn field_for(pg: &PgDatabaseError) -> String {
     "(root)".to_owned()
 }
 
+/// A unique index reports "Key (a, b)=(x, y) already exists."; say it in words.
+fn unique_message(pg: &PgDatabaseError, field: &str) -> String {
+    match pg.detail() {
+        Some(d) if d.starts_with("Key (") => match pg.constraint() {
+            Some("ci_relationships_live_edge_uq") => "This relationship already exists between these CIs".to_owned(),
+            _ if field == "(root)" => "A record with the same values already exists".to_owned(),
+            _ => format!("Another record already has this {field}"),
+        },
+        Some(d) => humanise(d),
+        None => humanise(pg.message()),
+    }
+}
+
 /// Trigger messages are "table: human text"; drop the table prefix.
 fn humanise(msg: &str) -> String {
     match msg.split_once(": ") {
@@ -134,7 +146,7 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
     }
     match pg.code() {
         "23505" => {
-            Some(AppError::new(ErrorCode::Conflict, humanise(pg.detail().unwrap_or(pg.message()))).with_details(vec![
+            Some(AppError::new(ErrorCode::Conflict, unique_message(pg, &field)).with_details(vec![
                 FieldError {
                     location: FieldLocation::Body,
                     field,
