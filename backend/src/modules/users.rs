@@ -1,4 +1,5 @@
-//! Administration > Users: local accounts, their passwords and profiles.
+//! Administration > Users: local accounts, their passwords and profiles, and
+//! the accounts identity providers created (see [`super::sso`]).
 //!
 //! Disabling (`isActive: false`) is the normal way to remove access; it ends
 //! the user's sessions at once. Deleting is allowed too (the audit log keeps
@@ -48,6 +49,16 @@ pub struct ProfileRef {
     pub is_builtin: bool,
 }
 
+/// The identity provider an account signs in through
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityProviderRef {
+    pub id: Uuid,
+    pub name: String,
+    /// oidc or ldap
+    pub kind: String,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct User {
@@ -63,6 +74,12 @@ pub struct User {
     pub is_administrator: bool,
     /// Has set up two-factor authentication (an authenticator app)
     pub mfa_enabled: bool,
+    /// Null for a local account (username and password). Otherwise the account
+    /// was created by this provider and signs in only through it: it has no
+    /// password here, and its name, e-mail and profiles are set from the
+    /// provider at every sign-in.
+    #[schema(required = true)]
+    pub identity_provider: Option<IdentityProviderRef>,
     pub profiles: Vec<ProfileRef>,
     #[serde(serialize_with = "ts::serialize")]
     pub password_changed_at: DateTime<Utc>,
@@ -221,6 +238,15 @@ async fn dtos(conn: &mut PgConnection, rows: Vec<UserRow>) -> Result<Vec<User>, 
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
     let held = data::profiles_of_users(conn, &ids).await?;
     let mfa = crate::data::mfa::enabled_among(conn, &ids).await?;
+    let provider_ids: Vec<Uuid> = rows.iter().filter_map(|r| r.identity_provider_id).collect();
+    let providers: Vec<(Uuid, String, String)> = if provider_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as("SELECT id, name, kind FROM identity_providers WHERE id = ANY($1)")
+            .bind(&provider_ids)
+            .fetch_all(&mut *conn)
+            .await?
+    };
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -237,6 +263,13 @@ async fn dtos(conn: &mut PgConnection, rows: Vec<UserRow>) -> Result<Vec<User>, 
                 is_active: r.is_active,
                 is_administrator: profiles.iter().any(|p| p.is_builtin),
                 mfa_enabled: mfa.contains(&r.id),
+                identity_provider: r.identity_provider_id.and_then(|id| {
+                    providers.iter().find(|p| p.0 == id).map(|(id, name, kind)| IdentityProviderRef {
+                        id: *id,
+                        name: name.clone(),
+                        kind: kind.clone(),
+                    })
+                }),
                 profiles,
                 password_changed_at: r.password_changed_at,
                 last_login_at: r.last_login_at,
@@ -420,6 +453,12 @@ pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_pas
     let hash = password::hash(new_password).await?;
     let mut tx = pool.begin().await?;
     let before = lock(&mut tx, id).await?;
+    if let Some(provider) = &before.identity_provider {
+        return Err(AppError::conflict(format!(
+            "This account signs in through \"{}\" and has no password here",
+            provider.name
+        )));
+    }
     must_cover_user(&mut tx, ctx, id).await?;
     data::set_password(&mut tx, id, &hash).await?;
     let own = ctx.principal().filter(|p| p.user_id == id);
@@ -502,7 +541,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Update a user (partial): rename, disable/enable, assign profiles")
             .description(
-                "`isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.",
+                "`isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. For an account of an identity provider, the name, e-mail and profiles are set again from the provider at its next sign-in (change the group mappings instead); disabling it holds whatever the provider says. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.",
             )
             .requires(manage)
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::LastAdministrator])
@@ -522,8 +561,9 @@ pub fn routes() -> Vec<Route> {
         route(Method::PUT, "/api/v1/admin/users/{id}/password", "resetUserPassword")
             .tag(TAG)
             .summary("Set a new password for a user and end their sessions")
+            .description("409 for an account that signs in through an identity provider (it has no password here).")
             .requires(manage)
-            .errors(&[ErrorCode::NotFound])
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<PasswordReset>>| async move {
                 Ok(Json(set_password(&api.pool, &api.ctx, id, &b.password).await?))
             }),

@@ -415,6 +415,7 @@ pub(crate) mod tests {
             session_idle: StdDuration::from_secs(3600),
             session_max_age: StdDuration::from_secs(3600),
             cookie_secure: CookieSecure::Never,
+            public_url: None,
         };
         let cfg = Config {
             api_host: "127.0.0.1".into(),

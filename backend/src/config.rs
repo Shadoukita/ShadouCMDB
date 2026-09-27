@@ -61,6 +61,10 @@ pub struct AuthConfig {
     /// A session ends this long after login, however active.
     pub session_max_age: Duration,
     pub cookie_secure: CookieSecure,
+    /// The address users open the web UI at (`PUBLIC_URL`), without a trailing
+    /// slash. OIDC sign-in builds its redirect URI from it, never from the
+    /// request's Host header; unset, OIDC sign-in is unavailable.
+    pub public_url: Option<String>,
 }
 
 const DEFAULT_SESSION_IDLE_MINUTES: u64 = 12 * 60;
@@ -164,6 +168,23 @@ fn parse_cors_origins(raw: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(origins)
+}
+
+/// Validates `PUBLIC_URL`: an absolute http(s) URL with no credentials, query
+/// or fragment. A path is allowed (a reverse proxy serving the UI below one).
+fn parse_public_url(raw: &str) -> Result<String, String> {
+    const EXPECTED: &str = "expected the address users open the web UI at, e.g. https://cmdb.example.com";
+    let url = url::Url::parse(raw.trim()).map_err(|_| format!("\"{raw}\" is not a URL; {EXPECTED}"))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        return Err(format!("\"{raw}\" is not an http(s) URL; {EXPECTED}"));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("must not contain a user name or password".to_owned());
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(format!("\"{raw}\" must not have a query or fragment; {EXPECTED}"));
+    }
+    Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
 /// Validates `CSP_REPORT_URI`. The value is pasted into the
@@ -272,6 +293,10 @@ impl Config {
             _ => CookieSecure::Auto,
         };
 
+        let public_url = r
+            .raw("PUBLIC_URL")
+            .and_then(|s| parse_public_url(&s).map_err(|e| r.errors.push(format!("PUBLIC_URL: {e}"))).ok());
+
         if !r.errors.is_empty() {
             let detail: Vec<String> = r.errors.iter().map(|e| format!("  - {e}")).collect();
             anyhow::bail!(
@@ -304,6 +329,7 @@ impl Config {
                 session_idle: Duration::from_secs(session_idle_minutes * 60),
                 session_max_age: Duration::from_secs(session_max_age_hours * 3600),
                 cookie_secure,
+                public_url,
             },
         })
     }
@@ -312,6 +338,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_url_is_an_absolute_address_without_trailing_slash() {
+        assert_eq!(parse_public_url("https://cmdb.example.com/").unwrap(), "https://cmdb.example.com");
+        assert_eq!(parse_public_url("https://example.com/cmdb/").unwrap(), "https://example.com/cmdb");
+        assert_eq!(parse_public_url("http://10.0.0.5:8080").unwrap(), "http://10.0.0.5:8080");
+        for bad in ["cmdb.example.com", "/cmdb", "ftp://x", "https://u:p@x", "https://x/?a=1", "https://x/#f"] {
+            assert!(parse_public_url(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn cors_origins_accept_browser_origins() {

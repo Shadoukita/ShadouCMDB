@@ -21,8 +21,8 @@ use crate::config::DatabaseConfig;
 
 /// System tables whose rows are never backed up. Restoring sessions would sign
 /// people back in with tokens from the past; after a restore everyone signs in
-/// again. Pending second-factor challenges are sessions-in-waiting.
-pub const EXCLUDED_TABLES: &[&str] = &["sessions", "mfa_challenges"];
+/// again. Pending second-factor challenges and OIDC sign-ins are sessions-in-waiting.
+pub const EXCLUDED_TABLES: &[&str] = &["sessions", "mfa_challenges", "oidc_login_states"];
 
 /// Schemas of the application's own tables: `cmdb` since migration 0008,
 /// `public` before (and still for the migration bookkeeping table). Areas are

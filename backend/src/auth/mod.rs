@@ -1,5 +1,6 @@
 //! Authentication and authorisation: local users with argon2id passwords,
-//! TOTP two-factor sign-in, server-side sessions, CSRF protection, login
+//! TOTP two-factor sign-in, sign-in through OIDC providers and LDAP/AD
+//! directories ([`sso`]), server-side sessions, CSRF protection, login
 //! backoff, permission profiles and API tokens.
 //!
 //! [`authenticate`] turns the session cookie into a [`Principal`]
@@ -13,6 +14,7 @@ pub mod events;
 pub mod password;
 pub mod permissions;
 pub mod session;
+pub mod sso;
 pub mod throttle;
 pub mod token;
 pub mod totp;
@@ -77,6 +79,8 @@ pub struct AuthState {
     pub throttle: LoginThrottle,
     /// Changing one's own password, keyed by user id.
     pub password_throttle: LoginThrottle,
+    /// Discovered OIDC providers and their signing keys.
+    pub oidc: sso::oidc::Cache,
     /// Set once the "session cookie without Secure under auto" warning has been logged.
     insecure_cookie_warned: AtomicBool,
 }
@@ -87,6 +91,7 @@ impl AuthState {
             config,
             throttle: LoginThrottle::default(),
             password_throttle: LoginThrottle::per_key(),
+            oidc: sso::oidc::Cache::default(),
             insecure_cookie_warned: AtomicBool::new(false),
         }
     }
@@ -161,6 +166,7 @@ mod tests {
             session_idle: Duration::from_secs(60),
             session_max_age: Duration::from_secs(3600),
             cookie_secure,
+            public_url: None,
         })
     }
 

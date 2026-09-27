@@ -73,7 +73,7 @@ export interface paths {
         put?: never;
         /**
          * Sign in with username and password
-         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429.
+         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. Accounts of an OIDC provider cannot sign in here.
          */
         post: operations["login"];
         delete?: never;
@@ -152,7 +152,7 @@ export interface paths {
         get?: never;
         /**
          * Change your own password (ends your other sessions)
-         * @description 400 when `currentPassword` is wrong. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["changeOwnPassword"];
         post?: never;
@@ -261,6 +261,63 @@ export interface paths {
          * @description Requires `users.manage`. Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["resetUserMfa"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How users can sign in besides a local account: OIDC buttons and whether a directory is enabled */
+        get: operations["getSignInOptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/{id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start signing in with an OIDC provider (browser navigation; redirects to the provider)
+         * @description Redirects (302) to the provider's authorization endpoint with the authorization code flow, PKCE (S256), `state` and `nonce`, and sets the `shadoucmdb_oidc` cookie (HttpOnly, 10 min). On a problem it redirects to `/login?ssoError=<code>` instead: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`.
+         */
+        get: operations["startOidcSignIn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The redirect URI to register at OIDC providers: finishes the sign-in
+         * @description `{PUBLIC_URL}/api/v1/auth/oidc/callback`. Needs the `shadoucmdb_oidc` cookie set by the start route in the same browser. Exchanges the code, checks the ID token, creates or updates the account and sets its profiles from the group mappings, then sets the session cookies (like POST /api/v1/auth/login) and redirects (302) to `returnTo`. On a problem it redirects to `/login?ssoError=<code>`: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`.
+         */
+        get: operations["completeOidcSignIn"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1565,7 +1622,7 @@ export interface paths {
         head?: never;
         /**
          * Update a user (partial): rename, disable/enable, assign profiles
-         * @description Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.
+         * @description Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. For an account of an identity provider, the name, e-mail and profiles are set again from the provider at its next sign-in (change the group mappings instead); disabling it holds whatever the provider says. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.
          */
         patch: operations["updateUser"];
         trace?: never;
@@ -1580,7 +1637,7 @@ export interface paths {
         get?: never;
         /**
          * Set a new password for a user and end their sessions
-         * @description Requires `users.manage`.
+         * @description Requires `users.manage`. 409 for an account that signs in through an identity provider (it has no password here).
          */
         put: operations["resetUserPassword"];
         post?: never;
@@ -1705,6 +1762,78 @@ export interface paths {
          * @description Requires `users.manage`. 403 when the owner holds permissions you do not (your own tokens are always revocable). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["revokeApiToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/identity-providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List OIDC providers and LDAP/AD directories with their group mappings (secrets are never returned)
+         * @description Requires `users.manage`.
+         */
+        get: operations["listIdentityProviders"];
+        put?: never;
+        /**
+         * Add an OIDC provider or an LDAP/AD directory
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused.
+         */
+        post: operations["createIdentityProvider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/identity-providers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one identity provider
+         * @description Requires `users.manage`.
+         */
+        get: operations["getIdentityProvider"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an identity provider that no account signs in through
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). 409 IN_USE while accounts belong to it: disable it instead.
+         */
+        delete: operations["deleteIdentityProvider"];
+        options?: never;
+        head?: never;
+        /**
+         * Change an identity provider (partial); groupMappings replaces all mappings
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts.
+         */
+        patch: operations["updateIdentityProvider"];
+        trace?: never;
+    };
+    "/api/v1/admin/identity-providers/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to.
+         */
+        post: operations["testIdentityProvider"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2090,6 +2219,15 @@ export interface components {
              */
             deletedAt: string | null;
         };
+        ConnectionTest: {
+            /** @description The provider answered as expected */
+            ok: boolean;
+            /** @description What was checked, or what went wrong (for the administrator) */
+            message: string;
+            /** @description Findings, one per line */
+            details: string[];
+            user: components["schemas"]["DirectoryUserPreview"] | null;
+        };
         /** @description A new token and its secret. The secret is shown here only: store it now. */
         CreatedApiToken: {
             token: components["schemas"]["ApiToken"];
@@ -2175,6 +2313,16 @@ export interface components {
                 /** @description Stable machine key, lower_snake_case */
                 targetClass: string;
             }[];
+        };
+        /** @description What a directory says about a user (connection test) */
+        DirectoryUserPreview: {
+            dn: string;
+            username: string | null;
+            displayName: string | null;
+            email: string | null;
+            groups: string[];
+            /** @description The profiles these groups map to; empty means the user would be refused */
+            profiles: string[];
         };
         EffectiveAttribute: {
             /** Format: uuid */
@@ -2263,7 +2411,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "DATABASE_UNAVAILABLE" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "DATABASE_UNAVAILABLE" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
                 message: string;
                 details?: {
                     /** @enum {string} */
@@ -2303,6 +2451,50 @@ export interface components {
             /** Format: uuid */
             targetCiId: string;
             notes: string | null;
+        };
+        /** @description Users in this group get this profile */
+        GroupMapping: {
+            /** @description As the provider reports it (a group name or id, or a group DN); compared case-insensitively */
+            group: string;
+            /** Format: uuid */
+            profileId: string;
+            profileName: string;
+        };
+        IdentityProvider: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ProviderKind"];
+            /** @description Shown on the sign-in button and in the audit trail */
+            name: string;
+            /** @description Disabled: nobody signs in through it and its accounts' sessions ended */
+            isEnabled: boolean;
+            /**
+             * Format: int32
+             * @description Button order (OIDC); the order directories are asked in (LDAP)
+             */
+            sortOrder: number;
+            /** @description Extra CA certificates (PEM) trusted for this provider */
+            caCertificate: string | null;
+            oidc: components["schemas"]["OidcConfig"] | null;
+            ldap: components["schemas"]["LdapConfig"] | null;
+            groupMappings: components["schemas"]["GroupMapping"][];
+            /**
+             * Format: int64
+             * @description Accounts that sign in through this provider
+             */
+            userCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description The identity provider an account signs in through */
+        IdentityProviderRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description oidc or ldap */
+            kind: string;
         };
         /** @description What a statement does to data that already exists */
         Impact: {
@@ -2354,6 +2546,23 @@ export interface components {
             /** @enum {string} */
             code: "unknown_class" | "unknown_attribute" | "unknown_status" | "unknown_environment" | "unknown_location" | "required_field_not_editable";
             message: string;
+        };
+        LdapConfig: {
+            /** @description ldaps://host[:port] or ldap://host[:port] (then with StartTLS) */
+            url: string;
+            startTls: boolean;
+            /** @description Service account the user search binds as; null searches anonymously */
+            bindDn: string | null;
+            /** @description A bind password is stored (it is never returned) */
+            bindPasswordSet: boolean;
+            userBaseDn: string;
+            /** @description {username} is replaced by the escaped sign-in name */
+            userFilter: string;
+            usernameAttribute: string;
+            displayNameAttribute: string;
+            emailAttribute: string;
+            /** @description Holds the DNs of the user's groups (memberOf) */
+            groupAttribute: string;
         };
         Liveness: {
             /** @enum {string} */
@@ -2506,6 +2715,20 @@ export interface components {
              */
             recoveryCodesRemaining: number;
         };
+        OidcConfig: {
+            issuerUrl: string;
+            clientId: string;
+            /** @description A client secret is stored (it is never returned) */
+            clientSecretSet: boolean;
+            /** @description Requested besides openid */
+            scopes: string;
+            /** @description ID token claim used as the username (dots descend into objects) */
+            usernameClaim: string;
+            /** @description ID token claim listing the user's groups (dots descend into objects) */
+            groupsClaim: string;
+            /** @description Register this at the provider; null until PUBLIC_URL is set */
+            redirectUri: string | null;
+        };
         Owner: {
             /** Format: uuid */
             id: string;
@@ -2578,6 +2801,8 @@ export interface components {
             name: string;
             isBuiltin: boolean;
         };
+        /** @enum {string} */
+        ProviderKind: "oidc" | "ldap";
         /** @description Branding for the login page (no sign-in needed) */
         PublicBranding: {
             appName: string;
@@ -2840,6 +3065,22 @@ export interface components {
         SetupStatus: {
             /** @description True while no user exists: the UI shows the first-run screen */
             setupRequired: boolean;
+        };
+        /** @description How users can sign in besides a local account. */
+        SignInOptions: {
+            /** @description Enabled OIDC providers, in button order (empty unless PUBLIC_URL is set) */
+            oidc: components["schemas"]["SignInProvider"][];
+            /** @description An LDAP/AD directory is enabled: the username/password form also takes directory accounts */
+            directory: boolean;
+        };
+        /** @description A button on the sign-in page. */
+        SignInProvider: {
+            /** Format: uuid */
+            id: string;
+            /** @description "Sign in with {name}" */
+            name: string;
+            /** @description GET this (a browser navigation, not a fetch) to start signing in */
+            startUrl: string;
         };
         StarterTemplate: {
             key: string;
@@ -3292,6 +3533,7 @@ export interface components {
             isAdministrator: boolean;
             /** @description Has set up two-factor authentication (an authenticator app) */
             mfaEnabled: boolean;
+            identityProvider: components["schemas"]["IdentityProviderRef"] | null;
             profiles: components["schemas"]["ProfileRef"][];
             /** Format: date-time */
             passwordChangedAt: string;
@@ -3306,6 +3548,34 @@ export interface components {
             data: components["schemas"]["User"][];
             page: components["schemas"]["PageMeta"];
         };
+        Vec: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ProviderKind"];
+            /** @description Shown on the sign-in button and in the audit trail */
+            name: string;
+            /** @description Disabled: nobody signs in through it and its accounts' sessions ended */
+            isEnabled: boolean;
+            /**
+             * Format: int32
+             * @description Button order (OIDC); the order directories are asked in (LDAP)
+             */
+            sortOrder: number;
+            /** @description Extra CA certificates (PEM) trusted for this provider */
+            caCertificate: string | null;
+            oidc: components["schemas"]["OidcConfig"] | null;
+            ldap: components["schemas"]["LdapConfig"] | null;
+            groupMappings: components["schemas"]["GroupMapping"][];
+            /**
+             * Format: int64
+             * @description Accounts that sign in through this provider
+             */
+            userCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        }[];
     };
     responses: never;
     parameters: never;
@@ -3565,7 +3835,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            /** @description The LDAP directory could not be reached (code IDENTITY_PROVIDER_UNAVAILABLE; local accounts still sign in), the database is unreachable (code DATABASE_UNAVAILABLE), or migrations are pending (code SCHEMA_NOT_MIGRATED) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3811,6 +4081,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4345,6 +4624,150 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getSignInOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInOptions"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    startOidcSignIn: {
+        parameters: {
+            query?: {
+                /** @description Path on this server to open after signing in (default /) */
+                returnTo?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect: the browser follows the Location header */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    completeOidcSignIn: {
+        parameters: {
+            query?: {
+                /** @description Authorization code */
+                code?: string;
+                /** @description The state sent with the authorization request */
+                state?: string;
+                /** @description The provider's issuer (RFC 9207), checked when present */
+                iss?: string;
+                /** @description Set by the provider when the sign-in did not happen */
+                error?: string;
+                /** @description The provider's explanation (logged only) */
+                error_description?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect: the browser follows the Location header */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13296,6 +13719,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Body is not application/json */
             415: {
                 headers: {
@@ -14182,6 +14614,570 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listIdentityProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Vec"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createIdentityProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    kind: "oidc" | "ldap";
+                    name: string;
+                    /** @description Default true */
+                    isEnabled?: boolean;
+                    sortOrder?: number;
+                    caCertificate?: string | null;
+                    /** @description Required for kind oidc */
+                    oidc?: {
+                        issuerUrl: string;
+                        clientId: string;
+                        clientSecret?: string | null;
+                        /** @description Space-separated; openid is always added. Default: profile email */
+                        scopes?: string;
+                        usernameClaim?: string;
+                        groupsClaim?: string;
+                    } | null;
+                    /** @description Required for kind ldap */
+                    ldap?: {
+                        url: string;
+                        /** @description Default: true for ldap://, false for ldaps:// */
+                        startTls?: boolean;
+                        bindDn?: string | null;
+                        bindPassword?: string | null;
+                        userBaseDn: string;
+                        userFilter?: string;
+                        usernameAttribute?: string;
+                        displayNameAttribute?: string;
+                        emailAttribute?: string;
+                        groupAttribute?: string;
+                    } | null;
+                    /** @description Replaces all mappings of the provider */
+                    groupMappings?: {
+                        group: string;
+                        /** Format: uuid */
+                        profileId: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityProvider"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getIdentityProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityProvider"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteIdentityProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateIdentityProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    /** @description false stops sign-ins through it and ends its accounts' sessions */
+                    isEnabled?: boolean;
+                    sortOrder?: number;
+                    caCertificate?: string | null;
+                    /** @description Only for kind oidc; fields left out are kept */
+                    oidc?: {
+                        issuerUrl?: string;
+                        clientId?: string;
+                        clientSecret?: string | null;
+                        /** @description Space-separated; openid is always added. Default: profile email */
+                        scopes?: string;
+                        usernameClaim?: string;
+                        groupsClaim?: string;
+                    } | null;
+                    /** @description Only for kind ldap; fields left out are kept */
+                    ldap?: {
+                        url?: string;
+                        startTls?: boolean;
+                        bindDn?: string | null;
+                        bindPassword?: string | null;
+                        userBaseDn?: string;
+                        userFilter?: string;
+                        usernameAttribute?: string;
+                        displayNameAttribute?: string;
+                        emailAttribute?: string;
+                        groupAttribute?: string;
+                    } | null;
+                    /** @description Replaces all mappings of the provider */
+                    groupMappings?: {
+                        group: string;
+                        /** Format: uuid */
+                        profileId: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityProvider"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    testIdentityProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    username?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionTest"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

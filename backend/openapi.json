@@ -256,7 +256,7 @@
           "Authentication"
         ],
         "summary": "Sign in with username and password",
-        "description": "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429.",
+        "description": "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. Accounts of an OIDC provider cannot sign in here.",
         "operationId": "login",
         "parameters": [],
         "requestBody": {
@@ -348,7 +348,7 @@
             }
           },
           "503": {
-            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
+            "description": "The LDAP directory could not be reached (code IDENTITY_PROVIDER_UNAVAILABLE; local accounts still sign in), the database is unreachable (code DATABASE_UNAVAILABLE), or migrations are pending (code SCHEMA_NOT_MIGRATED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -603,7 +603,7 @@
           "Authentication"
         ],
         "summary": "Change your own password (ends your other sessions)",
-        "description": "400 when `currentPassword` is wrong. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "changeOwnPassword",
         "parameters": [],
         "requestBody": {
@@ -660,6 +660,16 @@
           },
           "403": {
             "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -1393,6 +1403,214 @@
             "sessionCookie": []
           }
         ]
+      }
+    },
+    "/api/v1/auth/providers": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "How users can sign in besides a local account: OIDC buttons and whether a directory is enabled",
+        "operationId": "getSignInOptions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInOptions"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/oidc/{id}/start": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Start signing in with an OIDC provider (browser navigation; redirects to the provider)",
+        "description": "Redirects (302) to the provider's authorization endpoint with the authorization code flow, PKCE (S256), `state` and `nonce`, and sets the `shadoucmdb_oidc` cookie (HttpOnly, 10 min). On a problem it redirects to `/login?ssoError=<code>` instead: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`.",
+        "operationId": "startOidcSignIn",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "returnTo",
+            "in": "query",
+            "description": "Path on this server to open after signing in (default /)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect: the browser follows the Location header"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/oidc/callback": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "The redirect URI to register at OIDC providers: finishes the sign-in",
+        "description": "`{PUBLIC_URL}/api/v1/auth/oidc/callback`. Needs the `shadoucmdb_oidc` cookie set by the start route in the same browser. Exchanges the code, checks the ID token, creates or updates the account and sets its profiles from the group mappings, then sets the session cookies (like POST /api/v1/auth/login) and redirects (302) to `returnTo`. On a problem it redirects to `/login?ssoError=<code>`: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`.",
+        "operationId": "completeOidcSignIn",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Authorization code",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "The state sent with the authorization request",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          {
+            "name": "iss",
+            "in": "query",
+            "description": "The provider's issuer (RFC 9207), checked when present",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "description": "Set by the provider when the sign-in did not happen",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          {
+            "name": "error_description",
+            "in": "query",
+            "description": "The provider's explanation (logged only)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect: the browser follows the Location header"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
       }
     },
     "/api/v1/configuration-items": {
@@ -15493,7 +15711,7 @@
           "Users"
         ],
         "summary": "Update a user (partial): rename, disable/enable, assign profiles",
-        "description": "Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.",
+        "description": "Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. For an account of an identity provider, the name, e-mail and profiles are set again from the provider at its next sign-in (change the group mappings instead); disabling it holds whatever the provider says. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.",
         "operationId": "updateUser",
         "parameters": [
           {
@@ -15664,7 +15882,7 @@
           "Users"
         ],
         "summary": "Set a new password for a user and end their sessions",
-        "description": "Requires `users.manage`.",
+        "description": "Requires `users.manage`. 409 for an account that signs in through an identity provider (it has no password here).",
         "operationId": "resetUserPassword",
         "parameters": [
           {
@@ -15742,6 +15960,16 @@
           },
           "404": {
             "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -17151,6 +17379,1040 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/identity-providers": {
+      "get": {
+        "tags": [
+          "Identity providers"
+        ],
+        "summary": "List OIDC providers and LDAP/AD directories with their group mappings (secrets are never returned)",
+        "description": "Requires `users.manage`.",
+        "operationId": "listIdentityProviders",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Vec"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Identity providers"
+        ],
+        "summary": "Add an OIDC provider or an LDAP/AD directory",
+        "description": "Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused.",
+        "operationId": "createIdentityProvider",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "name"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "oidc",
+                      "ldap"
+                    ]
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "isEnabled": {
+                    "type": "boolean",
+                    "description": "Default true"
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": -1000000
+                  },
+                  "caCertificate": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 65536
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "oidc": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "issuerUrl",
+                          "clientId"
+                        ],
+                        "properties": {
+                          "issuerUrl": {
+                            "type": "string",
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "clientId": {
+                            "type": "string",
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "clientSecret": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 4096
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "scopes": {
+                            "type": "string",
+                            "description": "Space-separated; openid is always added. Default: profile email",
+                            "maxLength": 1024,
+                            "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E ]*$"
+                          },
+                          "usernameClaim": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_:/.\\-]{1,128}$"
+                          },
+                          "groupsClaim": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_:/.\\-]{1,128}$"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Required for kind oidc"
+                  },
+                  "ldap": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "url",
+                          "userBaseDn"
+                        ],
+                        "properties": {
+                          "url": {
+                            "type": "string",
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "startTls": {
+                            "type": "boolean",
+                            "description": "Default: true for ldap://, false for ldaps://"
+                          },
+                          "bindDn": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 1024,
+                                "minLength": 1,
+                                "pattern": "\\S"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "bindPassword": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 4096
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "userBaseDn": {
+                            "type": "string",
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "userFilter": {
+                            "type": "string",
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "usernameAttribute": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9-]{0,127}$"
+                          },
+                          "displayNameAttribute": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9-]{0,127}$"
+                          },
+                          "emailAttribute": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9-]{0,127}$"
+                          },
+                          "groupAttribute": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9-]{0,127}$"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Required for kind ldap"
+                  },
+                  "groupMappings": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "group",
+                        "profileId"
+                      ],
+                      "properties": {
+                        "group": {
+                          "type": "string",
+                          "maxLength": 1024,
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "profileId": {
+                          "type": "string",
+                          "format": "uuid"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "description": "Replaces all mappings of the provider",
+                    "maxItems": 500
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityProvider"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/identity-providers/{id}": {
+      "get": {
+        "tags": [
+          "Identity providers"
+        ],
+        "summary": "Get one identity provider",
+        "description": "Requires `users.manage`.",
+        "operationId": "getIdentityProvider",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityProvider"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Identity providers"
+        ],
+        "summary": "Delete an identity provider that no account signs in through",
+        "description": "Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). 409 IN_USE while accounts belong to it: disable it instead.",
+        "operationId": "deleteIdentityProvider",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Identity providers"
+        ],
+        "summary": "Change an identity provider (partial); groupMappings replaces all mappings",
+        "description": "Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts.",
+        "operationId": "updateIdentityProvider",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "isEnabled": {
+                    "type": "boolean",
+                    "description": "false stops sign-ins through it and ends its accounts' sessions"
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": -1000000
+                  },
+                  "caCertificate": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 65536
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "oidc": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "issuerUrl": {
+                            "type": "string",
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "clientId": {
+                            "type": "string",
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "clientSecret": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 4096
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "scopes": {
+                            "type": "string",
+                            "description": "Space-separated; openid is always added. Default: profile email",
+                            "maxLength": 1024,
+                            "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E ]*$"
+                          },
+                          "usernameClaim": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_:/.\\-]{1,128}$"
+                          },
+                          "groupsClaim": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_:/.\\-]{1,128}$"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Only for kind oidc; fields left out are kept"
+                  },
+                  "ldap": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "url": {
+                            "type": "string",
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "startTls": {
+                            "type": "boolean"
+                          },
+                          "bindDn": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 1024,
+                                "minLength": 1,
+                                "pattern": "\\S"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "bindPassword": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 4096
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "userBaseDn": {
+                            "type": "string",
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "userFilter": {
+                            "type": "string",
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "usernameAttribute": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9-]{0,127}$"
+                          },
+                          "displayNameAttribute": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9-]{0,127}$"
+                          },
+                          "emailAttribute": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9-]{0,127}$"
+                          },
+                          "groupAttribute": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9-]{0,127}$"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Only for kind ldap; fields left out are kept"
+                  },
+                  "groupMappings": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "group",
+                        "profileId"
+                      ],
+                      "properties": {
+                        "group": {
+                          "type": "string",
+                          "maxLength": 1024,
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "profileId": {
+                          "type": "string",
+                          "format": "uuid"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "description": "Replaces all mappings of the provider",
+                    "maxItems": 500
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityProvider"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/identity-providers/{id}/test": {
+      "post": {
+        "tags": [
+          "Identity providers"
+        ],
+        "summary": "Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)",
+        "description": "Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to.",
+        "operationId": "testIdentityProvider",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "A connection test; for a directory, optionally with a name to look up (no password)",
+                "properties": {
+                  "username": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionTest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
           }
         ]
       }
@@ -18716,6 +19978,44 @@
         },
         "additionalProperties": false
       },
+      "ConnectionTest": {
+        "type": "object",
+        "required": [
+          "ok",
+          "message",
+          "details",
+          "user"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "The provider answered as expected"
+          },
+          "message": {
+            "type": "string",
+            "description": "What was checked, or what went wrong (for the administrator)"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Findings, one per line"
+          },
+          "user": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectoryUserPreview",
+                "description": "LDAP with a username: the entry found (null when none or several matched)"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "CreatedApiToken": {
         "type": "object",
         "description": "A new token and its secret. The secret is shown here only: store it now.",
@@ -19186,6 +20486,55 @@
         },
         "additionalProperties": false
       },
+      "DirectoryUserPreview": {
+        "type": "object",
+        "description": "What a directory says about a user (connection test)",
+        "required": [
+          "dn",
+          "username",
+          "displayName",
+          "email",
+          "groups",
+          "profiles"
+        ],
+        "properties": {
+          "dn": {
+            "type": "string"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The profiles these groups map to; empty means the user would be refused"
+          }
+        },
+        "additionalProperties": false
+      },
       "EffectiveAttribute": {
         "type": "object",
         "required": [
@@ -19504,6 +20853,7 @@
                   "RATE_LIMITED",
                   "MFA_REQUIRED",
                   "MFA_ENROLMENT_REQUIRED",
+                  "IDENTITY_PROVIDER_UNAVAILABLE",
                   "UNSUPPORTED_MEDIA_TYPE",
                   "PAYLOAD_TOO_LARGE",
                   "DATABASE_UNAVAILABLE",
@@ -19636,6 +20986,140 @@
               "string",
               "null"
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "GroupMapping": {
+        "type": "object",
+        "description": "Users in this group get this profile",
+        "required": [
+          "group",
+          "profileId",
+          "profileName"
+        ],
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": "As the provider reports it (a group name or id, or a group DN); compared case-insensitively"
+          },
+          "profileId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "profileName": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "IdentityProvider": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "isEnabled",
+          "sortOrder",
+          "caCertificate",
+          "oidc",
+          "ldap",
+          "groupMappings",
+          "userCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProviderKind"
+          },
+          "name": {
+            "type": "string",
+            "description": "Shown on the sign-in button and in the audit trail"
+          },
+          "isEnabled": {
+            "type": "boolean",
+            "description": "Disabled: nobody signs in through it and its accounts' sessions ended"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Button order (OIDC); the order directories are asked in (LDAP)"
+          },
+          "caCertificate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Extra CA certificates (PEM) trusted for this provider"
+          },
+          "oidc": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OidcConfig",
+                "description": "Set for kind oidc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ldap": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LdapConfig",
+                "description": "Set for kind ldap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "groupMappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupMapping"
+            }
+          },
+          "userCount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Accounts that sign in through this provider"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "IdentityProviderRef": {
+        "type": "object",
+        "description": "The identity provider an account signs in through",
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "oidc or ldap"
           }
         },
         "additionalProperties": false
@@ -19814,6 +21298,62 @@
           },
           "message": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LdapConfig": {
+        "type": "object",
+        "required": [
+          "url",
+          "startTls",
+          "bindDn",
+          "bindPasswordSet",
+          "userBaseDn",
+          "userFilter",
+          "usernameAttribute",
+          "displayNameAttribute",
+          "emailAttribute",
+          "groupAttribute"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "ldaps://host[:port] or ldap://host[:port] (then with StartTLS)"
+          },
+          "startTls": {
+            "type": "boolean"
+          },
+          "bindDn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Service account the user search binds as; null searches anonymously"
+          },
+          "bindPasswordSet": {
+            "type": "boolean",
+            "description": "A bind password is stored (it is never returned)"
+          },
+          "userBaseDn": {
+            "type": "string"
+          },
+          "userFilter": {
+            "type": "string",
+            "description": "{username} is replaced by the escaped sign-in name"
+          },
+          "usernameAttribute": {
+            "type": "string"
+          },
+          "displayNameAttribute": {
+            "type": "string"
+          },
+          "emailAttribute": {
+            "type": "string"
+          },
+          "groupAttribute": {
+            "type": "string",
+            "description": "Holds the DNs of the user's groups (memberOf)"
           }
         },
         "additionalProperties": false
@@ -20462,6 +22002,50 @@
         },
         "additionalProperties": false
       },
+      "OidcConfig": {
+        "type": "object",
+        "required": [
+          "issuerUrl",
+          "clientId",
+          "clientSecretSet",
+          "scopes",
+          "usernameClaim",
+          "groupsClaim",
+          "redirectUri"
+        ],
+        "properties": {
+          "issuerUrl": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "clientSecretSet": {
+            "type": "boolean",
+            "description": "A client secret is stored (it is never returned)"
+          },
+          "scopes": {
+            "type": "string",
+            "description": "Requested besides openid"
+          },
+          "usernameClaim": {
+            "type": "string",
+            "description": "ID token claim used as the username (dots descend into objects)"
+          },
+          "groupsClaim": {
+            "type": "string",
+            "description": "ID token claim listing the user's groups (dots descend into objects)"
+          },
+          "redirectUri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Register this at the provider; null until PUBLIC_URL is set"
+          }
+        },
+        "additionalProperties": false
+      },
       "Owner": {
         "type": "object",
         "required": [
@@ -20697,6 +22281,13 @@
           }
         },
         "additionalProperties": false
+      },
+      "ProviderKind": {
+        "type": "string",
+        "enum": [
+          "oidc",
+          "ldap"
+        ]
       },
       "PublicBranding": {
         "type": "object",
@@ -21616,6 +23207,52 @@
           "setupRequired": {
             "type": "boolean",
             "description": "True while no user exists: the UI shows the first-run screen"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignInOptions": {
+        "type": "object",
+        "description": "How users can sign in besides a local account.",
+        "required": [
+          "oidc",
+          "directory"
+        ],
+        "properties": {
+          "oidc": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignInProvider"
+            },
+            "description": "Enabled OIDC providers, in button order (empty unless PUBLIC_URL is set)"
+          },
+          "directory": {
+            "type": "boolean",
+            "description": "An LDAP/AD directory is enabled: the username/password form also takes directory accounts"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignInProvider": {
+        "type": "object",
+        "description": "A button on the sign-in page.",
+        "required": [
+          "id",
+          "name",
+          "startUrl"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "\"Sign in with {name}\""
+          },
+          "startUrl": {
+            "type": "string",
+            "description": "GET this (a browser navigation, not a fetch) to start signing in"
           }
         },
         "additionalProperties": false
@@ -23040,6 +24677,7 @@
           "isActive",
           "isAdministrator",
           "mfaEnabled",
+          "identityProvider",
           "profiles",
           "passwordChangedAt",
           "lastLoginAt",
@@ -23075,6 +24713,17 @@
           "mfaEnabled": {
             "type": "boolean",
             "description": "Has set up two-factor authentication (an authenticator app)"
+          },
+          "identityProvider": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IdentityProviderRef",
+                "description": "Null for a local account (username and password). Otherwise the account\nwas created by this provider and signs in only through it: it has no\npassword here, and its name, e-mail and profiles are set from the\nprovider at every sign-in."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "profiles": {
             "type": "array",
@@ -23122,6 +24771,97 @@
           }
         },
         "additionalProperties": false
+      },
+      "Vec": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "name",
+            "isEnabled",
+            "sortOrder",
+            "caCertificate",
+            "oidc",
+            "ldap",
+            "groupMappings",
+            "userCount",
+            "createdAt",
+            "updatedAt"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "kind": {
+              "$ref": "#/components/schemas/ProviderKind"
+            },
+            "name": {
+              "type": "string",
+              "description": "Shown on the sign-in button and in the audit trail"
+            },
+            "isEnabled": {
+              "type": "boolean",
+              "description": "Disabled: nobody signs in through it and its accounts' sessions ended"
+            },
+            "sortOrder": {
+              "type": "integer",
+              "format": "int32",
+              "description": "Button order (OIDC); the order directories are asked in (LDAP)"
+            },
+            "caCertificate": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Extra CA certificates (PEM) trusted for this provider"
+            },
+            "oidc": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/OidcConfig",
+                  "description": "Set for kind oidc"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ldap": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/LdapConfig",
+                  "description": "Set for kind ldap"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "groupMappings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GroupMapping"
+              }
+            },
+            "userCount": {
+              "type": "integer",
+              "format": "int64",
+              "description": "Accounts that sign in through this provider"
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        }
       }
     },
     "securitySchemes": {
@@ -23234,6 +24974,9 @@
     {
       "name": "API tokens",
       "description": "Administration: tokens for scripts and services. A token acts as its owner, limited to one permission profile, until it expires or is revoked. Needs users.manage and a signed-in session."
+    },
+    {
+      "name": "Identity providers"
     },
     {
       "name": "Configuration export/import",

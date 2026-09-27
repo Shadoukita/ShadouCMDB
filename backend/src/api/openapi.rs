@@ -158,6 +158,12 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run \
              `shadoucmdb migrate`)",
         ),
+        ErrorCode::IdentityProviderUnavailable => (
+            503,
+            "The LDAP directory could not be reached (code IDENTITY_PROVIDER_UNAVAILABLE; local accounts still sign \
+             in), the database is unreachable (code DATABASE_UNAVAILABLE), or migrations are pending (code \
+             SCHEMA_NOT_MIGRATED)",
+        ),
         ErrorCode::InternalError => (500, "Unexpected server error (code INTERNAL_ERROR)"),
     }
 }
@@ -255,6 +261,10 @@ pub fn document(routes: &[Route]) -> OpenApi {
                 }
                 schemas.push((doc.name.clone(), doc.schema.clone()));
                 schemas.extend(doc.nested.iter().cloned());
+            }
+            None if r.status.is_redirection() => {
+                let description = "Redirect: the browser follows the Location header";
+                responses.insert(r.status.as_u16(), ResponseBuilder::new().description(description).build());
             }
             None => {
                 responses.insert(r.status.as_u16(), ResponseBuilder::new().description("Success, no content").build());

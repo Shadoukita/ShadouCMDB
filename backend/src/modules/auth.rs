@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use super::mfa::{self, MfaStatus};
 use super::profiles::ClassPermission;
+use super::sso;
 use super::users::{self, User, UserCreate, password_problem, password_schema, username_schema};
 use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{
@@ -156,8 +157,8 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, csrf_token: String) -> Result
     Ok(Session { user, permissions: EffectivePermissions::from(&permissions), mfa, csrf_token })
 }
 
-/// Opens a session for the user and records `login.success`; returns the session and its cookies.
-async fn start_session(
+/// Opens a session for the user and records `login.success`; returns its cookies.
+pub(crate) async fn open_session(
     pool: &PgPool,
     auth: &AuthState,
     headers: &HeaderMap,
@@ -165,7 +166,7 @@ async fn start_session(
     user_id: Uuid,
     username: &str,
     method: LoginMethod,
-) -> Result<WithCookies<Json<Session>>, AppError> {
+) -> Result<Vec<axum::http::HeaderValue>, AppError> {
     let ctx = ctx.acting_as_user(user_id, username);
     let token = session::new_token();
     let csrf = session::new_token();
@@ -188,7 +189,21 @@ async fn start_session(
     .await?;
     events::login_success(&mut tx, &ctx, session_id, user_id, username, method).await?;
     tx.commit().await?;
-    let cookies = session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &token, &csrf);
+    Ok(session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &token, &csrf))
+}
+
+/// [`open_session`], answering with the session.
+async fn start_session(
+    pool: &PgPool,
+    auth: &AuthState,
+    headers: &HeaderMap,
+    ctx: &RequestContext,
+    user_id: Uuid,
+    username: &str,
+    method: LoginMethod,
+) -> Result<WithCookies<Json<Session>>, AppError> {
+    let cookies = open_session(pool, auth, headers, ctx, user_id, username, method).await?;
+    let csrf = session::cookie_value(&cookies[1], session::CSRF_COOKIE).unwrap_or_default();
     Ok(WithCookies(Json(session_dto(pool, user_id, csrf).await?), cookies))
 }
 
@@ -299,11 +314,17 @@ async fn login(
 ) -> Result<LoginAnswer, AppError> {
     throttle_gate(&auth.throttle, &b.username, "sign-ins for this username").await?;
     let row = data::find_for_login(pool, &b.username).await?;
-    if !password::verify(&b.password, row.as_ref().map(|r| r.password_hash.as_str())).await? {
-        let locked = auth.throttle.failure(&b.username);
-        tracing::warn!(username = %b.username.chars().take(64).collect::<String>(), ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in failed");
-        record_failure(pool, ctx, &b.username, locked).await?;
-        return Err(invalid_credentials());
+    // Directory accounts, and names no account has while a directory is enabled, go to LDAP.
+    let directory = match &row {
+        Some(r) => r.provider.as_ref().filter(|(_, kind)| kind == sso::LDAP).map(|(id, _)| Some(*id)),
+        None => sso::any_directory(pool).await?.then_some(None),
+    };
+    if let Some(linked) = directory {
+        return directory_login(pool, auth, headers, ctx, &b, linked).await.map(Either::Left);
+    }
+    // An OIDC account has no password: verify() then checks a dummy hash, so it takes as long.
+    if !password::verify(&b.password, row.as_ref().and_then(|r| r.password_hash.as_deref())).await? {
+        return Err(wrong_credentials(pool, auth, ctx, &b.username).await?);
     }
     let Some(user) = row else { return Err(invalid_credentials()) };
     if !user.is_active {
@@ -340,6 +361,50 @@ async fn login(
     data::record_login(pool, user.id).await?;
     tracing::info!(user = %user.username, ip = ?ctx.client.ip, purged_sessions = purged, "signed in");
     Ok(Either::Left(start_session(pool, auth, headers, ctx, user.id, &user.username, LoginMethod::Password).await?))
+}
+
+/// A wrong password (or unknown name): counted, logged and audited; returns the 401.
+async fn wrong_credentials(
+    pool: &PgPool,
+    auth: &AuthState,
+    ctx: &RequestContext,
+    username: &str,
+) -> Result<AppError, AppError> {
+    let locked = auth.throttle.failure(username);
+    tracing::warn!(username = %username.chars().take(64).collect::<String>(), ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in failed");
+    record_failure(pool, ctx, username, locked).await?;
+    Ok(invalid_credentials())
+}
+
+/// Sign-in with a directory password, under the same throttle as local passwords.
+async fn directory_login(
+    pool: &PgPool,
+    auth: &AuthState,
+    headers: &HeaderMap,
+    ctx: &RequestContext,
+    b: &LoginBody,
+    linked: Option<Uuid>,
+) -> Result<WithCookies<Json<Session>>, AppError> {
+    match sso::directory_sign_in(pool, ctx, &b.username, &b.password, linked).await? {
+        sso::DirectoryAnswer::SignedIn { user_id, username } => {
+            auth.throttle.success(&b.username);
+            let purged = data::purge_sessions(pool, auth.config.session_idle).await?;
+            data::record_login(pool, user_id).await?;
+            tracing::info!(user = %username, ip = ?ctx.client.ip, purged_sessions = purged, "signed in through a directory");
+            start_session(pool, auth, headers, ctx, user_id, &username, LoginMethod::Ldap).await
+        }
+        sso::DirectoryAnswer::NoMatch => Err(wrong_credentials(pool, auth, ctx, &b.username).await?),
+        // A right password that is still refused counts like a disabled account's.
+        sso::DirectoryAnswer::Refused(refusal) => {
+            let locked = auth.throttle.failure(&b.username);
+            record_failure(pool, ctx, &b.username, locked).await?;
+            Err(AppError::new(ErrorCode::Unauthenticated, refusal.message()))
+        }
+        sso::DirectoryAnswer::Unavailable => Err(AppError::new(
+            ErrorCode::IdentityProviderUnavailable,
+            "The directory service could not be reached; try again shortly, or sign in with a local account",
+        )),
+    }
 }
 
 fn sign_in_expired() -> AppError {
@@ -418,7 +483,7 @@ pub(crate) async fn check_current_password(
 ) -> Result<(), AppError> {
     let key = me.user_id.to_string();
     throttle_gate(&auth.password_throttle, &key, "attempts at your current password").await?;
-    let hash = data::password_hash(&mut *pool.acquire().await?, me.user_id).await?;
+    let hash = data::password_hash(&mut *pool.acquire().await?, me.user_id).await?.flatten();
     if !password::verify(current_password, hash.as_deref()).await? {
         let locked = auth.password_throttle.failure(&key);
         tracing::warn!(user = %me.username, locked_secs = locked.map(|d| d.as_secs()), "wrong current password");
@@ -435,6 +500,11 @@ async fn change_password(
     b: PasswordChange,
 ) -> Result<(), AppError> {
     let me = principal(ctx)?;
+    if data::password_hash(&mut *pool.acquire().await?, me.user_id).await?.flatten().is_none() {
+        return Err(AppError::conflict(
+            "Your account signs in through an identity provider; change your password there",
+        ));
+    }
     check_current_password(pool, auth, me, &b.current_password).await?;
     users::set_password(pool, ctx, me.user_id, &b.new_password).await?;
     Ok(())
@@ -471,10 +541,10 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Sign in with username and password")
             .description(
-                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429.",
+                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. Accounts of an OIDC provider cannot sign in here.",
             )
             .public()
-            .errors(&[ErrorCode::MfaRequired, ErrorCode::RateLimited])
+            .errors(&[ErrorCode::MfaRequired, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<LoginBody>>| async move {
                 login(&api.pool, &api.auth, &api.headers, &api.ctx, b).await
             }),
@@ -515,9 +585,9 @@ pub fn routes() -> Vec<Route> {
             .session_only()
             .before_mfa_enrolment()
             .description(
-                "400 when `currentPassword` is wrong. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
+                "400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
             )
-            .errors(&[ErrorCode::RateLimited])
+            .errors(&[ErrorCode::RateLimited, ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<PasswordChange>>| async move {
                 change_password(&api.pool, &api.auth, &api.ctx, b).await?;
                 Ok(NoContent)
@@ -539,6 +609,7 @@ mod tests {
             session_idle: Duration::from_secs(3600),
             session_max_age: Duration::from_secs(3600),
             cookie_secure: CookieSecure::Never,
+            public_url: None,
         })
     }
 
@@ -662,7 +733,7 @@ mod tests {
         let e = change_password(pool, &auth, &ctx, change(right)).await.unwrap_err();
         assert_eq!(e.code, ErrorCode::RateLimited, "locked: not even the right password is checked");
         assert_eq!(e.retry_after, Some(1));
-        let hash = data::password_hash(&mut pool.acquire().await.unwrap(), user_id).await.unwrap();
+        let hash = data::password_hash(&mut pool.acquire().await.unwrap(), user_id).await.unwrap().flatten();
         assert!(password::verify(right, hash.as_deref()).await.unwrap(), "password unchanged");
         db.drop().await;
     }
