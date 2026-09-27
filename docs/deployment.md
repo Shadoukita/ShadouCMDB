@@ -40,7 +40,8 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
 - Logs are one JSON object per line. Every request is logged with its
   `request_id`, which comes from `X-Request-Id` or is generated, and is echoed in
   the response.
-- `migrate` connects with `MIGRATION_DATABASE_URL` when it is set, `prune-audit` only with
+- `migrate`, `restore`, `factory-reset` and `decommission` connect with `MIGRATION_DATABASE_URL`
+  when it is set, `prune-audit` only with
   `MAINTENANCE_DATABASE_URL`; everything else uses `DATABASE_URL` / `PG*`. See
   [Database roles](#database-roles).
 - `serve` does **not** migrate on start. Run `migrate` as an explicit step when
@@ -165,7 +166,7 @@ creates three roles. None is a superuser.
 
 | Role | Used by | Variable | May |
 | --- | --- | --- | --- |
-| `shadoucmdb_owner` | `shadoucmdb migrate` | `MIGRATION_DATABASE_URL` | Own the database and the `cmdb` system schema; run migrations. Member of `shadoucmdb_app`. |
+| `shadoucmdb_owner` | `shadoucmdb migrate`, `restore`, `factory-reset`, `decommission` | `MIGRATION_DATABASE_URL` | Own the database and the `cmdb` system schema; run migrations. Member of `shadoucmdb_app`. |
 | `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log` and `schema_changes`; no `EXECUTE` on the purge. Owns the area schemas (`CREATE` on the database). |
 | `shadoucmdb_maintenance` | `shadoucmdb prune-audit` | `MAINTENANCE_DATABASE_URL` | Execute `cmdb.prune_audit_log()`, nothing else. |
 
