@@ -9,6 +9,7 @@ import LoadingState from "../components/LoadingState.vue";
 import PaginationBar from "../components/PaginationBar.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { useDocumentTitle } from "../lib/composables";
+import { plural } from "../lib/format";
 
 /** Full global-search results (ranked by the API), with the field that matched. State lives in the URL. */
 const route = useRoute();
@@ -33,7 +34,7 @@ function onPage(p: { limit: number; offset: number }) {
   <div class="page-header">
     <div class="title">
       <h1>{{ q ? `Results for “${q}”` : "Search" }}</h1>
-      <span v-if="search.data.value" class="muted">{{ search.data.value.page.total.toLocaleString() }} matches</span>
+      <span v-if="search.data.value" class="muted">{{ plural(search.data.value.page.total, "match", "matches") }}</span>
     </div>
     <RouterLink v-if="q" class="btn" :to="{ path: '/cis', query: { q } }">Open as filterable inventory</RouterLink>
   </div>

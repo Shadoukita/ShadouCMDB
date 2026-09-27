@@ -18,7 +18,7 @@ import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import { useDocumentTitle } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
-import { formatDateTime } from "../../lib/format";
+import { formatDateTime, plural } from "../../lib/format";
 import { CLASS_RIGHTS, GLOBAL_PERMISSIONS, type ClassRight } from "../../lib/permissions";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
@@ -197,7 +197,7 @@ const notFound = computed(() => {
         <h1>{{ isNew ? "New permission profile" : profile.data.value?.name }}</h1>
         <span v-if="builtin" class="badge">Built-in</span>
         <span v-if="profile.data.value" class="muted">
-          {{ profile.data.value.userCount }} {{ profile.data.value.userCount === 1 ? "user" : "users" }}
+          {{ plural(profile.data.value.userCount, "user") }}
         </span>
       </div>
       <div v-if="profile.data.value && !isNew && session.can('profiles.manage')" class="actions">

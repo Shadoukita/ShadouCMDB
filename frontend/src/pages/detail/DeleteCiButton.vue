@@ -47,7 +47,8 @@ function confirm() {
     <p v-if="rels.data.value && total === 0">It has no relationships, so no other CI is affected.</p>
     <template v-if="rels.data.value && total > 0">
       <p>
-        These <strong>{{ plural(total, "relationship") }}</strong> will break:
+        <template v-if="total === 1">This relationship will break:</template>
+        <template v-else>These <strong>{{ plural(total, "relationship") }}</strong> will break:</template>
       </p>
       <ul>
         <li v-for="{ r, d } in edges" :key="r.id">
