@@ -21,6 +21,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 | `frontend/` | Vue 3 + Vite + TanStack Query web UI. See [`frontend/README.md`](frontend/README.md). |
 | `docs/data-model.md` | Data model, integrity rules and soft-delete decisions. |
 | `.github/` | CI and release workflows, pull request template. Releases: see [CONTRIBUTING.md](CONTRIBUTING.md#cutting-a-release). |
+| `SECURITY.md`, `docs/security/` | Vulnerability reporting and disclosure policy, hardening guide, support period, telemetry statement, secure development lifecycle, CRA incident process, risk assessment. See [docs/security](docs/security/README.md). |
 | `docs/api.md` | API conventions, error envelope, endpoint overview, extension seams. |
 | `backend/openapi.json` | OpenAPI contract generated from the code (`shadoucmdb openapi --out backend/openapi.json`; CI fails if it is stale). |
 | `tools/` | `smoke/smoke.ts`: end-to-end check of every API operation against any API URL. `openapi-diff.mjs`: semantic diff of two specs. |
@@ -179,3 +180,9 @@ Adding a CI class, attribute or relationship type is **data**, not a schema chan
 ## Contributing
 
 Branching, pull request and schema-change rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), never in a public issue.
+For production deployments, follow the [hardening guide](docs/security/hardening.md). ShadouCMDB sends
+no telemetry ([details](docs/security/telemetry.md)).

@@ -8,6 +8,7 @@
 
 pub mod error;
 pub mod request_id;
+mod security_txt;
 mod ui;
 
 use std::any::Any;
@@ -50,8 +51,8 @@ impl AppState {
 
 /// Paths the API owns: they get the error envelope from `fallback` and the
 /// no-store cache policy from `security_headers`. Every authenticated route is
-/// under `/api/`; `/healthz`, `/readyz`, `/openapi.json`, `/docs` and the UI
-/// are not. A module that declares a route outside `/api/` is outside this
+/// under `/api/`; `/healthz`, `/readyz`, `/openapi.json`, `/docs`,
+/// `/.well-known/security.txt` and the UI are not. A module that declares a route outside `/api/` is outside this
 /// gate, and its responses may be stored by a shared cache.
 fn is_api_path(path: &str) -> bool {
     path.starts_with("/api/") || path == "/api"
@@ -191,6 +192,7 @@ fn with_security_headers(app: Router, csp: Csp) -> Router {
 
 pub fn router(state: AppState, cfg: &Config) -> Router {
     let mut app = api::router()
+        .route(security_txt::PATH, axum::routing::get(security_txt::handler))
         .fallback(fallback)
         .method_not_allowed_fallback(fallback)
         .with_state(state)
@@ -406,6 +408,18 @@ mod tests {
             assert_eq!(header(&res, header::CACHE_CONTROL), None, "{path}");
             assert!(vary(&res).is_empty(), "{path}: {:?}", vary(&res));
         }
+    }
+
+    #[tokio::test]
+    async fn security_txt_is_served_without_a_session() {
+        let res = get(app(), "/.well-known/security.txt", &[]).await;
+        assert_eq!(res.status(), 200);
+        assert_eq!(header(&res, header::CONTENT_TYPE), Some("text/plain; charset=utf-8"));
+        assert_eq!(header(&res, header::X_CONTENT_TYPE_OPTIONS), Some("nosniff"));
+        let body = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+        let body = std::str::from_utf8(&body).unwrap();
+        assert!(body.lines().any(|l| l.starts_with("Contact: ")), "{body}");
+        assert!(body.lines().any(|l| l.starts_with("Expires: ")), "{body}");
     }
 
     #[tokio::test]
