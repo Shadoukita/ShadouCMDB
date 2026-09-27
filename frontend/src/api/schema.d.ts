@@ -12841,7 +12841,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12937,7 +12937,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -13013,7 +13013,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -13087,7 +13087,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
