@@ -867,6 +867,22 @@ pub async fn reconcile(
     apply_with(conn, ctx, summary, Scope::All, Purge::default(), true).await
 }
 
+/// Builds the physical schema from the metadata (a full, lenient reconcile)
+/// without recording it in cmdb.schema_changes or the audit log. For
+/// `shadoucmdb restore`: the restored history already describes the objects
+/// it recreates. Returns the statements run and the warnings.
+pub async fn rebuild_unrecorded(conn: &mut PgConnection) -> Result<(Vec<String>, Vec<String>), AppError> {
+    lock(conn).await?;
+    let model = Model::load(conn).await?;
+    let plan = build(conn, &model, &Scope::All, &Purge::default(), true).await?;
+    let statements = plan.statements();
+    for sql in &statements {
+        execute(conn, sql).await?;
+    }
+    let warnings = plan.impacts().into_iter().filter(|i| i.kind == "warning").map(|i| i.message).collect();
+    Ok((statements, warnings))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
