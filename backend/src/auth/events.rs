@@ -45,6 +45,8 @@ pub enum RevokeReason {
     PasswordChanged,
     /// A new sign-in in the same browser replaced the session its cookie named.
     Replaced,
+    /// The identity provider the user signs in through was disabled or deleted.
+    ProviderDisabled,
 }
 
 impl RevokeReason {
@@ -55,6 +57,7 @@ impl RevokeReason {
             RevokeReason::PasswordReset => "password_reset",
             RevokeReason::PasswordChanged => "password_changed",
             RevokeReason::Replaced => "replaced",
+            RevokeReason::ProviderDisabled => "provider_disabled",
         }
     }
 }
@@ -69,6 +72,10 @@ pub enum LoginMethod {
     RecoveryCode,
     /// First-run setup signs the new administrator in.
     Setup,
+    /// An OpenID Connect provider vouched for the user.
+    Oidc,
+    /// An LDAP / Active Directory bind with the user's password.
+    Ldap,
 }
 
 fn attempted(username: &str) -> String {
@@ -131,6 +138,8 @@ pub async fn login_success(
         LoginMethod::Totp => "totp",
         LoginMethod::RecoveryCode => "recovery_code",
         LoginMethod::Setup => "setup",
+        LoginMethod::Oidc => "oidc",
+        LoginMethod::Ldap => "ldap",
     };
     let v = details(ctx, fields(json!({ "userId": user_id, "username": username, "method": method })));
     write(conn, ctx, AuditAction::LoginSuccess, session_id, v).await

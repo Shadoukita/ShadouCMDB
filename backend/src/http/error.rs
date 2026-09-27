@@ -41,6 +41,8 @@ pub enum ErrorCode {
     MfaRequired,
     /// A profile the user holds requires MFA; until it is set up only the MFA set-up routes answer (403)
     MfaEnrolmentRequired,
+    /// The LDAP directory (or OIDC provider) could not be reached; local accounts still sign in (503)
+    IdentityProviderUnavailable,
     UnsupportedMediaType,
     PayloadTooLarge,
     DatabaseUnavailable,
@@ -65,7 +67,9 @@ impl ErrorCode {
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated | ErrorCode::IdentityProviderUnavailable => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             ErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

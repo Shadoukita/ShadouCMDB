@@ -40,6 +40,7 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   areas: "Area",
   schema_changes: "Schema change",
   api_tokens: "API token",
+  identity_providers: "Identity provider",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));
 const ACTION_SET: Record<Action, true> = {

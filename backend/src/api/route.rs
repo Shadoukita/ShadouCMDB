@@ -445,6 +445,33 @@ impl Output for ErrorWithCookies {
     }
 }
 
+/// A redirect for a browser navigation (OIDC sign-in): the route's 3xx
+/// status, `Location`, Set-Cookie headers and no body. Never cached.
+pub struct Redirect {
+    pub location: String,
+    pub cookies: Vec<HeaderValue>,
+}
+
+impl Output for Redirect {
+    fn doc() -> Option<ResponseDoc> {
+        None
+    }
+    fn respond(self, status: StatusCode) -> Response {
+        let Ok(location) = HeaderValue::from_str(&self.location) else {
+            tracing::error!("redirect target is not a valid header value");
+            return AppError::internal().into_response();
+        };
+        let mut res = status.into_response();
+        let headers = res.headers_mut();
+        headers.insert(header::LOCATION, location);
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        for c in self.cookies {
+            headers.append(header::SET_COOKIE, c);
+        }
+        res
+    }
+}
+
 /// Another output plus Set-Cookie headers (login, logout, first-run setup).
 pub struct WithCookies<R>(pub R, pub Vec<HeaderValue>);
 

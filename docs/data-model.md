@@ -39,7 +39,10 @@ users ─< user_permission_profiles >─ permission_profiles ─┬─< permissi
   │                                                        └─< permission_profile_class_permissions >─ ci_classes (NULL = all)
   ├─< sessions
   ├─< user_totp (0..1), user_recovery_codes, mfa_challenges
-  └─< api_tokens >─ permission_profiles (scope; NULL once deleted)
+  ├─< api_tokens >─ permission_profiles (scope; NULL once deleted)
+  └── identity_providers (0..1; the provider the account signs in through)
+         ├─< identity_provider_group_mappings >─ permission_profiles
+         └─< oidc_login_states
 
 ui_settings (one row) ── (version) ─> ui_settings_versions (append-only)
 ui_assets (logo, favicon)
@@ -63,7 +66,10 @@ ui_assets (logo, favicon)
 | `environments` | `production`, `staging`, `test`, `development`, `disaster_recovery`. | unique `key` |
 | `locations` | Location hierarchy (region › site › building › floor › room › rack, plus `cloud_region`). | unique `key`; `location_type` check; no cycles (trigger) |
 | `owners` | Accountable people or teams (`kind` = `person` / `team`). This is not a login table (see `users`). `external_ref` is the seam for a later directory/IdP link. | `kind` check; unique `external_ref`; email format |
-| `users` | Local accounts: `username`, `display_name`, `email`, `is_active`, argon2id `password_hash` (PHC string, never returned by the API), `password_changed_at`, `last_login_at`. | unique `lower(username)`; username format; `password_hash LIKE '$argon2id$%'`; email format |
+| `users` | Accounts: `username`, `display_name`, `email`, `is_active`, argon2id `password_hash` (PHC string, never returned by the API), `password_changed_at`, `last_login_at`. An account created by an identity provider has `identity_provider_id` and `external_id` (the OIDC `sub`, or the directory entry's `objectGUID`/`entryUUID`/DN) and no password. | unique `lower(username)`; username format; `password_hash LIKE '$argon2id$%'`; a password **iff** local (check); `identity_provider_id` and `external_id` together, unique as a pair; provider FK `RESTRICT`; email format |
+| `identity_providers` | OIDC providers (`kind = 'oidc'`: `issuer_url`, `client_id`, `client_secret`, `scopes`, `username_claim`, `groups_claim`) and LDAP/AD directories (`kind = 'ldap'`: `ldap_url`, `start_tls`, `bind_dn`, `bind_password`, `user_base_dn`, `user_filter`, attribute names), with `name`, `is_enabled`, `sort_order` and an optional `ca_certificate` (PEM). Secrets are stored as is (the server presents them) and never returned by the API. | unique `lower(name)`; the columns of its kind required and the other kind's NULL (checks); issuer `https://` (or loopback `http://`); `ldaps://`, or `ldap://` with `start_tls` (check); bind DN and password together; filter contains `{username}`; `kind` immutable (trigger) |
+| `identity_provider_group_mappings` | A group the provider reports (`group_name`: an OIDC groups-claim value or an LDAP group DN) grants a permission profile. | unique (`provider_id`, `lower(group_name)`, `profile_id`); cascades with the provider and the profile |
+| `oidc_login_states` | An OIDC sign-in between the redirect to the provider and its callback: SHA-256 of the `state`, the `nonce`, the PKCE verifier, `return_to` (a local path), `expires_at` (10 minutes). Never backed up. | unique `state_hash` (32 bytes); `return_to` is a local path (check); cascades with the provider |
 | `permission_profiles` | Named sets of permissions. `is_builtin` marks the one Administrator profile (created by the migration), which holds every permission implicitly. `require_mfa`: holders must set up two-factor authentication. | unique `lower(name)`; at most one built-in; built-in cannot be updated (except `require_mfa`) or deleted (trigger) |
 | `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
@@ -197,6 +203,8 @@ value before and after the upgrade.
 | `ui_assets` | **Hard delete** | An image is current state only; the audit log keeps its metadata (type, size, hash). |
 | `api_tokens` | **Revoke** (`revoked_at`), row kept | A revoked or expired token stays listed next to its audit rows. Deleting the owner deletes their tokens; the API writes a `delete` audit row for each first. |
 | `user_totp`, `user_recovery_codes`, `mfa_challenges` | **Hard delete** | Turning MFA off (by the user or an administrator) deletes the authenticator and codes; the `mfa.disable` audit row is the history. A used recovery code keeps its row (`used_at`) until the codes are replaced. Challenges are deleted when used, after 5 wrong codes, at the next sign-in once expired, and by `prune-audit --scope auth`. |
+| `identity_providers`, `identity_provider_group_mappings` | **Disable** (`is_enabled = false`), hard delete only without accounts | Disabling stops sign-ins through the provider and ends its accounts' sessions. A provider that accounts still belong to cannot be deleted (FK `RESTRICT`, checked by the API first: `409 IN_USE`). Mappings are configuration: replaced as a whole, history in `audit_log`. |
+| `oidc_login_states` | **Hard delete** | Deleted when the callback redeems them, and once expired at the next OIDC sign-in. |
 | `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login, and `prune-audit` removes any left 30 days after their expiry. Every session the API ends (not expiry) leaves a `logout` or `session.revoke` row in `audit_log`. |
 
 ## Auditing
@@ -219,11 +227,11 @@ and `peerIpAddress`, the TCP peer, when that differs from `ipAddress`):
 
 | `action` | Actor | `entity_id` | `new_value` |
 | --- | --- | --- | --- |
-| `login.success` | the user | the new session | `userId`, `username`, `method` (`password`, `totp`, `recovery_code` or `setup`) |
+| `login.success` | the user | the new session | `userId`, `username`, `method` (`password`, `totp`, `recovery_code`, `setup`, `oidc` or `ldap`) |
 | `login.failure` | anonymous (`api_client`, no id) | a fresh id for the attempt | `attemptedUsername` (first 64 characters, as typed) |
 | `login.locked` | anonymous | the failed attempt that set the lock | `attemptedUsername`, `lockedForSeconds` |
 | `logout` | the user | the session | `userId`, `username`, `session` (`createdAt`, `ipAddress`, `userAgent`) |
-| `session.revoke` | whoever caused it (an administrator, the user, `system`) | the ended session | as for `logout`, plus `reason`: `user_disabled`, `user_deleted`, `password_reset`, `password_changed` or `replaced` (a new sign-in in the same browser) |
+| `session.revoke` | whoever caused it (an administrator, the user, `system`) | the ended session | as for `logout`, plus `reason`: `user_disabled`, `user_deleted`, `password_reset`, `password_changed`, `replaced` (a new sign-in in the same browser) or `provider_disabled` (its identity provider was disabled) |
 
 A failed sign-in never says whether the username exists (a wrong password, an unknown name
 and a disabled account look the same, and all three count towards the same login lock), so reading the audit log does not reveal account
@@ -243,6 +251,13 @@ and `userId`, `username`, `ipAddress`, `userAgent` in `new_value`:
 | `mfa.failure` | anonymous at sign-in, else the user | `stage`: `login`, `disable` or `recovery_codes` (a wrong or replayed code); outside sign-in `lockedForSeconds` when it set the lock |
 | `mfa.recovery_code_used` | the user | `stage`, `recoveryCodesRemaining` |
 | `mfa.recovery_codes` | the user | `recoveryCodes` (new codes replaced the old ones) |
+
+Identity providers (`entity_type = 'identity_providers'`) record `create`, `update` and `delete` with the API
+representation (settings and group mappings; secrets only as `clientSecretSet` / `bindPasswordSet`). The account
+changes a sign-in through a provider makes (creating the account, new name, e-mail or profiles) are `create` and
+`update` rows on `users` with `actor_type = 'system'` and `actor_name = 'identity provider "<name>"'`. A sign-in
+the provider vouched for but ShadouCMDB refused (no mapped group, name taken, account disabled) is a
+`login.failure` with the name the provider sent; a callback without this browser's pending sign-in is not recorded.
 
 A wrong code at sign-in that sets the username's lock also writes `login.locked`. No TOTP secret, code, recovery
 code or hash is ever written.

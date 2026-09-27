@@ -150,7 +150,8 @@ from an empty directory to a verified install. The steps below are the same flow
 
    Further users and their permission profiles are managed under Administration. Behind a TLS proxy, let it
    send `X-Forwarded-Proto` so session cookies are marked `Secure`
-   (see [docs/deployment.md](docs/deployment.md#https-and-session-cookies)).
+   (see [docs/deployment.md](docs/deployment.md#https-and-session-cookies)). For single sign-on through an
+   OIDC provider or LDAP/AD, set `PUBLIC_URL` and see [Enterprise sign-in](docs/api.md#enterprise-sign-in).
 
 8. **Use the API.** It lives under `/api/v1`. The OpenAPI 3.1 contract is served at `/openapi.json`, and
    there is a browsable UI at `/docs`. The same contract is committed as

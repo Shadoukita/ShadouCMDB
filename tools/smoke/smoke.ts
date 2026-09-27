@@ -135,6 +135,8 @@ async function call(
       ...headers,
     },
     body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
+    // The OIDC routes answer browser navigations with 302: check the redirect itself.
+    redirect: 'manual',
   });
   const bytes = new Uint8Array(await res.arrayBuffer());
   const binary = /^image\//.test(res.headers.get('content-type') ?? '');
@@ -224,7 +226,8 @@ async function main() {
 
   // --- Without a session, everything but health, login and setup is 401 ----------
   console.log('\n# Unauthenticated');
-  const PUBLIC = ['getLiveness', 'getReadiness', 'getSetupStatus', 'completeSetup', 'login', 'loginSecondFactor', 'getPublicBranding', 'getUiAsset'];
+  const PUBLIC = ['getLiveness', 'getReadiness', 'getSetupStatus', 'completeSetup', 'login', 'loginSecondFactor', 'getPublicBranding', 'getUiAsset',
+    'getSignInOptions', 'startOidcSignIn', 'completeOidcSignIn'];
   const specPublic = Object.values(spec.paths as Record<string, Record<string, Json>>)
     .flatMap((m) => Object.values(m))
     .filter((op) => Array.isArray(op.security) && op.security.length === 0)
@@ -733,6 +736,9 @@ async function permissions(x: Json) {
     const plain = (await post('/api/v1/admin/users', { username: `smoke-plain-${RUN}`, displayName: 'Plain', password })).json;
     await del(`/api/v1/admin/users/${plain.id}`);
     await del(`/api/v1/admin/users/${nobody.id}`, 409); // not yourself
+    // Identity providers decide who gets which profile: Administrator only, even with users.manage.
+    await get('/api/v1/admin/identity-providers');
+    await post('/api/v1/admin/identity-providers', { kind: 'oidc', name: `x-${RUN}`, oidc: { issuerUrl: 'https://idp.invalid', clientId: 'x' } }, 403);
   });
 
   console.log('\n# Lockout protection');
@@ -887,12 +893,77 @@ async function permissions(x: Json) {
     !JSON.stringify(e).includes(createHash('sha256').update(readerToken.secret).digest('hex'))), 'no token secret or hash in the audit log');
 
   await mfa(builtin, createHash);
+  await identityProviders(builtin, readers);
 
   // Clean up what only this run uses.
   await del(`/api/v1/admin/users/${reader.id}`);
   await del(`/api/v1/admin/users/${nobody.id}`);
   for (const p of [readers, editors, copy, userManagers]) await del(`/api/v1/admin/profiles/${p.id}`);
   await del(`/api/v1/admin/profiles/${readers.id}`, 404);
+}
+
+/**
+ * OIDC providers and LDAP directories: administration, the public sign-in
+ * options and the OIDC redirect routes. No provider is reachable here (the
+ * .invalid names never resolve), so this covers the contract and the refusals;
+ * sign-in against a real provider is tested separately (SHAA-85).
+ */
+async function identityProviders(builtin: Json, readers: Json) {
+  console.log('\n# Identity providers (OIDC, LDAP)');
+  const base = '/api/v1/admin/identity-providers';
+  const secret = `client-secret-${RUN}`;
+  const created = (await post(base, {
+    kind: 'oidc', name: `Smoke IdP ${RUN}`, sortOrder: 5,
+    oidc: { issuerUrl: 'https://idp.smoke.invalid/realms/cmdb', clientId: 'shadoucmdb', clientSecret: secret },
+    groupMappings: [{ group: 'cmdb-readers', profileId: readers.id }, { group: 'CMDB-READERS', profileId: readers.id }, { group: 'cmdb-admins', profileId: builtin.id }],
+  })).json;
+  check(created.kind === 'oidc' && created.oidc.clientSecretSet === true && created.oidc.scopes === 'profile email' &&
+    created.oidc.usernameClaim === 'preferred_username' && created.oidc.groupsClaim === 'groups' && created.ldap === null,
+    'an OIDC provider gets the default scopes and claims; the secret is only reported as set');
+  check(created.groupMappings.length === 2, 'group mappings are de-duplicated case-insensitively');
+  check(!JSON.stringify(created).includes(secret), 'the client secret is never returned');
+  await post(base, { kind: 'oidc', name: `Smoke IdP ${RUN}`, oidc: { issuerUrl: 'https://other.invalid', clientId: 'x' } }, 409); // names are unique
+  await post(base, { kind: 'oidc', name: 'no settings' }, 400);
+  await post(base, { kind: 'oidc', name: 'plain http', oidc: { issuerUrl: 'http://idp.example.com', clientId: 'x' } }, 400);
+  await post(base, { kind: 'ldap', name: 'plain ldap', ldap: { url: 'ldap://dc.smoke.invalid', startTls: false, userBaseDn: 'dc=x' } }, 400);
+  await post(base, { kind: 'ldap', name: 'bad ca', caCertificate: 'not a certificate', ldap: { url: 'ldaps://dc.smoke.invalid', userBaseDn: 'dc=x' } }, 400);
+  await post(base, { kind: 'oidc', name: 'bad mapping', oidc: { issuerUrl: 'https://idp.invalid', clientId: 'x' }, groupMappings: [{ group: 'g', profileId: '00000000-0000-4000-8000-000000000000' }] }, 400);
+  const directory = (await post(base, {
+    kind: 'ldap', name: `Smoke Directory ${RUN}`,
+    ldap: { url: 'ldap://dc.smoke.invalid', bindDn: 'cn=svc,dc=smoke,dc=invalid', bindPassword: secret, userBaseDn: 'dc=smoke,dc=invalid' },
+  })).json;
+  check(directory.ldap.startTls === true && directory.ldap.bindPasswordSet === true && directory.ldap.userFilter.includes('{username}') &&
+    directory.ldap.groupAttribute === 'memberOf', 'ldap:// defaults to StartTLS; Active Directory attribute defaults');
+  const listed = (await get(base)).json;
+  check(listed.some((p: Json) => p.id === created.id) && listed.some((p: Json) => p.id === directory.id), 'both providers are listed');
+  await get(`${base}/${created.id}`);
+  await get(`${base}/00000000-0000-4000-8000-000000000000`, 404);
+  const changed = (await patch(`${base}/${created.id}`, { oidc: { clientSecret: null, scopes: 'profile email groups' }, groupMappings: [{ group: 'cmdb-admins', profileId: builtin.id }] })).json;
+  check(changed.oidc.clientSecretSet === false && changed.oidc.scopes === 'profile email groups' && changed.groupMappings.length === 1,
+    'PATCH removes the secret, keeps the other settings and replaces the mappings');
+  await patch(`${base}/${created.id}`, { ldap: { url: 'ldaps://x.invalid' } }, 400); // not a directory
+  await patch(`${base}/${directory.id}`, { ldap: { url: 'ldaps://dc.smoke.invalid:636' } }); // ldaps:// switches StartTLS off
+  await patch(`${base}/${directory.id}`, { ldap: { startTls: true } }, 400); // not both
+  const test = (await call('POST', `${base}/${created.id}/test`, {}, 200)).json;
+  check(test.ok === false && test.message.includes('idp.smoke.invalid'), `the connection test reports an unreachable issuer (${test.message})`);
+  const dirTest = (await call('POST', `${base}/${directory.id}/test`, { username: 'alice' }, 200)).json;
+  check(dirTest.ok === false && dirTest.user === null, `the connection test reports an unreachable directory (${dirTest.message})`);
+
+  // The sign-in page and the OIDC routes (browser navigations: 302, never an error page).
+  const options = (await as(null, () => get('/api/v1/auth/providers'))).json;
+  check(typeof options.directory === 'boolean' && options.directory === true, 'sign-in options report an enabled directory');
+  const start = await as(null, () => call('GET', `/api/v1/auth/oidc/${created.id}/start?returnTo=%2Fitems`, undefined, 302));
+  check(/\/login\?ssoError=(unavailable|not_configured)$/.test(start.headers.get('location') ?? ''), `an unreachable provider sends the browser back to the sign-in page (${start.headers.get('location')})`);
+  await as(null, () => call('GET', '/api/v1/auth/oidc/not-a-uuid/start', undefined, 302));
+  const callback = await as(null, () => call('GET', `/api/v1/auth/oidc/callback?code=x&state=${'y'.repeat(43)}&session_state=z`, undefined, 302));
+  check((callback.headers.get('location') ?? '').endsWith('/login?ssoError=expired'), 'a callback without this browser\'s sign-in state is refused');
+
+  await del(`${base}/${directory.id}`);
+  await del(`${base}/${created.id}`);
+  await del(`${base}/${created.id}`, 404);
+  const trail: Json[] = (await get(`/api/v1/audit-log?entityType=identity_providers&entityId=${created.id}&sort=occurredAt`)).json.data;
+  check(trail.map((e) => e.action).join() === 'create,update,delete', 'provider changes are audited');
+  check(!JSON.stringify(trail).includes(secret), 'no provider secret in the audit log');
 }
 
 /** The code an authenticator app shows for a base32 secret at a 30-second step (RFC 6238, HMAC-SHA1, 6 digits). */

@@ -370,6 +370,7 @@ mod tests {
             session_idle: Duration::from_secs(60),
             session_max_age: Duration::from_secs(3600),
             cookie_secure: CookieSecure::Auto,
+            public_url: None,
         };
         let mut cfg = Config {
             api_host: "127.0.0.1".into(),

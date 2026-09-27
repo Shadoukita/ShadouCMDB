@@ -26,10 +26,21 @@ hex = "0.4"
 # TOTP codes (RFC 6238 is HMAC-SHA1); both already in the tree through sqlx.
 hmac = "0.13"
 ipnetwork = "0.21"
+# LDAP/AD sign-in: rustls with ring (LDAPS and StartTLS), no OpenSSL.
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 mime_guess = "2"
 regex = "1"
+# OIDC discovery, JWKS and token requests. rustls with the ring provider we configure
+# ourselves (the same one sqlx uses), so no second crypto library enters the build.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "form"] }
+# Verifies OIDC ID token signatures (RSA, ECDSA, Ed25519); already in the tree through rustls.
+ring = "0.17"
 # Reads the password for `create-admin` without echoing it.
 rpassword = "7"
+# Trust anchors for the identity-provider TLS clients: extra CA PEMs per provider.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pki-types = { version = "1", features = ["std"] }
 rust-embed = { version = "8", features = ["mime-guess"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: JSON objects keep insertion order (attribute values follow the class definition order).
@@ -61,6 +72,7 @@ utoipa = { version = "6", features = ["uuid", "chrono", "preserve_order", "prese
 # Swagger UI assets are vendored into the binary: /docs works on air-gapped hosts.
 utoipa-swagger-ui = { version = "10", features = ["axum", "vendored"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+webpki-roots = "1"
 
 # musl's allocator serialises on one lock and scales poorly across threads; the
 # static release builds (x86_64/aarch64-unknown-linux-musl) use mimalloc instead.

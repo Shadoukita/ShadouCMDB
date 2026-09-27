@@ -13,6 +13,9 @@
 //! A sign-in whose password was right but whose second factor is due sets
 //! `shadoucmdb_mfa` instead: a random token naming the pending challenge,
 //! HttpOnly, sent only to `/api/v1/auth`, gone after a few minutes.
+//!
+//! An OIDC sign-in sets `shadoucmdb_oidc` (HttpOnly, sent only to
+//! `/api/v1/auth/oidc`, 10 minutes) to the `state` it sends the provider.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -26,6 +29,10 @@ pub const CSRF_COOKIE: &str = "shadoucmdb_csrf";
 pub const CSRF_HEADER: &str = "x-csrf-token";
 pub const MFA_COOKIE: &str = "shadoucmdb_mfa";
 const MFA_COOKIE_PATH: &str = "/api/v1/auth";
+/// The state of a pending OIDC sign-in, checked against the callback's `state`
+/// parameter so a callback only completes in the browser that started it.
+pub const OIDC_COOKIE: &str = "shadoucmdb_oidc";
+const OIDC_COOKIE_PATH: &str = "/api/v1/auth/oidc";
 
 /// 256 random bits, hex-encoded.
 pub fn new_token() -> String {
@@ -161,6 +168,23 @@ pub fn clear_mfa_cookie(secure: bool) -> HeaderValue {
     build_at(MFA_COOKIE_PATH, MFA_COOKIE, "", 0, true, secure)
 }
 
+/// Set-Cookie header binding a pending OIDC sign-in to this browser. SameSite=Lax
+/// still sends it on the provider's top-level redirect back to the callback.
+pub fn oidc_cookie(secure: bool, state: &str, ttl: std::time::Duration) -> HeaderValue {
+    build_at(OIDC_COOKIE_PATH, OIDC_COOKIE, state, ttl.as_secs(), true, secure)
+}
+
+pub fn clear_oidc_cookie(secure: bool) -> HeaderValue {
+    build_at(OIDC_COOKIE_PATH, OIDC_COOKIE, "", 0, true, secure)
+}
+
+/// The value a Set-Cookie header built here sets for `name`.
+pub fn cookie_value(set_cookie: &HeaderValue, name: &str) -> Option<String> {
+    let text = set_cookie.to_str().ok()?;
+    let (k, v) = text.split(';').next()?.split_once('=')?;
+    (k == name).then(|| v.to_owned())
+}
+
 /// Set-Cookie headers that delete both cookies.
 pub fn logout_cookies(secure: bool) -> Vec<HeaderValue> {
     vec![build(SESSION_COOKIE, "", 0, true, secure), build(CSRF_COOKIE, "", 0, false, secure)]
@@ -241,6 +265,7 @@ mod tests {
             session_idle: Duration::from_secs(60),
             session_max_age: Duration::from_secs(3600),
             cookie_secure: CookieSecure::Auto,
+            public_url: None,
         };
         let c = login_cookies(&cfg, true, "tok", "csrf");
         assert_eq!(c[0], "shadoucmdb_session=tok; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly; Secure");
