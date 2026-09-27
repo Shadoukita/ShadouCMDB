@@ -1518,7 +1518,11 @@ mod tests {
         let principal = Principal {
             user_id,
             username: username.into(),
-            credential: Credential::Session { id: Uuid::new_v4(), csrf_token: String::new() },
+            credential: Credential::Session {
+                id: Uuid::new_v4(),
+                csrf_token: String::new(),
+                mfa_enrolment_required: false,
+            },
             permissions,
         };
         RequestContext::user(std::sync::Arc::new(principal), "test".into())
