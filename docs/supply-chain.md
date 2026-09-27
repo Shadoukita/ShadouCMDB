@@ -11,7 +11,7 @@ image before you run it.
 | **npm audit** | `supply-chain.yml` | `package-lock.json` or `tools/sbom/package-lock.json` has a high or critical advisory; `npm audit signatures` finds a package whose registry signature or provenance does not verify |
 | **gitleaks** | `supply-chain.yml` | a secret (key, token, password, private key) is anywhere in the git history. Findings are redacted in the log |
 | **Dependency review** (PRs only) | `supply-chain.yml` | the PR adds a dependency with a known high or critical advisory. Needs the repository's Dependency graph: while that is off, the job passes with a *Dependency review skipped* warning and cargo-deny and npm audit remain the advisory gate |
-| **Actions pinned** | `supply-chain.yml` | any `uses:` refers to a tag or branch instead of a 40-character commit SHA |
+| **Actions pinned** ([`check-actions-pinned.py`](../.github/scripts/check-actions-pinned.py)) | `supply-chain.yml` | any `uses:` in `.github/workflows` or `.github/actions` (any YAML form, reusable workflows included) refers to a tag, branch or short SHA instead of a 40-character commit SHA. Local `./` actions and `docker://` images pinned by `sha256` digest are allowed |
 | **SBOM** | `supply-chain.yml` | the CycloneDX SBOM cannot be generated or does not validate. The SBOM of each build is kept as the `sbom` artifact for 30 days |
 | **CodeQL** (Rust, JavaScript/TypeScript, GitHub Actions; `security-extended`) | `codeql.yml` | results appear under *Security → Code scanning* and on the PR. They block a merge once code scanning is a required check (below) |
 
@@ -48,6 +48,7 @@ Run the same checks locally:
 cd backend && cargo deny --locked check        # cargo install --locked cargo-deny
 npm audit --audit-level=high
 gitleaks git --redact .
+.github/scripts/check-actions-pinned.py        # needs PyYAML (python3-yaml)
 ```
 
 ## What a release carries

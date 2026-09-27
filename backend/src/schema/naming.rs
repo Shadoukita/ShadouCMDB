@@ -299,6 +299,14 @@ pub fn validate(name: &str, kind: NameKind) -> Result<(), NameProblem> {
             if name.starts_with("cmdb_") {
                 return problem("reserved_prefix", "Names starting with \"cmdb_\" are reserved for the system".into());
             }
+            // The database roles (shadoucmdb_owner, _app, _maintenance): a schema
+            // named after a role is first on that role's default search_path.
+            if name.starts_with("shadoucmdb_") {
+                return problem(
+                    "reserved_prefix",
+                    "Names starting with \"shadoucmdb_\" are reserved for the database roles".into(),
+                );
+            }
         }
         NameKind::Type => {
             if name.starts_with("v_") {
@@ -432,6 +440,10 @@ mod tests {
             assert_eq!(code(n, NameKind::Area), "reserved_name", "{n}");
         }
         assert_eq!(code("cmdb_reporting", NameKind::Area), "reserved_prefix");
+        for n in ["shadoucmdb_owner", "shadoucmdb_app", "shadoucmdb_maintenance", "shadoucmdb_x"] {
+            assert_eq!(code(n, NameKind::Area), "reserved_prefix", "{n}");
+        }
+        assert_eq!(validate("shadoucmdb", NameKind::Area), Ok(()));
         assert_eq!(code("v_netzwerk", NameKind::Type), "reserved_prefix");
         assert_eq!(code("id", NameKind::Field), "reserved_name");
         assert_eq!(code("name", NameKind::Field), "reserved_name");
