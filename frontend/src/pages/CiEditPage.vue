@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { RouterLink, useRoute } from "vue-router";
+import { ApiError } from "../api/client";
 import { useCi } from "../api/queries";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -15,10 +16,15 @@ const ci = useCi(() => String(route.params.id));
 useDocumentTitle(() => (ci.data.value ? `Edit ${ci.data.value.name}` : "Edit CI"));
 const c = computed(() => ci.data.value);
 const session = useSessionStore();
+const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.value.code === "FORBIDDEN");
 </script>
 
 <template>
   <LoadingState v-if="ci.isLoading.value" />
+  <EmptyState v-else-if="forbidden" title="Permission denied">
+    None of your permission profiles allows viewing this configuration item's class, so it cannot be edited.
+    <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
+  </EmptyState>
   <ErrorAlert v-else-if="ci.isError.value" :error="ci.error.value" :on-retry="() => ci.refetch()" />
   <EmptyState v-else-if="c && c.deletedAt" title="This configuration item is deleted">
     Deleted CIs cannot be edited.

@@ -224,7 +224,7 @@ async function main() {
 
   // --- Without a session, everything but health, login and setup is 401 ----------
   console.log('\n# Unauthenticated');
-  const PUBLIC = ['getLiveness', 'getReadiness', 'getSetupStatus', 'completeSetup', 'login', 'getPublicBranding', 'getUiAsset'];
+  const PUBLIC = ['getLiveness', 'getReadiness', 'getSetupStatus', 'completeSetup', 'login', 'loginSecondFactor', 'getPublicBranding', 'getUiAsset'];
   const specPublic = Object.values(spec.paths as Record<string, Record<string, Json>>)
     .flatMap((m) => Object.values(m))
     .filter((op) => Array.isArray(op.security) && op.security.length === 0)
@@ -411,6 +411,12 @@ async function main() {
   await post('/api/v1/configuration-items', {
     classId: appClass, name: 'bad-attrs', statusId: inService, attributes: { url: 'ftp://x', criticality: 'extreme', primary_database: server.id, nope: 1 },
   }, 400);
+  const bothStages = await post('/api/v1/configuration-items', {
+    classId: serverClass, name: 'bad-both', statusId: inService, ipAddress: '999.1.1.1', attributes: { management_ip: 'abc', cpu_cores: 'x' },
+  }, 400);
+  const bothFields = (bothStages.json?.error?.details ?? []).map((d: Json) => d.field);
+  check(['ipAddress', 'attributes.management_ip', 'attributes.cpu_cores'].every((f) => bothFields.includes(f)),
+    'core-field and attribute errors are reported together');
   await post('/api/v1/configuration-items', { classId: lb.id, name: 'lb-missing-required', statusId: inService, attributes: { vip: '10.0.0.1' } }, 400);
   const lbItem = (await post('/api/v1/configuration-items', {
     classId: lb.id, name: `smoke-lb-${RUN}`, statusId: inService, attributes: { device_role: 'load_balancer', algorithm: 'round_robin', vip: '10.77.5.5', management_subnet: '10.77.5.0/24' },
@@ -575,7 +581,7 @@ async function main() {
 
 /** Profiles, users, class-scoped and global permissions, CSRF, backoff, lockout protection. */
 async function permissions(x: Json) {
-  const { serverClass, appClass, server, app, database, r1, inService, adminMe } = x;
+  const { serverClass, appClass, dbClass, server, app, database, r1, inService, adminMe } = x;
   const put = (url: string, body: unknown, expect = 200) => call('PUT', url, body, expect);
   const builtin = adminMe.user.profiles.find((p: Json) => p.isBuiltin);
 
@@ -652,6 +658,54 @@ async function permissions(x: Json) {
     await get('/api/v1/auth/me'); // this session survives the change
   });
   await loginFails(reader.username, password); // the old password no longer works
+
+  console.log('\n# Reference attributes into classes the caller may not view (app editor, no database rights)');
+  const appEditors = (await post('/api/v1/admin/profiles', {
+    name: `smoke-app-editors-${RUN}`,
+    classPermissions: [{ classId: appClass, view: true, create: true, edit: true, delete: false }],
+  })).json;
+  const appEditor = (await post('/api/v1/admin/users', { username: `smoke-app-editor-${RUN}`, displayName: 'App editor', password, profileIds: [appEditors.id] })).json;
+  const otherDb = (await post('/api/v1/configuration-items', { classId: dbClass, name: `smoke-db-hidden-${RUN}`, statusId: inService, attributes: { engine: 'postgresql' } })).json;
+  const hiddenRef = (ci: Json) => {
+    const r = ci.attributeReferences?.primary_database;
+    return ci.attributes?.primary_database === database.id && r?.id === database.id && r.hidden === true && r.name === null && r.deleted === false;
+  };
+  await as(await login(appEditor.username, password), async () => {
+    const shown = (await get(`/api/v1/configuration-items/${app.id}`)).json;
+    check(hiddenRef(shown) && !JSON.stringify(shown).includes(database.name), 'detail: a reference into a hidden class has no name (hidden: true)');
+    const listed = (await get(`/api/v1/configuration-items?classId=${appClass}&q=smoke-app-${RUN}`)).json.data.find((c: Json) => c.id === app.id);
+    check(hiddenRef(listed) && !JSON.stringify(listed).includes(database.name), 'list: a reference into a hidden class has no name');
+    const kept = (await patch(`/api/v1/configuration-items/${app.id}`, { attributes: { primary_database: database.id } })).json;
+    check(hiddenRef(kept), 'resending the unchanged hidden reference is accepted and stays hidden');
+    const code = (r: { json: Json }) => JSON.stringify([r.json.error?.code, r.json.error?.details]);
+    const existing = await patch(`/api/v1/configuration-items/${app.id}`, { attributes: { primary_database: otherDb.id } }, 400);
+    const missing = await patch(`/api/v1/configuration-items/${app.id}`, { attributes: { primary_database: '00000000-0000-4000-8000-000000000000' } }, 400);
+    check(code(existing) === code(missing) && existing.json.error?.details?.[0]?.code === 'not_found' && !JSON.stringify(existing.json).includes(otherDb.name),
+      'setting a reference to a CI in a hidden class fails exactly like a missing one (no existence oracle)');
+    // GH#45: a body that fails its schema still gets its attributes checked, with the same reference access.
+    const refFailed = (r: { json: Json }) => r.json.error?.details?.some((d: Json) => d.field === 'attributes.primary_database' && d.code === 'not_found');
+    const create = (ref: string) => post('/api/v1/configuration-items', {
+      classId: appClass, name: `smoke-app-bad-${RUN}`, statusId: inService, ipAddress: '999.1.1.1', attributes: { primary_database: ref },
+    }, 400);
+    const createExisting = await create(otherDb.id);
+    const createMissing = await create('00000000-0000-4000-8000-000000000000');
+    check(code(createExisting) === code(createMissing) && fields(createExisting).includes('ipAddress') && refFailed(createExisting) &&
+      !JSON.stringify(createExisting.json).includes(otherDb.name),
+      'create with an invalid body: a reference into a hidden class fails exactly like a missing one');
+    const update = (ref: string) => patch(`/api/v1/configuration-items/${app.id}`, { ipAddress: '999.1.1.1', attributes: { primary_database: ref } }, 400);
+    const updateExisting = await update(otherDb.id);
+    const updateMissing = await update('00000000-0000-4000-8000-000000000000');
+    check(code(updateExisting) === code(updateMissing) && fields(updateExisting).includes('ipAddress') && refFailed(updateExisting) &&
+      !JSON.stringify(updateExisting.json).includes(otherDb.name),
+      'update with an invalid body: a reference into a hidden class fails exactly like a missing one');
+    const unchanged = await update(database.id);
+    check(JSON.stringify(fields(unchanged)) === '["ipAddress"]', 'update with an invalid body: the unchanged hidden reference is not flagged');
+  });
+  const asAdmin = (await get(`/api/v1/configuration-items/${app.id}`)).json.attributeReferences?.primary_database;
+  check(asAdmin?.name === database.name && asAdmin.hidden === false, 'an administrator still sees the referenced name');
+  await del(`/api/v1/configuration-items/${otherDb.id}`, 204);
+  await del(`/api/v1/admin/users/${appEditor.id}`);
+  await del(`/api/v1/admin/profiles/${appEditors.id}`);
 
   console.log('\n# Global permissions (no profiles: 403 on every permission-guarded operation)');
   const asNobody = await login(nobody.username, password);
@@ -832,11 +886,115 @@ async function permissions(x: Json) {
   check(tokenTrail.every((e) => !JSON.stringify(e).includes(readerToken.secret.slice(6)) &&
     !JSON.stringify(e).includes(createHash('sha256').update(readerToken.secret).digest('hex'))), 'no token secret or hash in the audit log');
 
+  await mfa(builtin, createHash);
+
   // Clean up what only this run uses.
   await del(`/api/v1/admin/users/${reader.id}`);
   await del(`/api/v1/admin/users/${nobody.id}`);
   for (const p of [readers, editors, copy, userManagers]) await del(`/api/v1/admin/profiles/${p.id}`);
   await del(`/api/v1/admin/profiles/${readers.id}`, 404);
+}
+
+/** The code an authenticator app shows for a base32 secret at a 30-second step (RFC 6238, HMAC-SHA1, 6 digits). */
+async function totpCode(secret: string, step: number): Promise<string> {
+  const { createHmac } = await import('node:crypto');
+  let buffer = 0, bits = 0;
+  const key: number[] = [];
+  for (const c of secret) {
+    buffer = (buffer << 5) | 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'.indexOf(c);
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      key.push((buffer >> bits) & 0xff);
+    }
+  }
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const d = createHmac('sha1', Buffer.from(key)).update(counter).digest();
+  const offset = d[d.length - 1]! & 0x0f;
+  return String((d.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+}
+
+/** TOTP enrolment, the second sign-in step, recovery codes, the admin reset and the per-profile requirement. */
+async function mfa(builtin: Json, createHash: typeof import('node:crypto').createHash) {
+  console.log('\n# Two-factor authentication');
+  const nowStep = () => Math.floor(Date.now() / 30_000);
+  const password = `mfa-${RUN}-password`;
+  const user = (await post('/api/v1/admin/users', { username: `smoke-mfa-${RUN}`, displayName: 'Smoke MFA', password })).json;
+  check(user.mfaEnabled === false, 'a new user has no MFA');
+  const session = await login(user.username, password);
+  const { secret, codes, lastStep } = await as(session, async () => {
+    check((await get('/api/v1/auth/mfa')).json.totpEnabled === false, 'MFA status: off');
+    await post('/api/v1/auth/mfa/totp', { currentPassword: 'wrong password!' }, 400);
+    const started = (await post('/api/v1/auth/mfa/totp', { currentPassword: password })).json;
+    check(/^[A-Z2-7]{32}$/.test(started.secret) && started.otpauthUri.startsWith('otpauth://totp/') && started.digits === 6 && started.period === 30,
+      'set-up returns a 160-bit base32 secret and its otpauth URI');
+    await post('/api/v1/auth/mfa/totp/confirm', { code: await totpCode(started.secret, nowStep() - 5) }, 400);
+    const step = nowStep();
+    const confirmed = (await post('/api/v1/auth/mfa/totp/confirm', { code: await totpCode(started.secret, step) }, 200)).json;
+    check(confirmed.codes.length === 10 && confirmed.codes.every((c: string) => /^[a-z2-7]{4}(-[a-z2-7]{4}){3}$/.test(c)), 'confirming returns 10 recovery codes');
+    await post('/api/v1/auth/mfa/totp/confirm', { code: await totpCode(started.secret, step + 1) }, 409);
+    await post('/api/v1/auth/mfa/totp', { currentPassword: password }, 409);
+    const status = (await get('/api/v1/auth/mfa')).json;
+    check(status.totpEnabled && status.recoveryCodesRemaining === 10, 'MFA status: on, 10 recovery codes left');
+    return { secret: started.secret as string, codes: confirmed.codes as string[], lastStep: step };
+  });
+
+  // Sign-in now takes two steps; the challenge cookie carries the first one.
+  const firstStep = async () => {
+    const res = await loginFails(user.username, password);
+    check(res.json.error?.code === 'MFA_REQUIRED', 'a right password answers MFA_REQUIRED');
+    const cookie = res.headers.getSetCookie().map((c) => c.split(';')[0]!).find((c) => c.startsWith('shadoucmdb_mfa='));
+    check(cookie, 'the MFA challenge cookie is set');
+    return { name: 'mfa challenge', cookie: cookie ?? '', csrf: '' };
+  };
+  await as(null, () => post('/api/v1/auth/login/mfa', { code: '123456' }, 401)); // no challenge
+  const challenge = await firstStep();
+  const stale = await totpCode(secret, lastStep - 5);
+  await as(challenge, () => post('/api/v1/auth/login/mfa', { code: stale }, 401));
+  await as(challenge, () => post('/api/v1/auth/login/mfa', { code: 'short' }, 400));
+  const signedIn = identityFrom(user.username, await as(challenge, async () => post('/api/v1/auth/login/mfa', { code: await totpCode(secret, lastStep + 1) }, 200)));
+  await as(challenge, () => post('/api/v1/auth/login/mfa', { code: codes[0]! }, 401)); // the challenge is used up
+  const newCodes: string[] = await as(signedIn, async () => {
+    await get('/api/v1/auth/me');
+    await post('/api/v1/auth/mfa/recovery-codes', { currentPassword: password, code: '000000' }, 400);
+    const fresh = (await post('/api/v1/auth/mfa/recovery-codes', { currentPassword: password, code: codes[0]!.toUpperCase() }, 200)).json.codes;
+    await post('/api/v1/auth/mfa/recovery-codes', { currentPassword: password, code: codes[1]! }, 400); // the old codes are gone
+    return fresh;
+  });
+  const recovered = identityFrom(user.username, await as(await firstStep(), () => post('/api/v1/auth/login/mfa', { code: newCodes[0]! }, 200)));
+  await as(recovered, async () => {
+    check((await get('/api/v1/auth/mfa')).json.recoveryCodesRemaining === 9, 'a used recovery code is gone');
+  });
+
+  // An administrator resets a lost authenticator; a profile can require MFA.
+  check((await get(`/api/v1/admin/users/${user.id}`)).json.mfaEnabled === true, 'the user list shows mfaEnabled');
+  await del('/api/v1/admin/users/00000000-0000-4000-8000-000000000000/mfa', 404);
+  await del(`/api/v1/admin/users/${user.id}/mfa`);
+  await patch(`/api/v1/admin/profiles/${builtin.id}`, { requireMfa: false }); // the one change the built-in profile allows
+  const required = (await post('/api/v1/admin/profiles', { name: `smoke-mfa-required-${RUN}`, requireMfa: true })).json;
+  check(required.requireMfa === true, 'a profile can require MFA');
+  await patch(`/api/v1/admin/users/${user.id}`, { profileIds: [required.id] });
+  const mustEnrol = await login(user.username, password); // the password alone signs in after the reset
+  await as(mustEnrol, async () => {
+    check((await get('/api/v1/auth/mfa')).json.enrolmentRequired === true, 'MFA status: set-up required');
+    const blocked = await get('/api/v1/statuses?limit=1', 403);
+    check(blocked.json.error?.code === 'MFA_ENROLMENT_REQUIRED', 'other routes answer MFA_ENROLMENT_REQUIRED until MFA is set up');
+    await post('/api/v1/auth/mfa/totp', { currentPassword: password });
+    await call('DELETE', '/api/v1/auth/mfa/totp', { currentPassword: password, code: '000000' }, 204); // cancels the unfinished set-up
+    await call('DELETE', '/api/v1/auth/mfa/totp', { currentPassword: password, code: '000000' }, 409);
+  });
+
+  const trail: Json[] = (await get(`/api/v1/audit-log?entityType=users&entityId=${user.id}&sort=occurredAt&limit=100`)).json.data;
+  const actions = trail.filter((e) => e.action.startsWith('mfa.')).map((e) => e.action).join(',');
+  check(actions === 'mfa.enrol,mfa.failure,mfa.failure,mfa.recovery_code_used,mfa.recovery_codes,mfa.failure,mfa.recovery_code_used,mfa.disable',
+    `enrolment, failures, recovery codes and the reset are audited (${actions})`);
+  const secrets = [secret, ...codes, ...newCodes].flatMap((s) => [s, s.replaceAll('-', '')]);
+  check(trail.every((e) => secrets.every((s) => !JSON.stringify(e).includes(s) && !JSON.stringify(e).includes(createHash('sha256').update(s).digest('hex')))),
+    'no TOTP secret or recovery code (or its hash) in the audit log');
+
+  await del(`/api/v1/admin/users/${user.id}`);
+  await del(`/api/v1/admin/profiles/${required.id}`);
 }
 
 /** Areas are PostgreSQL schemas, types are tables, fields are typed columns: names, DDL, guards, concurrency, purge. */

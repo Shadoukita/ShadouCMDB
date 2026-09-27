@@ -10,7 +10,7 @@ import AttributeValue from "./AttributeValue.vue";
 const props = defineProps<{ ci: Ci; self: TrailStep; trail: TrailStep[] }>();
 const attrs = useClassAttributes(() => props.ci.classId);
 const values = computed(() => props.ci.attributes as Record<string, unknown>);
-const refs = computed(() => props.ci.attributeReferences as Record<string, { id: string; name: string; deleted?: boolean } | undefined>);
+const refs = computed(() => props.ci.attributeReferences);
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || values.value[d.key] != null));
 const groups = computed(() => groupAttributes(defs.value));
 /** Values stored on the CI that no current definition describes (e.g. after a class change). */

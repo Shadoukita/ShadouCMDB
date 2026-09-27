@@ -38,6 +38,7 @@ audit_log (append-only; entity_type + entity_id point at any row)
 users ─< user_permission_profiles >─ permission_profiles ─┬─< permission_profile_global_permissions
   │                                                        └─< permission_profile_class_permissions >─ ci_classes (NULL = all)
   ├─< sessions
+  ├─< user_totp (0..1), user_recovery_codes, mfa_challenges
   └─< api_tokens >─ permission_profiles (scope; NULL once deleted)
 
 ui_settings (one row) ── (version) ─> ui_settings_versions (append-only)
@@ -63,11 +64,14 @@ ui_assets (logo, favicon)
 | `locations` | Location hierarchy (region › site › building › floor › room › rack, plus `cloud_region`). | unique `key`; `location_type` check; no cycles (trigger) |
 | `owners` | Accountable people or teams (`kind` = `person` / `team`). This is not a login table (see `users`). `external_ref` is the seam for a later directory/IdP link. | `kind` check; unique `external_ref`; email format |
 | `users` | Local accounts: `username`, `display_name`, `email`, `is_active`, argon2id `password_hash` (PHC string, never returned by the API), `password_changed_at`, `last_login_at`. | unique `lower(username)`; username format; `password_hash LIKE '$argon2id$%'`; email format |
-| `permission_profiles` | Named sets of permissions. `is_builtin` marks the one Administrator profile (created by the migration), which holds every permission implicitly. | unique `lower(name)`; at most one built-in; built-in cannot be updated or deleted (trigger) |
+| `permission_profiles` | Named sets of permissions. `is_builtin` marks the one Administrator profile (created by the migration), which holds every permission implicitly. `require_mfa`: holders must set up two-factor authentication. | unique `lower(name)`; at most one built-in; built-in cannot be updated (except `require_mfa`) or deleted (trigger) |
 | `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
 | `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
 | `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by`. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted |
+| `user_totp` | A user's authenticator: the 160-bit TOTP `secret` (stored as is: checking a code needs it; whoever reads it still needs the password), `confirmed_at` (NULL while the set-up is unconfirmed, which does not count as MFA), `last_used_step` (the last accepted 30 s step, so no code works twice). | PK `user_id`, cascades with the user; secret exactly 20 bytes |
+| `user_recovery_codes` | Ten one-time codes per confirmed authenticator: SHA-256 of each (`code_hash`, 80 random bits per code), `used_at`. | unique (`user_id`, `code_hash`); 32-byte hash; cascades with the user |
+| `mfa_challenges` | A sign-in whose password was right and whose code is due: SHA-256 of the `shadoucmdb_mfa` cookie token, `expires_at` (5 minutes), `failed_attempts`. Never backed up. | unique `token_hash` (32 bytes); cascades with the user |
 | `sessions` | Server-side login sessions: SHA-256 of the cookie token, `csrf_token`, `last_seen_at` (idle timeout), `expires_at` (absolute lifetime), `user_agent`, `ip_address` (`inet`, client address at sign-in; evidence only). | unique `token_hash` (32 bytes); cascades with the user |
 | `ui_settings` | The one current UI settings document (`settings` jsonb, validated by the API against `UiSettingsDocument`), its `version`, and who saved it. Classes, attributes and lookups are referenced by key inside the document, not by FK, so it survives export/import; the API reports references that do not resolve. | exactly one row (`singleton` check + unique); `settings` is an object; `version` must exist in `ui_settings_versions` (deferred FK) |
 | `ui_settings_versions` | Every saved version of the document with actor, time and an optional comment. | PK `version`; **UPDATE/DELETE rejected** (trigger); comment at most 500 characters |
@@ -183,7 +187,7 @@ value before and after the upgrade.
 | `configuration_items` | **Soft delete** (`deleted_at`) | A decommissioned server must still resolve in last quarter's report, in audit entries, and in historic relationships. All live-inventory indexes are partial on `deleted_at IS NULL`. |
 | `ci_relationships` | **Soft delete** (`deleted_at`) | Answers "what did this app run on before the migration?" Uniqueness applies only to live edges, so a removed edge can be re-created. When the API soft-deletes a CI, it also soft-deletes that CI's live relationships in the same transaction. |
 | Type tables (`<area>.<type>`) | **Follow the registry** | A CI's rows live as long as its `configuration_items` row (so a soft-deleted CI keeps its values). Clearing a field sets the column to NULL; the old value is kept in `audit_log`. |
-| `areas`, `ci_classes`, `ci_attribute_definitions` | **Archive, then purge** (`is_active = false`) | They are database objects. DELETE archives and keeps all data; only a purge, typed to confirm, drops the schema, table or column. `schema_changes` and `audit_log` keep the history of both. |
+| `areas`, `ci_classes`, `ci_attribute_definitions` | **Archive, then purge** (`is_active = false`) | They are database objects. DELETE archives and keeps all data; only a purge, typed to confirm, drops the schema, table or column. `schema_changes` and `audit_log` keep the history of both; purging a type also writes a `delete` row with the last state of every CI and relationship it removes. |
 | `relationship_types`, `statuses`, `environments`, `locations`, `owners`, `lookup_lists`, `lookup_list_values` | **Retire, don't delete** (`is_active = false`) | These are referenced by history. FKs are `ON DELETE RESTRICT`, so a referenced row cannot be hard-deleted (the API checks first and answers `409 IN_USE` with the counts, see `GET …/{id}/usage`); inactive rows keep resolving for old CIs and are hidden from pickers. Inactive classes cannot receive new CIs, inactive attributes and lookup values cannot receive new values, and inactive relationship types cannot receive new edges. An unused lookup list is deleted together with its values. |
 | `relationship_type_rules` | **Hard delete** | Pure configuration. Removing a rule blocks new edges and leaves existing edges alone. |
 | `audit_log` | **Append-only; pruned by age only** | UPDATE, DELETE and TRUNCATE are rejected by trigger and not granted to the API role. The only deletion path is the operator's `shadoucmdb prune-audit`, see [Retention and personal data](#retention-and-personal-data). |
@@ -192,6 +196,7 @@ value before and after the upgrade.
 | `ui_settings`, `ui_settings_versions` | **Replaced, never deleted** | Saving creates a new version; history is append-only, so any earlier layout can be looked at and restored. |
 | `ui_assets` | **Hard delete** | An image is current state only; the audit log keeps its metadata (type, size, hash). |
 | `api_tokens` | **Revoke** (`revoked_at`), row kept | A revoked or expired token stays listed next to its audit rows. Deleting the owner deletes their tokens; the API writes a `delete` audit row for each first. |
+| `user_totp`, `user_recovery_codes`, `mfa_challenges` | **Hard delete** | Turning MFA off (by the user or an administrator) deletes the authenticator and codes; the `mfa.disable` audit row is the history. A used recovery code keeps its row (`used_at`) until the codes are replaced. Challenges are deleted when used, after 5 wrong codes, at the next sign-in once expired, and by `prune-audit --scope auth`. |
 | `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login, and `prune-audit` removes any left 30 days after their expiry. Every session the API ends (not expiry) leaves a `logout` or `session.revoke` row in `audit_log`. |
 
 ## Auditing
@@ -214,7 +219,7 @@ and `peerIpAddress`, the TCP peer, when that differs from `ipAddress`):
 
 | `action` | Actor | `entity_id` | `new_value` |
 | --- | --- | --- | --- |
-| `login.success` | the user | the new session | `userId`, `username`, `method` (`password` or `setup`) |
+| `login.success` | the user | the new session | `userId`, `username`, `method` (`password`, `totp`, `recovery_code` or `setup`) |
 | `login.failure` | anonymous (`api_client`, no id) | a fresh id for the attempt | `attemptedUsername` (first 64 characters, as typed) |
 | `login.locked` | anonymous | the failed attempt that set the lock | `attemptedUsername`, `lockedForSeconds` |
 | `logout` | the user | the session | `userId`, `username`, `session` (`createdAt`, `ipAddress`, `userAgent`) |
@@ -227,6 +232,20 @@ server nothing, and recording them would let an anonymous client grow `audit_log
 Passwords, session tokens, token hashes and CSRF tokens are never written. The IP address is
 evidence, not an access control: see [deployment](deployment.md#https-and-session-cookies)
 for the proxy it assumes. Nothing alerts on these rows yet.
+
+Two-factor authentication events have `entity_type = 'users'` and the user's id as `entity_id`, `old_value` NULL,
+and `userId`, `username`, `ipAddress`, `userAgent` in `new_value`:
+
+| `action` | Actor | `new_value` also has |
+| --- | --- | --- |
+| `mfa.enrol` | the user | `method` (`totp`), `recoveryCodes` (how many were issued) |
+| `mfa.disable` | the user, or the administrator who reset it | `reason`: `self_service` or `admin_reset` |
+| `mfa.failure` | anonymous at sign-in, else the user | `stage`: `login`, `disable` or `recovery_codes` (a wrong or replayed code); outside sign-in `lockedForSeconds` when it set the lock |
+| `mfa.recovery_code_used` | the user | `stage`, `recoveryCodesRemaining` |
+| `mfa.recovery_codes` | the user | `recoveryCodes` (new codes replaced the old ones) |
+
+A wrong code at sign-in that sets the username's lock also writes `login.locked`. No TOTP secret, code, recovery
+code or hash is ever written.
 
 API tokens (`entity_type = 'api_tokens'`, `entity_id` = the token): creating one is a `create` row and revoking it
 an `update` row (old and new token, never the secret or its hash). **Every request made with a known token** is a
@@ -245,6 +264,7 @@ These fields hold it:
 | Where | Fields |
 | --- | --- |
 | `audit_log`, `entity_type = 'sessions'` (`login.*`, `logout`, `session.revoke`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.userAgent`, `new_value.session.ipAddress`, `new_value.session.userAgent`, and the user named in `actor_*`, `new_value.username` / `attemptedUsername` |
+| `audit_log`, `mfa.*` rows (`entity_type = 'users'`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.userAgent`, `new_value.username` |
 | `audit_log`, `entity_type = 'api_tokens'` (`token.use`) | `new_value.ipAddress`, `new_value.userAgent`, `new_value.username`, and the owner in `actor_*` |
 | `sessions` | `ip_address`, `user_agent` |
 | `api_tokens` | `last_used_ip` |
@@ -255,7 +275,7 @@ These fields hold it:
 
 | Data | Kept | How it goes |
 | --- | --- | --- |
-| Authentication events and `token.use` rows in `audit_log` | **180 days** | `shadoucmdb prune-audit --older-than 180d --execute`, run by the operator (scope `auth`, the default) |
+| Authentication events (including `mfa.*`) and `token.use` rows in `audit_log` | **180 days** | `shadoucmdb prune-audit --older-than 180d --execute`, run by the operator (scope `auth`, the default) |
 | CI and configuration change history in `audit_log` (`create`, `update`, `delete`, `restore`) | **Indefinitely** | Only if an operator explicitly runs `prune-audit --scope changes` |
 | `sessions` rows | Until **30 days after expiry**; revoked sessions are deleted at once | Deleted at sign-in once expired; `prune-audit` (scope `auth`) removes any older than 30 days past expiry |
 | `audit.purge` rows | **Forever** | Never deleted, not even by the purge |
@@ -278,7 +298,7 @@ and never for an `audit.purge` row. Because the function runs with the owner's r
 aggregate another role planted in `public` can never be resolved in its place. For the same
 reason no role but the owner may create objects in `public` (PostgreSQL 14 allows it by
 default; the bootstrap scripts and migration 0007 revoke it). Migration 0008 moved the function into
-`cmdb` with the other system objects (`cmdb.prune_audit_log`); migration 0010 added `token.use` to the `auth` scope. The schema owner remains able to change anything, which
+`cmdb` with the other system objects (`cmdb.prune_audit_log`); migration 0010 added `token.use` to the `auth` scope, and 0013 the `mfa.*` events (and the clean-up of expired `mfa_challenges`). The schema owner remains able to change anything, which
 is why its credentials belong to migrations only, not to the running server.
 
 **Erasure for one person (GDPR Art. 17) is not supported.** It conflicts with an append-only

@@ -19,6 +19,7 @@ import LookupSelect from "../../components/LookupSelect.vue";
 import { useAppSettings } from "../../lib/appSettings";
 import { groupAttributes } from "../../lib/attributes";
 import { vAutofocus } from "../../lib/directives";
+import { HIDDEN_CI } from "../../lib/format";
 import { hintFor, toApiValue, toFormValue, type FormValue } from "../../lib/attributeValues";
 import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, FORM_BUILTINS, layoutFor, resolveLayout } from "../../lib/uiSettings";
 import { useFlashStore } from "../../stores/flash";
@@ -224,11 +225,7 @@ function coreToApi(c: CoreValues): Record<CoreField, string | null> {
 
 function referenceNames(ci: Ci | undefined): Record<string, string> {
   const out: Record<string, string> = {};
-  const refs = (ci?.attributeReferences ?? {}) as Record<string, unknown>;
-  for (const [k, v] of Object.entries(refs)) {
-    if (typeof v === "string") out[k] = v;
-    else if (v && typeof v === "object" && "name" in v) out[k] = String((v as { name: unknown }).name);
-  }
+  for (const [k, v] of Object.entries(ci?.attributeReferences ?? {})) out[k] = v.hidden ? HIDDEN_CI : (v.name ?? v.id);
   return out;
 }
 </script>

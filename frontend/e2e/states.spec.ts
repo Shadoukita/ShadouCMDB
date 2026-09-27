@@ -1,3 +1,4 @@
+import type { Route } from "@playwright/test";
 import { snap, expect, test } from "./support";
 
 test("unknown and malformed CI ids show a designed not-found state", async ({ page }) => {
@@ -29,4 +30,20 @@ test("an unreachable API is explained, not a blank page", async ({ page }) => {
   await expect(alert).toContainText("Cannot reach the ShadouCMDB API");
   await expect(alert.getByRole("button", { name: "Retry" })).toBeVisible();
   await snap(page, "16-api-unreachable");
+});
+
+test("an unmigrated database says to run migrate, and Retry recovers once it has run", async ({ page }) => {
+  const message = "The database schema is not migrated (0 of 13 migrations applied). Run `shadoucmdb migrate`, then retry.";
+  const notMigrated = (route: Route) =>
+    route.fulfill({ status: 503, json: { error: { code: "SCHEMA_NOT_MIGRATED", message, requestId: "e2e" } } });
+  await page.route("**/api/v1/**", notMigrated);
+  await page.goto("/cis");
+  const alert = page.getByRole("alert").first();
+  await expect(alert).toContainText("The database is not migrated yet");
+  await expect(alert).toContainText("Run `shadoucmdb migrate`, then retry.");
+  await expect(page).toHaveURL(/\/cis$/); // not sent to sign-in or setup
+  await snap(page, "16b-schema-not-migrated");
+  await page.unroute("**/api/v1/**", notMigrated);
+  await alert.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("heading", { name: "Configuration items" })).toBeVisible();
 });

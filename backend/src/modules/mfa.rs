@@ -1,0 +1,680 @@
+//! Two-factor authentication: TOTP authenticator apps and one-time recovery
+//! codes. Setting up, confirming and turning off one's own MFA, new recovery
+//! codes, and an administrator's reset for a user who lost their device.
+//!
+//! The sign-in step itself (POST /api/v1/auth/login/mfa) lives with the rest
+//! of sign-in in [`super::auth`]; it uses [`verify_second_factor`] from here.
+
+use axum::http::{Method, StatusCode};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sqlx::{PgConnection, PgPool};
+use utoipa::ToSchema;
+use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
+use uuid::Uuid;
+
+use super::auth::{check_current_password, login_field_schema};
+use super::users;
+use crate::api::context::{RequestContext, unauthenticated};
+use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
+use crate::auth::events::{self, LoginMethod};
+use crate::auth::permissions::GlobalPermission;
+use crate::auth::{AuthState, Principal, totp};
+use crate::data::auth as auth_data;
+use crate::data::crud::AuditAction;
+use crate::data::mfa as data;
+use crate::http::error::{AppError, ErrorCode};
+
+// ---------------------------------------------------------------------------
+// Schemas
+// ---------------------------------------------------------------------------
+
+/// The user's two-factor state.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MfaStatus {
+    /// An authenticator app is set up: sign-in asks for its code after the password
+    pub totp_enabled: bool,
+    /// A permission profile the user holds requires MFA
+    pub required: bool,
+    /// Required but not set up: until it is, the session only reaches sign-out,
+    /// /auth/me and the MFA set-up routes (others answer 403 MFA_ENROLMENT_REQUIRED)
+    pub enrolment_required: bool,
+    /// Unused recovery codes
+    pub recovery_codes_remaining: i64,
+}
+
+impl From<data::Status> for MfaStatus {
+    fn from(s: data::Status) -> Self {
+        MfaStatus {
+            totp_enabled: s.totp_enabled,
+            required: s.required,
+            enrolment_required: s.required && !s.totp_enabled,
+            recovery_codes_remaining: s.recovery_codes_remaining,
+        }
+    }
+}
+
+/// A new authenticator secret, to be confirmed with a code from the app.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TotpEnrolment {
+    /// Base32, for typing into the app by hand
+    pub secret: String,
+    /// `otpauth://totp/...`: show it as a QR code
+    pub otpauth_uri: String,
+    /// HMAC algorithm (always SHA1, what every app supports)
+    pub algorithm: String,
+    pub digits: u32,
+    /// Seconds per code
+    pub period: u32,
+}
+
+/// One-time recovery codes. Shown only in this response: only their hashes are kept.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveryCodes {
+    /// Each signs in once in place of an authenticator code (case, dashes and spaces do not matter)
+    pub codes: Vec<String>,
+}
+
+pub fn code_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .min_length(Some(6))
+        .max_length(Some(64))
+        .description(Some("The 6-digit code from the authenticator app, or an unused recovery code"))
+        .into()
+}
+
+fn totp_code_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .min_length(Some(6))
+        .max_length(Some(16))
+        .description(Some("The 6-digit code the app shows for the new secret"))
+        .into()
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PasswordConfirmation {
+    #[schema(schema_with = login_field_schema)]
+    current_password: String,
+}
+impl Check for PasswordConfirmation {}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TotpConfirmation {
+    #[schema(schema_with = totp_code_schema)]
+    code: String,
+}
+impl Check for TotpConfirmation {}
+
+/// The password and a current second factor, to change MFA settings.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MfaReauthentication {
+    #[schema(schema_with = login_field_schema)]
+    current_password: String,
+    #[schema(schema_with = code_schema)]
+    code: String,
+}
+impl Check for MfaReauthentication {}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+pub async fn status(conn: &mut PgConnection, user_id: Uuid) -> Result<MfaStatus, AppError> {
+    Ok(data::status(conn, user_id).await?.into())
+}
+
+/// Checks `input` against the user's authenticator (a 6-digit code, each
+/// usable once) or their unused recovery codes (used up by this call). In the
+/// caller's transaction; None if it matches neither.
+pub async fn verify_second_factor(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    input: &str,
+) -> Result<Option<LoginMethod>, AppError> {
+    if totp::looks_like_code(input) {
+        let Some(t) = data::get_totp(conn, user_id, true).await?.filter(|t| t.confirmed) else { return Ok(None) };
+        let Some(step) = totp::verify(&t.secret, input, totp::current_step(), t.last_used_step) else {
+            return Ok(None);
+        };
+        return Ok(data::use_step(conn, user_id, step).await?.then_some(LoginMethod::Totp));
+    }
+    let Some(canonical) = totp::normalise_recovery_code(input) else { return Ok(None) };
+    let used = data::use_recovery_code(conn, user_id, &totp::recovery_code_hash(&canonical)).await?;
+    Ok(used.then_some(LoginMethod::RecoveryCode))
+}
+
+/// Writes `mfa.recovery_code_used` with the number of codes left.
+pub async fn audit_recovery_code_used(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    user_id: Uuid,
+    username: &str,
+    stage: &str,
+) -> Result<(), AppError> {
+    let left = data::status(conn, user_id).await?.recovery_codes_remaining;
+    let extra = json!({ "stage": stage, "recoveryCodesRemaining": left });
+    events::mfa(conn, ctx, AuditAction::MfaRecoveryCodeUsed, user_id, username, extra).await?;
+    Ok(())
+}
+
+fn me(ctx: &RequestContext) -> Result<&Principal, AppError> {
+    ctx.principal().ok_or_else(unauthenticated)
+}
+
+fn already_enabled() -> AppError {
+    AppError::conflict("Two-factor authentication is already set up; turn it off first to set up a new authenticator")
+}
+
+fn not_enabled() -> AppError {
+    AppError::conflict("Two-factor authentication is not set up")
+}
+
+/// Fresh recovery codes replace the old ones; returns them in clear, once.
+async fn new_recovery_codes(conn: &mut PgConnection, user_id: Uuid) -> Result<RecoveryCodes, AppError> {
+    let codes = totp::new_recovery_codes();
+    let hashes: Vec<Vec<u8>> = codes
+        .iter()
+        .map(|c| totp::recovery_code_hash(&totp::normalise_recovery_code(c).expect("generated codes are valid")))
+        .collect();
+    data::set_recovery_codes(conn, user_id, &hashes).await?;
+    Ok(RecoveryCodes { codes })
+}
+
+/// Starts setting up an authenticator (again, if a set-up was left unfinished).
+async fn enrol(
+    pool: &PgPool,
+    auth: &AuthState,
+    ctx: &RequestContext,
+    b: PasswordConfirmation,
+) -> Result<TotpEnrolment, AppError> {
+    let me = me(ctx)?;
+    check_current_password(pool, auth, me, &b.current_password).await?;
+    let mut tx = pool.begin().await?;
+    auth_data::get_user(&mut tx, me.user_id, true).await?;
+    if data::get_totp(&mut tx, me.user_id, false).await?.is_some_and(|t| t.confirmed) {
+        return Err(already_enabled());
+    }
+    let secret = totp::new_secret();
+    data::put_pending_totp(&mut tx, me.user_id, &secret).await?;
+    tx.commit().await?;
+    Ok(TotpEnrolment {
+        secret: totp::base32(&secret),
+        otpauth_uri: totp::otpauth_uri(&me.username, &secret),
+        algorithm: "SHA1".into(),
+        digits: totp::DIGITS as u32,
+        period: totp::STEP_SECONDS as u32,
+    })
+}
+
+/// A code from the app proves it holds the secret: MFA is on from now on.
+async fn confirm(pool: &PgPool, ctx: &RequestContext, b: TotpConfirmation) -> Result<RecoveryCodes, AppError> {
+    let me = me(ctx)?;
+    let mut tx = pool.begin().await?;
+    let Some(t) = data::get_totp(&mut tx, me.user_id, true).await? else {
+        return Err(AppError::conflict("Start the set-up first (POST /api/v1/auth/mfa/totp)"));
+    };
+    if t.confirmed {
+        return Err(already_enabled());
+    }
+    let Some(step) = totp::verify(&t.secret, &b.code, totp::current_step(), None) else {
+        return Err(AppError::field(
+            "code",
+            "The code does not match; check the app's clock and enter the current code",
+            "invalid_code",
+        ));
+    };
+    data::confirm_totp(&mut tx, me.user_id, step).await?;
+    let codes = new_recovery_codes(&mut tx, me.user_id).await?;
+    let extra = json!({ "method": "totp", "recoveryCodes": codes.codes.len() });
+    events::mfa(&mut tx, ctx, AuditAction::MfaEnrol, me.user_id, &me.username, extra).await?;
+    tx.commit().await?;
+    tracing::info!(user = %me.username, "two-factor authentication set up");
+    Ok(codes)
+}
+
+/// The password, then a current second factor. A wrong code counts against
+/// the same per-user lock as a wrong password and is audited as `mfa.failure`.
+async fn reauthenticate(
+    pool: &PgPool,
+    auth: &AuthState,
+    ctx: &RequestContext,
+    tx: &mut PgConnection,
+    b: &MfaReauthentication,
+    stage: &str,
+) -> Result<(), AppError> {
+    let me = me(ctx)?;
+    match verify_second_factor(tx, me.user_id, &b.code).await? {
+        Some(LoginMethod::RecoveryCode) => audit_recovery_code_used(tx, ctx, me.user_id, &me.username, stage).await,
+        Some(_) => Ok(()),
+        None => {
+            let locked = auth.password_throttle.failure(&me.user_id.to_string());
+            let extra = json!({ "stage": stage, "lockedForSeconds": locked.map(|d| d.as_secs().max(1)) });
+            let mut own = pool.begin().await?;
+            events::mfa(&mut own, ctx, AuditAction::MfaFailure, me.user_id, &me.username, extra).await?;
+            own.commit().await?;
+            Err(AppError::field("code", "The code is wrong or was already used", "invalid_code"))
+        }
+    }
+}
+
+/// Turns one's own MFA off (or cancels an unfinished set-up).
+async fn disable(
+    pool: &PgPool,
+    auth: &AuthState,
+    ctx: &RequestContext,
+    b: MfaReauthentication,
+) -> Result<(), AppError> {
+    let me = me(ctx)?;
+    check_current_password(pool, auth, me, &b.current_password).await?;
+    let mut tx = pool.begin().await?;
+    let Some(t) = data::get_totp(&mut tx, me.user_id, true).await? else { return Err(not_enabled()) };
+    if t.confirmed {
+        reauthenticate(pool, auth, ctx, &mut tx, &b, "disable").await?;
+    }
+    if data::delete_mfa(&mut tx, me.user_id).await? {
+        let extra = json!({ "reason": "self_service" });
+        events::mfa(&mut tx, ctx, AuditAction::MfaDisable, me.user_id, &me.username, extra).await?;
+        tracing::info!(user = %me.username, "two-factor authentication turned off");
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn regenerate(
+    pool: &PgPool,
+    auth: &AuthState,
+    ctx: &RequestContext,
+    b: MfaReauthentication,
+) -> Result<RecoveryCodes, AppError> {
+    let me = me(ctx)?;
+    check_current_password(pool, auth, me, &b.current_password).await?;
+    let mut tx = pool.begin().await?;
+    if !data::get_totp(&mut tx, me.user_id, true).await?.is_some_and(|t| t.confirmed) {
+        return Err(not_enabled());
+    }
+    reauthenticate(pool, auth, ctx, &mut tx, &b, "recovery_codes").await?;
+    let codes = new_recovery_codes(&mut tx, me.user_id).await?;
+    let extra = json!({ "recoveryCodes": codes.codes.len() });
+    events::mfa(&mut tx, ctx, AuditAction::MfaRecoveryCodes, me.user_id, &me.username, extra).await?;
+    tx.commit().await?;
+    Ok(codes)
+}
+
+/// An administrator turns a user's MFA off (lost device and recovery codes).
+/// If a profile requires MFA, the user sets it up again at their next sign-in.
+pub async fn reset(pool: &PgPool, ctx: &RequestContext, user_id: Uuid) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    let user = auth_data::get_user(&mut tx, user_id, true).await?.ok_or_else(|| AppError::missing("User", user_id))?;
+    users::must_cover_user(&mut tx, ctx, user_id).await?;
+    if data::delete_mfa(&mut tx, user_id).await? {
+        let extra = json!({ "reason": "admin_reset" });
+        events::mfa(&mut tx, ctx, AuditAction::MfaDisable, user_id, &user.username, extra).await?;
+        tracing::info!(user = %user.username, "two-factor authentication reset by an administrator");
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+const TAG: &str = "Authentication";
+const LOCK_NOTE: &str = "400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After).";
+
+pub fn routes() -> Vec<Route> {
+    vec![
+        route(Method::GET, "/api/v1/auth/mfa", "getMfaStatus")
+            .tag(TAG)
+            .summary("Your two-factor authentication status")
+            .session_only()
+            .before_mfa_enrolment()
+            .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
+                let me = me(&api.ctx)?;
+                Ok(Json(status(&mut *api.pool.acquire().await?, me.user_id).await?))
+            }),
+        route(Method::POST, "/api/v1/auth/mfa/totp", "startTotpEnrolment")
+            .tag(TAG)
+            .summary("Start setting up an authenticator app: returns a new secret to confirm")
+            .description(format!(
+                "Nothing changes at sign-in until the secret is confirmed (POST /api/v1/auth/mfa/totp/confirm); calling this again replaces an unconfirmed secret. 409 when an authenticator is already set up. {LOCK_NOTE}"
+            ))
+            .status(StatusCode::CREATED)
+            .session_only()
+            .before_mfa_enrolment()
+            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited])
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<PasswordConfirmation>>| async move {
+                Ok(Json(enrol(&api.pool, &api.auth, &api.ctx, b).await?))
+            }),
+        route(Method::POST, "/api/v1/auth/mfa/totp/confirm", "confirmTotpEnrolment")
+            .tag(TAG)
+            .summary("Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)")
+            .description(
+                "From now on sign-in asks for a code after the password. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed.",
+            )
+            .session_only()
+            .before_mfa_enrolment()
+            .errors(&[ErrorCode::Conflict])
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<TotpConfirmation>>| async move {
+                Ok(Json(confirm(&api.pool, &api.ctx, b).await?))
+            }),
+        route(Method::DELETE, "/api/v1/auth/mfa/totp", "disableTotp")
+            .tag(TAG)
+            .summary("Turn your two-factor authentication off (or cancel an unfinished set-up)")
+            .description(format!(
+                "Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. {LOCK_NOTE}"
+            ))
+            .session_only()
+            .before_mfa_enrolment()
+            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited])
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<MfaReauthentication>>| async move {
+                disable(&api.pool, &api.auth, &api.ctx, b).await?;
+                Ok(NoContent)
+            }),
+        route(Method::POST, "/api/v1/auth/mfa/recovery-codes", "regenerateRecoveryCodes")
+            .tag(TAG)
+            .summary("Replace your recovery codes with 10 new ones (shown once)")
+            .description(format!(
+                "Needs the password and a current code. The old codes stop working. 409 when MFA is not set up. {LOCK_NOTE}"
+            ))
+            .session_only()
+            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited])
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<MfaReauthentication>>| async move {
+                Ok(Json(regenerate(&api.pool, &api.auth, &api.ctx, b).await?))
+            }),
+        route(Method::DELETE, "/api/v1/admin/users/{id}/mfa", "resetUserMfa")
+            .tag("Users")
+            .summary("Turn a user's two-factor authentication off (lost authenticator and recovery codes)")
+            .description(
+                "Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403).",
+            )
+            .requires(GlobalPermission::UsersManage)
+            .session_only()
+            .errors(&[ErrorCode::NotFound])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                reset(&api.pool, &api.ctx, id).await?;
+                Ok(NoContent)
+            }),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::Router;
+    use axum::http::{HeaderMap, header};
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::db::scratch;
+    use crate::modules::api_tokens::tests::{Creds, app, call, code};
+
+    const PASSWORD: &str = "correct horse battery";
+
+    /// The `name=value` pairs of the response's Set-Cookie headers.
+    fn set_cookies(headers: &HeaderMap) -> Vec<String> {
+        headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect()
+    }
+
+    fn session_of(me: &Value, headers: &HeaderMap) -> Creds {
+        let cookie = set_cookies(headers).into_iter().filter(|c| !c.starts_with("shadoucmdb_mfa=")).collect::<Vec<_>>();
+        Creds { cookie: Some(cookie.join("; ")), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None }
+    }
+
+    async fn setup(app: &Router) -> (Creds, Value) {
+        let body = json!({ "username": "owner", "displayName": "Owner", "password": PASSWORD });
+        let (status, me, headers) = call(app, "POST", "/api/v1/setup", &Creds::default(), Some(body)).await;
+        assert_eq!(status, 201, "{me}");
+        (session_of(&me, &headers), me)
+    }
+
+    /// A time step with a few seconds left, so codes for it and its
+    /// neighbours stay valid while the test runs.
+    async fn settled_step() -> i64 {
+        let into =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() % totp::STEP_SECONDS;
+        if into > totp::STEP_SECONDS - 5 {
+            tokio::time::sleep(std::time::Duration::from_secs(totp::STEP_SECONDS - into + 1)).await;
+        }
+        totp::current_step()
+    }
+
+    /// Sets up an authenticator through the API; returns its secret and the recovery codes.
+    async fn enrol(app: &Router, pool: &PgPool, session: &Creds, step: i64) -> (Vec<u8>, Vec<String>) {
+        let (status, v, _) =
+            call(app, "POST", "/api/v1/auth/mfa/totp", session, Some(json!({ "currentPassword": PASSWORD }))).await;
+        assert_eq!(status, 201, "{v}");
+        let secret: Vec<u8> = sqlx::query_scalar("SELECT secret FROM user_totp").fetch_one(pool).await.unwrap();
+        assert_eq!(v["secret"].as_str(), Some(totp::base32(&secret).as_str()));
+        let body = json!({ "code": totp::code_at(&secret, step - 1) });
+        let (status, v, _) = call(app, "POST", "/api/v1/auth/mfa/totp/confirm", session, Some(body)).await;
+        assert_eq!(status, 200, "{v}");
+        let codes = v["codes"].as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_owned()).collect();
+        (secret, codes)
+    }
+
+    /// Password step: returns the challenge cookie.
+    async fn password_step(app: &Router) -> Creds {
+        let body = json!({ "username": "owner", "password": PASSWORD });
+        let (status, v, headers) = call(app, "POST", "/api/v1/auth/login", &Creds::default(), Some(body)).await;
+        assert_eq!((status, code(&v)), (401, "MFA_REQUIRED"), "{v}");
+        let cookie = set_cookies(&headers).into_iter().find(|c| c.starts_with("shadoucmdb_mfa=")).expect("mfa cookie");
+        Creds { cookie: Some(cookie), ..Creds::default() }
+    }
+
+    async fn second_step(app: &Router, challenge: &Creds, code_or_recovery: &str) -> (u16, Value, HeaderMap) {
+        call(app, "POST", "/api/v1/auth/login/mfa", challenge, Some(json!({ "code": code_or_recovery }))).await
+    }
+
+    async fn mfa_rows(pool: &PgPool) -> Vec<(String, Value)> {
+        sqlx::query_as("SELECT action, new_value FROM audit_log WHERE action LIKE 'mfa.%' ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    /// Enrolment, the second sign-in step, replay protection, one-time
+    /// recovery codes, turning MFA off, and what the audit log keeps.
+    #[tokio::test]
+    async fn totp_sign_in_takes_a_second_step() {
+        let Some(db) = scratch::database("totp_sign_in_takes_a_second_step").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, _) = setup(&app).await;
+        let step = settled_step().await;
+
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/mfa", &session, None).await;
+        assert_eq!((status, &v["totpEnabled"], &v["enrolmentRequired"]), (200, &json!(false), &json!(false)));
+        let wrong = json!({ "currentPassword": "not the password" });
+        let (status, v, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(wrong)).await;
+        assert_eq!((status, v["error"]["details"][0]["field"].as_str()), (400, Some("currentPassword")));
+
+        // A code that does not match does not confirm.
+        let (status, _, _) =
+            call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(json!({ "currentPassword": PASSWORD }))).await;
+        assert_eq!(status, 201);
+        let secret: Vec<u8> = sqlx::query_scalar("SELECT secret FROM user_totp").fetch_one(pool).await.unwrap();
+        let far = json!({ "code": totp::code_at(&secret, step + 10) });
+        let (status, v, _) = call(&app, "POST", "/api/v1/auth/mfa/totp/confirm", &session, Some(far)).await;
+        assert_eq!((status, v["error"]["details"][0]["code"].as_str()), (400, Some("invalid_code")));
+        let (secret, recovery) = enrol(&app, pool, &session, step).await;
+        assert_eq!(recovery.len(), 10);
+        let (status, _, _) =
+            call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(json!({ "currentPassword": PASSWORD }))).await;
+        assert_eq!(status, 409, "already set up");
+
+        // The password alone no longer signs in; the code step needs the cookie.
+        let challenge = password_step(&app).await;
+        let (status, v, _) = second_step(&app, &Creds::default(), &totp::code_at(&secret, step)).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"));
+        let (status, _, _) = second_step(&app, &challenge, &totp::code_at(&secret, step - 1)).await;
+        assert_eq!(status, 401, "the confirming code was used already");
+        let (status, me, headers) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!(status, 200, "{me}");
+        assert_eq!((&me["mfa"]["totpEnabled"], &me["mfa"]["recoveryCodesRemaining"]), (&json!(true), &json!(10)));
+        assert!(set_cookies(&headers).contains(&"shadoucmdb_mfa=".to_owned()), "challenge cookie cleared");
+        let (status, _, _) = second_step(&app, &challenge, &totp::code_at(&secret, step + 1)).await;
+        assert_eq!(status, 401, "a challenge signs in once");
+
+        // Each code once; recovery codes in any case, once.
+        let challenge = password_step(&app).await;
+        let (status, _, _) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!(status, 401, "replayed code");
+        let (status, me, _) = second_step(&app, &challenge, &recovery[0].to_uppercase()).await;
+        assert_eq!((status, &me["mfa"]["recoveryCodesRemaining"]), (200, &json!(9)));
+        let challenge = password_step(&app).await;
+        let (status, _, _) = second_step(&app, &challenge, &recovery[0]).await;
+        assert_eq!(status, 401, "used recovery code");
+        let (status, users, _) = call(&app, "GET", "/api/v1/admin/users", &session, None).await;
+        assert_eq!((status, &users["data"][0]["mfaEnabled"]), (200, &json!(true)));
+
+        // Turning it off needs the password and a factor.
+        let off = |c: &str| json!({ "currentPassword": PASSWORD, "code": c });
+        let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(off("000000"))).await;
+        assert_eq!((status, v["error"]["details"][0]["field"].as_str()), (400, Some("code")));
+        let (status, _, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(off(&recovery[1]))).await;
+        assert_eq!(status, 204);
+        let body = json!({ "username": "owner", "password": PASSWORD });
+        let (status, _, _) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(body)).await;
+        assert_eq!(status, 200, "password-only again");
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM user_recovery_codes").fetch_one(pool).await.unwrap();
+        assert_eq!(left, 0);
+
+        let rows = mfa_rows(pool).await;
+        let actions: Vec<&str> = rows.iter().map(|(a, _)| a.as_str()).collect();
+        assert_eq!(
+            actions,
+            [
+                "mfa.enrol",
+                "mfa.failure",
+                "mfa.failure",
+                "mfa.recovery_code_used",
+                "mfa.failure",
+                "mfa.failure",
+                "mfa.recovery_code_used",
+                "mfa.disable"
+            ]
+        );
+        assert_eq!((rows[1].1["stage"].as_str(), rows[1].1["username"].as_str()), (Some("login"), Some("owner")));
+        assert_eq!((rows[3].1["stage"].as_str(), &rows[3].1["recoveryCodesRemaining"]), (Some("login"), &json!(9)));
+        assert_eq!((rows[4].1["stage"].as_str(), rows[5].1["stage"].as_str()), (Some("login"), Some("disable")));
+        assert_eq!(
+            (rows[6].1["stage"].as_str(), rows[7].1["reason"].as_str()),
+            (Some("disable"), Some("self_service"))
+        );
+        let methods: Vec<String> =
+            sqlx::query_scalar("SELECT new_value->>'method' FROM audit_log WHERE action = 'login.success' ORDER BY id")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(methods, ["setup", "totp", "recovery_code", "password"]);
+        let all: Vec<String> =
+            sqlx::query_scalar("SELECT new_value::text FROM audit_log").fetch_all(pool).await.unwrap();
+        let hashes =
+            recovery.iter().map(|c| hex::encode(totp::recovery_code_hash(&totp::normalise_recovery_code(c).unwrap())));
+        let secrets: Vec<String> =
+            [totp::base32(&secret), hex::encode(&secret)].into_iter().chain(recovery.clone()).chain(hashes).collect();
+        for row in &all {
+            for s in &secrets {
+                assert!(!row.to_lowercase().contains(&s.to_lowercase()), "{row} contains secret material");
+            }
+        }
+        db.drop().await;
+    }
+
+    /// Wrong codes are failed sign-ins for the username: the same lock as
+    /// wrong passwords, and a challenge takes only so many.
+    #[tokio::test]
+    async fn wrong_codes_lock_the_username_like_wrong_passwords() {
+        let Some(db) = scratch::database("wrong_codes_lock_the_username_like_wrong_passwords").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, _) = setup(&app).await;
+        let step = settled_step().await;
+        let (secret, _) = enrol(&app, pool, &session, step).await;
+
+        // Three wrong codes on one challenge, two on the next: the fifth locks the username.
+        let first = password_step(&app).await;
+        for _ in 0..3 {
+            let (status, v, _) = second_step(&app, &first, "000000").await;
+            assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"));
+        }
+        let challenge = password_step(&app).await;
+        for _ in 3..crate::auth::throttle::FREE_FAILURES {
+            let (status, v, _) = second_step(&app, &challenge, "000000").await;
+            assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"));
+        }
+        let (status, v, _) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!((status, code(&v)), (429, "RATE_LIMITED"), "locked: not even the right code is checked");
+        let body = json!({ "username": "owner", "password": PASSWORD });
+        let (status, _, _) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(body)).await;
+        assert_eq!(status, 429, "the password step shares the lock");
+        let locked: Vec<Value> = sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'login.locked'")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        assert_eq!((locked.len(), locked[0]["attemptedUsername"].as_str()), (1, Some("owner")));
+
+        // Once the lock has passed the right code signs in; a challenge takes
+        // at most five wrong codes, then the password is asked for again.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let (status, _, _) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!(status, 200);
+        let spent = password_step(&app).await;
+        for _ in 0..5 {
+            second_step(&app, &spent, "000000").await;
+        }
+        let (status, v, _) = second_step(&app, &spent, &totp::code_at(&secret, step + 1)).await;
+        let expired = v["error"]["message"].as_str().is_some_and(|m| m.contains("expired"));
+        assert_eq!((status, expired), (401, true), "the fifth wrong code drops the challenge: {v}");
+        db.drop().await;
+    }
+
+    /// A profile that requires MFA limits its holders' sessions to setting it
+    /// up; an administrator's reset puts them back there.
+    #[tokio::test]
+    async fn a_profile_can_require_mfa() {
+        let Some(db) = scratch::database("a_profile_can_require_mfa").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, me) = setup(&app).await;
+        let owner = me["user"]["id"].as_str().unwrap().to_owned();
+        let admin_profile = me["user"]["profiles"][0]["id"].as_str().unwrap().to_owned();
+        let path = format!("/api/v1/admin/profiles/{admin_profile}");
+
+        let (status, _, _) = call(&app, "PATCH", &path, &session, Some(json!({ "name": "Renamed" }))).await;
+        assert_eq!(status, 409, "the built-in profile stays read-only");
+        let (status, v, _) = call(&app, "PATCH", &path, &session, Some(json!({ "requireMfa": true }))).await;
+        assert_eq!((status, &v["requireMfa"]), (200, &json!(true)), "{v}");
+
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &session, None).await;
+        assert_eq!((status, code(&v)), (403, "MFA_ENROLMENT_REQUIRED"));
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &session, None).await;
+        assert_eq!((status, &v["mfa"]["enrolmentRequired"]), (200, &json!(true)));
+        let step = settled_step().await;
+        enrol(&app, pool, &session, step).await;
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &session, None).await;
+        assert_eq!((status, &v["data"][0]["mfaEnabled"]), (200, &json!(true)));
+
+        // Reset by an administrator (here: themselves): back to enrolment.
+        let reset = format!("/api/v1/admin/users/{owner}/mfa");
+        let (status, _, _) = call(&app, "DELETE", &reset, &session, None).await;
+        assert_eq!(status, 204);
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &session, None).await;
+        assert_eq!((status, code(&v)), (403, "MFA_ENROLMENT_REQUIRED"));
+        let rows = mfa_rows(pool).await;
+        let last = rows.last().unwrap();
+        assert_eq!((last.0.as_str(), last.1["reason"].as_str()), ("mfa.disable", Some("admin_reset")));
+        let (status, _, _) = call(&app, "DELETE", &reset, &session, None).await;
+        assert_eq!(status, 403, "the reset route is not an enrolment route");
+        db.drop().await;
+    }
+}

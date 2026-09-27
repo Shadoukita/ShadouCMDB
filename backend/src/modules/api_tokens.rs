@@ -396,7 +396,7 @@ pub fn routes() -> Vec<Route> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::time::Duration as StdDuration;
 
     use axum::Router;
@@ -409,7 +409,8 @@ mod tests {
     use crate::db::scratch;
     use crate::http::{AppState, router};
 
-    fn app(pool: sqlx::PgPool) -> Router {
+    /// The real router on a scratch database (also used by the MFA tests).
+    pub(crate) fn app(pool: sqlx::PgPool) -> Router {
         let auth = AuthConfig {
             session_idle: StdDuration::from_secs(3600),
             session_max_age: StdDuration::from_secs(3600),
@@ -441,13 +442,13 @@ mod tests {
     }
 
     #[derive(Default, Clone)]
-    struct Creds {
-        cookie: Option<String>,
-        csrf: Option<String>,
-        bearer: Option<String>,
+    pub(crate) struct Creds {
+        pub cookie: Option<String>,
+        pub csrf: Option<String>,
+        pub bearer: Option<String>,
     }
 
-    async fn call(
+    pub(crate) async fn call(
         app: &Router,
         method: &str,
         path: &str,
@@ -475,7 +476,7 @@ mod tests {
         (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null), headers)
     }
 
-    fn code(v: &Value) -> &str {
+    pub(crate) fn code(v: &Value) -> &str {
         v["error"]["code"].as_str().unwrap_or_default()
     }
 

@@ -51,11 +51,14 @@ const flashText = computed(() => (id.value ? flash.forCi(id.value) : undefined))
 useDocumentTitle(() => (isNew.value ? "New profile" : profile.data.value?.name));
 
 const builtin = computed(() => !!profile.data.value?.isBuiltin);
-const readOnly = computed(() => builtin.value || !session.can("profiles.manage"));
+const canManage = computed(() => session.can("profiles.manage"));
+/** Name and permissions. The built-in Administrator profile only takes `requireMfa`. */
+const readOnly = computed(() => builtin.value || !canManage.value);
 
 const name = ref("");
 const description = ref("");
 const globals = ref<GlobalPermission[]>([]);
+const requireMfa = ref(false);
 /** Explicit grants keyed by class id (WILDCARD for "all classes"). */
 const grants = ref<Record<string, Rights>>({});
 const error = ref<unknown>(null);
@@ -67,6 +70,7 @@ function seed(p: PermissionProfile | undefined) {
   name.value = p?.name ?? "";
   description.value = p?.description ?? "";
   globals.value = p ? [...p.globalPermissions] : [];
+  requireMfa.value = p?.requireMfa ?? false;
   const g: Record<string, Rights> = {};
   for (const c of p?.classPermissions ?? []) g[c.classId ?? WILDCARD] = { view: c.view, create: c.create, edit: c.edit, delete: c.delete };
   grants.value = g;
@@ -117,14 +121,26 @@ function classPermissions(): ClassPermission[] {
 
 const fieldErrors = computed(() => ({ ...(error.value instanceof ApiError ? error.value.fieldErrors() : {}), ...local.value }));
 const unplaced = computed(() =>
-  error.value instanceof ApiError ? error.value.details.filter((d) => !["name", "description"].includes(d.field)) : [],
+  error.value instanceof ApiError ? error.value.details.filter((d) => !["name", "description", "requireMfa"].includes(d.field)) : [],
 );
 const holdsThis = computed(() => !!session.user?.profiles.some((p) => p.id === id.value));
+/** Saving would lock the editor into two-factor set-up: say so before they click. */
+const locksSelf = computed(() => requireMfa.value && !profile.data.value?.requireMfa && holdsThis.value && !session.session?.mfa.totpEnabled);
 
 async function submit() {
-  if (readOnly.value) return;
+  if (!canManage.value) return;
   error.value = null;
   saved.value = null;
+  if (builtin.value) {
+    try {
+      const next = await update.mutateAsync({ id: id.value!, body: { requireMfa: requireMfa.value } });
+      saved.value = `Saved ${next?.name ?? "the profile"}. Users holding it are affected on their next request.`;
+      if (holdsThis.value) await session.refresh();
+    } catch (e) {
+      error.value = e;
+    }
+    return;
+  }
   local.value = name.value.trim() ? {} : { name: "Required" };
   if (local.value.name) {
     document.getElementById("profile-name")?.focus();
@@ -135,6 +151,7 @@ async function submit() {
     description: description.value.trim() || null,
     globalPermissions: globals.value,
     classPermissions: classPermissions(),
+    requireMfa: requireMfa.value,
   };
   try {
     if (isNew.value) {
@@ -190,8 +207,8 @@ const notFound = computed(() => {
     </div>
     <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
     <div v-if="builtin" class="alert" role="note">
-      The built-in Administrator profile holds every permission, on every class, and cannot be changed or deleted. Clone it
-      to start an editable profile from it.
+      The built-in Administrator profile holds every permission, on every class, and cannot be deleted. Only its two-factor
+      requirement can be changed. Clone it to start an editable profile from it.
     </div>
     <div v-else-if="readOnly" class="alert" role="note">You can view this profile. Changing it needs the <code>profiles.manage</code> permission.</div>
     <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
@@ -210,6 +227,25 @@ const notFound = computed(() => {
             <textarea :id="fid" v-model="description" rows="2" :readonly="readOnly" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>
         </FormField>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="signin-title">
+      <div class="panel-header"><h2 id="signin-title">Sign-in</h2></div>
+      <div class="panel-body stack">
+        <label class="checkbox-row">
+          <input id="profile-requireMfa" v-model="requireMfa" type="checkbox" :disabled="!canManage" />
+          Require two-factor authentication
+        </label>
+        <p class="hint" style="margin: 0">
+          Users holding this profile must set up an authenticator app. Until they do, they can only sign in and set it up;
+          everything else is refused. API tokens are not affected.
+        </p>
+        <div v-if="locksSelf" class="alert alert-warn" role="note">
+          You hold this profile and have not set up two-factor authentication. After saving you will be asked to set it up
+          before you can continue.
+        </div>
+        <span v-if="fieldErrors.requireMfa" class="error">{{ fieldErrors.requireMfa }}</span>
       </div>
     </section>
 
@@ -292,7 +328,7 @@ const notFound = computed(() => {
     <div v-if="profile.data.value && !isNew" class="muted" style="font-size: var(--fs-sm); margin-bottom: var(--sp-4)">
       Created {{ formatDateTime(profile.data.value.createdAt) }} · updated {{ formatDateTime(profile.data.value.updatedAt) }}
     </div>
-    <div v-if="!readOnly" class="form-footer panel">
+    <div v-if="canManage" class="form-footer panel">
       <button type="submit" class="btn btn-primary" :disabled="pending">{{ pending ? "Saving…" : isNew ? "Create profile" : "Save changes" }}</button>
       <RouterLink class="btn" to="/admin/profiles">Cancel</RouterLink>
     </div>

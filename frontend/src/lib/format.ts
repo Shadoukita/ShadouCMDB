@@ -1,6 +1,9 @@
 const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const dateOnly = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 
+/** Placeholder for a reference into a class the caller may not view (the API withholds its name). */
+export const HIDDEN_CI = "Hidden CI";
+
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);

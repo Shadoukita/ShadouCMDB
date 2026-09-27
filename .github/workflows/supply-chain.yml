@@ -8,7 +8,7 @@ name: Supply chain
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
   pull_request:
   schedule:
     - cron: "17 5 * * *"
@@ -22,7 +22,7 @@ jobs:
     name: cargo-deny (advisories, licences, sources)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -38,10 +38,10 @@ jobs:
     name: npm audit (high, critical)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
       # Reads the lockfiles against the npm advisory database; installs nothing.
@@ -50,8 +50,15 @@ jobs:
       - name: npm audit (tools/sbom)
         run: npm audit --audit-level=high
         working-directory: tools/sbom
+      # The npm bundled with the runner's Node 22 failed with EMISSINGSIGNATUREKEY on
+      # attestations signed with the registry's current key (SHAA-112), so this step uses a
+      # pinned npm instead. Bump NPM_VERSION on purpose, not by tag.
       - name: Registry signatures of the installed packages
+        env:
+          NPM_VERSION: 11.19.0
         run: |
+          npm install -g "npm@$NPM_VERSION" --ignore-scripts --no-audit --no-fund
+          echo "node $(node --version), npm $(npm --version)"
           npm ci --ignore-scripts --no-audit --no-fund
           npm audit signatures
 
@@ -62,7 +69,7 @@ jobs:
       GITLEAKS_VERSION: 8.30.1
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -79,10 +86,10 @@ jobs:
     name: SBOM (CycloneDX)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -98,7 +105,7 @@ jobs:
         run: |
           crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' backend/Cargo.toml | head -1)
           .github/scripts/sbom.sh "$crate-dev.${GITHUB_SHA::7}" dist/shadoucmdb.cdx.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom
           path: dist/shadoucmdb.cdx.json
@@ -110,7 +117,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Dependency review needs the repository's Dependency graph. Until the owner turns it on,
@@ -138,7 +145,7 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.graph.outputs.enabled == 'true'
-        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
 
@@ -146,7 +153,7 @@ jobs:
     name: Every action pinned by commit SHA
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # The checker parses the YAML, so flow-style steps and quoted keys cannot slip past it.

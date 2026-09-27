@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useAreas } from "../api/datamodel";
 import { useCiClasses } from "../api/queries";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import { useDocumentTitle } from "../lib/composables";
+import { groupByArea } from "../lib/areas";
 import { vAutofocus } from "../lib/directives";
 import { useSessionStore } from "../stores/session";
 import CiForm from "./form/CiForm.vue";
@@ -21,11 +23,15 @@ const session = useSessionStore();
 const concrete = computed(() =>
   (classes.data.value ?? []).filter((c) => c.isActive && !c.isAbstract && session.canOnClass(c.id, "create")),
 );
+const areas = useAreas();
+const concreteGroups = computed(() => groupByArea(concrete.value, (c) => c.areaId, areas.data.value ?? []));
+const area = computed(() => areas.data.value?.find((a) => a.id === cls.value?.areaId));
 const denied = computed(() => !!cls.value && !session.canOnClass(cls.value.id, "create"));
 /** Archived classes accept no new CIs; abstract ones hold none. */
 const closed = computed(() => !!cls.value && (!cls.value.isActive || cls.value.isAbstract));
 const crumbs = computed<Crumb[]>(() => [
   { label: "Inventory", to: "/cis" },
+  ...(area.value ? [{ label: area.value.name }] : []),
   ...(cls.value ? [{ label: cls.value.name, to: `/cis?classId=${cls.value.id}` }] : []),
   { label: "New" },
 ]);
@@ -53,7 +59,9 @@ function pickClass(e: Event) {
         <ErrorAlert v-if="classes.isError.value" :error="classes.error.value" :on-retry="() => classes.refetch()" />
         <select v-else id="ci-class" v-autofocus="!classId" :value="classId" required @change="pickClass">
           <option value="">{{ classes.isLoading.value ? "Loading…" : "Choose a class…" }}</option>
-          <option v-for="c in concrete" :key="c.id" :value="c.id">{{ c.name }}</option>
+          <optgroup v-for="g in concreteGroups" :key="g.area?.id ?? '-'" :label="g.area?.name ?? 'Other'">
+            <option v-for="c in g.items" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </optgroup>
           <option v-if="cls && !concrete.includes(cls)" :value="cls.id" disabled>{{ cls.name }}{{ cls.isActive ? "" : " (archived)" }}</option>
         </select>
         <span class="hint">The class decides which attributes the CI carries.</span>

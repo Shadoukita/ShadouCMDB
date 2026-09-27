@@ -26,7 +26,10 @@ const rows = computed<Row[]>(() => {
   switch (props.widget.type) {
     case "count_by_class": {
       const keys = props.widget.classKeys ?? [];
-      const list = (classes.data.value ?? []).filter((c) => !c.isAbstract && (keys.length ? keys.includes(c.key) : true));
+      // Only classes the user may view: the API leaves the others out of every count, which would read as 0.
+      const list = (classes.data.value ?? []).filter(
+        (c) => !c.isAbstract && session.canOnClass(c.id, "view") && (keys.length ? keys.includes(c.key) : true),
+      );
       return list.map((c) => ({
         id: c.id,
         label: c.name,

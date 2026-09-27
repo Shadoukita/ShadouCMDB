@@ -1,11 +1,13 @@
-//! Authentication events in `audit_log`: sessions (entity type `sessions`)
-//! and API token use (entity type `api_tokens`, the token's id).
+//! Authentication events in `audit_log`: sessions (entity type `sessions`),
+//! API token use (entity type `api_tokens`, the token's id) and two-factor
+//! sign-in (`mfa.*`, entity type `users`, the user's id).
 //!
 //! Each row carries the request's id, the client IP (and the TCP peer when it
 //! differs) and user agent (see
 //! [`crate::api::context::ClientInfo`]) and, in `new_value`, the event's
 //! details. Never recorded: the password, the session token or its hash, the
-//! CSRF token, an API token's secret or its hash.
+//! CSRF token, an API token's secret or its hash, a TOTP secret, an
+//! authenticator or recovery code or its hash.
 //!
 //! A failed sign-in stores the username as typed (truncated) and nothing about
 //! whether it exists, so the audit log is not an enumeration oracle for those
@@ -27,6 +29,7 @@ use crate::data::crud::{self, AuditAction, AuditEntry};
 
 const ENTITY: &str = "sessions";
 pub const TOKEN_ENTITY: &str = "api_tokens";
+const MFA_ENTITY: &str = "users";
 
 /// Longest attempted username kept (the real ones are at most 64 characters).
 const ATTEMPTED_USERNAME_MAX: usize = 64;
@@ -60,6 +63,10 @@ impl RevokeReason {
 #[derive(Debug, Clone, Copy)]
 pub enum LoginMethod {
     Password,
+    /// Password, then an authenticator code.
+    Totp,
+    /// Password, then a one-time recovery code.
+    RecoveryCode,
     /// First-run setup signs the new administrator in.
     Setup,
 }
@@ -121,6 +128,8 @@ pub async fn login_success(
 ) -> sqlx::Result<()> {
     let method = match method {
         LoginMethod::Password => "password",
+        LoginMethod::Totp => "totp",
+        LoginMethod::RecoveryCode => "recovery_code",
         LoginMethod::Setup => "setup",
     };
     let v = details(ctx, fields(json!({ "userId": user_id, "username": username, "method": method })));
@@ -206,4 +215,18 @@ pub async fn token_use(
         })),
     );
     write_for(conn, ctx, AuditAction::TokenUse, TOKEN_ENTITY, token.id, v).await
+}
+
+/// A two-factor event for this user (`mfa.*`): `extra` adds the event's own details.
+pub async fn mfa(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    action: AuditAction,
+    user_id: Uuid,
+    username: &str,
+    extra: Value,
+) -> sqlx::Result<()> {
+    let mut f = fields(json!({ "userId": user_id, "username": username }));
+    f.extend(fields(extra));
+    write_for(conn, ctx, action, MFA_ENTITY, user_id, details(ctx, f)).await
 }

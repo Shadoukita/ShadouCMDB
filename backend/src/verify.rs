@@ -415,7 +415,8 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
                 .await?;
             let s = new_ci(c, "server", "soft-srv").await?;
             let res = reject!(c, "ci_relationships_live_endpoints", link(c, "runs_on", d, s))?;
-            Ok(format!("edge re-created after soft delete; linking deleted CI {res}"))
+            let tgt = reject!(c, "ci_relationships_live_endpoints", link(c, "depends_on", a, d))?;
+            Ok(format!("edge re-created after soft delete; linking deleted CI as source {res}, as target {tgt}"))
         }
         16 => {
             c.execute("SET LOCAL enable_seqscan = off").await?;

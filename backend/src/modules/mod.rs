@@ -9,6 +9,7 @@ pub mod config_transfer;
 pub mod health;
 pub mod items;
 pub mod lookups;
+pub mod mfa;
 pub mod profiles;
 pub mod relationships;
 pub mod schema_changes;

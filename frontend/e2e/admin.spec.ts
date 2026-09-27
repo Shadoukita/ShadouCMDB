@@ -37,7 +37,7 @@ test("Administration has its own sub-navigation", async ({ page }) => {
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Administration", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/users$/);
   const sub = page.getByRole("navigation", { name: "Administration" });
-  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "CI classes", "Relationship types", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
+  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "API tokens", "Areas", "CI classes", "Relationship types", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
   await expect(page.getByRole("heading", { level: 1, name: "Users" })).toBeVisible();
   await expect(page.getByRole("cell", { name: E2E_USER.username, exact: true })).toBeVisible();
 });
@@ -72,10 +72,10 @@ test("create a permission profile from the matrix", async ({ page, request }) =>
   expect(saved.classPermissions).toHaveLength(2);
 });
 
-test("the built-in Administrator profile is read-only; clone and delete a profile", async ({ page }) => {
+test("the built-in Administrator profile is read-only but for its two-factor requirement; clone and delete a profile", async ({ page }) => {
   await page.goto("/admin/profiles");
   await page.getByRole("link", { name: "Administrator", exact: true }).click();
-  await expect(page.getByRole("note")).toContainText("cannot be changed or deleted");
+  await expect(page.getByRole("note")).toContainText("Only its two-factor requirement can be changed.");
   await expect(page.getByLabel("delete on all classes")).toBeChecked();
   await expect(page.getByLabel("delete on all classes")).toBeDisabled();
   await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
