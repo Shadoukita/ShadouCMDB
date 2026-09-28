@@ -3904,7 +3904,10 @@ export interface operations {
                     username: string;
                     displayName: string;
                     email?: string | null;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                 };
             };
@@ -4249,7 +4252,10 @@ export interface operations {
             content: {
                 "application/json": {
                     currentPassword: string;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     newPassword: string;
                 };
             };
@@ -13151,7 +13157,10 @@ export interface operations {
                     username: string;
                     displayName: string;
                     email?: string | null;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                     /** @description Default true */
                     isActive?: boolean;
@@ -13512,7 +13521,10 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                 };
             };

@@ -218,6 +218,7 @@
                   },
                   "password": {
                     "type": "string",
+                    "format": "password",
                     "description": "At least 12 characters",
                     "maxLength": 256,
                     "minLength": 12
@@ -667,6 +668,7 @@
                   },
                   "newPassword": {
                     "type": "string",
+                    "format": "password",
                     "description": "At least 12 characters",
                     "maxLength": 256,
                     "minLength": 12
@@ -14664,6 +14666,7 @@
                   },
                   "password": {
                     "type": "string",
+                    "format": "password",
                     "description": "At least 12 characters",
                     "maxLength": 256,
                     "minLength": 12
@@ -15176,6 +15179,7 @@
                 "properties": {
                   "password": {
                     "type": "string",
+                    "format": "password",
                     "description": "At least 12 characters",
                     "maxLength": 256,
                     "minLength": 12
