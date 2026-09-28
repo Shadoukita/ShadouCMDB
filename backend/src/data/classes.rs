@@ -23,6 +23,7 @@ pub struct EffectiveAttributeRow {
     pub enum_values: Option<Json<Vec<String>>>,
     pub reference_class_id: Option<Uuid>,
     pub lookup_list_id: Option<Uuid>,
+    pub parent_attribute_id: Option<Uuid>,
     pub validation: Option<Json<Map<String, Value>>>,
     pub group_name: Option<String>,
     pub help_text: Option<String>,
@@ -51,7 +52,7 @@ pub async fn effective_attributes(conn: &mut PgConnection, class_id: Uuid) -> sq
         r#"SELECT d.id, d.class_id, d.key, d.label, d.description,
                   d.data_type AS "data_type: AttributeDataType", d.is_required,
                   d.enum_values AS "enum_values: Json<Vec<String>>", d.reference_class_id, d.lookup_list_id,
-                  d.validation AS "validation: Json<Map<String, Value>>", d.group_name, d.help_text,
+                  d.parent_attribute_id, d.validation AS "validation: Json<Map<String, Value>>", d.group_name, d.help_text,
                   d.default_value AS "default_value: Json<Value>", d.sort_order,
                   d.is_active, d.created_at, d.updated_at,
                   l.depth AS "depth!", c.key AS defined_on_key, c.name AS defined_on_name

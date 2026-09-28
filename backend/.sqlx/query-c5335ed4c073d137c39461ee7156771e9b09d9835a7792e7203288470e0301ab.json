@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT d.id, d.class_id, d.key, d.label, d.description,\n                  d.data_type AS \"data_type: AttributeDataType\", d.is_required,\n                  d.enum_values AS \"enum_values: Json<Vec<String>>\", d.reference_class_id, d.lookup_list_id,\n                  d.validation AS \"validation: Json<Map<String, Value>>\", d.group_name, d.help_text,\n                  d.default_value AS \"default_value: Json<Value>\", d.sort_order,\n                  d.is_active, d.created_at, d.updated_at,\n                  l.depth AS \"depth!\", c.key AS defined_on_key, c.name AS defined_on_name\n           FROM ci_class_lineage($1) l\n           JOIN ci_attribute_definitions d ON d.class_id = l.class_id\n           JOIN ci_classes c ON c.id = d.class_id\n           ORDER BY l.depth DESC, d.sort_order, d.key",
+  "query": "SELECT d.id, d.class_id, d.key, d.label, d.description,\n                  d.data_type AS \"data_type: AttributeDataType\", d.is_required,\n                  d.enum_values AS \"enum_values: Json<Vec<String>>\", d.reference_class_id, d.lookup_list_id,\n                  d.parent_attribute_id, d.validation AS \"validation: Json<Map<String, Value>>\", d.group_name, d.help_text,\n                  d.default_value AS \"default_value: Json<Value>\", d.sort_order,\n                  d.is_active, d.created_at, d.updated_at,\n                  l.depth AS \"depth!\", c.key AS defined_on_key, c.name AS defined_on_name\n           FROM ci_class_lineage($1) l\n           JOIN ci_attribute_definitions d ON d.class_id = l.class_id\n           JOIN ci_classes c ON c.id = d.class_id\n           ORDER BY l.depth DESC, d.sort_order, d.key",
   "describe": {
     "columns": [
       {
@@ -115,6 +115,17 @@
       },
       {
         "ordinal": 10,
+        "name": "parent_attribute_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "ci_attribute_definitions",
+            "name": "parent_attribute_id"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
         "name": "validation: Json<Map<String, Value>>",
         "type_info": "Jsonb",
         "origin": {
@@ -125,7 +136,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "group_name",
         "type_info": "Text",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "help_text",
         "type_info": "Text",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "default_value: Json<Value>",
         "type_info": "Jsonb",
         "origin": {
@@ -158,7 +169,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "sort_order",
         "type_info": "Int4",
         "origin": {
@@ -169,7 +180,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "is_active",
         "type_info": "Bool",
         "origin": {
@@ -180,7 +191,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -191,7 +202,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -202,13 +213,13 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "depth!",
         "type_info": "Int4",
         "origin": "Expression"
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "defined_on_key",
         "type_info": "Text",
         "origin": {
@@ -219,7 +230,7 @@
         }
       },
       {
-        "ordinal": 20,
+        "ordinal": 21,
         "name": "defined_on_name",
         "type_info": "Text",
         "origin": {
@@ -250,6 +261,7 @@
       true,
       true,
       true,
+      true,
       false,
       false,
       false,
@@ -259,5 +271,5 @@
       false
     ]
   },
-  "hash": "500a952c081003d4972c79fa7e90f36358468207cb462451ac329a15832af3d6"
+  "hash": "c5335ed4c073d137c39461ee7156771e9b09d9835a7792e7203288470e0301ab"
 }

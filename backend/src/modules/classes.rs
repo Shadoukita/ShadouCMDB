@@ -376,6 +376,7 @@ impl Resource for CiClasses {
                 }
                 if row.parent_id != previous.parent_id {
                     move_to_new_parent(conn, row, previous).await?;
+                    check_parent_fields_in_lineage(conn, row.id).await?;
                 }
             }
             let verb = match previous {
@@ -437,6 +438,34 @@ async fn move_to_new_parent(conn: &mut PgConnection, row: &CiClass, previous: &C
         }
     }
     Ok(())
+}
+
+/// Fields of the moved type and its subtypes whose parent field (dependent
+/// dropdowns) is no longer on the type or an ancestor.
+async fn check_parent_fields_in_lineage(conn: &mut PgConnection, class_id: Uuid) -> Result<(), AppError> {
+    let broken: Vec<String> = sqlx::query_scalar(
+        "SELECT c.key || '.' || d.key
+         FROM ci_attribute_definitions d
+         JOIN ci_attribute_definitions p ON p.id = d.parent_attribute_id
+         JOIN ci_classes c ON c.id = d.class_id
+         WHERE ci_class_is_a(d.class_id, $1) AND NOT ci_class_is_a(d.class_id, p.class_id)
+         ORDER BY 1",
+    )
+    .bind(class_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    if broken.is_empty() {
+        return Ok(());
+    }
+    Err(engine::refused(
+        "parentId",
+        "parent_field_outside_lineage",
+        format!(
+            "Fields {} depend on a parent field the new parent type does not provide; unlink them (parentAttributeId: \
+             null) first.",
+            broken.join(", ")
+        ),
+    ))
 }
 
 /// Deletes an archived type: its CIs (with their relationships), fields,
@@ -621,6 +650,10 @@ pub struct AttributeDefinition {
     /// When dataType is "lookup": the admin-defined list its values come from
     #[schema(required = true)]
     pub lookup_list_id: Option<Uuid>,
+    /// When the lookup list has a parent list: the field (on this class or an ancestor) bound to the parent
+    /// list. A CI's value must then belong to the CI's value of that field.
+    #[schema(required = true)]
+    pub parent_attribute_id: Option<Uuid>,
     #[schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>, required = true)]
     pub validation: Option<SqlJson<Map<String, Value>>>,
     /// Form section the field is shown in, e.g. "Hardware"
@@ -672,6 +705,10 @@ pub struct EffectiveAttribute {
     /// When dataType is "lookup": the admin-defined list its values come from
     #[schema(required = true)]
     pub lookup_list_id: Option<Uuid>,
+    /// When the lookup list has a parent list: the field (on this class or an ancestor) bound to the parent
+    /// list. A CI's value must then belong to the CI's value of that field.
+    #[schema(required = true)]
+    pub parent_attribute_id: Option<Uuid>,
     #[schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>, required = true)]
     pub validation: Option<SqlJson<Map<String, Value>>>,
     /// Form section the field is shown in, e.g. "Hardware"
@@ -717,6 +754,7 @@ impl From<data::EffectiveAttributeRow> for EffectiveAttribute {
             enum_values: r.enum_values,
             reference_class_id: r.reference_class_id,
             lookup_list_id: r.lookup_list_id,
+            parent_attribute_id: r.parent_attribute_id,
             validation: r.validation,
             group_name: r.group_name,
             help_text: r.help_text,
@@ -856,6 +894,10 @@ pub struct AttributeDefinitionCreate {
     #[schema(schema_with = nullable_uuid_schema)]
     #[serde(default)]
     lookup_list_id: Option<Uuid>,
+    /// Lookup fields on a list with a parent list: the field bound to the parent list (this class or an ancestor)
+    #[schema(schema_with = nullable_uuid_schema)]
+    #[serde(default)]
+    parent_attribute_id: Option<Uuid>,
     #[schema(schema_with = name_schema)]
     #[serde(deserialize_with = "trimmed")]
     label: String,
@@ -930,6 +972,10 @@ pub struct AttributeDefinitionUpdate {
     sort_order: Option<i32>,
     #[schema(nullable = false)]
     is_active: Option<bool>,
+    /// Lookup fields on a list with a parent list: the field bound to the parent list (this class or an ancestor)
+    #[schema(schema_with = nullable_uuid_schema)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    parent_attribute_id: Option<Option<Uuid>>,
 }
 
 fn json_list(v: &[String]) -> Value {
@@ -948,6 +994,7 @@ impl Writable for AttributeDefinitionCreate {
             .opt("data_type", Some(self.data_type.as_str().to_owned()))
             .opt("reference_class_id", self.reference_class_id.map(Some))
             .opt("lookup_list_id", self.lookup_list_id.map(Some))
+            .opt("parent_attribute_id", self.parent_attribute_id.map(Some))
             .opt("label", Some(self.label.clone()))
             .opt("description", self.description.clone().map(Some))
             .opt("is_required", self.is_required)
@@ -987,6 +1034,9 @@ impl Check for AttributeDefinitionCreate {
         if !is_lookup && self.lookup_list_id.is_some() {
             errors.push(custom("lookupListId", "Only allowed for lookup attributes"));
         }
+        if !is_lookup && self.parent_attribute_id.is_some() {
+            errors.push(custom("parentAttributeId", "Only allowed for lookup attributes"));
+        }
         if is_ref && self.default_value.as_ref().is_some_and(|v| !v.is_null()) {
             errors.push(custom("defaultValue", "Reference attributes cannot have a default"));
         }
@@ -1015,7 +1065,8 @@ impl Writable for AttributeDefinitionUpdate {
             .opt("help_text", self.help_text.clone())
             .opt("default_value", self.default_value.clone())
             .opt("sort_order", self.sort_order)
-            .opt("is_active", self.is_active);
+            .opt("is_active", self.is_active)
+            .opt("parent_attribute_id", self.parent_attribute_id);
         c
     }
 }
@@ -1100,9 +1151,9 @@ impl Resource for AttributeDefinitions {
     const TAG: &'static str = "Attribute definitions";
     const SINGULAR: &'static str = "attributeDefinition";
     const PLURAL: &'static str = "attributeDefinitions";
-    const COLUMNS: &'static str = "id, class_id, key, label, description, data_type, is_required, enum_values, reference_class_id, lookup_list_id, validation, group_name, help_text, default_value, sort_order, is_active, created_at, updated_at";
+    const COLUMNS: &'static str = "id, class_id, key, label, description, data_type, is_required, enum_values, reference_class_id, lookup_list_id, validation, group_name, help_text, default_value, sort_order, is_active, created_at, updated_at, parent_attribute_id";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "label", "description", "group_name"];
-    const UPDATE_DESCRIPTION: &'static str = "`dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. Preview any change with `POST /api/v1/schema-changes/preview`.";
+    const UPDATE_DESCRIPTION: &'static str = "`dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. `parentAttributeId` (lookup fields on a list with a parent list) names the field bound to the parent list, on this class or an ancestor; CI writes then only accept a value that belongs to the CI's value of that field. Preview any change with `POST /api/v1/schema-changes/preview`.";
     const ARCHIVE_ON_DELETE: bool = true;
     const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
     const DELETE_DESCRIPTION: &'static str = "Archives the field (`isActive=false`): its column and stored values stay readable, no new values are accepted, and forms hide it. `PATCH {\"isActive\": true}` restores it. To drop the column and its values, purge the field (`POST /api/v1/attribute-definitions/{id}/purge`).";
@@ -1188,6 +1239,22 @@ pub async fn purge_attribute_in(
             .await?
             .ok_or_else(|| AppError::missing(AttributeDefinitions::LABEL, id))?;
     check_purge("field", &row.key, row.is_active, confirm)?;
+    let dependents: Vec<String> = sqlx::query_scalar(
+        "SELECT c.key || '.' || d.key FROM ci_attribute_definitions d JOIN ci_classes c ON c.id = d.class_id
+         WHERE d.parent_attribute_id = $1 ORDER BY 1",
+    )
+    .bind(id)
+    .fetch_all(&mut *conn)
+    .await?;
+    if !dependents.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::InUse,
+            format!(
+                "Fields {} use this field as their parent field; unlink them (parentAttributeId: null) first",
+                dependents.join(", ")
+            ),
+        ));
+    }
     let model = Model::load(conn).await?;
     let table = model.table(row.class_id).ok_or_else(AppError::internal)?;
     crud::delete_row(conn, AttributeDefinitions::TABLE, id).await?;
@@ -1668,10 +1735,10 @@ pub fn routes() -> Vec<Route> {
         .description(
             "Irreversible. The field must be archived (DELETE) and `confirm` must repeat its technical name. Drops the \
              column (and every stored value) from the type's table and rebuilds the reporting views. Returns the \
-             schema change that ran.",
+             schema change that ran. Refused (409 IN_USE) while other fields name it as their parent field.",
         )
         .requires(GlobalPermission::DatamodelManage)
-        .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+        .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::InUse])
         .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<PurgeRequest>>| async move {
             let mut tx = api.pool.begin().await?;
             let change = purge_attribute_in(&mut tx, &api.ctx, id, &b.confirm).await?;
