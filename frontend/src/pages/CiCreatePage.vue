@@ -2,12 +2,13 @@
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAreas } from "../api/datamodel";
-import { useCiClasses } from "../api/queries";
+import { useCiClasses, useClassAttributes } from "../api/queries";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import { useDocumentTitle } from "../lib/composables";
 import { groupByArea } from "../lib/areas";
+import { useLayoutEditor } from "../lib/layoutEditor";
 import { vAutofocus } from "../lib/directives";
 import { useSessionStore } from "../stores/session";
 import CiForm from "./form/CiForm.vue";
@@ -36,6 +37,11 @@ const crumbs = computed<Crumb[]>(() => [
   { label: "New" },
 ]);
 
+// Edit layout (?layout=edit): the form's layout edited in place on an empty form of the class,
+// also where the designer's "Open on a CI" leads for a class without CIs.
+const attrs = useClassAttributes(() => cls.value?.id);
+const editor = useLayoutEditor({ classKey: () => cls.value?.key, attrs: () => attrs.data.value?.filter((d) => d.isActive) });
+
 const unknownClass = computed(() => new Error(`Class ${classId.value} does not exist.`));
 
 function pickClass(e: Event) {
@@ -48,6 +54,9 @@ function pickClass(e: Event) {
   <Breadcrumbs :items="crumbs" />
   <div class="page-header">
     <div class="title"><h1>New configuration item</h1></div>
+    <div v-if="editor.allowed && !editor.active && cls" class="actions">
+      <button type="button" class="btn" @click="editor.enter()">Edit layout</button>
+    </div>
   </div>
   <section v-if="classes.data.value?.length === 0" class="panel callout">
     <DataModelEmpty />
@@ -79,6 +88,6 @@ function pickClass(e: Event) {
     None of your permission profiles allows creating configuration items. Ask an administrator for a profile with the
     create right.
   </div>
-  <CiForm v-if="classId && cls && !denied && !closed" :key="classId" mode="create" :class-id="classId" :class-name="cls.name" />
+  <CiForm v-if="classId && cls && ((!denied && !closed) || editor.active)" :key="classId" mode="create" :class-id="classId" :class-name="cls.name" :editor="editor" />
   <ErrorAlert v-if="classId && classes.data.value && !cls" :error="unknownClass" />
 </template>

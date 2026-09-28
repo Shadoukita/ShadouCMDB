@@ -9,13 +9,17 @@ import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import CiStateBadge from "../components/CiStateBadge.vue";
+import LayoutEditView from "../components/layoutEdit/LayoutEditView.vue";
 import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
+import { useLayoutEditor } from "../lib/layoutEditor";
 import { formatDateTime } from "../lib/format";
 import { useTrail, type TrailStep } from "../lib/trail";
-import { builtInLayout, DETAIL_CORE, DETAIL_RECORD, layoutFor, resolveLayout } from "../lib/uiSettings";
+import { attributeKey, builtInLayout, DETAIL_CORE, DETAIL_RECORD, layoutFor, resolveLayout } from "../lib/uiSettings";
 import { useFlashStore } from "../stores/flash";
 import { useSessionStore } from "../stores/session";
+import AttributeValue from "./detail/AttributeValue.vue";
+import CoreFieldValue from "./detail/CoreFieldValue.vue";
 import DeleteCiButton from "./detail/DeleteCiButton.vue";
 import HistoryPanel from "./detail/HistoryPanel.vue";
 import LayoutPanels from "./detail/LayoutPanels.vue";
@@ -56,6 +60,16 @@ const layout = computed(() => layoutFor(settings.doc.value, classKey.value));
 const attrs = useClassAttributes(() => c.value?.classId);
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || c.value?.attributes[d.key] != null));
 const layoutTabs = computed(() => resolveLayout(layout.value ?? builtInLayout(classKey.value ?? ""), defs.value, DETAIL_CORE, DETAIL_RECORD));
+
+// Edit layout (?layout=edit): the class layout edited in place on this CI, for users who may customize.
+const activeAttrs = computed(() => attrs.data.value?.filter((d) => d.isActive));
+const editor = useLayoutEditor({ classKey, attrs: activeAttrs });
+const defFor = (f: string) => defs.value.find((d) => d.key === attributeKey(f));
+/** The record section as the draft layout places it (always last on the first tab). */
+const recordSection = computed(() =>
+  editor.layout ? resolveLayout(editor.layout, defs.value, DETAIL_CORE, DETAIL_RECORD, true)[0]?.sections.filter((s) => s.key === "_record") ?? [] : [],
+);
+
 const TABS = computed<[Tab, string][]>(() => [
   ...(layoutTabs.value.length > 1 ? layoutTabs.value.map((t): [Tab, string] => [`layout:${t.key}`, t.label]) : [["overview", "Overview"] as [Tab, string]]),
   ["graph", "Relationship map"],
@@ -118,6 +132,7 @@ const crumbs = computed<Crumb[]>(() => {
         <CiStateBadge v-else :ci="c" />
       </div>
       <div v-if="!c.deletedAt" class="actions">
+        <button v-if="editor.allowed && !editor.active" type="button" class="btn" @click="editor.enter()">Edit layout</button>
         <RouterLink v-if="session.canOnClass(c.classId, 'edit')" class="btn" :to="`/cis/${c.id}/edit`">Edit</RouterLink>
         <DeleteCiButton v-if="session.canOnClass(c.classId, 'delete')" :ci="c" />
       </div>
@@ -128,7 +143,18 @@ const crumbs = computed<Crumb[]>(() => {
       removed with it.
     </div>
 
-    <div class="tabs" role="tablist" aria-label="CI sections">
+    <LayoutEditView v-if="editor.active && classKey" :editor="editor" :class-name="c.class.name" :class-key="classKey" :attrs="activeAttrs" :attrs-error="attrs.error.value">
+      <template #field="{ field }">
+        <AttributeValue v-if="defFor(field)" :def="defFor(field)!" :value="c.attributes[defFor(field)!.key]" :ref-info="c.attributeReferences[defFor(field)!.key]" :self="self" :trail="trail" />
+        <CoreFieldValue v-else :ci="c" :field="field" />
+      </template>
+      <template #first-tab-end>
+        <LayoutPanels :ci="c" :sections="recordSection" :defs="defs" :self="self" :trail="trail" />
+        <p class="hint">The record details come last on the first tab; the relationships, the relationship map and the history follow the layout's tabs.</p>
+      </template>
+    </LayoutEditView>
+
+    <div v-if="!editor.active" class="tabs" role="tablist" aria-label="CI sections">
       <button
         v-for="[key, label] in TABS"
         :id="`tab-${tabId(key)}`"
@@ -145,7 +171,7 @@ const crumbs = computed<Crumb[]>(() => {
       </button>
     </div>
 
-    <div :id="`panel-${tabId(current)}`" role="tabpanel" :aria-labelledby="`tab-${tabId(current)}`">
+    <div v-if="!editor.active" :id="`panel-${tabId(current)}`" role="tabpanel" :aria-labelledby="`tab-${tabId(current)}`">
       <template v-if="layoutIndex >= 0">
         <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
         <ErrorAlert

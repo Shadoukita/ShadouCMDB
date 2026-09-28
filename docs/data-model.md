@@ -227,6 +227,35 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   core fields not hidden). References to attributes that do not exist are accepted, dropped from the
   effective settings and listed as `issues`, like everywhere else in the document.
 
+### Editing a layout on the CI page
+
+Users with **customization.manage** can also edit a class's layout in place: **Edit layout** on a CI's
+detail page, its edit form or the new-CI form (URL parameter `?layout=edit`; the designer's **Open on a
+CI** leads there, to the class's first CI or, without CIs, to an empty form of the class). The page stays
+the real one, with the CI's values, framed as being edited; the bar on top names the class, since the
+layout applies to all of its CIs.
+
+| To… | With the mouse | From the keyboard |
+|---|---|---|
+| Add a tab | **+ Tab** at the end of the tab bar; type its name | same (a button) |
+| Add a section | **+ Section** between or after sections; type its name | same |
+| Rename a tab or section | click its name (a tab: click the selected tab) | Enter on the name, or **✎** |
+| Move a field | drag it (by its grip) within a section, into another section, or onto a tab | on the grip: Alt+↑ / Alt+↓; the field's toolbar: **Move to section** |
+| Resize a field | drag its right edge | on the grip: Alt+← / Alt+→; toolbar ⇤ / ⇥ |
+| Hide / show a field | drag it onto **Hidden fields**, or **Hide**; **Show** in the tray | Delete on the grip |
+| Section order, columns, collapsed, tab, remove | the section's toolbar (hover) | Tab into the toolbar |
+| Read-only on the form | the field's toolbar (form only) | same |
+
+**Undo** / **Redo** (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y outside text fields), **Desktop** / **Tablet** /
+**Phone** widths, **Reset to built-in layout** (drops the class's own layout from the draft; undoable),
+**Save layout** with an optional note, **Discard** and **Done** are in the bar. Leaving edit mode or the
+page with unsaved changes asks first. Saving goes through `PUT /api/v1/ui-settings` with the version the
+editor started from, like **Customization**: it creates a settings version (listed in **Customization ›
+History** with the note, and audited), and a `409 VERSION_CONFLICT` (someone saved in between) is shown
+with **Load the latest version**, which discards the draft. The same rules apply as in the designer
+(lib/layoutDesign in the web UI, and the API's validation). Users without the permission see the normal
+page at the edit-mode URL.
+
 **Layout format v1 and migration 0017.** Before 0017 a layout was `panels[]` (`key`, `label`,
 ordered `fields`, `collapsed`). Migration `0017_layout_tabs` converts the stored settings: the panels
 become the sections of one tab "General" (key `general`), in order, each with 3 columns and every field
