@@ -1983,6 +1983,8 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "hmac",
+ "hyper",
+ "hyper-util",
  "ipnetwork",
  "ldap3",
  "mimalloc",

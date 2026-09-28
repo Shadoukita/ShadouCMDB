@@ -153,8 +153,8 @@ from an empty directory to a verified install. The steps below are the same flow
    (see [docs/deployment.md](docs/deployment.md#https-and-session-cookies)). For single sign-on through an
    OIDC provider or LDAP/AD, set `PUBLIC_URL` and see [Enterprise sign-in](docs/api.md#enterprise-sign-in).
 
-8. **Use the API.** It lives under `/api/v1`. The OpenAPI 3.1 contract is served at `/openapi.json`, and
-   there is a browsable UI at `/docs`. The same contract is committed as
+8. **Use the API.** It lives under `/api/v1`. With `API_DOCS=authenticated` or `public` (off by default) the
+   OpenAPI 3.1 contract is served at `/openapi.json`, and there is a browsable UI at `/docs`. The same contract is committed as
    [`backend/openapi.json`](backend/openapi.json). See [docs/api.md](docs/api.md) for conventions
    (pagination, errors, attributes) and extension points. To check a deployment end to end:
 

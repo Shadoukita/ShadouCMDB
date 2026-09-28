@@ -405,7 +405,7 @@ pub(crate) mod tests {
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
-    use crate::config::{AuthConfig, Config, CookieSecure, DatabaseConfig, SslMode};
+    use crate::config::{ApiDocs, AuthConfig, Config, CookieSecure, DatabaseConfig, HttpConfig, SslMode};
     use crate::db::scratch;
     use crate::http::{AppState, router};
 
@@ -422,6 +422,11 @@ pub(crate) mod tests {
             api_port: 3000,
             cors_origins: Vec::new(),
             csp_report_uri: None,
+            api_docs: ApiDocs::Off,
+            http: HttpConfig {
+                header_read_timeout: StdDuration::from_secs(10),
+                request_timeout: StdDuration::from_secs(120),
+            },
             database: DatabaseConfig {
                 url: Some("postgres://unused".into()),
                 host: None,
@@ -439,6 +444,7 @@ pub(crate) mod tests {
             migration_url: None,
             maintenance_url: None,
             auth: auth.clone(),
+            audit: Default::default(),
         };
         router(AppState::new(pool, auth), &cfg)
     }

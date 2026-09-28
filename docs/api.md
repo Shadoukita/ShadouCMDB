@@ -4,12 +4,17 @@ The backend is the only database client. Everything the UI needs goes through th
 
 - **Contract:** [`backend/openapi.json`](../backend/openapi.json) (OpenAPI 3.1). It is generated from the code
   (utoipa): the same route table builds the router and the document, and requests are validated against the
-  same JSON Schemas the document publishes. The running server also serves it at `GET /openapi.json`, with a
-  browsable UI (Swagger UI, bundled in the binary) at `GET /docs`.
+  same JSON Schemas the document publishes. The running server serves it at `GET /openapi.json`, with a
+  browsable UI (Swagger UI, bundled in the binary) at `GET /docs`, only when `API_DOCS` allows it: `off`
+  (default, 404), `authenticated` (any signed-in user; 401 otherwise) or `public`.
 - **Base path:** `/api/v1`. The health probes `/healthz` and `/readyz` sit at the root.
-- **Sign-in required:** every operation except `/healthz`, `/readyz`, `GET/POST /api/v1/setup` and
-  `POST /api/v1/auth/login` needs a session (see [Authentication and permissions](#authentication-and-permissions)).
-  The contract itself (`/openapi.json`, `/docs`) and the web UI's static files stay public.
+- **Sign-in required:** every operation except `/healthz`, `/readyz`, `GET /api/v1/version`,
+  `GET/POST /api/v1/setup` and `POST /api/v1/auth/login` needs a session (see
+  [Authentication and permissions](#authentication-and-permissions)). The web UI's static files stay public.
+- **Version:** `GET /healthz` returns `{"status":"ok","version":"…"}`; `GET /api/v1/version` returns the
+  version, the API major version (`v1`) and the number of migrations the build ships.
+- **Timeouts:** a request not answered within `HTTP_REQUEST_TIMEOUT_SECS` (default 120) gets
+  `408 REQUEST_TIMEOUT` and its transaction is rolled back.
 - **Regenerate the contract** after changing a route: `shadoucmdb openapi --out backend/openapi.json`
   (or `cargo run -- openapi --out openapi.json` in `backend/`). `shadoucmdb openapi --check backend/openapi.json`
   fails if the committed file is stale; CI runs it. Then refresh the UI types with `npm run api:types -w frontend`.
