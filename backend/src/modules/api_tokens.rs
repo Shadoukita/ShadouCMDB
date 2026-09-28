@@ -317,6 +317,34 @@ pub async fn revoke(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     Ok(())
 }
 
+/// Revokes every token of the user that still works, in the transaction that
+/// sets their password: a token minted with a stolen password must not
+/// outlive the reset. Each gets an update row; returns how many were revoked.
+pub async fn revoke_all_of_user(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    user_id: Uuid,
+) -> Result<usize, AppError> {
+    let by = ctx.actor.name.clone().unwrap_or_else(|| ctx.actor.actor_type.as_str().to_owned());
+    let mut entries = Vec::new();
+    for row in data::active_of_user(conn, user_id).await? {
+        let before = ApiToken::from(row);
+        data::revoke(conn, before.id, &by).await?;
+        let after = load(conn, before.id, false).await?;
+        tracing::info!(token = %after.token_prefix, "API token revoked with the password change");
+        entries.push(AuditEntry {
+            action: AuditAction::Update,
+            entity_type: TOKEN_ENTITY,
+            entity_id: after.id,
+            old_value: Some(crud::json(&before)),
+            new_value: Some(crud::json(&after)),
+        });
+    }
+    let revoked = entries.len();
+    crud::write_audit(conn, ctx, entries).await?;
+    Ok(revoked)
+}
+
 /// Audits the deletion of a user's tokens, in the transaction that deletes the user.
 pub async fn audit_deleted_with_owner(
     conn: &mut PgConnection,
@@ -744,6 +772,118 @@ pub(crate) mod tests {
         )
         .await;
         assert_eq!(status, 200, "{v}");
+
+        db.drop().await;
+    }
+
+    fn session_of(me: &Value, headers: &HeaderMap) -> Creds {
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None }
+    }
+
+    /// A new password, set by an administrator or by the owner, revokes the
+    /// owner's API tokens: a token minted with a stolen password must not
+    /// survive the reset (GH#124).
+    #[tokio::test]
+    async fn setting_a_password_revokes_the_owners_tokens() {
+        let Some(db) = scratch::database("setting_a_password_revokes_the_owners_tokens").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let alice = json!({ "username": "alice", "displayName": "Alice", "password": "alice first password",
+            "profileIds": [administrators] });
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(alice)).await;
+        assert_eq!(status, 201, "{v}");
+        let alice_id = v["id"].as_str().unwrap().to_owned();
+        let login = json!({ "username": "alice", "password": "alice first password" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+        assert_eq!(status, 200, "{me}");
+        let alice_session = session_of(&me, &headers);
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let mint = |session: Creds, name: &'static str| {
+            let app = app.clone();
+            let expires = expires.clone();
+            async move {
+                let body = json!({ "name": name, "profileId": administrators, "expiresAt": expires });
+                let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(body)).await;
+                assert_eq!(status, 201, "{created}");
+                Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() }
+            }
+        };
+        let works = |tok: Creds| {
+            let app = app.clone();
+            async move { call(&app, "GET", "/api/v1/audit-log?limit=1", &tok, None).await }
+        };
+
+        // An administrator resets Alice's password: her token is revoked by them.
+        let alices = mint(alice_session.clone(), "alice script").await;
+        let admins = mint(admin.clone(), "admin script").await;
+        assert_eq!(works(alices.clone()).await.0, 200);
+        let reset = json!({ "password": "alice second password" });
+        let path = format!("/api/v1/admin/users/{alice_id}/password");
+        let (status, v, _) = call(&app, "PUT", &path, &admin, Some(reset)).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = works(alices).await;
+        assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
+        let revoked: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT name, revoked_by FROM api_tokens WHERE revoked_at IS NOT NULL ORDER BY name")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(revoked, vec![("alice script".to_owned(), Some("admin".to_owned()))]);
+        // Only hers: the administrator's own token keeps working.
+        assert_eq!(works(admins.clone()).await.0, 200);
+
+        // Alice changes her own password: her tokens go, her session stays.
+        let alice_session = {
+            let login = json!({ "username": "alice", "password": "alice second password" });
+            let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+            assert_eq!(status, 200, "{me}");
+            session_of(&me, &headers)
+        };
+        let alices = mint(alice_session.clone(), "alice again").await;
+        let change = json!({ "currentPassword": "alice second password", "newPassword": "alice third password" });
+        let (status, v, _) = call(&app, "PUT", "/api/v1/auth/password", &alice_session, Some(change)).await;
+        assert!(status < 300, "{status} {v}");
+        assert_eq!(works(alices).await.0, 401);
+        let (status, _, _) = call(&app, "GET", "/api/v1/auth/me", &alice_session, None).await;
+        assert_eq!(status, 200, "the caller's own session survives");
+        let (by,): (Option<String>,) = sqlx::query_as("SELECT revoked_by FROM api_tokens WHERE name = 'alice again'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(by.as_deref(), Some("alice"));
+        assert_eq!(works(admins).await.0, 200);
+
+        // Each revocation is audited as an update of the token.
+        let audited: Vec<(String, Option<String>, Value)> = sqlx::query_as(
+            "SELECT a.actor_name, t.name, a.new_value FROM audit_log a JOIN api_tokens t ON t.id = a.entity_id
+             WHERE a.entity_type = 'api_tokens' AND a.action = 'update' ORDER BY a.id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let summary: Vec<(&str, Option<&str>, Option<&str>)> =
+            audited.iter().map(|(a, n, v)| (a.as_str(), n.as_deref(), v["status"].as_str())).collect();
+        assert_eq!(
+            summary,
+            vec![("admin", Some("alice script"), Some("revoked")), ("alice", Some("alice again"), Some("revoked"))]
+        );
 
         db.drop().await;
     }

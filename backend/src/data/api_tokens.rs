@@ -147,6 +147,17 @@ pub async fn revoke(conn: &mut PgConnection, id: Uuid, by: &str) -> sqlx::Result
     Ok(())
 }
 
+/// The user's tokens that still authenticate (neither revoked nor expired), locked.
+pub async fn active_of_user(conn: &mut PgConnection, user_id: Uuid) -> sqlx::Result<Vec<TokenRow>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM {FROM} WHERE t.user_id = $1 AND t.revoked_at IS NULL AND t.expires_at > now()
+         ORDER BY t.created_at, t.id FOR UPDATE OF t"
+    )))
+    .bind(user_id)
+    .fetch_all(conn)
+    .await
+}
+
 /// The user's tokens, locked, before the user is deleted (their rows cascade away).
 pub async fn of_user(conn: &mut PgConnection, user_id: Uuid) -> sqlx::Result<Vec<TokenRow>> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(

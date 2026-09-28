@@ -646,8 +646,8 @@
         "tags": [
           "Authentication"
         ],
-        "summary": "Change your own password (ends your other sessions)",
-        "description": "400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "summary": "Change your own password (ends your other sessions and revokes your API tokens)",
+        "description": "Every API token you own that still works is revoked; create new ones after the change. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "changeOwnPassword",
         "parameters": [],
         "requestBody": {
@@ -15151,8 +15151,8 @@
         "tags": [
           "Users"
         ],
-        "summary": "Set a new password for a user and end their sessions",
-        "description": "Requires `users.manage`. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "summary": "Set a new password for a user, end their sessions and revoke their API tokens",
+        "description": "Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "resetUserPassword",
         "parameters": [
           {
