@@ -31,7 +31,7 @@ const isUrl = (v: unknown) => /^https?:\/\//.test(String(v));
     {{ refInfo?.name ?? String(value) }}{{ refInfo?.deleted ? " (deleted)" : "" }}
   </CiLink>
   <LookupValueName v-else-if="def.dataType === 'lookup'" :list-id="def.lookupListId" :value-id="String(value)" />
-  <span v-else-if="isMultiline(def)" class="multiline">{{ String(value) }}</span>
+  <span v-else-if="isMultiline(def) || (def.dataType === 'text' && String(value).includes('\n'))" class="multiline">{{ String(value) }}</span>
   <a v-else-if="def.dataType === 'text' && isUrl(value)" :href="String(value)" target="_blank" rel="noreferrer noopener">{{ String(value) }}</a>
   <template v-else>{{ String(value) }}</template>
 </template>

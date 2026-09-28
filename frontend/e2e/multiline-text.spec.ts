@@ -75,4 +75,15 @@ test("the class editor sets and clears Multiline, keeping the other text rules",
   await page.getByRole("button", { name: "Save attribute" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Saved attribute Runbook." })).toBeVisible();
   expect((await runbook())?.validation).toEqual({ maxLength: 2000 });
+
+  // Without the flag, a value that already has line breaks (from the API or an import) still gets a
+  // text area, so an edit cannot flatten it.
+  const ci = await createCi(request, cls.id, `e2e-runbook-${stamp}`, { runbook: "Line 1\nLine 2" });
+  await page.goto(`/cis/${ci.id}/edit`);
+  await expect(page.locator("#attr-runbook")).toHaveJSProperty("tagName", "TEXTAREA");
+  await page.locator("#attr-runbook").press("ControlOrMeta+End");
+  await page.locator("#attr-runbook").pressSequentially(" (checked)");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));
+  expect((await apiGet<Ci>(request, `/configuration-items/${ci.id}`)).attributes.runbook).toBe("Line 1\nLine 2 (checked)");
 });
