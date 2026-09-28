@@ -979,14 +979,14 @@ export interface paths {
         /**
          * List status records (paginated, searchable, sortable)
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
          */
         get: operations["listStatuses"];
         put?: never;
         /**
          * Create a status
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createStatus"];
         delete?: never;
@@ -1005,7 +1005,7 @@ export interface paths {
         /**
          * Get one status
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         get: operations["getStatus"];
         put?: never;
@@ -1013,7 +1013,7 @@ export interface paths {
         /**
          * Delete a status
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteStatus"];
         options?: never;
@@ -1021,7 +1021,7 @@ export interface paths {
         /**
          * Update a status (partial)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateStatus"];
         trace?: never;
@@ -1036,7 +1036,7 @@ export interface paths {
         /**
          * What still refers to a status
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getStatusUsage"];
         put?: never;
@@ -1057,14 +1057,14 @@ export interface paths {
         /**
          * List environment records (paginated, searchable, sortable)
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
          */
         get: operations["listEnvironments"];
         put?: never;
         /**
          * Create a environment
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createEnvironment"];
         delete?: never;
@@ -1083,7 +1083,7 @@ export interface paths {
         /**
          * Get one environment
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         get: operations["getEnvironment"];
         put?: never;
@@ -1091,7 +1091,7 @@ export interface paths {
         /**
          * Delete a environment
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteEnvironment"];
         options?: never;
@@ -1099,7 +1099,7 @@ export interface paths {
         /**
          * Update a environment (partial)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateEnvironment"];
         trace?: never;
@@ -1114,7 +1114,7 @@ export interface paths {
         /**
          * What still refers to a environment
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getEnvironmentUsage"];
         put?: never;
@@ -1135,14 +1135,14 @@ export interface paths {
         /**
          * List location records (paginated, searchable, sortable)
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description, address (case-insensitive substring).
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description, address (case-insensitive substring).
          */
         get: operations["listLocations"];
         put?: never;
         /**
          * Create a location
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createLocation"];
         delete?: never;
@@ -1161,7 +1161,7 @@ export interface paths {
         /**
          * Get one location
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         get: operations["getLocation"];
         put?: never;
@@ -1169,7 +1169,7 @@ export interface paths {
         /**
          * Delete a location
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteLocation"];
         options?: never;
@@ -1177,7 +1177,7 @@ export interface paths {
         /**
          * Update a location (partial)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateLocation"];
         trace?: never;
@@ -1192,7 +1192,7 @@ export interface paths {
         /**
          * What still refers to a location
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getLocationUsage"];
         put?: never;
@@ -1213,14 +1213,14 @@ export interface paths {
         /**
          * List owner records (paginated, searchable, sortable)
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches name, email, external_ref (case-insensitive substring).
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches name, email, external_ref (case-insensitive substring).
          */
         get: operations["listOwners"];
         put?: never;
         /**
          * Create a owner
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createOwner"];
         delete?: never;
@@ -1239,7 +1239,7 @@ export interface paths {
         /**
          * Get one owner
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         get: operations["getOwner"];
         put?: never;
@@ -1247,7 +1247,7 @@ export interface paths {
         /**
          * Delete a owner
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteOwner"];
         options?: never;
@@ -1255,7 +1255,7 @@ export interface paths {
         /**
          * Update a owner (partial)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0015 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateOwner"];
         trace?: never;
@@ -1270,7 +1270,7 @@ export interface paths {
         /**
          * What still refers to a owner
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0015 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getOwnerUsage"];
         put?: never;
@@ -1554,7 +1554,7 @@ export interface paths {
         put?: never;
         /**
          * Make an earlier version current again (saved as a new version)
-         * @description Requires `customization.manage`. 409 CONFLICT for a version saved before an upgrade changed the settings format (e.g. migration 0015); the upgrade saved a converted copy as a newer version.
+         * @description Requires `customization.manage`. 409 CONFLICT for a version saved before an upgrade changed the settings format (e.g. migration 0016); the upgrade saved a converted copy as a newer version.
          */
         post: operations["restoreUiSettingsVersion"];
         delete?: never;
