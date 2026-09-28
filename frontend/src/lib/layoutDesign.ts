@@ -1,6 +1,6 @@
 import type { UiClassLayout } from "../api/uiSettings";
 import { suggestKey } from "./keys";
-import { CORE_FIELDS, GRID_COLUMNS, MAX_COLUMNS, resolveLayout, type AttributeLike } from "./uiSettings";
+import { CORE_FIELDS, GRID_COLUMNS, MAX_COLUMNS, SECTION_GRID, resolveLayout, type AttributeLike } from "./uiSettings";
 
 /**
  * The form designer's edits (Customization › Detail and form layout) on a class
@@ -130,7 +130,14 @@ export function addTab(l: UiClassLayout, label: string): LayoutTab {
 /** Adds an empty section to `tab`, at `index` among its sections (the end when omitted). */
 export function addSection(l: UiClassLayout, tab: LayoutTab, label: string, index?: number): LayoutSection {
   const key = uniqueKey(label, allSections(l).map((x) => x.section.key), "section");
-  const section: LayoutSection = { key, label, columns: GRID_COLUMNS, collapsed: false, fields: [] };
+  const section: LayoutSection = {
+    key,
+    label,
+    columns: GRID_COLUMNS,
+    width: SECTION_GRID,
+    collapsed: false,
+    fields: [],
+  };
   const list = sectionsOf(tab);
   list.splice(Math.max(0, Math.min(index ?? list.length, list.length)), 0, section);
   return section;

@@ -333,7 +333,7 @@ test("layouts: the API validates the layout document and converts the older pane
   expect(v1.ok(), await v1.text()).toBeTruthy();
   const saved = (await v1.json()).settings.layouts[0];
   expect(saved.panels).toBeUndefined();
-  expect(saved.tabs).toEqual([{ key: "general", label: "General", sections: [{ key: "main", label: "Main", columns: 3, collapsed: false, fields: [{ field: "attributes.model", width: 1 }] }] }]);
+  expect(saved.tabs).toEqual([{ key: "general", label: "General", sections: [{ key: "main", label: "Main", columns: 3, width: 12, collapsed: false, fields: [{ field: "attributes.model", width: 1 }] }] }]);
 });
 
 test("a concurrent save is reported, not overwritten", async ({ page, request }) => {

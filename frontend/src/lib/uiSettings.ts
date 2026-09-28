@@ -310,6 +310,8 @@ export function layoutFor(doc: UiSettingsDocument | undefined, classKey: string 
 
 /** Grid columns of a section that does not say (the API's default). */
 export const GRID_COLUMNS = 3;
+/** Columns of a tab's grid: a section spans 1 to 12 of them (the API's default is 12, the full width). */
+export const SECTION_GRID = 12;
 /** The most columns a section's grid has, and the widest a field can be. */
 export const MAX_COLUMNS = 4;
 
@@ -329,6 +331,7 @@ export function normalizeLayout(l: UiClassLayout): UiClassLayout {
               key: s.key,
               label: s.label,
               columns: s.columns ?? GRID_COLUMNS,
+              width: s.width ?? SECTION_GRID,
               collapsed: !!s.collapsed,
               fields: (s.fields ?? []).map((f) => ({ field: f.field, width: f.width ?? 1 })),
             },
