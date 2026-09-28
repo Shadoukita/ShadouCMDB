@@ -127,10 +127,12 @@ export function addTab(l: UiClassLayout, label: string): LayoutTab {
   return tab;
 }
 
-export function addSection(l: UiClassLayout, tab: LayoutTab, label: string): LayoutSection {
+/** Adds an empty section to `tab`, at `index` among its sections (the end when omitted). */
+export function addSection(l: UiClassLayout, tab: LayoutTab, label: string, index?: number): LayoutSection {
   const key = uniqueKey(label, allSections(l).map((x) => x.section.key), "section");
   const section: LayoutSection = { key, label, columns: GRID_COLUMNS, collapsed: false, fields: [] };
-  sectionsOf(tab).push(section);
+  const list = sectionsOf(tab);
+  list.splice(Math.max(0, Math.min(index ?? list.length, list.length)), 0, section);
   return section;
 }
 
@@ -173,6 +175,21 @@ export function removeSection(l: UiClassLayout, section: LayoutSection): boolean
   fieldsOf(into).push(...fieldsOf(section).map((f) => ({ ...f, width: Math.min(f.width ?? 1, columnsOf(into)) })));
   for (const t of tabsOf(l)) t.sections = sectionsOf(t).filter((s) => s !== section);
   return true;
+}
+
+/** Whether `tab` can be removed: not the only tab, and its fields have somewhere to go. */
+export const canRemoveTab = (l: UiClassLayout, tab: LayoutTab) =>
+  tabsOf(l).length > 1 && (!!tabFallback(l, tab) || sectionsOf(tab).every((s) => fieldsOf(s).length === 0));
+/** Whether `section` can be removed: not the only section of the layout. */
+export const canRemoveSection = (l: UiClassLayout, section: LayoutSection) => !!sectionFallback(l, section);
+
+/** What removing a tab or a section does with its fields, for the confirmation. */
+export function removalSummary(l: UiClassLayout, target: { tab: LayoutTab } | { section: LayoutSection }): string {
+  const noun = "tab" in target ? "tab" : "section";
+  const fields = "tab" in target ? sectionsOf(target.tab).flatMap((s) => fieldsOf(s)) : fieldsOf(target.section);
+  const into = "tab" in target ? tabFallback(l, target.tab) : sectionFallback(l, target.section);
+  const n = fields.length;
+  return n === 0 ? `The ${noun} has no fields.` : `Its ${n} field${n === 1 ? "" : "s"} move to the end of the section ${into?.label}.`;
 }
 
 export function moveTab(l: UiClassLayout, tab: LayoutTab, delta: -1 | 1): void {
