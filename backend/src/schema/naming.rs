@@ -163,16 +163,12 @@ pub const RESERVED_SCHEMAS: &[&str] = &["cmdb", "public", "information_schema", 
 /// the primary key of every type table. A field cannot take these names.
 pub const REGISTRY_VIEW_COLUMNS: &[&str] = &[
     "id",
-    "name",
+    "ident",
+    "label",
     "type",
-    "status",
-    "environment",
-    "owner",
-    "location",
-    "hostname",
-    "ip_address",
-    "serial_number",
-    "notes",
+    "valid_from",
+    "valid_until",
+    "active",
     "record_version",
     "created_at",
     "updated_at",
@@ -446,7 +442,12 @@ mod tests {
         assert_eq!(validate("shadoucmdb", NameKind::Area), Ok(()));
         assert_eq!(code("v_netzwerk", NameKind::Type), "reserved_prefix");
         assert_eq!(code("id", NameKind::Field), "reserved_name");
-        assert_eq!(code("name", NameKind::Field), "reserved_name");
+        assert_eq!(code("ident", NameKind::Field), "reserved_name");
+        assert_eq!(code("label", NameKind::Field), "reserved_name");
+        assert_eq!(code("valid_until", NameKind::Field), "reserved_name");
+        // Former registry columns are ordinary fields since SHAA-267.
+        assert_eq!(validate("name", NameKind::Field), Ok(()));
+        assert_eq!(validate("hostname", NameKind::Field), Ok(()));
         assert_eq!(code("deleted_at", NameKind::Field), "reserved_name");
     }
 

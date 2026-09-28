@@ -15,6 +15,8 @@ use super::validate;
 /// Machine keys are lower_snake_case so they are safe in URLs, JSON and code.
 pub const KEY_PATTERN: &str = "^[a-z][a-z0-9_]{0,62}$";
 pub const HOSTNAME_PATTERN: &str = "^[A-Za-z0-9]([A-Za-z0-9._-]{0,252})$";
+/// CI idents an administrator may set; generated ones are "CI-" and 8 Crockford base32 characters.
+pub const IDENT_PATTERN: &str = "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$";
 /// At least one non-whitespace character; values are trimmed when read.
 pub const NOT_BLANK_PATTERN: &str = "\\S";
 /// "#rrggbb"
@@ -125,31 +127,11 @@ pub fn sort_order_schema() -> Schema {
     ObjectBuilder::new().schema_type(Type::Integer).minimum(Some(-1_000_000)).maximum(Some(1_000_000)).into()
 }
 
-fn ip_union() -> Schema {
-    AnyOfBuilder::new()
-        .item(string().format(Some(SchemaFormat::KnownFormat(KnownFormat::Ipv4))))
-        .item(string().format(Some(SchemaFormat::KnownFormat(KnownFormat::Ipv6))))
-        .into()
-}
-
-/// IPv4 or IPv6 address, or null.
-pub fn nullable_ip_schema() -> Schema {
-    let mut s = nullable(ip_union());
-    if let Schema::AnyOf(a) = &mut s {
-        a.description = Some("IPv4 or IPv6 address".into());
-    }
-    s
-}
-
 pub fn cidr_schema() -> Schema {
     AnyOfBuilder::new()
         .item(string().format(Some(SchemaFormat::Custom("cidrv4".into()))))
         .item(string().format(Some(SchemaFormat::Custom("cidrv6".into()))))
         .into()
-}
-
-pub fn nullable_hostname_schema() -> Schema {
-    nullable(string().pattern(Some(HOSTNAME_PATTERN)))
 }
 
 pub fn nullable_trimmed_schema(max: usize) -> Schema {
@@ -414,13 +396,4 @@ pub struct LookupRef {
 pub enum OwnerKind {
     Person,
     Team,
-}
-
-#[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct OwnerRef {
-    pub id: Uuid,
-    pub name: String,
-    #[schema(inline)]
-    pub kind: OwnerKind,
 }

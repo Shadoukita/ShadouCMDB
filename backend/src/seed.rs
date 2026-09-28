@@ -21,11 +21,11 @@ use crate::data::items;
 use crate::modules::templates;
 use crate::schema::model::{Field, Model};
 
-/// Demo owners: kind, name, email, external ref
-const OWNERS: &[(&str, &str, &str, &str)] = &[
-    ("team", "Infrastructure", "infra@example.com", "seed:team:infrastructure"),
-    ("team", "Platform Engineering", "platform@example.com", "seed:team:platform"),
-    ("team", "Database Administration", "dba@example.com", "seed:team:dba"),
+/// Demo owners (values of the template's "owner" list): key, name, description
+const OWNERS: &[(&str, &str, &str)] = &[
+    ("infrastructure", "Infrastructure", "Team, infra@example.com"),
+    ("platform", "Platform Engineering", "Team, platform@example.com"),
+    ("dba", "Database Administration", "Team, dba@example.com"),
 ];
 
 type KeyMap = HashMap<String, Uuid>;
@@ -66,7 +66,7 @@ pub async fn install_template(pool: &PgPool, key: &str) -> anyhow::Result<templa
     Ok(result)
 }
 
-/// Core fields of a demo CI; `None` columns are left NULL.
+/// The fields every demo CI may have (lookup values by key); `None` is left empty.
 #[derive(Default)]
 struct DemoCi<'a> {
     class: &'a str,
@@ -88,6 +88,7 @@ enum Val<'a> {
     Ip(&'a str),
     Cidr(&'a str),
     Ref(Uuid),
+    Lookup(Uuid),
 }
 
 impl Val<'_> {
@@ -95,7 +96,7 @@ impl Val<'_> {
         match self {
             Val::Text(v) | Val::Number(v) | Val::Date(v) | Val::Ip(v) | Val::Cidr(v) => (*v).to_owned(),
             Val::Bool(b) => b.to_string(),
-            Val::Ref(id) => id.to_string(),
+            Val::Ref(id) | Val::Lookup(id) => id.to_string(),
         }
     }
 }
@@ -109,94 +110,65 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
     }
 
     let mut tx = pool.begin().await?;
-    for (kind, name, email, external_ref) in OWNERS {
+    for (i, (key, name, description)) in OWNERS.iter().enumerate() {
         sqlx::query(
-            "INSERT INTO owners (kind, name, email, external_ref) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            "INSERT INTO lookup_list_values (list_id, key, name, description, sort_order)
+             SELECT id, $1, $2, $3, $4 FROM lookup_lists WHERE key = 'owner'
+             ON CONFLICT DO NOTHING",
         )
-        .bind(kind)
+        .bind(key)
         .bind(name)
-        .bind(email)
-        .bind(external_ref)
+        .bind(description)
+        .bind(i as i32 * 10)
         .execute(&mut *tx)
         .await?;
     }
     let cls = key_map(&mut tx, "ci_classes").await?;
-    let st = key_map(&mut tx, "statuses").await?;
-    let envs = key_map(&mut tx, "environments").await?;
-    let locs = key_map(&mut tx, "locations").await?;
     let types = key_map(&mut tx, "relationship_types").await?;
-    let owners: KeyMap =
-        sqlx::query_as::<_, (String, Uuid)>("SELECT external_ref, id FROM owners WHERE external_ref IS NOT NULL")
-            .fetch_all(&mut *tx)
-            .await?
-            .into_iter()
-            .collect();
+    // "list.value" -> id
+    let lookups: KeyMap = sqlx::query_as::<_, (String, Uuid)>(
+        "SELECT l.key || '.' || v.key, v.id FROM lookup_list_values v JOIN lookup_lists l ON l.id = v.list_id",
+    )
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect();
+    let lookup = |list: &str, key: &str| must(&lookups, &format!("{list}.{key}"));
 
     let mut created: Vec<(Uuid, Uuid)> = Vec::new();
-    let mut insert = async |ci: DemoCi<'_>| -> anyhow::Result<Uuid> {
+    let mut values: Vec<(Uuid, &str, Val)> = Vec::new();
+    let mut insert = async |ci: DemoCi<'static>| -> anyhow::Result<Uuid> {
         let class_id = must(&cls, ci.class)?;
-        let status_id = must(&st, ci.status.unwrap_or("in_service"))?;
-        let environment_id = ci.environment.map(|k| must(&envs, k)).transpose()?;
-        let owner_id = ci.owner.map(|k| must(&owners, k)).transpose()?;
-        let location_id = ci.location.map(|k| must(&locs, k)).transpose()?;
-        let id: Uuid = sqlx::query_scalar(
-            "INSERT INTO configuration_items
-               (class_id, name, status_id, environment_id, owner_id, location_id, hostname, ip_address, serial_number)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::inet, $9) RETURNING id",
-        )
-        .bind(class_id)
-        .bind(ci.name)
-        .bind(status_id)
-        .bind(environment_id)
-        .bind(owner_id)
-        .bind(location_id)
-        .bind(ci.hostname)
-        .bind(ci.ip_address)
-        .bind(ci.serial_number)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        // Same shape the API writes: the inserted fields plus the id.
-        let mut new_value = Map::new();
-        new_value.insert("id".into(), json!(id));
-        new_value.insert("classId".into(), json!(class_id));
-        new_value.insert("name".into(), json!(ci.name));
-        new_value.insert("statusId".into(), json!(status_id));
-        for (k, v) in [
-            ("environmentId", environment_id.map(|u| u.to_string())),
-            ("ownerId", owner_id.map(|u| u.to_string())),
-            ("locationId", location_id.map(|u| u.to_string())),
-            ("hostname", ci.hostname.map(str::to_owned)),
-            ("ipAddress", ci.ip_address.map(str::to_owned)),
-            ("serialNumber", ci.serial_number.map(str::to_owned)),
+        let new = items::NewItem { class_id, ident: None, valid_from: None, valid_until: None };
+        let id = items::insert(&mut tx, &new).await?;
+        values.push((id, "name", Val::Text(ci.name)));
+        values.push((id, "status", Val::Lookup(lookup("status", ci.status.unwrap_or("in_service"))?)));
+        for (key, list, v) in [
+            ("environment", "environment", ci.environment),
+            ("owner", "owner", ci.owner),
+            ("location", "location", ci.location),
         ] {
             if let Some(v) = v {
-                new_value.insert(k.into(), json!(v));
+                values.push((id, key, Val::Lookup(lookup(list, v)?)));
             }
         }
-        sqlx::query(
-            "INSERT INTO audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
-             VALUES ('system', 'seed', 'create', 'configuration_items', $1, $2)",
-        )
-        .bind(id)
-        .bind(Value::Object(new_value))
-        .execute(&mut *tx)
-        .await?;
+        if let Some(h) = ci.hostname {
+            values.push((id, "hostname", Val::Text(h)));
+        }
+        if let Some(ip) = ci.ip_address {
+            values.push((id, "ip_address", Val::Ip(ip)));
+        }
+        if let Some(sn) = ci.serial_number {
+            values.push((id, "serial_number", Val::Text(sn)));
+        }
         created.push((id, class_id));
         Ok(id)
     };
 
-    let infra = Some("seed:team:infrastructure");
-    let platform = Some("seed:team:platform");
+    let infra = Some("infrastructure");
+    let platform = Some("platform");
     let prod = Some("production");
-    let rack = insert(DemoCi {
-        class: "location",
-        name: "FRA1 Rack A01",
-        location: Some("fra1_rack_a01"),
-        owner: infra,
-        ..Default::default()
-    })
-    .await?;
+    let rack = insert(DemoCi { class: "location", name: "FRA1 Rack A01", ..Default::default() }).await?;
     let srv = insert(DemoCi {
         class: "server",
         name: "fra1-esx-01",
@@ -228,18 +200,14 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
         ip_address: Some("10.20.5.21"),
         environment: prod,
         owner: platform,
-        location: Some("fra1"),
         ..Default::default()
     })
     .await?;
     let db1 = insert(DemoCi {
         class: "database",
         name: "crm-db",
-        hostname: Some("crm-db-01.example.internal"),
-        ip_address: Some("10.20.6.31"),
         environment: prod,
-        owner: Some("seed:team:dba"),
-        location: Some("fra1"),
+        owner: Some("dba"),
         ..Default::default()
     })
     .await?;
@@ -264,7 +232,7 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
     })
     .await?;
 
-    let values = [
+    values.extend([
         (srv, "manufacturer", Val::Text("HPE")),
         (srv, "model", Val::Text("ProLiant DL380 Gen10")),
         (srv, "warranty_end", Val::Date("2028-03-31")),
@@ -289,20 +257,41 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
         (app, "primary_database", Val::Ref(db1)),
         (svc, "service_tier", Val::Text("tier_1")),
         (svc, "sla_uptime_percent", Val::Number("99.9")),
-    ];
+    ]);
     // One row per CI in the table of its class and of every ancestor, with its values.
     let model = Model::load(&mut tx).await?;
-    for (ci, class_id) in created {
-        for class in model.lineage(class_id) {
+    for (ci, class_id) in &created {
+        let mut written = Vec::new();
+        for class in model.lineage(*class_id) {
             let table = model.table(class.id).context("seed: type without a table")?;
             let row: Vec<(&Field, Option<String>)> = model
                 .own_fields(class.id)
                 .filter_map(|f| {
-                    values.iter().find(|(c, k, _)| *c == ci && *k == f.key).map(|(_, _, v)| (f, Some(v.text())))
+                    values.iter().find(|(c, k, _)| c == ci && *k == f.key).map(|(_, _, v)| (f, Some(v.text())))
                 })
                 .collect();
-            items::insert_type_row(&mut tx, &table, ci, &row).await?;
+            written.extend(row.iter().map(|(f, v)| (f.key.clone(), json!(v))));
+            items::insert_type_row(&mut tx, &table, *ci, &row).await?;
         }
+        items::refresh_labels(&mut tx, &model, &[*class_id], Some(&[*ci])).await?;
+        let (ident, label): (String, String) =
+            sqlx::query_as("SELECT ident, label FROM configuration_items WHERE id = $1")
+                .bind(ci)
+                .fetch_one(&mut *tx)
+                .await?;
+        // The inserted fields, as the API names them.
+        let new_value = json!({
+            "id": ci, "ident": ident, "label": label, "classId": class_id,
+            "attributes": written.into_iter().collect::<Map<String, Value>>(),
+        });
+        sqlx::query(
+            "INSERT INTO audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+             VALUES ('system', 'seed', 'create', 'configuration_items', $1, $2)",
+        )
+        .bind(ci)
+        .bind(new_value)
+        .execute(&mut *tx)
+        .await?;
     }
 
     let edges = [
@@ -343,14 +332,13 @@ pub async fn run(cfg: &DatabaseConfig, template_keys: &[String], demo: bool) -> 
             let r = install_template(&pool, key).await?;
             let c = &r.created;
             println!(
-                "Template {key}: created {} classes, {} attributes, {} relationship types, {} rules, {} statuses, {} environments, {} locations",
+                "Template {key}: created {} classes, {} attributes, {} relationship types, {} rules, {} lookup lists, {} list values",
                 c.classes,
                 c.attribute_definitions,
                 c.relationship_types,
                 c.relationship_rules,
-                c.statuses,
-                c.environments,
-                c.locations
+                c.lookup_lists,
+                c.lookup_list_values
             );
             for s in &r.skipped {
                 println!("  skipped {s}");
@@ -361,11 +349,8 @@ pub async fn run(cfg: &DatabaseConfig, template_keys: &[String], demo: bool) -> 
              UNION ALL SELECT 'ci_attribute_definitions', count(*) FROM ci_attribute_definitions
              UNION ALL SELECT 'relationship_types', count(*) FROM relationship_types
              UNION ALL SELECT 'relationship_type_rules', count(*) FROM relationship_type_rules
-             UNION ALL SELECT 'statuses', count(*) FROM statuses
-             UNION ALL SELECT 'environments', count(*) FROM environments
-             UNION ALL SELECT 'locations', count(*) FROM locations
-             UNION ALL SELECT 'owners', count(*) FROM owners
-             UNION ALL SELECT 'lookup_lists', count(*) FROM lookup_lists",
+             UNION ALL SELECT 'lookup_lists', count(*) FROM lookup_lists
+             UNION ALL SELECT 'lookup_list_values', count(*) FROM lookup_list_values",
         )
         .fetch_all(&pool)
         .await?;

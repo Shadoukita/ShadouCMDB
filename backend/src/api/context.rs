@@ -167,6 +167,16 @@ impl RequestContext {
         }
     }
 
+    /// Only users whose profile is Administrator (`what`: "change a CI's ident").
+    pub fn require_administrator(&self, what: &str) -> Result<(), AppError> {
+        match &self.caller {
+            Caller::System => Ok(()),
+            Caller::Anonymous => Err(unauthenticated()),
+            Caller::User(p) if p.permissions.administrator => Ok(()),
+            Caller::User(_) => Err(forbidden(format!("Only administrators can {what}"))),
+        }
+    }
+
     pub fn require_class(&self, class_id: Uuid, op: ClassOp) -> Result<(), AppError> {
         match &self.caller {
             Caller::System => Ok(()),

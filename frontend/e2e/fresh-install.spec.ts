@@ -71,8 +71,8 @@ test.describe("a bare install", () => {
     await expect(panel.locator(".badge", { hasText: "Not installed" })).toBeVisible();
     await panel.getByRole("button", { name: "Install IT infrastructure starter" }).click();
     await expect(panel.getByRole("status")).toContainText("Installed IT infrastructure.");
-    // 76 data model rows and the area the classes live in.
-    await expect(panel.getByRole("status")).toContainText("Added 77 rows");
+    // The area, 8 classes, 69 attributes, 4 relationship types, 12 rules, 4 lookup lists and their 17 values.
+    await expect(panel.getByRole("status")).toContainText("Added 115 rows");
     await expect(panel.getByRole("status")).toContainText('CREATE SCHEMA "infrastruktur"');
     await expect(panel.locator(".badge", { hasText: "Installed" })).toBeVisible();
     await expect(panel.getByRole("button", { name: "Installed" })).toBeDisabled();
@@ -135,8 +135,8 @@ test.describe("a bare install", () => {
     for (const ci of CIS) {
       await page.goto(`/cis/new?classId=${classId}`);
       await expect(page.locator("#attr-manufacturer")).toBeVisible();
-      await page.locator("#f-name").fill(ci.name);
-      await page.locator("#f-status").selectOption({ label: "In service" });
+      await page.locator("#attr-name").fill(ci.name);
+      await page.locator("#attr-status").selectOption({ label: "In service" });
       await page.locator("#attr-outlets").fill(ci.outlets);
       await page.locator("#attr-tier").selectOption({ label: ci.tier });
       await page.getByRole("button", { name: `Create ${CLASS}` }).click();
@@ -157,8 +157,10 @@ test.describe("a bare install", () => {
             { id: "recent", type: "recent_changes", limit: 5 },
           ],
         },
-        listViews: [{ classKey: CLASS_KEY, columns: ["name", "status", "attributes.tier", "attributes.outlets"], defaultSort: { field: "name", direction: "desc" } }],
-        layouts: [{ classKey: CLASS_KEY, panels: [{ key: "feed", label: "Power feed", fields: ["attributes.outlets", "attributes.tier"] }], hiddenFields: ["serialNumber"] }],
+        listViews: [
+          { classKey: CLASS_KEY, columns: ["attributes.name", "attributes.status", "attributes.tier", "attributes.outlets"], defaultSort: { field: "label", direction: "desc" } },
+        ],
+        layouts: [{ classKey: CLASS_KEY, panels: [{ key: "feed", label: "Power feed", fields: ["attributes.outlets", "attributes.tier"] }], hiddenFields: ["attributes.serial_number"] }],
       },
     });
     await page.goto("/");
@@ -168,7 +170,7 @@ test.describe("a bare install", () => {
     await expect(page).toHaveURL(new RegExp(`classId=${classId}`));
     await expect(page.locator("table.data thead th")).toHaveText([/Name/, /Status/, /Tier/, /Outlets/]);
     const rows = page.locator("table.data tbody tr");
-    // Default sort: name, descending.
+    // Default sort: label (the name), descending.
     await expect(rows).toHaveCount(2);
     await expect(rows.nth(0)).toContainText(CIS[1].name);
     await expect(rows.nth(0).getByRole("cell").nth(2)).toHaveText(CIS[1].tier);
@@ -178,8 +180,8 @@ test.describe("a bare install", () => {
     // The inventory filter and the API agree.
     await page.goto(`/cis?q=${CIS[0].name}`);
     await expect(page.locator("table.data tbody tr")).toHaveCount(1);
-    const listed = await apiGet<Page_<{ name: string; attributes: Record<string, unknown> }>>(request, `/configuration-items?classId=${classId}&sort=name`);
-    expect(listed.data.map((c) => [c.name, c.attributes.outlets])).toEqual(CIS.map((c) => [c.name, Number(c.outlets)]));
+    const listed = await apiGet<Page_<{ label: string; attributes: Record<string, unknown> }>>(request, `/configuration-items?classId=${classId}&sort=label`);
+    expect(listed.data.map((c) => [c.label, c.attributes.outlets])).toEqual(CIS.map((c) => [c.name, Number(c.outlets)]));
 
     // A permission profile that refers to the class, for the export.
     await apiSend(request, "POST", "/admin/profiles", {
@@ -258,8 +260,8 @@ test.describe("imported into a fresh install", () => {
     await page.goto(`/cis/new?classId=${classId}`);
     await expect(page.locator("#attr-tier option")).toHaveText(["— not set —", "Gold", "Silver"]);
     await expect(page.getByLabel("Serial number")).toHaveCount(0);
-    await page.locator("#f-name").fill("pdu-ber1-b01");
-    await page.locator("#f-status").selectOption({ label: "In service" });
+    await page.locator("#attr-name").fill("pdu-ber1-b01");
+    await page.locator("#attr-status").selectOption({ label: "In service" });
     await page.locator("#attr-outlets").fill("8");
     await page.locator("#attr-tier").selectOption({ label: "Gold" });
     await page.getByRole("button", { name: `Create ${CLASS}` }).click();

@@ -253,7 +253,7 @@ export function useClassAttributes(classId: MaybeRefOrGetter<string | undefined>
   });
 }
 
-// ---------- Lookups (pickers and filters) ----------
+// ---------- Older lookups (Administration › Lookups; CIs use lookup list attributes instead) ----------
 
 export type LookupKind = "statuses" | "environments" | "locations" | "owners";
 

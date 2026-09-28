@@ -173,20 +173,15 @@ impl Resource for Statuses {
     const COLUMNS: &'static str =
         "id, key, name, description, sort_order, is_active, created_at, updated_at, is_operational";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
-    const USAGE: &'static [Usage] = &[
-        Usage {
-            kind: "configurationItems",
-            label: "configuration items",
-            sql: "SELECT count(*) FROM configuration_items WHERE status_id = $1 AND deleted_at IS NULL",
-            blocking: true,
-        },
-        Usage {
-            kind: "deletedConfigurationItems",
-            label: "deleted configuration items (kept for history)",
-            sql: "SELECT count(*) FROM configuration_items WHERE status_id = $1 AND deleted_at IS NOT NULL",
-            blocking: true,
-        },
-    ];
+    const DEPRECATED: Option<&'static str> = Some(
+        "Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+    );
+    const USAGE: &'static [Usage] = &[Usage {
+        kind: "configurationItems",
+        label: "configuration items holding the lookup list value with the same id (not blocking)",
+        sql: "SELECT cmdb.lookup_value_count($1)",
+        blocking: false,
+    }];
     fn id(row: &Status) -> Uuid {
         row.id
     }
@@ -322,20 +317,15 @@ impl Resource for Environments {
     const PLURAL: &'static str = "environments";
     const COLUMNS: &'static str = "id, key, name, description, sort_order, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
-    const USAGE: &'static [Usage] = &[
-        Usage {
-            kind: "configurationItems",
-            label: "configuration items",
-            sql: "SELECT count(*) FROM configuration_items WHERE environment_id = $1 AND deleted_at IS NULL",
-            blocking: true,
-        },
-        Usage {
-            kind: "deletedConfigurationItems",
-            label: "deleted configuration items (kept for history)",
-            sql: "SELECT count(*) FROM configuration_items WHERE environment_id = $1 AND deleted_at IS NOT NULL",
-            blocking: true,
-        },
-    ];
+    const DEPRECATED: Option<&'static str> = Some(
+        "Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+    );
+    const USAGE: &'static [Usage] = &[Usage {
+        kind: "configurationItems",
+        label: "configuration items holding the lookup list value with the same id (not blocking)",
+        sql: "SELECT cmdb.lookup_value_count($1)",
+        blocking: false,
+    }];
     fn id(row: &Environment) -> Uuid {
         row.id
     }
@@ -552,18 +542,15 @@ impl Resource for Locations {
     const COLUMNS: &'static str =
         "id, key, name, description, sort_order, is_active, created_at, updated_at, parent_id, location_type, address";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description", "address"];
+    const DEPRECATED: Option<&'static str> = Some(
+        "Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+    );
     const USAGE: &'static [Usage] = &[
         Usage {
             kind: "configurationItems",
-            label: "configuration items",
-            sql: "SELECT count(*) FROM configuration_items WHERE location_id = $1 AND deleted_at IS NULL",
-            blocking: true,
-        },
-        Usage {
-            kind: "deletedConfigurationItems",
-            label: "deleted configuration items (kept for history)",
-            sql: "SELECT count(*) FROM configuration_items WHERE location_id = $1 AND deleted_at IS NOT NULL",
-            blocking: true,
+            label: "configuration items holding the lookup list value with the same id (not blocking)",
+            sql: "SELECT cmdb.lookup_value_count($1)",
+            blocking: false,
         },
         Usage {
             kind: "childLocations",
@@ -755,20 +742,15 @@ impl Resource for Owners {
     const PLURAL: &'static str = "owners";
     const COLUMNS: &'static str = "id, kind, name, email, external_ref, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["name", "email", "external_ref"];
-    const USAGE: &'static [Usage] = &[
-        Usage {
-            kind: "configurationItems",
-            label: "configuration items",
-            sql: "SELECT count(*) FROM configuration_items WHERE owner_id = $1 AND deleted_at IS NULL",
-            blocking: true,
-        },
-        Usage {
-            kind: "deletedConfigurationItems",
-            label: "deleted configuration items (kept for history)",
-            sql: "SELECT count(*) FROM configuration_items WHERE owner_id = $1 AND deleted_at IS NOT NULL",
-            blocking: true,
-        },
-    ];
+    const DEPRECATED: Option<&'static str> = Some(
+        "Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+    );
+    const USAGE: &'static [Usage] = &[Usage {
+        kind: "configurationItems",
+        label: "configuration items holding the lookup list value with the same id (not blocking)",
+        sql: "SELECT cmdb.lookup_value_count($1)",
+        blocking: false,
+    }];
     fn id(row: &Owner) -> Uuid {
         row.id
     }

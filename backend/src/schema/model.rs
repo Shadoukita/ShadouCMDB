@@ -22,6 +22,8 @@ pub struct Class {
     pub key: String,
     pub area_id: Uuid,
     pub parent_id: Option<Uuid>,
+    /// The field whose value labels the class's CIs (in its lineage)
+    pub title_attribute_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -35,6 +37,7 @@ pub struct Field {
     pub is_required: bool,
     pub is_active: bool,
     pub sort_order: i32,
+    pub lookup_list_id: Option<Uuid>,
 }
 
 /// PostgreSQL column type of a field's data type.
@@ -105,11 +108,15 @@ impl Model {
             .fetch_all(&mut *conn)
             .await?;
         let classes =
-            sqlx::query_as::<_, Class>("SELECT id, key, area_id, parent_id FROM cmdb.ci_classes ORDER BY key")
+            // Through to_jsonb: a restore builds type tables at older migration levels (before 0016).
+            sqlx::query_as::<_, Class>(
+                "SELECT id, key, area_id, parent_id, (to_jsonb(c) ->> 'title_attribute_id')::uuid AS title_attribute_id
+                 FROM cmdb.ci_classes c ORDER BY key",
+            )
                 .fetch_all(&mut *conn)
                 .await?;
         let fields = sqlx::query_as::<_, Field>(
-            "SELECT id, class_id, key, label, data_type, enum_values, is_required, is_active, sort_order
+            "SELECT id, class_id, key, label, data_type, enum_values, is_required, is_active, sort_order, lookup_list_id
              FROM cmdb.ci_attribute_definitions ORDER BY sort_order, key",
         )
         .fetch_all(&mut *conn)
@@ -138,6 +145,24 @@ impl Model {
         let t = self.table(class_id)?;
         let name = format!("v_{}", t.table.as_str());
         is_identifier(&name).then(|| TableName { schema: t.schema, table: Ident::trusted(&name) })
+    }
+
+    pub fn field(&self, id: Uuid) -> Option<&Field> {
+        self.fields.iter().find(|f| f.id == id)
+    }
+
+    /// The field that labels CIs of this type (None: they are labelled by their ident).
+    pub fn title_field(&self, class_id: Uuid) -> Option<&Field> {
+        self.class(class_id)?.title_attribute_id.and_then(|id| self.field(id))
+    }
+
+    /// Where values of this lookup list are stored: (table, column) of every lookup field using it.
+    pub fn lookup_columns(&self, list_id: Uuid) -> Vec<(TableName, Ident)> {
+        self.fields
+            .iter()
+            .filter(|f| f.data_type == AttributeDataType::Lookup && f.lookup_list_id == Some(list_id))
+            .filter_map(|f| Some((self.table(f.class_id)?, f.column())))
+            .collect()
     }
 
     /// Fields defined directly on a type, in form order.

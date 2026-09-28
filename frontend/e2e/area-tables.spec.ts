@@ -19,16 +19,17 @@ test.skip(
 );
 test.describe.configure({ mode: "serial" });
 
-const STATUS = "In Betrieb";
 const RESTRICTED = { username: "bestand-viewer", password: "bestand-viewer-password-1" };
+// The types have no name field and no title attribute, so their assets are labelled by their generated ident.
+// In VLAN order.
 const NETWORKS = [
-  { name: "net-fra1-mgmt", vlan: "110", subnet: "10.10.0.0/24", gateway: "10.10.0.1" },
-  { name: "net-fra1-dmz", vlan: "120", subnet: "10.20.0.0/24", gateway: "10.20.0.1" },
+  { vlan: "110", subnet: "10.10.0.0/24", gateway: "10.10.0.1" },
+  { vlan: "120", subnet: "10.20.0.0/24", gateway: "10.20.0.1" },
 ];
-// vm-fra1-app02 is left without a commissioning date and with a hypervisor name that is no number.
+// In vCPU order. The second is left without a commissioning date and with a hypervisor name that is no number.
 const VMS = [
-  { name: "vm-fra1-app01", vcpu: "4", ram: "16", hypervisor: "4711", commissioned: "2026-03-01", monitored: true },
-  { name: "vm-fra1-app02", vcpu: "8", ram: "32.5", hypervisor: "esx-fra1-07", commissioned: "", monitored: false },
+  { vcpu: "4", ram: "16", hypervisor: "4711", commissioned: "2026-03-01", monitored: true },
+  { vcpu: "8", ram: "32.5", hypervisor: "esx-fra1-07", commissioned: "", monitored: false },
 ];
 
 let areaId = "";
@@ -118,13 +119,6 @@ async function expectRefused(res: APIResponse, what: string) {
 test.describe("the source install", () => {
   test.use({ baseURL: sourceURL, storageState: AREAS_STATE });
 
-  test.beforeAll(async ({ playwright }) => {
-    // A bare install has no statuses; the CIs below need one. Setup, not under test.
-    const request = await playwright.request.newContext({ baseURL: sourceURL, storageState: AREAS_STATE });
-    await apiSend(request, "POST", "/statuses", { name: STATUS, key: "in_betrieb", sortOrder: 10 });
-    await request.dispose();
-  });
-
   test("the area Bestand is a menu tab and the PostgreSQL schema bestand", async ({ page, request }) => {
     expect(sql(sourceDb!, "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'bestand'")).toEqual([]);
     await page.goto("/admin/areas");
@@ -177,7 +171,7 @@ test.describe("the source install", () => {
     expect(relkind(sourceDb!, "bestand.v_netzwerk")).toBe("v");
     expect(relkind(sourceDb!, "bestand.v_virtuelle_maschinen")).toBe("v");
     const view = columns(sourceDb!, "bestand", "v_netzwerk").map((c) => c.column);
-    expect(view).toEqual(expect.arrayContaining(["id", "name", "vlan_id", "subnetz", "gateway"]));
+    expect(view).toEqual(expect.arrayContaining(["id", "ident", "label", "valid_from", "valid_until", "active", "vlan_id", "subnetz", "gateway"]));
     expect(view.slice(-3)).toEqual(["vlan_id", "subnetz", "gateway"]);
 
     // Every DDL that ran is in the change history, with its exact statements.
@@ -192,25 +186,22 @@ test.describe("the source install", () => {
   test("assets created in the UI are rows of the type tables and the reporting views", async ({ page, request }) => {
     for (const n of NETWORKS) {
       await page.goto(`/cis/new?classId=${networkClassId}`);
-      await page.locator("#f-name").fill(n.name);
-      await page.locator("#f-status").selectOption({ label: STATUS });
       await page.locator("#attr-vlan_id").fill(n.vlan);
       await page.locator("#attr-subnetz").fill(n.subnet);
       await page.locator("#attr-gateway").fill(n.gateway);
       await page.getByRole("button", { name: "Create Netzwerk" }).click();
-      await expect(page.getByRole("heading", { level: 1 })).toHaveText(n.name);
+      await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);
+      await expect(page.getByRole("heading", { level: 1 })).toHaveText(/\S/);
     }
     for (const v of VMS) {
       await page.goto(`/cis/new?classId=${vmClassId}`);
-      await page.locator("#f-name").fill(v.name);
-      await page.locator("#f-status").selectOption({ label: STATUS });
       await page.locator("#attr-vcpu").fill(v.vcpu);
       await page.locator("#attr-arbeitsspeicher_gb").fill(v.ram);
       await page.locator("#attr-hypervisor").fill(v.hypervisor);
       if (v.commissioned) await page.locator("#attr-inbetriebnahme").fill(v.commissioned);
       await page.locator("#attr-ueberwacht").selectOption(v.monitored ? "true" : "false");
       await page.getByRole("button", { name: "Create Virtuelle Maschinen" }).click();
-      await expect(page.getByRole("heading", { level: 1 })).toHaveText(v.name);
+      await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);
     }
     await snap(page, "61-bestand-vm-detail");
 
@@ -218,26 +209,24 @@ test.describe("the source install", () => {
     expect(
       sql(
         sourceDb!,
-        `SELECT ci.name, n.vlan_id, n.subnetz::text AS subnetz, host(n.gateway) AS gateway
-         FROM bestand.netzwerk n JOIN cmdb.configuration_items ci USING (id) ORDER BY ci.name`,
+        `SELECT ci.label = ci.ident AS labelled_by_ident, n.vlan_id, n.subnetz::text AS subnetz, host(n.gateway) AS gateway
+         FROM bestand.netzwerk n JOIN cmdb.configuration_items ci USING (id) ORDER BY n.vlan_id`,
       ),
-    ).toEqual(
-      [...NETWORKS].sort((a, b) => a.name.localeCompare(b.name)).map((n) => ({ name: n.name, vlan_id: n.vlan, subnetz: n.subnet, gateway: n.gateway })),
-    );
+    ).toEqual(NETWORKS.map((n) => ({ labelled_by_ident: true, vlan_id: n.vlan, subnetz: n.subnet, gateway: n.gateway })));
     expect(
       sql(
         sourceDb!,
-        `SELECT name, vcpu::text AS vcpu, arbeitsspeicher_gb::text AS ram, hypervisor, inbetriebnahme::text AS commissioned, ueberwacht AS monitored
-         FROM bestand.v_virtuelle_maschinen ORDER BY name`,
+        `SELECT vcpu::text AS vcpu, arbeitsspeicher_gb::text AS ram, hypervisor, inbetriebnahme::text AS commissioned, ueberwacht AS monitored, active
+         FROM bestand.v_virtuelle_maschinen ORDER BY vcpu`,
       ),
-    ).toEqual(VMS.map((v) => ({ name: v.name, vcpu: v.vcpu, ram: v.ram, hypervisor: v.hypervisor, commissioned: v.commissioned || null, monitored: v.monitored })));
-    expect(sql(sourceDb!, "SELECT name, vlan_id FROM bestand.v_netzwerk ORDER BY name")).toEqual(
-      [...NETWORKS].sort((a, b) => a.name.localeCompare(b.name)).map((n) => ({ name: n.name, vlan_id: n.vlan })),
+    ).toEqual(VMS.map((v) => ({ vcpu: v.vcpu, ram: v.ram, hypervisor: v.hypervisor, commissioned: v.commissioned || null, monitored: v.monitored, active: true })));
+    expect(sql(sourceDb!, "SELECT label = ident AS labelled_by_ident, vlan_id FROM bestand.v_netzwerk ORDER BY vlan_id")).toEqual(
+      NETWORKS.map((n) => ({ labelled_by_ident: true, vlan_id: n.vlan })),
     );
 
     // The API and the inventory show the same.
-    const listed = await apiGet<{ data: { name: string; attributes: Record<string, unknown> }[] }>(request, `/configuration-items?classId=${vmClassId}&sort=name`);
-    expect(listed.data.map((c) => [c.name, c.attributes.hypervisor])).toEqual(VMS.map((v) => [v.name, v.hypervisor]));
+    const listed = await apiGet<{ data: { ident: string; label: string; attributes: Record<string, unknown> }[] }>(request, `/configuration-items?classId=${vmClassId}&sort=createdAt`);
+    expect(listed.data.map((c) => [c.label === c.ident, c.attributes.hypervisor])).toEqual(VMS.map((v) => [true, v.hypervisor]));
     await page.goto("/");
     const nav = page.getByRole("navigation", { name: "Main" });
     await expect(nav.getByRole("heading", { name: "Bestand" })).toBeVisible();
@@ -383,7 +372,7 @@ test.describe("the source install", () => {
     expect(exported.dataModel.areas.map((a) => a.key)).toContain("bestand");
     expect(exported.dataModel.classes.map((c) => c.key)).toEqual(expect.arrayContaining(["netzwerk", "virtuelle_maschinen"]));
     // Assets are not configuration.
-    expect(JSON.stringify(exported)).not.toContain(VMS[0].name);
+    expect(JSON.stringify(exported)).not.toContain(VMS[1].hypervisor);
   });
 });
 

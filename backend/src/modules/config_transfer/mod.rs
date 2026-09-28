@@ -236,6 +236,13 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
 
     let classes: Vec<CiClass> = crud::select_all(conn, CiClasses::TABLE, CiClasses::COLUMNS, "sort_order, key").await?;
     let class_key: HashMap<Uuid, String> = classes.iter().map(|c| (c.id, c.key.clone())).collect();
+    let field_keys: HashMap<Uuid, String> = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT d.id, d.key FROM cmdb.ci_attribute_definitions d JOIN cmdb.ci_classes c ON c.title_attribute_id = d.id",
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .collect();
     let class_specs: Vec<ClassSpec> = classes
         .iter()
         .map(|c| ClassSpec {
@@ -249,6 +256,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             color: c.color.clone(),
             sort_order: c.sort_order,
             is_active: c.is_active,
+            title_attribute: Some(c.title_attribute_id.and_then(|t| field_keys.get(&t).cloned())),
         })
         .collect();
     let (mut class_specs, cyclic) = parents_first(class_specs, |c| &c.key, |c| c.parent.as_deref());
@@ -1209,11 +1217,16 @@ async fn run(
         let (ordered, _) = parents_first(indexed, |(_, c)| &c.key, |(_, c)| c.parent.as_deref());
         for (i, cls) in ordered {
             let existing = old.get(cls.key.as_str()).map(|o| (im.ids.classes[&cls.key], *o));
-            // A class without an area (version 1 files) stays where it is.
+            // A class without an area (version 1 files) stays where it is; one without a
+            // title attribute (files from before SHAA-267) keeps its own.
             let with_area;
-            let cls = match (&cls.area, existing) {
-                (None, Some((_, o))) => {
-                    with_area = ClassSpec { area: o.area.clone(), ..cls.clone() };
+            let cls = match existing {
+                Some((_, o)) if cls.area.is_none() || cls.title_attribute.is_none() => {
+                    with_area = ClassSpec {
+                        area: cls.area.clone().or_else(|| o.area.clone()),
+                        title_attribute: cls.title_attribute.clone().or_else(|| o.title_attribute.clone()),
+                        ..cls.clone()
+                    };
                     &with_area
                 }
                 _ => cls,
@@ -1338,6 +1351,47 @@ async fn run(
                 to: a.parent_attribute.clone().map_or(Value::Null, Value::String),
             };
             im.amend("attributes", format!("{}.{}", a.class, a.key), change);
+        }
+
+        // Title attributes, now that the fields exist (a class may be titled by an inherited one).
+        for (i, cls) in dm.classes.iter().enumerate() {
+            let Some(title) = &cls.title_attribute else { continue };
+            let class_id = im.ids.classes[&cls.key];
+            let path = format!("dataModel.classes.{i}.titleAttribute");
+            let wanted: Option<Uuid> = match title {
+                None => None,
+                Some(key) => Some(
+                    sqlx::query_scalar(
+                        "SELECT d.id FROM cmdb.ci_class_lineage($1) l
+                         JOIN cmdb.ci_attribute_definitions d ON d.class_id = l.class_id
+                         WHERE d.key = $2 ORDER BY l.depth LIMIT 1",
+                    )
+                    .bind(class_id)
+                    .bind(key)
+                    .fetch_optional(&mut *im.conn)
+                    .await?
+                    .ok_or_else(|| {
+                        at(
+                            &path,
+                            AppError::field(
+                                "titleAttribute",
+                                format!("Class \"{}\" has no field \"{key}\" (own or inherited)", cls.key),
+                                "not_found",
+                            ),
+                        )
+                    })?,
+                ),
+            };
+            let current: Option<Uuid> =
+                sqlx::query_scalar("SELECT title_attribute_id FROM cmdb.ci_classes WHERE id = $1")
+                    .bind(class_id)
+                    .fetch_one(&mut *im.conn)
+                    .await?;
+            if current != wanted {
+                let mut c = ColumnSet::default();
+                c.opt("title_attribute_id", Some(wanted));
+                simple::update_in::<CiClasses>(im.conn, im.ctx, class_id, c).await.map_err(|e| at(&path, e))?;
+            }
         }
 
         let keys: HashSet<String> = dm.relationship_types.iter().map(|t| t.key.clone()).collect();

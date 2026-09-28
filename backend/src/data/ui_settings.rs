@@ -9,14 +9,13 @@ use uuid::Uuid;
 
 use crate::api::context::RequestContext;
 
-/// What a UI settings document may refer to: every class with its effective attributes, and lookup keys.
+/// What a UI settings document may refer to: every class with its effective attributes, and lookup lists.
 #[derive(Debug, Default)]
 pub struct Model {
     /// class key -> effective attribute key -> required (and active)
     pub classes: HashMap<String, HashMap<String, bool>>,
-    pub statuses: HashSet<String>,
-    pub environments: HashSet<String>,
-    pub locations: HashSet<String>,
+    /// lookup list key -> its value keys
+    pub lookups: HashMap<String, HashSet<String>>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -87,7 +86,7 @@ pub async fn version(pool: &PgPool, version: i32) -> sqlx::Result<Option<Version
         .await
 }
 
-/// Every class key with its effective attributes (own and inherited), and the lookup keys.
+/// Every class key with its effective attributes (own and inherited), and the lookup lists with their value keys.
 pub async fn model(conn: &mut PgConnection) -> sqlx::Result<Model> {
     let mut m = Model::default();
     let classes: Vec<(String,)> = sqlx::query_as("SELECT key FROM ci_classes").fetch_all(&mut *conn).await?;
@@ -111,12 +110,13 @@ pub async fn model(conn: &mut PgConnection) -> sqlx::Result<Model> {
     for (class, attr, required) in attrs {
         m.classes.entry(class).or_default().insert(attr, required);
     }
-    for (table, set) in
-        [("statuses", &mut m.statuses), ("environments", &mut m.environments), ("locations", &mut m.locations)]
-    {
-        let keys: Vec<(String,)> =
-            sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT key FROM {table}"))).fetch_all(&mut *conn).await?;
-        set.extend(keys.into_iter().map(|(k,)| k));
+    let lists: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT l.key, v.key FROM lookup_lists l LEFT JOIN lookup_list_values v ON v.list_id = l.id")
+            .fetch_all(&mut *conn)
+            .await?;
+    for (list, value) in lists {
+        let values = m.lookups.entry(list).or_default();
+        values.extend(value);
     }
     Ok(m)
 }

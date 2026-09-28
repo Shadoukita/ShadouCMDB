@@ -6,7 +6,6 @@ import {
   useCiClasses,
   useClassAttributes,
   useCreateCi,
-  useLookup,
   useUpdateCi,
   type Ci,
   type CiCreateBody,
@@ -15,10 +14,8 @@ import {
 import AttributeInput from "../../components/AttributeInput.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
-import LookupSelect from "../../components/LookupSelect.vue";
 import { useAppSettings } from "../../lib/appSettings";
 import { groupAttributes } from "../../lib/attributes";
-import { vAutofocus } from "../../lib/directives";
 import { HIDDEN_CI } from "../../lib/format";
 import { hintFor, toApiValue, toFormValue, type FormValue } from "../../lib/attributeValues";
 import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, FORM_BUILTINS, layoutFor, resolveLayout } from "../../lib/uiSettings";
@@ -28,8 +25,9 @@ import FormErrorBanner from "./FormErrorBanner.vue";
 import FormField from "./FormField.vue";
 
 /**
- * The CI form. Core fields are the same for every CI; the class attributes are
- * rendered from GET /ci-classes/{id}/attributes, so a new class needs no frontend change.
+ * The CI form. Core fields (ident, validity period) are the same for every CI; everything
+ * else, name and status included, is a class attribute rendered from
+ * GET /ci-classes/{id}/attributes, so a new class needs no frontend change.
  * The parent keys this component by class (create) or id+version (edit).
  *
  * A class layout (Administration › Customization › Detail and form layout) arranges
@@ -39,34 +37,25 @@ import FormField from "./FormField.vue";
 const props = defineProps<{ mode: "create" | "edit"; classId: string; className: string; ci?: Ci }>();
 
 /** Core CI fields. These belong to every CI regardless of class; class-specific fields come from the API. */
-const CORE_FIELDS = ["name", "statusId", "environmentId", "ownerId", "locationId", "hostname", "ipAddress", "serialNumber", "notes"] as const;
+const CORE_FIELDS = ["ident", "validFrom", "validUntil"] as const;
 type CoreField = (typeof CORE_FIELDS)[number];
 type CoreValues = Record<CoreField, string>;
 
 const router = useRouter();
 const flash = useFlashStore();
 const session = useSessionStore();
-/** Every CI needs a status; on a fresh install there may be none yet. */
-const statuses = useLookup("statuses");
-const noStatuses = computed(() => !!statuses.data.value && !statuses.data.value.some((s) => s.isActive));
+/** Only administrators choose or change an ident; everyone else gets a generated one. */
+const isAdmin = computed(() => !!session.permissions?.administrator);
 const attrs = useClassAttributes(() => props.classId);
 const create = useCreateCi();
 const update = useUpdateCi(() => props.ci?.id ?? "");
 const pending = computed(() => (props.mode === "create" ? create.isPending.value : update.isPending.value));
 
+// The validity period is edited in local time (datetime-local inputs) and sent as ISO timestamps.
+const DATETIME = { dataType: "datetime" } as const;
 const initialCore: CoreValues = props.ci
-  ? {
-      name: props.ci.name,
-      statusId: props.ci.statusId,
-      environmentId: props.ci.environmentId ?? "",
-      ownerId: props.ci.ownerId ?? "",
-      locationId: props.ci.locationId ?? "",
-      hostname: props.ci.hostname ?? "",
-      ipAddress: props.ci.ipAddress ?? "",
-      serialNumber: props.ci.serialNumber ?? "",
-      notes: props.ci.notes ?? "",
-    }
-  : { name: "", statusId: "", environmentId: "", ownerId: "", locationId: "", hostname: "", ipAddress: "", serialNumber: "", notes: "" };
+  ? { ident: props.ci.ident, validFrom: toFormValue(DATETIME, props.ci.validFrom), validUntil: toFormValue(DATETIME, props.ci.validUntil) }
+  : { ident: "", validFrom: "", validUntil: "" };
 const core = ref<CoreValues>({ ...initialCore });
 const values = ref<Record<string, FormValue>>({});
 let initialValues: Record<string, FormValue> = {};
@@ -79,8 +68,7 @@ const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive ||
 const settings = useAppSettings();
 const classes = useCiClasses();
 const layout = computed(() => layoutFor(settings.doc.value, classes.data.value?.find((c) => c.id === props.classId)?.key));
-const requiredField = (f: string) =>
-  f === "name" || f === "status" || !!defs.value.find((d) => `${ATTRIBUTE_PREFIX}${d.key}` === f && d.isRequired && d.isActive);
+const requiredField = (f: string) => !!defs.value.find((d) => `${ATTRIBUTE_PREFIX}${d.key}` === f && d.isRequired && d.isActive);
 const keepEditable = (f: string) => props.mode === "create" && requiredField(f);
 const readOnly = computed(() => new Set((layout.value?.readOnlyFields ?? []).filter((f) => !keepEditable(f))));
 
@@ -110,21 +98,15 @@ const sections = computed<FormSection[]>(() => {
     },
   ];
 });
-const FIELD_IDS: Record<string, string> = {
-  name: "f-name",
-  status: "f-status",
-  environment: "f-environment",
-  owner: "f-owner",
-  location: "f-location",
-  hostname: "f-hostname",
-  ipAddress: "f-ip",
-  serialNumber: "f-serial",
-  notes: "f-notes",
-};
+const FIELD_IDS: Record<string, string> = { ident: "f-ident", validFrom: "f-valid-from", validUntil: "f-valid-until" };
 const defFor = (f: string) => defs.value.find((d) => d.key === attributeKey(f));
 const coreError = (f: string) => fieldErrors.value[BUILTIN.get(f)?.form ?? f];
+/** The ident is editable for administrators only (the API refuses anyone else). */
+const coreDisabled = (f: string) => readOnly.value.has(f) || (f === "ident" && !isAdmin.value);
 function coreHint(f: string): string | undefined {
-  return [f === "ipAddress" ? "IPv4 or IPv6" : "", readOnly.value.has(f) ? "read-only" : ""].filter(Boolean).join(" · ") || undefined;
+  const create = props.mode === "create";
+  const hint = f === "ident" ? (create ? "Generated when left empty" : "") : f === "validFrom" ? (create ? "Local time; empty: now" : "Local time") : "Local time; empty: open-ended";
+  return [hint, coreDisabled(f) ? "read-only" : ""].filter(Boolean).join(" · ") || undefined;
 }
 
 // Seed attribute values once the definitions arrive. A new CI starts from each attribute's default value.
@@ -154,8 +136,7 @@ async function onSubmit() {
   error.value = null;
   // Catch empty required fields before the round trip; everything else is validated by the API.
   const req: Record<string, string> = {};
-  if (!core.value.name.trim()) req.name = "Required";
-  if (!core.value.statusId) req.statusId = "Required";
+  if (props.mode === "edit" && !core.value.validFrom) req.validFrom = "Required";
   const shown = new Set(sections.value.flatMap((sec) => sec.groups.flatMap((g) => g.fields)));
   for (const d of defs.value) {
     const f = `${ATTRIBUTE_PREFIX}${d.key}`;
@@ -178,21 +159,24 @@ async function onSubmit() {
   const coreBody = coreToApi(core.value);
   try {
     if (props.mode === "create") {
-      const body = { classId: props.classId, ...coreBody, attributes } as CiCreateBody;
+      // Empty core fields are left out: the API generates the ident and starts the validity period now.
+      const given = Object.fromEntries(Object.entries(coreBody).filter(([k, v]) => v !== null && (k !== "ident" || isAdmin.value)));
+      const body = { classId: props.classId, ...given, attributes } as CiCreateBody;
       const created = await create.mutateAsync(body);
-      flash.show(created.id, `Created ${created.name}.`);
+      flash.show(created.id, `Created ${created.label}.`);
       await router.push(`/cis/${created.id}`);
     } else if (props.ci) {
       const initial = coreToApi(initialCore);
       const changed: Record<string, unknown> = {};
-      for (const k of CORE_FIELDS) if (coreBody[k] !== initial[k]) changed[k] = coreBody[k];
+      // An emptied valid until clears it (open-ended); an emptied ident keeps the current one.
+      for (const k of CORE_FIELDS) if (coreBody[k] !== initial[k] && !(k === "ident" && coreBody[k] === null)) changed[k] = coreBody[k];
       if (Object.keys(changed).length === 0 && Object.keys(attributes).length === 0) {
         await router.push(`/cis/${props.ci.id}`);
         return;
       }
       const body = { ...changed, ...(Object.keys(attributes).length ? { attributes } : {}), version: props.ci.version } as CiUpdateBody;
       const saved = await update.mutateAsync(body);
-      flash.show(saved.id, `Saved ${saved.name}.`);
+      flash.show(saved.id, `Saved ${saved.label}.`);
       await router.push(`/cis/${saved.id}`);
     }
   } catch (err) {
@@ -206,21 +190,17 @@ function attrHint(d: (typeof defs.value)[number]): string | undefined {
   return [hintFor(d), d.inherited ? `from ${d.definedOn.name}` : "", d.isActive ? "" : "retired attribute", ro].filter(Boolean).join(" · ") || undefined;
 }
 
-const CORE_IDS: Record<string, string> = { name: "f-name", statusId: "f-status" };
 function fieldIdFor(key: string): string {
-  return key.startsWith("attributes.") ? `attr-${key.slice(11)}` : (CORE_IDS[key] ?? key);
+  return key.startsWith("attributes.") ? `attr-${key.slice(11)}` : (FIELD_IDS[key] ?? key);
 }
 
+/** Core values for the API; null for an empty one (a new CI leaves those out, so the API fills them in). */
 function coreToApi(c: CoreValues): Record<CoreField, string | null> {
-  const out = {} as Record<CoreField, string | null>;
-  for (const k of CORE_FIELDS) {
-    const v = c[k].trim();
-    out[k] = v === "" ? null : k === "notes" ? c[k] : v;
-  }
-  // name and statusId are required; send "" rather than null so the API reports them as fields.
-  if (out.name === null) out.name = "";
-  if (out.statusId === null) out.statusId = "";
-  return out;
+  return {
+    ident: c.ident.trim() || null,
+    validFrom: c.validFrom ? (toApiValue(DATETIME, c.validFrom) as string) : null,
+    validUntil: c.validUntil ? (toApiValue(DATETIME, c.validUntil) as string) : null,
+  };
 }
 
 function referenceNames(ci: Ci | undefined): Record<string, string> {
@@ -231,16 +211,8 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
 </script>
 
 <template>
-  <form novalidate :aria-label="mode === 'create' ? `New ${className}` : `Edit ${ci?.name}`" @submit.prevent="onSubmit">
+  <form novalidate :aria-label="mode === 'create' ? `New ${className}` : `Edit ${ci?.label}`" @submit.prevent="onSubmit">
     <FormErrorBanner v-if="error != null" :error="error" :unplaced="unplaced" :version-conflict-href="ci ? `/cis/${ci.id}` : undefined" />
-    <div v-if="noStatuses" class="alert alert-warn" role="alert">
-      <strong>No statuses are defined yet.</strong> Every configuration item needs one.
-      <template v-if="session.can('datamodel.manage')">
-        Add them under <RouterLink to="/admin/lookups/statuses">Administration › Lookups</RouterLink>, or install the
-        <RouterLink to="/admin/templates">IT infrastructure starter</RouterLink>.
-      </template>
-      <template v-else>Ask an administrator to add statuses under Administration › Lookups.</template>
-    </div>
     <details v-for="sec in sections" :key="sec.key" class="panel layout-panel" :open="!sec.collapsed">
       <summary class="panel-header">
         <h2>{{ sec.label }}</h2>
@@ -261,21 +233,24 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
           <legend v-if="g.legend !== null">{{ g.legend }}</legend>
           <div class="form-grid">
             <template v-for="f in g.fields" :key="f">
-              <FormField v-if="BUILTIN.has(f)" :id="FIELD_IDS[f]" v-slot="p" :label="BUILTIN.get(f)!.label" :required="f === 'name' || f === 'status'" :error="coreError(f)" :hint="coreHint(f)" :wide="f === 'notes'">
-                <fieldset class="ro-wrap" :disabled="readOnly.has(f)">
-                  <input v-if="f === 'name'" :id="p.id" v-model="core.name" v-autofocus type="text" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
-                  <LookupSelect v-else-if="f === 'status'" v-model="core.statusId" kind="statuses" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="Choose a status…" required />
-                  <LookupSelect v-else-if="f === 'environment'" v-model="core.environmentId" kind="environments" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="— none —" />
-                  <LookupSelect v-else-if="f === 'owner'" v-model="core.ownerId" kind="owners" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="— none —" />
-                  <LookupSelect v-else-if="f === 'location'" v-model="core.locationId" kind="locations" :id="p.id" :invalid="p.invalid" :described-by="p.describedBy" empty-label="— none —" />
-                  <textarea v-else-if="f === 'notes'" :id="p.id" v-model="core.notes" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
+              <FormField v-if="BUILTIN.has(f)" :id="FIELD_IDS[f]" v-slot="p" :label="BUILTIN.get(f)!.label" :error="coreError(f)" :hint="coreHint(f)">
+                <fieldset class="ro-wrap" :disabled="coreDisabled(f)">
                   <input
-                    v-else-if="f === 'hostname' || f === 'ipAddress' || f === 'serialNumber'"
+                    v-if="f === 'ident'"
                     :id="p.id"
-                    v-model="core[f]"
+                    v-model="core.ident"
                     type="text"
                     class="mono"
                     spellcheck="false"
+                    :placeholder="mode === 'create' ? 'Generated' : undefined"
+                    :aria-invalid="p.invalid || undefined"
+                    :aria-describedby="p.describedBy"
+                  />
+                  <input
+                    v-else-if="f === 'validFrom' || f === 'validUntil'"
+                    :id="p.id"
+                    v-model="core[f]"
+                    type="datetime-local"
                     :aria-invalid="p.invalid || undefined"
                     :aria-describedby="p.describedBy"
                   />

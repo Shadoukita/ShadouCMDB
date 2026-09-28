@@ -42,8 +42,12 @@ const CONSTRAINT_FIELDS: &[(&str, &str)] = &[
     ("ci_attribute_definitions_not_own_parent", "parentAttributeId"),
     ("ci_attribute_definitions_parent_attribute", "parentAttributeId"),
     ("ci_attribute_definitions_parent_attribute_id_fkey", "parentAttributeId"),
-    ("configuration_items_name_not_blank", "name"),
-    ("configuration_items_hostname_format", "hostname"),
+    ("configuration_items_ident_uq", "ident"),
+    ("configuration_items_ident_format", "ident"),
+    ("configuration_items_validity_order", "validUntil"),
+    ("ci_classes_title_attribute_in_lineage", "titleAttributeId"),
+    ("ci_classes_title_attribute_type", "titleAttributeId"),
+    ("ci_classes_title_attribute_id_fkey", "titleAttributeId"),
     ("configuration_items_class_concrete", "classId"),
     ("configuration_items_class_active", "classId"),
     ("configuration_items_class_change_attributes", "classId"),
@@ -138,6 +142,9 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
             return Some(AppError::new(ErrorCode::LastAdministrator, humanise(pg.message())));
         }
         Some("permission_profiles_builtin_protected") => return Some(AppError::conflict(humanise(pg.message()))),
+        Some("configuration_items_validity_order") => {
+            return Some(AppError::field("validUntil", "Must be after validFrom", "custom"));
+        }
         // Technical names of areas, types and fields: a taken name is a naming problem, like a malformed one.
         Some(c @ ("areas_key_unique" | "ci_classes_key_unique" | "ci_attribute_definitions_class_key_uq")) => {
             let what = match c {

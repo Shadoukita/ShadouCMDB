@@ -24,7 +24,7 @@ const enumValues = computed(() => props.def.enumValues ?? []);
 const aria = computed(() => ({ "aria-invalid": props.invalid || undefined, "aria-describedby": props.describedBy }));
 
 function onReference(ci: CiSummary | null) {
-  if (ci) emit("referenceName", ci.name);
+  if (ci) emit("referenceName", ci.label);
   model.value = ci ? ci.id : "";
 }
 </script>

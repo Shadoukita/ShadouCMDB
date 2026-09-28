@@ -10,7 +10,11 @@ import AuditActor from "../admin/AuditActor.vue";
 /** Change history from GET /audit-log?entityId=… with a field-level diff of each update. */
 const props = defineProps<{ ci: Ci }>();
 
-const HIDDEN = new Set(["updatedAt", "createdAt", "version", "classId", "statusId", "environmentId", "ownerId", "locationId", "attributeReferences"]);
+/**
+ * Bookkeeping and derived fields (the label follows the title attribute, `active` the validity period).
+ * Entries from before CIs kept status, owner etc. in attributes still carry those ids and references.
+ */
+const HIDDEN = new Set(["updatedAt", "createdAt", "version", "classId", "label", "active", "attributeReferences", "statusId", "environmentId", "ownerId", "locationId"]);
 /** Embedded references are shown by name instead of by id. */
 const REFS = new Set(["class", "status", "environment", "owner", "location"]);
 

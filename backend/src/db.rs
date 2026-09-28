@@ -361,3 +361,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod upgrade_0016;

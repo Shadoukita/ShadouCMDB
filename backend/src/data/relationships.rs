@@ -38,8 +38,8 @@ pub struct RelationshipRow {
 const COLUMNS: &str = "r.id, r.relationship_type_id, r.source_ci_id, r.target_ci_id, r.notes,
     r.created_at, r.updated_at, r.deleted_at,
     t.key AS type_key, t.name AS type_name, t.forward_label, t.reverse_label, t.is_directional,
-    s.name AS source_name, s.class_id AS source_class_id, sc.key AS source_class_key, sc.name AS source_class_name, s.deleted_at AS source_deleted_at,
-    g.name AS target_name, g.class_id AS target_class_id, gc.key AS target_class_key, gc.name AS target_class_name, g.deleted_at AS target_deleted_at";
+    s.label AS source_name, s.class_id AS source_class_id, sc.key AS source_class_key, sc.name AS source_class_name, s.deleted_at AS source_deleted_at,
+    g.label AS target_name, g.class_id AS target_class_id, gc.key AS target_class_key, gc.name AS target_class_name, g.deleted_at AS target_deleted_at";
 
 const FROM: &str = "ci_relationships r
     JOIN relationship_types t ON t.id = r.relationship_type_id
@@ -51,8 +51,8 @@ pub const SORT_FIELDS: &[&str] = &["createdAt", "updatedAt", "sourceName", "targ
 fn sort_column(field: &str) -> &'static str {
     match field {
         "updatedAt" => "r.updated_at",
-        "sourceName" => "lower(s.name)",
-        "targetName" => "lower(g.name)",
+        "sourceName" => "lower(s.label)",
+        "targetName" => "lower(g.label)",
         "typeName" => "lower(t.name)",
         _ => "r.created_at",
     }
@@ -80,8 +80,8 @@ pub async fn get(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<Relat
 /// Search predicate: source/target CI name, type name and notes.
 pub fn search(w: &mut Where<'_>, pattern: &str) {
     let qb = w.and();
-    qb.push("(s.name ILIKE ").push_bind(pattern.to_owned());
-    qb.push(" OR g.name ILIKE ").push_bind(pattern.to_owned());
+    qb.push("(s.label ILIKE ").push_bind(pattern.to_owned());
+    qb.push(" OR g.label ILIKE ").push_bind(pattern.to_owned());
     qb.push(" OR r.notes ILIKE ").push_bind(pattern.to_owned());
     qb.push(" OR t.name ILIKE ").push_bind(pattern.to_owned()).push(")");
 }

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { useCiClasses, useLookup } from "../../../api/queries";
+import { useLookupLists } from "../../../api/datamodel";
+import { useCiClasses } from "../../../api/queries";
 import type { UiListFilters, UiSettingsDocument, UiWidget, UiWidgetType } from "../../../api/uiSettings";
 import { moveItem } from "../../../lib/reorder";
 import { SORT_FIELDS, WIDGET_TYPES, widgetLabel } from "../../../lib/uiSettings";
 import DashboardWidgets from "../../dashboard/DashboardWidgets.vue";
 import KeyChecklist from "./KeyChecklist.vue";
+import LookupFilterEditor from "./LookupFilterEditor.vue";
 
 /**
  * Customization › Dashboard: the built-in dashboard, or the administrator's
@@ -14,17 +16,16 @@ import KeyChecklist from "./KeyChecklist.vue";
 const props = defineProps<{ doc: UiSettingsDocument }>();
 const widgets = computed(() => props.doc.dashboard.widgets ?? null);
 const classes = useCiClasses();
-const statuses = useLookup("statuses");
-const environments = useLookup("environments");
-const locations = useLookup("locations");
+const lookupLists = useLookupLists();
 const classOptions = computed(() => (classes.data.value ?? []).map((c) => ({ key: c.key, label: c.name + (c.isAbstract ? " (abstract)" : "") })));
-const keyed = (data: { key?: string; name: string }[] | undefined) => (data ?? []).filter((o) => o.key).map((o) => ({ key: o.key!, label: o.name }));
+/** The built-in dashboard counts by status when there is a lookup list with key "status". */
+const statusListKey = computed(() => lookupLists.data.value?.find((l) => l.key === "status")?.key);
 
 /** Starts from the built-in dashboard's panels, so switching to custom widgets changes nothing until edited. */
 function useCustom() {
   props.doc.dashboard.widgets = [
     { id: "by_class", type: "count_by_class", title: null, size: "medium" },
-    { id: "by_status", type: "count_by_status", title: null, size: "medium" },
+    ...(statusListKey.value ? [{ id: "by_status", type: "count_by_lookup", title: "By status", size: "medium", lookupListKey: statusListKey.value } as UiWidget] : []),
     { id: "recent", type: "recent_changes", title: null, size: "large", limit: 12 },
   ];
 }
@@ -40,9 +41,10 @@ function addWidget() {
   for (let n = 2; taken.has(id); n++) id = `${addType.value}_${n}`;
   const w: UiWidget = { id, type: addType.value, title: null, size: "medium" };
   if (addType.value === "recent_changes") w.limit = 10;
+  if (addType.value === "count_by_lookup") w.lookupListKey = lookupLists.data.value?.[0]?.key;
   if (addType.value === "saved_search") {
     w.limit = 10;
-    w.search = { classKeys: [], includeSubclasses: true, filters: { q: null, statusKeys: [], environmentKeys: [], locationKeys: [] }, sort: { field: "updatedAt", direction: "desc" } };
+    w.search = { classKeys: [], includeSubclasses: true, filters: { q: null, lookups: {} }, sort: { field: "updatedAt", direction: "desc" } };
   }
   props.doc.dashboard.widgets = [...list, w];
 }
@@ -109,6 +111,15 @@ function setSortField(w: UiWidget, field: string) {
                   :options="classOptions"
                   @update:model-value="(v) => (w.classKeys = v)"
                 />
+                <div v-if="w.type === 'count_by_lookup'" class="field">
+                  <label :for="`w-list-${w.id}`">Lookup list</label>
+                  <select :id="`w-list-${w.id}`" v-model="w.lookupListKey">
+                    <option v-for="l in lookupLists.data.value ?? []" :key="l.id" :value="l.key">{{ l.name }}</option>
+                    <option v-if="w.lookupListKey && !lookupLists.data.value?.some((l) => l.key === w.lookupListKey)" :value="w.lookupListKey">
+                      {{ w.lookupListKey }} (does not exist)
+                    </option>
+                  </select>
+                </div>
                 <div v-if="w.type === 'recent_changes' || w.type === 'saved_search'" class="field">
                   <label :for="`w-limit-${w.id}`">Rows (1-50)</label>
                   <input :id="`w-limit-${w.id}`" type="number" min="1" max="50" :value="w.limit ?? 10" @change="setLimit(w, ($event.target as HTMLInputElement).value)" />
@@ -120,13 +131,11 @@ function setSortField(w: UiWidget, field: string) {
                     <label :for="`w-q-${w.id}`">Search text</label>
                     <input :id="`w-q-${w.id}`" type="text" maxlength="200" :value="filters(w).q ?? ''" @input="filters(w).q = ($event.target as HTMLInputElement).value || null" />
                   </div>
-                  <KeyChecklist :model-value="filters(w).statusKeys ?? []" legend="Statuses" :options="keyed(statuses.data.value)" @update:model-value="(v) => (filters(w).statusKeys = v)" />
-                  <KeyChecklist :model-value="filters(w).environmentKeys ?? []" legend="Environments" :options="keyed(environments.data.value)" @update:model-value="(v) => (filters(w).environmentKeys = v)" />
-                  <KeyChecklist :model-value="filters(w).locationKeys ?? []" legend="Locations" :options="keyed(locations.data.value)" @update:model-value="(v) => (filters(w).locationKeys = v)" />
+                  <LookupFilterEditor :filters="filters(w)" />
                   <div class="inline-control">
                     <label :for="`w-sort-${w.id}`">Sort by</label>
                     <select :id="`w-sort-${w.id}`" :value="w.search.sort?.field ?? ''" @change="setSortField(w, ($event.target as HTMLSelectElement).value)">
-                      <option value="">Name</option>
+                      <option value="">Label</option>
                       <option v-for="s in SORT_FIELDS" :key="s.field" :value="s.field">{{ s.label }}</option>
                     </select>
                     <select v-if="w.search.sort" v-model="w.search.sort.direction" :aria-label="`Sort direction of ${w.id}`">

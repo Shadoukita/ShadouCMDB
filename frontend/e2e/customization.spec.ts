@@ -131,7 +131,8 @@ test("dashboard: chosen widgets replace the built-in panels, with a saved search
   const row = page.locator("tr", { has: page.locator("code", { hasText: /^saved_search$/ }) });
   await row.getByLabel("Title of saved_search").fill("Servers in service");
   await row.getByRole("group", { name: "Classes" }).getByLabel("Server", { exact: true }).check();
-  await row.getByRole("group", { name: "Statuses" }).getByLabel("In service").check();
+  // Lookup filters: one checklist per lookup list (the status is a lookup attribute).
+  await row.getByRole("group", { name: "Status", exact: true }).getByLabel("In service").check();
   await page.getByLabel("Remove by_status").click();
   // The preview renders the draft with live data.
   await expect(page.getByLabel("Dashboard preview").getByRole("heading", { name: /Servers in service/ })).toBeVisible();
@@ -152,14 +153,14 @@ test("list views: a class's columns, default sort, filter and page size apply to
   await page.getByLabel("Class").selectOption("server");
   await expect(page).toHaveURL(/class=server/);
   await page.getByRole("button", { name: "Customize the Server list" }).click();
-  await page.getByLabel("Remove Owner").click();
+  await page.getByLabel("Remove Ident").click();
   await page.getByLabel("Add to Columns").selectOption({ label: "CPU cores (attribute)" });
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.getByLabel("Default sort").selectOption("updatedAt");
   await page.getByLabel("Sort direction").selectOption("desc");
   await page.getByLabel("Rows per page (10-200)").fill("25");
   await page.getByLabel("Rows per page (10-200)").blur();
-  await page.getByRole("group", { name: "Default statuses" }).getByLabel("In service").check();
+  await page.getByRole("group", { name: "Default: Status" }).getByLabel("In service").check();
   await expect(page.getByLabel("List preview").getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
   await save(page, "e2e list view");
 
@@ -167,24 +168,24 @@ test("list views: a class's columns, default sort, filter and page size apply to
   await page.goto("/");
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /^Server/ }).click();
   await expect(page).toHaveURL(new RegExp(`classId=${serverId}`));
-  await expect(page).toHaveURL(/statusId=/);
-  await expect(page.locator("#f-status")).not.toHaveValue("");
+  await expect(page).toHaveURL(/lookupValueId=/);
+  await expect(page.locator("form.toolbar")).toContainText("In service");
   await expect(page.getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Owner" })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Ident" })).toHaveCount(0);
   // Attribute columns show the values the list API returns with each CI.
   await expect(page.getByRole("row").filter({ hasText: "fra1-esx-01" }).getByRole("cell").last()).toHaveText("32");
   await expect(page.getByRole("columnheader", { name: /Updated/ })).toHaveAttribute("aria-sort", "descending");
   await expect(page.locator(".pagination select")).toHaveValue("25");
   // Clearing the filter sticks: a reload and Back show the URL as the operator left it.
-  await page.locator("#f-status").selectOption("");
-  await expect(page).not.toHaveURL(/statusId=/);
+  await page.getByRole("button", { name: "Remove the lookup value filter" }).click();
+  await expect(page).not.toHaveURL(/lookupValueId=/);
   await page.reload();
   await expect(page.getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
-  await expect(page).not.toHaveURL(/statusId=/);
+  await expect(page).not.toHaveURL(/lookupValueId=/);
   await page.locator("table.data tbody tr a").first().click();
   await page.goBack();
   await expect(page.getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
-  await expect(page).not.toHaveURL(/statusId=/);
+  await expect(page).not.toHaveURL(/lookupValueId=/);
   await snap(page, "customization-list-view");
 });
 
@@ -199,11 +200,11 @@ test("layouts: panels, hidden and read-only fields on the detail page and the fo
     await page.locator(".layout-editor-panel").getByRole("button", { name: "Add", exact: true }).click();
   }
   await page.getByLabel("Hide Asset tag").check();
-  await page.getByLabel("Make Serial number read-only").check();
+  await page.getByLabel("Make Serial number (attribute) read-only").check();
   await expect(page.getByLabel("Layout preview").getByRole("heading").first()).toHaveText(/Hardware facts/);
   await save(page, "e2e layout");
 
-  const servers = await apiGet<{ data: { id: string; name: string }[] }>(request, `/configuration-items?classId=${await classIdByName(request, "Server")}&limit=1`);
+  const servers = await apiGet<{ data: { id: string; label: string }[] }>(request, `/configuration-items?classId=${await classIdByName(request, "Server")}&limit=1`);
   const ci = servers.data[0];
   await page.goto(`/cis/${ci.id}`);
   const panels = page.locator(".layout-panels > details > summary h2");
@@ -218,7 +219,7 @@ test("layouts: panels, hidden and read-only fields on the detail page and the fo
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));
   await expect(page.locator(".layout-panels")).toContainText(`E2E ${stamp}`);
-  expect(await ciIdByName(request, ci.name)).toBe(ci.id);
+  expect(await ciIdByName(request, ci.label)).toBe(ci.id);
   await snap(page, "customization-layout");
 });
 

@@ -1,4 +1,4 @@
-import { apiSend, classIdByName, pickCi, snap, expect, test } from "./support";
+import { apiGet, apiSend, classIdByName, pickCi, snap, expect, test } from "./support";
 
 // A class created through the API alone gets a sidebar entry, dashboard row, form and
 // detail view with no frontend change: the form is generated from its attribute definitions.
@@ -24,8 +24,8 @@ test("a new CI class works end to end without a frontend change", async ({ page,
   await expect(page.locator("#attr-max_connections-hint")).toHaveText("1 – 100000");
   await expect(page.locator("#attr-vip_network-hint")).toContainText("CIDR");
 
-  await page.locator("#f-name").fill(`lb-e2e-${stamp}`);
-  await page.locator("#f-status").selectOption({ label: "In service" });
+  // The class has no name or status attribute and no title attribute: only its own fields are asked for.
+  await expect(page.locator("#attr-name")).toHaveCount(0);
   await page.getByRole("button", { name: `Create ${className}` }).click();
   await expect(page.locator("#attr-vip-err")).toHaveText("Required");
   await expect(page.locator("#attr-algorithm-err")).toHaveText("Required");
@@ -45,7 +45,11 @@ test("a new CI class works end to end without a frontend change", async ({ page,
   await pickCi(page, "#attr-primary_backend", "fra1-esx", "fra1-esx-01");
   await page.getByRole("button", { name: `Create ${className}` }).click();
 
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(`lb-e2e-${stamp}`);
+  // Without a title attribute a CI is labelled by its generated ident.
+  await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);
+  const created = await apiGet<{ ident: string; label: string }>(request, `/configuration-items/${page.url().split("/").pop()}`);
+  expect(created.label).toBe(created.ident);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(created.ident);
   const attrs = page.locator("dl.props").nth(1);
   await expect(attrs).toContainText("10.30.0.10");
   await expect(attrs).toContainText("least_conn");

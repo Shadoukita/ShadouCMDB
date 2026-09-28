@@ -21,7 +21,7 @@ const layout = computed(() => (cls.value ? props.doc.layouts.find((l) => l.class
 const attrs = useClassAttributes(() => cls.value?.id);
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive));
 const fields = computed(() => [
-  ...BUILTIN_FIELDS.map((f) => ({ key: f.key, label: f.label, required: f.key === "name" || f.key === "status", form: FORM_BUILTINS.includes(f.key) })),
+  ...BUILTIN_FIELDS.map((f) => ({ key: f.key, label: f.label, required: false, form: FORM_BUILTINS.includes(f.key) })),
   ...defs.value.map((d) => ({ key: `${ATTRIBUTE_PREFIX}${d.key}`, label: `${d.label} (attribute)`, required: d.isRequired, form: true })),
 ]);
 /** Fields another panel already holds cannot be added to this one. */
@@ -124,19 +124,19 @@ const previewPanels = computed(() => resolveLayout(layout.value, defs.value, DET
               <td>
                 {{ f.label }} <code class="muted">{{ f.key }}</code>
                 <span v-if="f.required" class="badge">required</span>
-                <span v-if="f.required && f.key !== 'name' && (isHidden(f.key) || isReadOnly(f.key))" class="hint">
+                <span v-if="f.required && (isHidden(f.key) || isReadOnly(f.key))" class="hint">
                   · stays editable on new CIs, which cannot be saved without it
                 </span>
               </td>
               <td>
                 <label class="check">
-                  <input type="checkbox" :disabled="f.key === 'name'" :checked="isHidden(f.key)" @change="toggle('hiddenFields', f.key, ($event.target as HTMLInputElement).checked)" />
+                  <input type="checkbox" :checked="isHidden(f.key)" @change="toggle('hiddenFields', f.key, ($event.target as HTMLInputElement).checked)" />
                   <span class="sr-only">Hide {{ f.label }}</span>
                 </label>
               </td>
               <td>
                 <label v-if="f.form" class="check">
-                  <input type="checkbox" :disabled="f.key === 'name'" :checked="isReadOnly(f.key)" @change="toggle('readOnlyFields', f.key, ($event.target as HTMLInputElement).checked)" />
+                  <input type="checkbox" :checked="isReadOnly(f.key)" @change="toggle('readOnlyFields', f.key, ($event.target as HTMLInputElement).checked)" />
                   <span class="sr-only">Make {{ f.label }} read-only</span>
                 </label>
                 <span v-else class="muted">not on the form</span>
