@@ -280,42 +280,67 @@ async function main() {
   check(adminMe.user.username === ADMIN_USERNAME && adminMe.csrfToken === admin.csrf, '/auth/me returns the user and the CSRF token');
 
   // --- Lookups ------------------------------------------------------------------
-  // Deprecated since migration 0016: CIs hold lookup list values (same ids) instead of these rows.
-  // A fresh install has none of them; the smoke creates its own.
-  console.log('\n# Statuses / environments / locations / owners (deprecated)');
+  // Deprecated since migration 0016: CIs hold lookup list values (same ids) instead of these rows,
+  // and the API refuses writes with 410 GONE. A fresh install has none of them; the smoke brings
+  // its own in through the configuration import, which still carries them.
+  console.log('\n# Statuses / environments / locations / owners (deprecated, read-only)');
+  await post('/api/v1/admin/config/import?mode=apply', {
+    format: 'shadoucmdb.config',
+    formatVersion: 3,
+    lookups: {
+      statuses: [{ key: `smoke_${RUN}`, name: 'Smoke status' }],
+      environments: [{ key: `smoke_env_${RUN}`, name: 'Smoke env' }],
+      locations: [
+        { key: `smoke_site_${RUN}`, name: 'Smoke site', locationType: 'site' },
+        { key: `smoke_room_${RUN}`, name: 'Smoke room', locationType: 'room', parent: `smoke_site_${RUN}` },
+      ],
+      owners: [{ kind: 'person', name: `Smoke Person ${RUN}`, email: `smoke-${RUN}@example.com` }],
+    },
+  }, 200);
   await get('/api/v1/statuses?sort=-name&isOperational=true');
-  const status = (await post('/api/v1/statuses', { key: `smoke_${RUN}`, name: 'Smoke status', isOperational: false })).json;
+  const status = (await get(`/api/v1/statuses?q=smoke_${RUN}`)).json.data[0];
   await get(`/api/v1/statuses/${status.id}`);
-  await patch(`/api/v1/statuses/${status.id}`, { name: 'Smoke status (renamed)', sortOrder: 99 });
-  await post('/api/v1/statuses', { key: `smoke_${RUN}`, name: 'dup' }, 409);
-  await post('/api/v1/statuses', { key: 'Bad Key', name: '' }, 400);
-  await patch(`/api/v1/statuses/${status.id}`, {}, 400);
   const legacyUsage = (await get(`/api/v1/statuses/${status.id}/usage`)).json;
   check(!legacyUsage.inUse && legacyUsage.data[0]?.kind === 'configurationItems', 'a legacy status is never in use (CIs hold lookup values)');
-  await del(`/api/v1/statuses/${status.id}`);
-  await get(`/api/v1/statuses/${status.id}`, 404);
+  await get(`/api/v1/statuses/00000000-0000-4000-8000-000000000000`, 404);
 
   await get('/api/v1/environments?q=prod');
-  const env = (await post('/api/v1/environments', { key: `smoke_env_${RUN}`, name: 'Smoke env' })).json;
+  const env = (await get(`/api/v1/environments?q=smoke_env_${RUN}`)).json.data[0];
   await get(`/api/v1/environments/${env.id}`);
-  await patch(`/api/v1/environments/${env.id}`, { isActive: false });
   await get(`/api/v1/environments/${env.id}/usage`);
-  await del(`/api/v1/environments/${env.id}`);
 
   await get('/api/v1/locations?parentId=none&sort=name');
-  const fra1 = (await post('/api/v1/locations', { key: `smoke_site_${RUN}`, name: 'Smoke site', locationType: 'site' })).json.id;
-  await get(`/api/v1/locations?parentId=${fra1}`);
-  const room = (await post('/api/v1/locations', { key: `smoke_room_${RUN}`, name: 'Smoke room', locationType: 'room', parentId: fra1 })).json;
+  const fra1 = (await get(`/api/v1/locations?q=smoke_site_${RUN}`)).json.data[0].id;
+  const room = (await get(`/api/v1/locations?parentId=${fra1}`)).json.data[0];
   await get(`/api/v1/locations/${room.id}`);
-  await patch(`/api/v1/locations/${room.id}`, { parentId: room.id }, 400); // own parent
-  await post('/api/v1/locations', { key: `smoke_x_${RUN}`, name: 'x', locationType: 'moon' }, 400);
-  await post('/api/v1/locations', { key: `smoke_y_${RUN}`, name: 'y', locationType: 'room', parentId: '00000000-0000-4000-8000-000000000000' }, 400);
+  await get(`/api/v1/locations/${room.id}/usage`);
 
   await get('/api/v1/owners?kind=team&sort=name');
-  const owner = (await post('/api/v1/owners', { kind: 'person', name: `Smoke Person ${RUN}`, email: `smoke-${RUN}@example.com` })).json;
+  const owner = (await get(`/api/v1/owners?q=${encodeURIComponent(`Smoke Person ${RUN}`)}`)).json.data[0];
   await get(`/api/v1/owners/${owner.id}`);
-  await patch(`/api/v1/owners/${owner.id}`, { email: 'not-an-email' }, 400);
-  await patch(`/api/v1/owners/${owner.id}`, { externalRef: `hr-${RUN}` });
+  await get(`/api/v1/owners/${owner.id}/usage`);
+
+  // Every write answers 410 GONE, names the lookup list that replaced the table, and changes nothing.
+  const legacyWrites: [string, string, unknown][] = [
+    ['POST', '/api/v1/statuses', { key: `smoke_gone_${RUN}`, name: 'Gone' }],
+    ['PATCH', `/api/v1/statuses/${status.id}`, { name: 'Renamed' }],
+    ['DELETE', `/api/v1/statuses/${status.id}`, undefined],
+    ['POST', '/api/v1/environments', { key: `smoke_gone_${RUN}`, name: 'Gone' }],
+    ['PATCH', `/api/v1/environments/${env.id}`, { isActive: false }],
+    ['DELETE', `/api/v1/environments/${env.id}`, undefined],
+    ['POST', '/api/v1/locations', { key: `smoke_gone_${RUN}`, name: 'Gone', locationType: 'site' }],
+    ['PATCH', `/api/v1/locations/${room.id}`, { parentId: room.id }],
+    ['DELETE', `/api/v1/locations/${room.id}`, undefined],
+    ['POST', '/api/v1/owners', { kind: 'team', name: `Gone ${RUN}` }],
+    ['PATCH', `/api/v1/owners/${owner.id}`, { email: 'not-an-email' }],
+    ['DELETE', `/api/v1/owners/${owner.id}`, undefined],
+  ];
+  for (const [method, url, body] of legacyWrites) {
+    const res = await call(method, url, body, 410);
+    check(res.json?.error?.code === 'GONE' && res.json.error.message.includes('/api/v1/lookup-lists'), `${method} ${url}: GONE points to /api/v1/lookup-lists`);
+  }
+  check((await get(`/api/v1/statuses/${status.id}`)).json.name === 'Smoke status' && (await get(`/api/v1/statuses?q=smoke_gone_${RUN}`)).json.page.total === 0,
+    'refused legacy writes change nothing');
 
   // --- Starter templates ----------------------------------------------------------
   console.log('\n# Templates');
@@ -576,7 +601,6 @@ async function main() {
   await patch(`/api/v1/configuration-items/${server.id}`, { attributes: { notes: 'x' } }, 409);
   await del(`/api/v1/configuration-items/${server.id}`, 404);
   await post('/api/v1/relationships', { relationshipTypeId: runsOn, sourceCiId: app.id, targetCiId: server.id }, 400); // deleted endpoint
-  await patch(`/api/v1/owners/${owner.id}`, { isActive: false });
   await get(`/api/v1/relationship-rules/${rule.id}/usage`);
   await del(`/api/v1/relationship-rules/${rule.id}`);
   const rtUsage = (await get(`/api/v1/relationship-types/${rt.id}/usage`)).json;
@@ -595,12 +619,6 @@ async function main() {
   await del(`/api/v1/ci-classes/${lb.id}`); // archives the type; its table and CIs stay
   check((await get(`/api/v1/ci-classes/${lb.id}`)).json.isActive === false, 'deleting a type archives it');
   await post('/api/v1/configuration-items', { classId: lb.id, attributes: { name: 'archived-class', status: inService, device_role: 'other', algorithm: 'least_conn' } }, 400);
-  await get(`/api/v1/locations/${room.id}/usage`);
-  await get(`/api/v1/owners/${owner.id}/usage`);
-  await del(`/api/v1/locations/${fra1}`, 409); // still has the room
-  await del(`/api/v1/locations/${room.id}`); // CIs do not refer to the old tables any more
-  await del(`/api/v1/locations/${fra1}`);
-  await del(`/api/v1/owners/${owner.id}`);
   const ownerUsage = (await get(`/api/v1/lookup-list-values/${ownerValue.id}/usage`)).json;
   check(ownerUsage.inUse && ownerUsage.data.some((u: Json) => u.kind === 'attributeValues' && u.count === 1), 'a lookup value stored on a (deleted) CI is in use');
   const silverUsage = (await get(`/api/v1/lookup-list-values/${silver.id}/usage`)).json;
@@ -635,8 +653,8 @@ async function main() {
 
   // --- HTTP-level errors ---------------------------------------------------------
   console.log('\n# HTTP errors');
-  await call('POST', '/api/v1/statuses', '{"key":', 400);
-  await call('POST', '/api/v1/statuses', 'key=x', 415, { 'content-type': 'application/x-www-form-urlencoded' });
+  await call('POST', '/api/v1/lookup-lists', '{"key":', 400);
+  await call('POST', '/api/v1/lookup-lists', 'key=x', 415,{ 'content-type': 'application/x-www-form-urlencoded' });
   await get('/api/v1/does-not-exist', 404);
   await get('/api/v1/configuration-items?limit=500', 400);
 
@@ -1397,7 +1415,11 @@ async function customization(x: Json) {
   check(withImages.logo?.contentType === 'image/png' && withImages.favicon?.contentType === 'image/svg+xml', 'branding lists both images');
 
   console.log('\n# Configuration export/import');
-  const scratch = (await post('/api/v1/statuses', { key: `smoke_exp_${RUN}`, name: 'Exported status' })).json;
+  // The legacy status tables are read-only in the API; the import still writes them.
+  await post('/api/v1/admin/config/import?mode=apply', {
+    format: 'shadoucmdb.config', formatVersion: 3, lookups: { statuses: [{ key: `smoke_exp_${RUN}`, name: 'Exported status' }] },
+  }, 200);
+  const scratch = (await get(`/api/v1/statuses?q=smoke_exp_${RUN}`)).json.data[0];
   const exported = await get('/api/v1/admin/config/export');
   const file = exported.json;
   const raw = JSON.stringify(file);
@@ -1471,8 +1493,6 @@ async function customization(x: Json) {
   const newClass = (await get(`/api/v1/ci-classes?q=smoke_imp_${RUN}`)).json.data[0];
   for (const a of attrs.filter((a: Json) => a.classId === newClass.id)) await del(`/api/v1/attribute-definitions/${a.id}`);
   await del(`/api/v1/ci-classes/${newClass.id}`);
-  await del(`/api/v1/statuses/${imported.id}`);
-  await del(`/api/v1/statuses/${scratch.id}`);
   const current = (await get('/api/v1/ui-settings')).json;
   const restored = (await post(`/api/v1/ui-settings/versions/${firstVersion}/restore`, { version: current.version }, 200)).json;
   check(restored.version === current.version + 1 && JSON.stringify(restored.settings) === JSON.stringify(before.settings), 'restoring an earlier version saves it as a new version');
