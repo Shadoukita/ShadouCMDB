@@ -654,11 +654,13 @@ impl RouteBuilder {
             let (method, operation_id) = (method.clone(), operation_id.clone());
             async move {
                 let run = async move {
-                    let peer_ip = peer.map(|Extension(ConnectInfo(a))| a.ip());
+                    // AUDIT_CAPTURE_*: what is not captured is never stored (sessions, audit_log) or logged.
+                    let capture = state.capture;
+                    let peer_ip = peer.map(|Extension(ConnectInfo(a))| a.ip()).filter(|_| capture.ip);
                     let client = ClientInfo {
-                        ip: auth::session::client_ip(&headers, peer_ip),
+                        ip: auth::session::client_ip(&headers, peer_ip).filter(|_| capture.ip),
                         peer_ip,
-                        user_agent: auth::session::user_agent(&headers),
+                        user_agent: auth::session::user_agent(&headers).filter(|_| capture.user_agent),
                     };
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
                     let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };

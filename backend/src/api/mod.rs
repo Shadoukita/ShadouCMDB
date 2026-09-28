@@ -56,13 +56,11 @@ pub fn openapi_json() -> String {
     json
 }
 
-/// Router for every route plus `/openapi.json` and the Swagger UI at `/docs`.
+/// Router for every route. `/openapi.json` and `/docs` are [`docs_router`],
+/// mounted by http/mod.rs according to `API_DOCS`.
 pub fn router() -> Router<AppState> {
-    let routes = routes();
-    let doc = openapi::document(&routes);
-
     let mut by_path: Vec<(String, MethodRouter<AppState>)> = Vec::new();
-    for r in routes {
+    for r in routes() {
         match by_path.iter_mut().find(|(p, _)| *p == r.path) {
             Some((_, existing)) => {
                 let merged = std::mem::take(existing).merge(r.handler);
@@ -75,8 +73,14 @@ pub fn router() -> Router<AppState> {
     for (path, handler) in by_path {
         router = router.route(&path, handler);
     }
+    router
+}
+
+/// `/openapi.json` and the Swagger UI at `/docs`.
+pub fn docs_router() -> Router<AppState> {
+    let doc = openapi::document(&routes());
     // BaseLayout drops the top bar (logo and spec-URL box). Its logo SVG
     // injects an inline <style> that the CSP on /docs would block (see
     // `CSP` in http/mod.rs); the bar has nothing to offer with one document.
-    router.merge(SwaggerUi::new("/docs").url("/openapi.json", doc).config(Config::default().use_base_layout()))
+    Router::new().merge(SwaggerUi::new("/docs").url("/openapi.json", doc).config(Config::default().use_base_layout()))
 }

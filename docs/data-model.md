@@ -402,7 +402,28 @@ names. Sign-ins refused with 429 while a name is locked are not recorded: they c
 server nothing, and recording them would let an anonymous client grow `audit_log` at will.
 Passwords, session tokens, token hashes and CSRF tokens are never written. The IP address is
 evidence, not an access control: see [deployment](deployment.md#https-and-session-cookies)
-for the proxy it assumes. Nothing alerts on these rows yet.
+for the proxy it assumes. Nothing alerts on these rows yet. With `AUDIT_CAPTURE_CLIENT_IP=false` or
+`AUDIT_CAPTURE_USER_AGENT=false` those fields are `null` here and in `sessions`, and nothing logs them.
+
+### Tamper evidence
+
+`audit_log` rejects `UPDATE`, `DELETE` and `TRUNCATE` (triggers), and every row is hash-chained
+(migration 0018). A `BEFORE INSERT` trigger sets `chain_seq` (1, 2, 3, … in commit order),
+`prev_hash` (the previous row's `row_hash`; 32 zero bytes for the first) and
+
+```
+row_hash = sha256(prev_hash || jsonb_build_array(chain_seq, occurred_at (UTC, µs), actor_type, actor_id,
+                  actor_name, action, entity_type, entity_id, old_value, new_value, request_id)::text)
+```
+
+whatever the inserting statement supplied. Inserts serialise on the one row of
+`audit_log_chain_head` until they commit; a rolled-back insert leaves no gap.
+`audit_log_verify()` (and `shadoucmdb audit-verify`, which exits non-zero) reports rows whose content no
+longer matches their hash (`altered`), broken links (`relinked`), missing `chain_seq` values (`gap`) and a
+deleted tail (`tail`). A superuser can still rewrite the whole chain consistently; the defence against that
+is the off-host copy: `AUDIT_EXPORT` sends every row with its `rowHash` to a SIEM, and `audit-verify`
+prints the chain head to compare with it. Rows that existed before migration 0018 were chained in `id`
+order when it ran.
 
 Two-factor authentication events have `entity_type = 'users'` and the user's id as `entity_id`, `old_value` NULL,
 and `userId`, `username`, `ipAddress`, `userAgent` in `new_value`:

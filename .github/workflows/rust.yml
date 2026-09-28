@@ -75,7 +75,7 @@ jobs:
 
       - name: serve, /healthz, /readyz, smoke suite (every operation), graceful shutdown
         run: |
-          API_HOST=127.0.0.1 API_PORT=3000 ./target/release/shadoucmdb serve > serve.log &
+          API_HOST=127.0.0.1 API_PORT=3000 API_DOCS=public ./target/release/shadoucmdb serve > serve.log &
           PID=$!
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/healthz && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/readyz | tee readyz.json
@@ -107,8 +107,12 @@ jobs:
           MIGRATION_DATABASE_URL="postgres://invqa-owner:ci-owner@$U" $B migrate | grep -q "nothing to do"
           $B seed --demo
           $B verify
+          $B audit-verify
+          # Only the audit_log trigger may move the hash-chain head (migration 0018), whatever the API role is called.
+          test "$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc \
+            "SELECT has_table_privilege('invqa.api', 'cmdb.audit_log_chain_head', 'SELECT,INSERT,UPDATE,DELETE')")" = f
           $B prune-audit --older-than 180d
-          API_HOST=127.0.0.1 API_PORT=3002 $B serve > serve-custom.log &
+          API_HOST=127.0.0.1 API_PORT=3002 API_DOCS=public $B serve > serve-custom.log &
           PID=$!
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3002/healthz && break; sleep 1; done
           curl -sf http://127.0.0.1:3002/readyz | grep -q '"upToDate":true'

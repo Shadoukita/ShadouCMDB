@@ -1,6 +1,8 @@
 //! `shadoucmdb`: the ShadouCMDB server and its admin commands in one binary.
 
 mod api;
+mod audit_export;
+mod audit_verify;
 mod auth;
 mod config;
 mod data;
@@ -64,6 +66,12 @@ enum Command {
     },
     /// Run schema acceptance checks inside a rolled-back transaction.
     Verify,
+    /// Check the audit_log hash chain; prints the chain head to compare with the SIEM copy.
+    AuditVerify {
+        /// Report missing rows (gaps in chainSeq) without failing, e.g. after retention pruning.
+        #[arg(long)]
+        allow_gaps: bool,
+    },
     /// Create a user with the built-in Administrator profile (first install or lost access).
     CreateAdmin(auth::cli::CreateAdminArgs),
     /// Delete audit_log rows past the retention window (a dry run unless --execute).
@@ -97,6 +105,7 @@ impl Command {
             Command::Migrate { .. } => "migrate",
             Command::Seed { .. } => "seed",
             Command::Verify => "verify",
+            Command::AuditVerify { .. } => "audit-verify",
             Command::CreateAdmin(_) => "create-admin",
             Command::PruneAudit(_) => "prune-audit",
             Command::Backup(_) => "backup",
@@ -164,6 +173,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Verify => {
             let cfg = Config::from_env()?;
             runtime()?.block_on(verify::run(&cfg.database))
+        }
+        Command::AuditVerify { allow_gaps } => {
+            let cfg = Config::from_env()?;
+            runtime()?.block_on(audit_verify::run(&cfg.database, allow_gaps))
         }
         Command::CreateAdmin(args) => {
             let cfg = Config::from_env()?;

@@ -13,7 +13,6 @@ mod ui;
 
 use std::any::Any;
 use std::future::Future;
-use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::Router;
@@ -31,9 +30,17 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use crate::api;
 use crate::auth::AuthState;
 use crate::auth::session::{CSRF_HEADER, request_is_https};
-use crate::config::{AuthConfig, Config};
+use crate::config::{ApiDocs, AuditConfig, AuthConfig, Config};
 use crate::db;
-use error::AppError;
+use error::{AppError, ErrorCode};
+
+/// Which client details the API records (sessions and sign-in events);
+/// `AUDIT_CAPTURE_CLIENT_IP` and `AUDIT_CAPTURE_USER_AGENT`.
+#[derive(Debug, Clone, Copy)]
+pub struct ClientCapture {
+    pub ip: bool,
+    pub user_agent: bool,
+}
 
 /// Shared by every handler.
 #[derive(Clone)]
@@ -41,13 +48,24 @@ pub struct AppState {
     pub pool: PgPool,
     /// Session settings and the login backoff.
     pub auth: Arc<AuthState>,
+    pub capture: ClientCapture,
     /// Whether every migration of this build is applied (see `schema_gate`).
     pub schema: Arc<db::SchemaState>,
 }
 
 impl AppState {
     pub fn new(pool: PgPool, auth: AuthConfig) -> Self {
-        AppState { pool, auth: Arc::new(AuthState::new(auth)), schema: Arc::default() }
+        AppState {
+            pool,
+            auth: Arc::new(AuthState::new(auth)),
+            capture: ClientCapture { ip: true, user_agent: true },
+            schema: Arc::default(),
+        }
+    }
+
+    pub fn capturing(mut self, audit: &AuditConfig) -> Self {
+        self.capture = ClientCapture { ip: audit.capture_client_ip, user_agent: audit.capture_user_agent };
+        self
     }
 }
 
@@ -63,12 +81,15 @@ fn not_migrated(applied: usize, expected: usize) -> String {
 /// any handler runs. An unreachable database is answered here too, so the
 /// request does not wait for a connection twice. Any other failure of the
 /// check (e.g. no privileges) lets the request go on to the handler.
+/// `/api/v1/version` needs no database and stays answerable, so an operator
+/// can see which build (and how many migrations) is running before migrating.
 async fn schema_gate(
     axum::extract::State(state): axum::extract::State<AppState>,
     req: Request,
     next: axum::middleware::Next,
 ) -> Response {
-    if is_api_path(req.uri().path()) {
+    let path = req.uri().path();
+    if is_api_path(path) && path != "/api/v1/version" {
         match state.schema.check(&state.pool).await {
             Ok(db::SchemaCheck::Pending { applied, expected }) => {
                 let message = not_migrated(applied, expected);
@@ -237,14 +258,74 @@ fn with_security_headers(app: Router, csp: Csp) -> Router {
         .layer(SetResponseHeaderLayer::overriding(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer")))
 }
 
+/// `API_DOCS=authenticated`: the contract and Swagger UI need a session, like `/api/v1/auth/me`.
+async fn require_session(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    match crate::auth::authenticate(&state.pool, &state.auth.config, req.headers()).await {
+        Ok(Some(_)) => next.run(req).await,
+        Ok(None) => AppError::new(ErrorCode::Unauthenticated, "Sign in to read the API documentation").into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn docs_disabled(req: Request) -> Response {
+    AppError::not_found(format!(
+        "Route {} {} does not exist (API documentation is off: API_DOCS)",
+        req.method(),
+        req.uri().path()
+    ))
+    .into_response()
+}
+
+/// `/openapi.json` and `/docs` as `API_DOCS` says. Off by default: the
+/// contract lists every route and parameter, which helps an attacker map the
+/// API; it is also committed as backend/openapi.json for developers.
+fn docs(state: &AppState, mode: ApiDocs) -> Router<AppState> {
+    match mode {
+        ApiDocs::Public => api::docs_router(),
+        ApiDocs::Authenticated => {
+            api::docs_router().route_layer(axum::middleware::from_fn_with_state(state.clone(), require_session))
+        }
+        ApiDocs::Off => Router::new()
+            .route("/openapi.json", axum::routing::any(docs_disabled))
+            .route("/docs", axum::routing::any(docs_disabled))
+            .route("/docs/{*rest}", axum::routing::any(docs_disabled)),
+    }
+}
+
+/// Bounds the whole request (body upload included) until the response
+/// starts. Dropping the handler rolls back its open transaction.
+async fn request_timeout(
+    axum::extract::State(limit): axum::extract::State<Duration>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    match tokio::time::timeout(limit, next.run(req)).await {
+        Ok(res) => res,
+        Err(_) => {
+            tracing::warn!(limit_secs = limit.as_secs(), "request timed out");
+            AppError::new(
+                ErrorCode::RequestTimeout,
+                format!("The request was not completed within {} s", limit.as_secs()),
+            )
+            .into_response()
+        }
+    }
+}
+
 pub fn router(state: AppState, cfg: &Config) -> Router {
     let mut app = api::router()
         .route(security_txt::PATH, axum::routing::get(security_txt::handler))
+        .merge(docs(&state, cfg.api_docs))
         .fallback(fallback)
         .method_not_allowed_fallback(fallback)
         // Matched routes only: an unknown path is a 404 whatever the database state.
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), schema_gate))
         .with_state(state)
+        .layer(axum::middleware::from_fn_with_state(cfg.http.request_timeout, request_timeout))
         .layer(CatchPanicLayer::custom(panic_response))
         .layer(DefaultBodyLimit::max(1024 * 1024));
 
@@ -275,8 +356,9 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
 /// and closes the pool.
 pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
     let pool = db::lazy_pool(&cfg.database)?;
-    let state = AppState::new(pool.clone(), cfg.auth.clone());
+    let state = AppState::new(pool.clone(), cfg.auth.clone()).capturing(&cfg.audit);
     let app = router(state.clone(), &cfg);
+    let exporter = cfg.audit.export.clone().map(|export| crate::audit_export::spawn(pool.clone(), export));
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
         .await
@@ -287,19 +369,78 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         ui = ui::available(),
         migrations = db::expected_count(),
         ssl = cfg.database.ssl.as_str(),
+        api_docs = cfg.api_docs.as_str(),
         "server listening"
     );
     tokio::spawn(log_schema_state(state));
 
-    // The peer address is the client IP of last resort for the audit trail (auth::session::client_ip).
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    accept_loop(listener, app, &cfg.http, shutdown).await;
+    if let Some(exporter) = exporter {
+        exporter.stop().await;
+    }
     tracing::info!("draining complete, closing database pool");
     // Do not let a wedged connection hold up process exit.
     let _ = tokio::time::timeout(Duration::from_secs(5), pool.close()).await;
     tracing::info!("server stopped");
     Ok(())
+}
+
+/// Accepts connections until `shutdown`, then waits for open ones to finish
+/// their current request. axum::serve sets no timer on hyper, which leaves
+/// HTTP/1 header reads unbounded; this loop sets one.
+async fn accept_loop(
+    listener: TcpListener,
+    app: Router,
+    http: &crate::config::HttpConfig,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) {
+    use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+    use hyper_util::server::conn::auto::Builder;
+    use hyper_util::server::graceful::GracefulShutdown;
+    use hyper_util::service::TowerToHyperService;
+    use tower::ServiceExt;
+
+    let mut builder = Builder::new(TokioExecutor::new());
+    builder.http1().timer(TokioTimer::new()).header_read_timeout(http.header_read_timeout);
+    builder
+        .http2()
+        .timer(TokioTimer::new())
+        .enable_connect_protocol()
+        .keep_alive_interval(Duration::from_secs(30))
+        .keep_alive_timeout(Duration::from_secs(20));
+
+    let graceful = GracefulShutdown::new();
+    let mut shutdown = std::pin::pin!(shutdown);
+    loop {
+        let (stream, peer) = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok(conn) => conn,
+                Err(e) => {
+                    // EMFILE and friends: back off instead of spinning.
+                    tracing::warn!(error = %e, "accept failed");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            },
+            () = &mut shutdown => break,
+        };
+        let _ = stream.set_nodelay(true);
+        // The peer address is the client IP of last resort for the audit trail (auth::session::client_ip).
+        let service = app.clone().map_request(move |req: axum::http::Request<hyper::body::Incoming>| {
+            let mut req = req.map(axum::body::Body::new);
+            req.extensions_mut().insert(axum::extract::ConnectInfo(peer));
+            req
+        });
+        let conn = builder.serve_connection_with_upgrades(TokioIo::new(stream), TowerToHyperService::new(service));
+        let conn = graceful.watch(conn.into_owned());
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                tracing::debug!(error = %e, "connection closed with an error");
+            }
+        });
+    }
+    drop(listener);
+    graceful.shutdown().await;
 }
 
 /// Resolves on Ctrl+C, or SIGTERM on Unix (systemd, Docker, Kubernetes).
@@ -377,6 +518,11 @@ mod tests {
             api_port: 3000,
             cors_origins: Vec::new(),
             csp_report_uri: None,
+            api_docs: ApiDocs::Public,
+            http: crate::config::HttpConfig {
+                header_read_timeout: Duration::from_secs(10),
+                request_timeout: Duration::from_secs(120),
+            },
             database: crate::config::DatabaseConfig {
                 url: Some("postgres://nobody@127.0.0.1:1/none".into()),
                 host: None,
@@ -394,6 +540,7 @@ mod tests {
             migration_url: None,
             maintenance_url: None,
             auth: auth.clone(),
+            audit: AuditConfig::default(),
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth), &cfg)
@@ -612,5 +759,80 @@ mod tests {
         let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
         let js = String::from_utf8(body.to_vec()).unwrap();
         assert!(js.contains(r#""layout": "BaseLayout""#), "{js}");
+    }
+
+    #[tokio::test]
+    async fn api_docs_are_off_unless_enabled() {
+        let off = || app_with(|cfg| cfg.api_docs = ApiDocs::Off);
+        for path in ["/openapi.json", "/docs", "/docs/", "/docs/swagger-initializer.js"] {
+            let res = get(off(), path, &[]).await;
+            assert_eq!(res.status(), 404, "{path}");
+            assert!(header(&res, header::CONTENT_TYPE).unwrap().starts_with("application/json"), "{path}");
+        }
+        assert_eq!(get(app(), "/openapi.json", &[]).await.status(), 200, "API_DOCS=public");
+    }
+
+    #[tokio::test]
+    async fn api_docs_can_require_a_session() {
+        let app = || app_with(|cfg| cfg.api_docs = ApiDocs::Authenticated);
+        // No cookie: refused before any database lookup.
+        for path in ["/openapi.json", "/docs/"] {
+            let res = get(app(), path, &[]).await;
+            assert_eq!(res.status(), 401, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_requests_get_the_timeout_envelope() {
+        let slow = Router::new().route(
+            "/api/slow",
+            axum::routing::get(|| async {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                "late"
+            }),
+        );
+        let app = slow.layer(axum::middleware::from_fn_with_state(Duration::from_millis(50), request_timeout));
+        let res = get(app, "/api/slow", &[]).await;
+        assert_eq!(res.status(), 408);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"], "REQUEST_TIMEOUT");
+    }
+
+    #[tokio::test]
+    async fn healthz_and_version_report_the_build() {
+        for path in ["/healthz", "/api/v1/version"] {
+            let res = get(app(), path, &[]).await;
+            assert_eq!(res.status(), 200, "{path}");
+            let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(v["version"], env!("CARGO_PKG_VERSION"), "{path}");
+        }
+    }
+
+    /// A client that opens a connection and never finishes its headers is cut off.
+    #[tokio::test]
+    async fn header_read_timeout_closes_slow_connections() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let http = crate::config::HttpConfig {
+            header_read_timeout: Duration::from_millis(200),
+            request_timeout: Duration::from_secs(5),
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            accept_loop(listener, app(), &http, async {
+                let _ = rx.await;
+            })
+            .await
+        });
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n").await.unwrap();
+        let mut buf = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf)).await;
+        assert!(read.is_ok(), "connection still open after the header read timeout");
+        let _ = tx.send(());
+        server.await.unwrap();
     }
 }

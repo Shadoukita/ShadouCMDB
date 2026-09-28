@@ -19,12 +19,14 @@ the certificate check and logs a warning at startup; use it only while you fix t
 ```
 shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
 
-  serve                     Run the HTTP server (/api/v1, /openapi.json, /docs, /healthz, /readyz, web UI)
+  serve                     Run the HTTP server (/api/v1, /healthz, /readyz, web UI; /openapi.json and /docs with API_DOCS)
   migrate [--adopt-drizzle] Apply pending migrations; re-running is a no-op
   seed [--template KEY]... [--demo]
                             Check system rows; install a starter template (it_infrastructure);
                             --demo installs it and adds a sample inventory. Idempotent
   verify                    Schema acceptance checks in a rolled-back transaction
+  audit-verify [--allow-gaps]
+                            Check the audit_log hash chain and print its head; exits 1 if it is broken
   create-admin --username U [--display-name N] [--email E] [--password-stdin]
                             Create a user holding the built-in Administrator profile
   prune-audit --older-than 180d [--scope auth|changes] [--execute]
@@ -292,6 +294,37 @@ Recorded as an audit.purge entry in audit_log.
   `DATABASE_STATEMENT_TIMEOUT_MS`. Under a sustained sign-in attack the table can gain about
   43,000 `login.failure` rows a day, so run it regularly, e.g. a daily systemd timer or cron
   job with `--execute`.
+
+## Hardening settings
+
+All optional; every variable is in [`.env.example`](../.env.example).
+
+- **Database TLS:** keep the default `DATABASE_SSL=verify-full` (with `DATABASE_SSL_CA_FILE` for a private
+  CA). `require` encrypts but does not check the server certificate.
+- **API documentation:** `/openapi.json` and `/docs` are off by default (`API_DOCS=off`). Use
+  `authenticated` to offer them to signed-in users, `public` for development. The contract is
+  committed as `backend/openapi.json` either way.
+- **Timeouts:** `HTTP_HEADER_READ_TIMEOUT_SECS` (default 10) closes connections that do not finish
+  their headers in time; `HTTP_REQUEST_TIMEOUT_SECS` (default 120) answers `408 REQUEST_TIMEOUT` to a
+  request that runs longer. A reverse proxy in front should have its own, shorter limits.
+- **Client details:** `AUDIT_CAPTURE_CLIENT_IP=false` and `AUDIT_CAPTURE_USER_AGENT=false` stop the
+  server recording the IP address and User-Agent of sign-ins and sessions (for example where a works
+  council agreement rules them out). Changes stay attributed to the signed-in user.
+- **Audit export to a SIEM:** `AUDIT_EXPORT` copies each committed `audit_log` row, once, to `stdout`,
+  a file (`file:/var/log/shadoucmdb/audit.jsonl`), or syslog over UDP or TCP
+  (`udp://siem.example.com:514`). `AUDIT_EXPORT_FORMAT` is `rfc5424` (default for UDP/TCP) or `json`
+  (default for stdout/file). RFC 5424 messages use facility 13 (log audit; `AUDIT_SYSLOG_FACILITY`),
+  severity warning for `login.failure` / `login.locked` and notice otherwise, `MSGID` = the action,
+  structured data `[audit@32473 seq=… id=… actorType=… entityType=… entityId=… hash=… actorId=…]`
+  (32473 is the RFC 5612 documentation enterprise number) and the full event as JSON in `MSG`. There is
+  no TLS: for an encrypted link to a remote SIEM, point it at a local relay (rsyslog, Vector, Fluent
+  Bit). A failed send is retried from the same row; delivery is at least once while the server runs.
+  Export starts at the newest row when the server starts, so rows written while it was stopped (for
+  example by `create-admin`) are not sent; the `chainSeq` gap shows it. Run export on one instance only.
+- **Audit integrity:** run `shadoucmdb audit-verify` on a schedule and compare the printed chain head
+  with the `rowHash` of the same `chainSeq` in the SIEM (see
+  [data model › Tamper evidence](data-model.md#tamper-evidence)). Rows removed by `prune-audit`
+  show up as `gap` findings; use `audit-verify --allow-gaps` once retention runs.
 
 ## Release downloads
 
