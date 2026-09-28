@@ -6,6 +6,7 @@ import { useCiClasses, useClassAttributes } from "../api/queries";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
+import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
 import { useDocumentTitle } from "../lib/composables";
 import { groupByArea } from "../lib/areas";
 import { useLayoutEditor } from "../lib/layoutEditor";
@@ -37,7 +38,7 @@ const crumbs = computed<Crumb[]>(() => [
   { label: "New" },
 ]);
 
-// Edit layout (?layout=edit): the form's layout edited in place on an empty form of the class,
+// Edit layout (the layout-editor route, in its own window): the form's layout edited on an empty form of the class,
 // also where the designer's "Open on a CI" leads for a class without CIs.
 const attrs = useClassAttributes(() => cls.value?.id);
 const editor = useLayoutEditor({ classKey: () => cls.value?.key, attrs: () => attrs.data.value?.filter((d) => d.isActive) });
@@ -55,7 +56,7 @@ function pickClass(e: Event) {
   <div class="page-header">
     <div class="title"><h1>New configuration item</h1></div>
     <div v-if="editor.allowed && !editor.active && cls" class="actions">
-      <button type="button" class="btn" @click="editor.enter()">Edit layout</button>
+      <EditLayoutButton :editor="editor" />
     </div>
   </div>
   <section v-if="classes.data.value?.length === 0" class="panel callout">

@@ -29,6 +29,7 @@ import AccountPage from "./pages/account/AccountPage.vue";
 import TwoFactorSetupPage from "./pages/account/TwoFactorSetupPage.vue";
 import LoginPage from "./pages/auth/LoginPage.vue";
 import SetupPage from "./pages/auth/SetupPage.vue";
+import { EDITOR_SUFFIX, OPENED_HERE_QUERY, pageOfEditor } from "./lib/layoutEditor";
 import { trackNavigations } from "./lib/navigation";
 import { useSessionStore } from "./stores/session";
 import type { GlobalPermission } from "./api/admin";
@@ -43,6 +44,8 @@ declare module "vue-router" {
     permissions?: GlobalPermission[];
     /** Administration screens only for holders of the built-in Administrator profile. */
     administratorOnly?: boolean;
+    /** The layout editor of a CI page (lib/layoutEditor): needs customization.manage. */
+    layoutEditor?: boolean;
   }
 }
 
@@ -61,6 +64,10 @@ export const router = createRouter({
     { path: "/cis/new", component: CiCreatePage },
     { path: "/cis/:id", component: CiDetailPage },
     { path: "/cis/:id/edit", component: CiEditPage },
+    // The layout editor, opened in its own window from the pages above (lib/layoutEditor).
+    { path: `/cis/new${EDITOR_SUFFIX}`, component: CiCreatePage, meta: { layoutEditor: true } },
+    { path: `/cis/:id${EDITOR_SUFFIX}`, component: CiDetailPage, meta: { layoutEditor: true } },
+    { path: `/cis/:id/edit${EDITOR_SUFFIX}`, component: CiEditPage, meta: { layoutEditor: true } },
     { path: "/search", component: SearchPage },
     { path: "/account", component: AccountPage },
     { path: TWO_FACTOR_SETUP, component: TwoFactorSetupPage, meta: { bare: true } },
@@ -130,5 +137,11 @@ router.beforeEach(async (to) => {
     return { path: TWO_FACTOR_SETUP, query: to.fullPath === "/" ? {} : { redirect: to.fullPath } };
   }
   if (!session.enrolmentRequired && to.path === TWO_FACTOR_SETUP) return "/account";
+  // Without customization.manage the layout editor is just the page.
+  if (to.meta.layoutEditor && !session.can("customization.manage")) {
+    const query = { ...to.query };
+    delete query[OPENED_HERE_QUERY];
+    return { path: pageOfEditor(to.path), query, replace: true };
+  }
   return true;
 });

@@ -229,11 +229,18 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
 
 ### Editing a layout on the CI page
 
-Users with **customization.manage** can also edit a class's layout in place: **Edit layout** on a CI's
-detail page, its edit form or the new-CI form (URL parameter `?layout=edit`; the designer's **Open on a
-CI** leads there, to the class's first CI or, without CIs, to an empty form of the class). The page stays
-the real one, with the CI's values, framed as being edited; the bar on top names the class, since the
-layout applies to all of its CIs.
+Users with **customization.manage** can also edit a class's layout on a real CI page: **Edit layout** on
+a CI's detail page, its edit form or the new-CI form opens the layout editor in a separate browser
+window. The designer's **Open on a CI** opens it too, on the class's first CI or, without CIs, on an
+empty form of the class. There is one editor window per class (named `layout-editor-<class key>`): a
+second click brings the open window to the front instead of loading it again. The page the editor was
+opened from stays as it is.
+
+The editor has its own route: the page's path plus `/layout-editor` (`/cis/<id>/layout-editor`,
+`/cis/<id>/edit/layout-editor`, `/cis/new/layout-editor?classId=<id>`). It shows the real page, with the
+CI's values, framed as being edited; the bar on top names the class, since the layout applies to all of
+its CIs. Users without the permission are sent to the page itself. If a popup blocker refuses the window,
+the editor opens in the same tab with a notice, and **Done** returns to the page.
 
 | To… | With the mouse | From the keyboard |
 |---|---|---|
@@ -248,13 +255,15 @@ layout applies to all of its CIs.
 
 **Undo** / **Redo** (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y outside text fields), **Desktop** / **Tablet** /
 **Phone** widths, **Reset to built-in layout** (drops the class's own layout from the draft; undoable),
-**Save layout** with an optional note, **Discard** and **Done** are in the bar. Leaving edit mode or the
-page with unsaved changes asks first. Saving goes through `PUT /api/v1/ui-settings` with the version the
+**Save layout** with an optional note, **Discard** and **Done** (closes the editor's window) are in the
+bar. Leaving the editor or closing its window with unsaved changes asks first. After a save, the editor
+tells the other open windows of the web UI (BroadcastChannel `layout-updated`), which load the new
+settings; in a browser without BroadcastChannel, the page that opened the editor offers a reload. Saving goes through `PUT /api/v1/ui-settings` with the version the
 editor started from, like **Customization**: it creates a settings version (listed in **Customization ›
 History** with the note, and audited), and a `409 VERSION_CONFLICT` (someone saved in between) is shown
 with **Load the latest version**, which discards the draft. The same rules apply as in the designer
 (lib/layoutDesign in the web UI, and the API's validation). Users without the permission see the normal
-page at the edit-mode URL.
+page at the editor's URL.
 
 **Layout format v1 and migration 0017.** Before 0017 a layout was `panels[]` (`key`, `label`,
 ordered `fields`, `collapsed`). Migration `0017_layout_tabs` converts the stored settings: the panels

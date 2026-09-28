@@ -1,8 +1,8 @@
 import type { Browser, Page } from "@playwright/test";
 import { apiGet, apiSend, classIdByName, csrf, expect, resetUiSettings, snap, test } from "./support";
 
-// Edit layout: the Server layout edited in place on a real Server CI (the demo seed), saved as a
-// settings version, and seen by a user who may only view servers. The walk starts from and ends
+// Edit layout: the Server layout edited on a real Server CI (the demo seed) in the layout editor's
+// own window, saved as a settings version, and seen by a user who may only view servers. The walk starts from and ends
 // with the built-in settings, so the other specs see the stock UI.
 test.describe.configure({ mode: "serial" });
 
@@ -36,18 +36,38 @@ async function signInUi(browser: Browser, username: string, password: string): P
   return page;
 }
 
+/** Clicks a button that opens the layout editor, and returns its window once the editor shows. */
+async function openEditor(page: Page, name: "Edit layout" | "Open on a CI" = "Edit layout"): Promise<Page> {
+  const [popup] = await Promise.all([page.waitForEvent("popup"), page.getByRole("button", { name }).click()]);
+  await expect(bar(popup)).toBeVisible();
+  return popup;
+}
+
+/** Done in the editor's window closes it. */
+async function closeEditor(page: Page) {
+  const closed = page.waitForEvent("close");
+  // The window closes during the click, which Playwright reports as an error of the click itself.
+  await bar(page).getByRole("button", { name: "Done" }).click().catch(() => undefined);
+  await closed;
+}
+
 const bar = (page: Page) => page.getByRole("region", { name: "Layout editing" });
 const tabBar = (page: Page) => page.getByRole("group", { name: "Tabs of the layout" });
 const section = (page: Page, label: string) => page.getByRole("region", { name: `Section ${label}`, exact: true });
 /** A field on the canvas by its label (its grip's accessible name starts with it). */
 const field = (page: Page, label: string) => page.locator(".le-field").filter({ has: page.getByRole("button", { name: new RegExp(`^${label}, `) }) });
 
-test("edit mode: add a tab and a section, move fields, save, and a viewer sees the result", async ({ page, browser }) => {
+test("the editor window: add a tab and a section, move fields, save, and a viewer sees the result", async ({ page: origin, browser }) => {
+  await origin.goto(`/cis/${ci.id}`);
+  const page = await openEditor(origin);
+  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}/layout-editor$`));
+  // The page it was opened from stays as it is; a second click focuses the open editor instead of another one.
+  await expect(origin.getByRole("tablist", { name: "CI sections" })).toBeVisible();
+  await expect(bar(origin)).toHaveCount(0);
+  await origin.getByRole("button", { name: "Edit layout" }).click();
+  await expect.poll(() => origin.context().pages().length).toBe(2);
   // Tall enough that a dragged field and where it is dropped are both in view.
   await page.setViewportSize({ width: 1440, height: 2400 });
-  await page.goto(`/cis/${ci.id}`);
-  await page.getByRole("button", { name: "Edit layout" }).click();
-  await expect(page).toHaveURL(/[?&]layout=edit/);
   // The mode is unmistakable, and says what the change applies to.
   await expect(bar(page)).toContainText("Editing the Server layout");
   await expect(bar(page)).toContainText("Changes apply to every Server configuration item");
@@ -114,7 +134,7 @@ test("edit mode: add a tab and a section, move fields, save, and a viewer sees t
   await bar(page).getByRole("button", { name: "Desktop" }).click();
   await snap(page, "layout-edit-detail");
 
-  // Unsaved changes are guarded: leaving edit mode asks first.
+  // Unsaved changes are guarded: closing the editor asks first.
   let asked = "";
   page.once("dialog", (d) => {
     asked = d.message();
@@ -122,20 +142,21 @@ test("edit mode: add a tab and a section, move fields, save, and a viewer sees t
   });
   await bar(page).getByRole("button", { name: "Done" }).click();
   expect(asked).toContain("unsaved");
-  await expect(page).toHaveURL(/[?&]layout=edit/);
+  await expect(bar(page)).toBeVisible();
 
   // Save with a note: a new settings version.
   await bar(page).getByLabel("Note for this version").fill(`e2e in-place layout ${stamp}`);
   await bar(page).getByRole("button", { name: "Save layout" }).click();
   await expect(bar(page).getByRole("status")).toContainText(/Saved as version \d+/);
   await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
-  await bar(page).getByRole("button", { name: "Done" }).click();
-  await expect(page).not.toHaveURL(/layout=edit/);
-  const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
+  // The page the editor was opened from shows the saved layout without a reload.
+  const tabs = origin.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
   await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "History"]);
+  // Done closes the editor's window.
+  await closeEditor(page);
 
   // The version history has the note.
-  const versions = await apiGet<{ data: { comment: string | null }[] }>(page.request, "/ui-settings/versions?limit=1");
+  const versions = await apiGet<{ data: { comment: string | null }[] }>(origin.request, "/ui-settings/versions?limit=1");
   expect(versions.data[0].comment).toBe(`e2e in-place layout ${stamp}`);
 
   // A user who may only view servers sees the new layout, and no way to edit it.
@@ -149,17 +170,19 @@ test("edit mode: add a tab and a section, move fields, save, and a viewer sees t
   await vtabs.filter({ hasText: "Hardware" }).click();
   await expect(viewer.locator(".layout-panels > details > summary h2")).toHaveText(["Hardware facts"]);
   await expect(viewer.locator(".layout-panels dt")).toHaveText(["Model", "CPU cores"]);
-  // The edit mode URL is just the page for them.
-  await viewer.goto(`/cis/${ci.id}?layout=edit`);
+  // The editor's URL is just the page for them.
+  await viewer.goto(`/cis/${ci.id}/layout-editor`);
+  await expect(viewer).toHaveURL(new RegExp(`/cis/${ci.id}$`));
   await expect(viewer.getByRole("tablist", { name: "CI sections" })).toBeVisible();
   await expect(viewer.getByRole("region", { name: "Layout editing" })).toHaveCount(0);
   await snap(viewer, "layout-edit-viewer");
   await viewer.context().close();
 });
 
-test("edit mode on the form: the CI's values in place, read-only fields, and back to the built-in layout", async ({ page }) => {
-  await page.goto(`/cis/${ci.id}/edit`);
-  await page.getByRole("button", { name: "Edit layout" }).click();
+test("the editor on the form: the CI's values in place, read-only fields, and back to the built-in layout", async ({ page: origin }) => {
+  await origin.goto(`/cis/${ci.id}/edit`);
+  let page = await openEditor(origin);
+  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}/edit/layout-editor$`));
   await expect(bar(page)).toContainText("Editing the Server layout");
   // The form's own controls, inert, with the CI's values.
   await expect(field(page, "Ident").locator("#f-ident")).toHaveValue(ci.ident);
@@ -170,12 +193,12 @@ test("edit mode on the form: the CI's values in place, read-only fields, and bac
   await expect(field(page, "Serial number")).toContainText("read-only");
   await bar(page).getByRole("button", { name: "Save layout" }).click();
   await expect(bar(page).getByRole("status")).toContainText(/Saved as version \d+/);
-  await bar(page).getByRole("button", { name: "Done" }).click();
-  await expect(page.getByLabel("Serial number")).toBeDisabled();
-  await expect(page.getByRole("tablist", { name: "Form tabs" }).getByRole("tab")).toHaveText(["General", "Hardware"]);
+  await closeEditor(page);
+  await expect(origin.getByLabel("Serial number")).toBeDisabled();
+  await expect(origin.getByRole("tablist", { name: "Form tabs" }).getByRole("tab")).toHaveText(["General", "Hardware"]);
 
   // Reset to the built-in layout (undoable until saved).
-  await page.getByRole("button", { name: "Edit layout" }).click();
+  page = await openEditor(origin);
   await bar(page).getByRole("button", { name: "Reset to built-in layout" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Reset to built-in layout" }).click();
   await expect(bar(page)).toContainText("built-in layout");
@@ -193,7 +216,7 @@ test("edit mode on the form: the CI's values in place, read-only fields, and bac
 });
 
 test("a concurrent save is reported with a way to reload", async ({ page, request }) => {
-  await page.goto(`/cis/${ci.id}?layout=edit`);
+  await page.goto(`/cis/${ci.id}/layout-editor`);
   await expect(bar(page)).toBeVisible();
   await field(page, "Manufacturer").hover();
   await field(page, "Manufacturer").getByRole("button", { name: "Make Manufacturer wider" }).click();
@@ -211,17 +234,33 @@ test("a concurrent save is reported with a way to reload", async ({ page, reques
   await expect(bar(page).getByRole("alert")).toHaveCount(0);
 });
 
-test("the designer opens its class on a real CI, or on an empty form without CIs", async ({ page, request }) => {
-  await page.goto("/admin/customization/layouts?class=server");
-  await page.getByRole("link", { name: "Open on a CI" }).click();
-  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}\\?layout=edit$`));
+test("the designer opens its class on a real CI, or on an empty form without CIs", async ({ page: designer, request }) => {
+  await designer.goto("/admin/customization/layouts?class=server");
+  let page = await openEditor(designer, "Open on a CI");
+  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}/layout-editor$`));
   await expect(bar(page)).toContainText("Editing the Server layout");
+  await page.close();
 
   const key = `e2e_empty_${stamp}`;
   await apiSend(request, "POST", "/ci-classes", { key, name: `E2E Empty ${stamp}` });
-  await page.goto(`/admin/customization/layouts?class=${key}`);
-  await page.getByRole("link", { name: "Open on a CI" }).click();
-  await expect(page).toHaveURL(/\/cis\/new\?classId=.+&layout=edit$/);
+  await designer.goto(`/admin/customization/layouts?class=${key}`);
+  page = await openEditor(designer, "Open on a CI");
+  await expect(page).toHaveURL(/\/cis\/new\/layout-editor\?classId=[^&]+$/);
   await expect(bar(page)).toContainText(`Editing the E2E Empty ${stamp} layout`);
   await expect(field(page, "Ident")).toBeVisible();
+  await page.close();
+});
+
+test("with popups blocked the editor opens in the same tab, and says so", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.open = () => null;
+  });
+  await page.goto(`/cis/${ci.id}`);
+  await page.getByRole("button", { name: "Edit layout" }).click();
+  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}/layout-editor\\?opened=tab$`));
+  await expect(bar(page).getByRole("note")).toContainText("Your browser blocked the new window");
+  await expect(field(page, "Ident")).toContainText(ci.ident);
+  await bar(page).getByRole("button", { name: "Done" }).click();
+  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));
+  await expect(page.getByRole("tablist", { name: "CI sections" })).toBeVisible();
 });

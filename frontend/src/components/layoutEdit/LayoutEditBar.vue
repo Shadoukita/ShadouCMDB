@@ -6,10 +6,10 @@ import ConfirmDialog from "../ConfirmDialog.vue";
 import ErrorAlert from "../ErrorAlert.vue";
 
 /**
- * The bar over a CI page in layout edit mode: which class's layout is being
+ * The bar over a CI page in the layout editor: which class's layout is being
  * edited (it applies to every CI of that class), undo and redo, preview widths,
  * back to the built-in layout, and save (a new settings version with an
- * optional note) or discard. Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) undo and redo
+ * optional note) or discard, and Done (closes the editor's window). Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) undo and redo
  * outside text fields.
  */
 const props = defineProps<{ editor: LayoutEditor; className: string; classKey: string }>();
@@ -68,6 +68,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       <button type="button" class="btn btn-primary" :disabled="!editor.dirty || editor.saving" @click="onSave">{{ editor.saving ? "Saving…" : "Save layout" }}</button>
       <button type="button" class="btn" :disabled="!editor.dirty || editor.saving" @click="editor.discard()">Discard</button>
       <button type="button" class="btn" @click="editor.exit()">Done</button>
+    </div>
+    <div v-if="editor.openedHere" class="alert" role="note">
+      Your browser blocked the new window, so the layout editor opened in this tab. Done takes you back to the page.
     </div>
     <div v-if="editor.saved && !editor.dirty" class="alert" role="status">{{ editor.saved }} Every {{ className }} configuration item now shows it.</div>
     <div v-if="editor.conflict || (editor.stale && editor.dirty)" class="alert alert-warn" role="alert">

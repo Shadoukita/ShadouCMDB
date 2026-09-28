@@ -10,6 +10,7 @@ import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import CiStateBadge from "../components/CiStateBadge.vue";
 import LayoutEditView from "../components/layoutEdit/LayoutEditView.vue";
+import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
 import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { useLayoutEditor } from "../lib/layoutEditor";
@@ -61,7 +62,7 @@ const attrs = useClassAttributes(() => c.value?.classId);
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || c.value?.attributes[d.key] != null));
 const layoutTabs = computed(() => resolveLayout(layout.value ?? builtInLayout(classKey.value ?? ""), defs.value, DETAIL_CORE, DETAIL_RECORD));
 
-// Edit layout (?layout=edit): the class layout edited in place on this CI, for users who may customize.
+// Edit layout (the layout-editor route, in its own window): the class layout edited on this CI, for users who may customize.
 const activeAttrs = computed(() => attrs.data.value?.filter((d) => d.isActive));
 const editor = useLayoutEditor({ classKey, attrs: activeAttrs });
 const defFor = (f: string) => defs.value.find((d) => d.key === attributeKey(f));
@@ -132,7 +133,7 @@ const crumbs = computed<Crumb[]>(() => {
         <CiStateBadge v-else :ci="c" />
       </div>
       <div v-if="!c.deletedAt" class="actions">
-        <button v-if="editor.allowed && !editor.active" type="button" class="btn" @click="editor.enter()">Edit layout</button>
+        <EditLayoutButton v-if="editor.allowed && !editor.active" :editor="editor" />
         <RouterLink v-if="session.canOnClass(c.classId, 'edit')" class="btn" :to="`/cis/${c.id}/edit`">Edit</RouterLink>
         <DeleteCiButton v-if="session.canOnClass(c.classId, 'delete')" :ci="c" />
       </div>

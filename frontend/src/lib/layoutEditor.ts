@@ -1,8 +1,8 @@
-import { useQueryClient } from "@tanstack/vue-query";
+import { useQueryClient, type QueryClient } from "@tanstack/vue-query";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, toValue, watch, type MaybeRefOrGetter } from "vue";
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type RouteLocationNormalized } from "vue-router";
+import { useRoute, useRouter, type LocationQueryRaw, type Router } from "vue-router";
 import { ApiError } from "../api/client";
-import { fetchCurrentStoredSettings, useSaveUiSettings, useUiSettings, type UiClassLayout, type UiSettingsDocument } from "../api/uiSettings";
+import { fetchCurrentStoredSettings, uiKeys, useSaveUiSettings, useUiSettings, type UiClassLayout, type UiSettingsDocument } from "../api/uiSettings";
 import { useSessionStore } from "../stores/session";
 import { materialize } from "./layoutDesign";
 import { normalizeDocument, type AttributeLike } from "./uiSettings";
@@ -15,16 +15,19 @@ import { normalizeDocument, type AttributeLike } from "./uiSettings";
  * version through PUT /ui-settings, so the history, the audit trail and the
  * optimistic lock are the ones Customization has.
  *
- * Edit mode lives in the URL (`?layout=edit`), so the designer can link to it and
- * a reload keeps it. Only holders of customization.manage get it; the API checks
- * that again on save. A class without a layout of its own is shown as its
+ * The editor has its own route (the page's path + `/layout-editor`, see
+ * router.ts) and opens in a separate browser window, one per class, so the page
+ * the user came from stays as it is. Saving tells the other windows of the app
+ * (BroadcastChannel `layout-updated`), which reload the settings. Only holders
+ * of customization.manage get it (the router sends others to the page itself);
+ * the API checks that again on save. A class without a layout of its own is shown as its
  * built-in layout made explicit (lib/layoutDesign materialize); it becomes part
  * of the draft at the first change. Every change goes through `apply`, which
  * keeps the undo history.
  */
 
-export const EDIT_LAYOUT_QUERY = "layout";
-export const EDIT_LAYOUT_VALUE = "edit";
+/** The editor's route: the CI page's path plus this suffix. */
+export const EDITOR_SUFFIX = "/layout-editor";
 export const LEAVE_QUESTION = "Discard your unsaved layout changes?";
 
 /** Width presets for checking the layout on smaller screens. */
@@ -34,7 +37,53 @@ export const WIDTH_PRESETS = [
   { label: "Phone", width: 390 },
 ] as const;
 
-const isEditRoute = (r: Pick<RouteLocationNormalized, "query">) => r.query[EDIT_LAYOUT_QUERY] === EDIT_LAYOUT_VALUE;
+const CHANNEL = "layout-updated";
+/** The browser window the layout editor of a class opens in. */
+export const editorWindowName = (classKey: string) => `layout-editor-${classKey.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+/** The page an editor route edits (and back): `/cis/1/layout-editor` ↔ `/cis/1`. */
+export const pageOfEditor = (path: string) => (path.endsWith(EDITOR_SUFFIX) ? path.slice(0, -EDITOR_SUFFIX.length) || "/" : path);
+const editorOfPage = (path: string) => `${path.replace(/\/$/, "")}${EDITOR_SUFFIX}`;
+
+/** Why the editor opened in this tab rather than its own window (shown in its bar). */
+export const OPENED_HERE_QUERY = "opened";
+
+/**
+ * Opens the layout editor of a class for a CI page in its own window. A second
+ * call for the same class focuses the window already open rather than loading it
+ * again (which would drop its unsaved changes). When a popup blocker refuses the
+ * window, the editor opens in this tab instead, and says so.
+ */
+export function openLayoutEditor(router: Router, page: { path: string; query?: LocationQueryRaw }, classKey: string): "window" | "tab" {
+  const target = { path: editorOfPage(page.path), query: page.query };
+  const name = editorWindowName(classKey);
+  // An empty URL returns the named window as it is when it is already open, and a blank one otherwise.
+  const w = window.open("", name, "popup,width=1400,height=900");
+  if (!w) {
+    void router.push({ ...target, query: { ...target.query, [OPENED_HERE_QUERY]: "tab" } });
+    return "tab";
+  }
+  let blank = true;
+  try {
+    blank = w.location.href === "about:blank";
+  } catch {
+    blank = false; // another origin's page under that name: leave it alone
+  }
+  if (blank) w.location.href = router.resolve(target).href;
+  w.focus();
+  return "window";
+}
+
+/**
+ * Keeps this window's layouts current when a layout editor window saves: the
+ * settings are loaded again. Without BroadcastChannel it returns false, and the
+ * caller asks for a reload after saving instead.
+ */
+export function listenForLayoutUpdates(qc: QueryClient): boolean {
+  if (typeof BroadcastChannel === "undefined") return false;
+  const channel = new BroadcastChannel(CHANNEL);
+  channel.onmessage = () => void qc.invalidateQueries({ queryKey: uiKeys.settings });
+  return true;
+}
 
 export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | undefined>; attrs: MaybeRefOrGetter<readonly AttributeLike[] | undefined> }) {
   const route = useRoute();
@@ -45,7 +94,7 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
   const allowed = computed(() => session.can("customization.manage"));
   const settings = useUiSettings(allowed);
 
-  const active = computed(() => allowed.value && isEditRoute(route));
+  const active = computed(() => allowed.value && route.meta.layoutEditor === true);
   const doc = ref<UiSettingsDocument | null>(null);
   const baseline = ref("");
   const loadedVersion = ref<number | null>(null);
@@ -167,6 +216,11 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
       baseline.value = JSON.stringify(doc.value);
       loadedVersion.value = result.version;
       saved.value = `Saved as version ${result.version}.`;
+      if (typeof BroadcastChannel !== "undefined") {
+        const channel = new BroadcastChannel(CHANNEL);
+        channel.postMessage({ classKey: classKey.value, version: result.version });
+        channel.close();
+      }
       return true;
     } catch (e) {
       saveError.value = e;
@@ -174,25 +228,49 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
     }
   }
 
-  const enter = () => router.push({ query: { ...route.query, [EDIT_LAYOUT_QUERY]: EDIT_LAYOUT_VALUE } });
-  /** Leaves edit mode; the route guard asks first when there are unsaved changes. */
-  const exit = () => {
+  /** This page opened the editor in another window. */
+  const opened = ref(false);
+  const broadcast = typeof BroadcastChannel !== "undefined";
+  /** Opens the editor for this page in its own window (or this tab, when popups are blocked). */
+  const enter = () => {
+    if (!classKey.value) return;
+    const how = openLayoutEditor(router, { path: route.path, query: route.query }, classKey.value);
+    if (how === "window") opened.value = true;
+  };
+  /** The editor opened in a window of its own, which Done closes. */
+  const popup = !!window.opener && window.name.startsWith("layout-editor-");
+  const openedHere = computed(() => route.query[OPENED_HERE_QUERY] === "tab");
+
+  let leaving = false;
+  /** Leaves the editor, asking first when there are unsaved changes: closes its window, or back to the page. */
+  const exit = async () => {
+    if (dirty.value && !window.confirm(LEAVE_QUESTION)) return;
+    leaving = true;
+    if (popup) {
+      window.close();
+      if (window.closed) return;
+    }
     const query = { ...route.query };
-    delete query[EDIT_LAYOUT_QUERY];
-    return router.push({ query });
+    delete query[OPENED_HERE_QUERY];
+    await router.push({ path: pageOfEditor(route.path), query });
+    leaving = false;
   };
 
-  // Unsaved changes: ask before leaving edit mode or the page, and let the browser ask before a reload or closing the tab.
-  const ask = () => !(active.value && dirty.value) || window.confirm(LEAVE_QUESTION);
-  onBeforeRouteLeave(ask);
-  onBeforeRouteUpdate((to, from) => (isEditRoute(to) && to.path === from.path ? true : ask()));
+  // Unsaved changes: ask before leaving the editor, and let the browser ask before a reload or closing the window.
+  const removeGuard = router.beforeEach((to, from) => {
+    if (leaving || !active.value || !dirty.value || to.path === from.path) return true;
+    return window.confirm(LEAVE_QUESTION);
+  });
   function onBeforeUnload(e: BeforeUnloadEvent) {
-    if (!active.value || !dirty.value) return;
+    if (leaving || !active.value || !dirty.value) return;
     e.preventDefault();
     e.returnValue = "";
   }
   onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
-  onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload));
+  onBeforeUnmount(() => {
+    removeGuard();
+    window.removeEventListener("beforeunload", onBeforeUnload);
+  });
 
   return reactive({
     allowed,
@@ -221,6 +299,9 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
     reload: load,
     enter,
     exit,
+    openedHere,
+    /** Ask for a reload here after the other window saves: this browser cannot tell this window. */
+    reloadHint: computed(() => opened.value && !broadcast),
   });
 }
 

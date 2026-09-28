@@ -7,6 +7,7 @@ import Breadcrumbs from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
+import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
 import { useDocumentTitle } from "../lib/composables";
 import { useLayoutEditor } from "../lib/layoutEditor";
 import { useSessionStore } from "../stores/session";
@@ -17,7 +18,7 @@ const ci = useCi(() => String(route.params.id));
 useDocumentTitle(() => (ci.data.value ? `Edit ${ci.data.value.label}` : "Edit CI"));
 const c = computed(() => ci.data.value);
 const session = useSessionStore();
-// Edit layout (?layout=edit): the form's layout edited in place, with this CI's values.
+// Edit layout (the layout-editor route, in its own window): the form's layout edited, with this CI's values.
 const classes = useCiClasses();
 const attrs = useClassAttributes(() => c.value?.classId);
 const editor = useLayoutEditor({
@@ -57,7 +58,7 @@ const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.
         <span class="muted">{{ c.class.name }} · <span class="mono">{{ c.ident }}</span> · version {{ c.version }}</span>
       </div>
       <div v-if="editor.allowed && !editor.active" class="actions">
-        <button type="button" class="btn" @click="editor.enter()">Edit layout</button>
+        <EditLayoutButton :editor="editor" />
       </div>
     </div>
     <CiForm :key="`${c.id}-${c.version}`" mode="edit" :class-id="c.classId" :class-name="c.class.name" :ci="c" :editor="editor" />
