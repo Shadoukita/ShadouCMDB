@@ -70,9 +70,11 @@ superuser:
 | `shadoucmdb_app` | the running server, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` |
 | `shadoucmdb_maintenance` | `shadoucmdb prune-audit` only | `MAINTENANCE_DATABASE_URL` |
 
-> **Keep these role names.** The current migrations only work with exactly these three role
-> names ([#42](https://github.com/Shadoukita/ShadouCMDB/issues/42)). The database *host,
-> port and TLS settings* are free; only the role names are fixed for now.
+> **Your own names.** These are the defaults. To follow your naming scheme, add
+> `-v owner_role=… -v app_role=… -v maintenance_role=… -v db_name=…` to the `psql` command
+> below and use the same names in the connection strings. `shadoucmdb migrate` grants to the
+> users of `DATABASE_URL` and `MAINTENANCE_DATABASE_URL`, so set both when you migrate (see
+> [Database roles](deployment.md#database-roles)).
 
 Generate three passwords and keep them in files readable only by you:
 

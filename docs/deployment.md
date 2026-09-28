@@ -178,6 +178,15 @@ must be percent-encoded (`@` becomes `%40`), and hex needs none.
 | `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log` and `schema_changes`; no `EXECUTE` on the purge. Owns the area schemas (`CREATE` on the database). |
 | `shadoucmdb_maintenance` | `shadoucmdb prune-audit` | `MAINTENANCE_DATABASE_URL` | Execute `cmdb.prune_audit_log()`, nothing else. |
 
+These are the default names; any others work, as does a database not named `shadoucmdb`.
+Pass your names to the bootstrap script with `-v owner_role=… -v app_role=…
+-v maintenance_role=… -v db_name=…` and use them in the connection strings. `migrate` takes
+the API role from the `DATABASE_URL` (or `PGUSER`) user and the maintenance role from the
+`MAINTENANCE_DATABASE_URL` user, prints both, and grants to and hands over to those roles. So
+set all three variables when you run `migrate`; it stops if either role does not exist. When
+the API role is the migrating user itself (a single-role install), there is nothing to grant
+or hand over.
+
 Areas are PostgreSQL schemas whose tables and columns the API changes at run time, when an
 administrator adds an area, type or field (see [data-model.md](data-model.md)). So
 `shadoucmdb_app` owns the area schemas, their type tables and reporting views, but nothing
@@ -186,7 +195,7 @@ can build the tables of existing types (migration 0009) and hand them over, and 
 reporting views as that role. The membership only runs that way round; the API role gains
 nothing from it. Migration 0008 stops with the `GRANT` to run if the membership is missing,
 e.g. on an install split before this version: run `GRANT shadoucmdb_app TO shadoucmdb_owner;`
-as an administrator, or re-run `10_split_roles.sql`, then `migrate` again.
+(with your role names) as an administrator, or re-run `10_split_roles.sql`, then `migrate` again.
 
 Both bootstrap scripts pin `search_path = cmdb, public` for `shadoucmdb_owner` and
 `shadoucmdb_maintenance`. PostgreSQL's default `"$user", public` would look first in a schema
@@ -232,6 +241,9 @@ purge itself. To split it, once:
         -v owner_password='<password>' -v maintenance_password='<password>' \
         -f sql/bootstrap/10_split_roles.sql
    ```
+
+   If your API role is not named `shadoucmdb_app`, add `-v app_role=<the DATABASE_URL user>`;
+   `-v owner_role=…` and `-v maintenance_role=…` name the two new roles.
 
    It creates `shadoucmdb_owner` and `shadoucmdb_maintenance`, hands the database and every
    object `shadoucmdb_app` owns in it to `shadoucmdb_owner`, and grants `shadoucmdb_app` the

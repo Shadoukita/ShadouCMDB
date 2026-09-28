@@ -389,6 +389,7 @@ mod tests {
                 pool_max: 1,
                 statement_timeout: Duration::ZERO,
                 connect_timeout: Duration::from_secs(1),
+                roles: Default::default(),
             },
             migration_url: None,
             maintenance_url: None,
