@@ -547,14 +547,14 @@ const notFound = computed(() => {
         <section class="panel" aria-labelledby="idp-about-title">
           <div class="panel-header"><h2 id="idp-about-title">How accounts work</h2></div>
           <div class="panel-body stack">
-            <p style="margin: 0">
+            <p class="no-margin">
               A person's first sign-in creates their account. Every sign-in sets the display name, e-mail and permission
               profiles from the provider; changes made by hand last until then.
             </p>
-            <p style="margin: 0">
+            <p class="no-margin">
               An existing local account is never taken over: if the username is taken, the sign-in is refused.
             </p>
-            <p class="muted" style="margin: 0">
+            <p class="muted no-margin">
               Local accounts keep working when a provider is down. Keep a local administrator with two-factor
               authentication for emergencies. Two-factor authentication for provider accounts is the provider's job.
             </p>

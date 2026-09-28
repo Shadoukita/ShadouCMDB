@@ -98,7 +98,7 @@ function resetPassword() {
   <section v-if="provider" class="panel" aria-labelledby="pw-title">
     <div class="panel-header"><h2 id="pw-title">Password and two-factor</h2></div>
     <div class="panel-body">
-      <p class="muted" style="margin: 0" data-testid="provider-credentials">
+      <p class="muted no-margin" data-testid="provider-credentials">
         {{ user.username }} signs in through <strong>{{ provider.name }}</strong> and has no password in ShadouCMDB.
         Passwords and two-factor authentication are managed there.
       </p>

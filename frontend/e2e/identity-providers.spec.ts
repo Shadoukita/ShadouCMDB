@@ -368,7 +368,7 @@ test("a provider without accounts is deleted, and is gone from the list", async 
   ldapId = "";
 });
 
-test("users.manage alone is not enough: no section, a permission-denied screen, and the API refuses changes", async ({ browser, playwright, baseURL }) => {
+test("users.manage alone is not enough: no section, a permission-denied screen, and the API refuses reads and changes", async ({ browser, playwright, baseURL }) => {
   const page = await anonymousPage(browser);
   await page.goto("/login");
   await page.getByLabel("Username").fill(MANAGER);
@@ -384,12 +384,16 @@ test("users.manage alone is not enough: no section, a permission-denied screen, 
   await expect(page.getByText("only for holders of the built-in")).toBeVisible();
   await page.context().close();
 
-  // The server is what refuses it: a user manager cannot add or change a provider (and so cannot grant themselves
-  // the Administrator profile through a group mapping).
+  // The server is what refuses it: a user manager cannot read a provider's mappings, nor add or change a provider
+  // (and so cannot grant themselves the Administrator profile through a group mapping).
   const ctx = await playwright.request.newContext({ baseURL, storageState: { cookies: [], origins: [] } });
   const login = await ctx.post("/api/v1/auth/login", { data: { username: MANAGER, password: MANAGER_PASSWORD } });
   expect(login.status()).toBe(200);
   const headers = { "X-CSRF-Token": (await login.json()).csrfToken as string };
+  const list = await ctx.get("/api/v1/admin/identity-providers");
+  expect(list.status(), await list.text()).toBe(403);
+  const read = await ctx.get(`/api/v1/admin/identity-providers/${oidcId}`);
+  expect(read.status(), await read.text()).toBe(403);
   const create = await ctx.post("/api/v1/admin/identity-providers", {
     headers,
     data: { kind: "oidc", name: `E2E refused ${stamp}`, oidc: { issuerUrl: "https://127.0.0.1:9/", clientId: "x" } },

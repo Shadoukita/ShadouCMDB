@@ -40,7 +40,7 @@ function warning(p: IdentityProvider): string | null {
       <RouterLink class="btn btn-primary" :to="{ path: '/admin/identity-providers/new', query: { kind: 'oidc' } }">+ New OpenID Connect provider</RouterLink>
     </div>
   </div>
-  <p class="muted" style="margin-top: 0">
+  <p class="muted no-margin-top">
     Let people sign in with their company account. OpenID Connect providers appear as “Sign in with …” buttons;
     directory users sign in with the username and password form. Group mappings decide their permission profiles.
     Local accounts keep working next to them.
@@ -79,7 +79,7 @@ function warning(p: IdentityProvider): string | null {
             <td class="num">{{ p.sortOrder }}</td>
             <td>
               <RouterLink :to="`/admin/identity-providers/${p.id}`">{{ p.name }}</RouterLink>
-              <span v-if="warning(p)" class="badge warn" style="margin-left: 6px">{{ warning(p) }}</span>
+              <span v-if="warning(p)" class="badge warn spaced">{{ warning(p) }}</span>
             </td>
             <td>{{ KIND_LABELS[p.kind] }}</td>
             <td>

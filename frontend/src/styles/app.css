@@ -207,6 +207,16 @@ code,
 .stack > * + * {
   margin-top: var(--sp-4);
 }
+/* Spacing overrides as classes: the served CSP (style-src 'self') blocks style attributes that Vue renders as static HTML. */
+.no-margin {
+  margin: 0;
+}
+.no-margin-top {
+  margin-top: 0;
+}
+.badge.spaced {
+  margin-left: 6px;
+}
 
 /* ---------- Controls ---------- */
 .btn {

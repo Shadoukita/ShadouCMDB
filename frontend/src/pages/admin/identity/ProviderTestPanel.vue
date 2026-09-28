@@ -29,14 +29,14 @@ function run() {
   <section class="panel" aria-labelledby="test-title">
     <div class="panel-header"><h2 id="test-title">Test connection</h2></div>
     <form class="panel-body stack" novalidate @submit.prevent="run">
-      <p class="muted" style="margin: 0">
+      <p class="muted no-margin">
         <template v-if="provider.kind === 'oidc'">Fetches the provider's discovery document and signing keys.</template>
         <template v-else>
           Connects with TLS and binds as the service account. Enter a username to look the user up and see their groups
           and the profiles they would get (no password needed).
         </template>
       </p>
-      <p v-if="dirty" class="alert alert-warn" style="margin: 0" role="status">The test uses the saved settings. Save your changes first.</p>
+      <p v-if="dirty" class="alert alert-warn no-margin" role="status">The test uses the saved settings. Save your changes first.</p>
       <div v-if="provider.kind === 'ldap'" class="field">
         <label for="test-username">Look up a user (optional)</label>
         <input id="test-username" v-model="username" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. jdoe" />

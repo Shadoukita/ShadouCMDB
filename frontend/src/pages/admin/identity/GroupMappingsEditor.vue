@@ -48,16 +48,16 @@ function set(i: number, patch: Partial<MappingRow>) {
       <button type="button" class="btn btn-sm" @click="add">+ Add mapping</button>
     </div>
     <div class="panel-body stack">
-      <p class="muted" style="margin: 0">
+      <p class="muted no-margin">
         At every sign-in an account gets exactly the permission profiles its groups map to, and loses the others. A
         user in no mapped group cannot sign in. Groups are compared without regard to case.
         <RouterLink to="/admin/profiles">Permission profiles</RouterLink>
       </p>
-      <p class="hint" style="margin: 0">{{ groupHint }}</p>
+      <p class="hint no-margin">{{ groupHint }}</p>
       <LoadingState v-if="profiles.isLoading.value" label="Loading profiles…" />
       <ErrorAlert v-else-if="profiles.isError.value" :error="profiles.error.value" :on-retry="() => profiles.refetch()" />
       <div v-if="errors.groupMappings" class="field"><span class="error" role="alert">{{ errors.groupMappings }}</span></div>
-      <p v-if="rows.length === 0" class="alert alert-warn" style="margin: 0" role="status">
+      <p v-if="rows.length === 0" class="alert alert-warn no-margin" role="status">
         No mappings yet: nobody can sign in through this provider until at least one group maps to a profile.
       </p>
       <div v-else class="table-wrap">
