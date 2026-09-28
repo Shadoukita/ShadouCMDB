@@ -89,6 +89,34 @@ jobs:
           echo "error-level log lines: $errors"
           if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log; exit 1; fi
 
+      # Nothing may depend on the default role or database names (GH#42). These need quoting.
+      - name: "Three roles with custom names: bootstrap, migrate, seed, verify, prune-audit, smoke suite"
+        env:
+          ADMIN_URL: postgres://ci:ci-only-password@127.0.0.1:5432/postgres
+          U: 127.0.0.1:5432/invqa-cmdb
+        run: |
+          psql "$ADMIN_URL" -X -v ON_ERROR_STOP=1 \
+            -v owner_role=invqa-owner -v app_role=invqa.api -v maintenance_role=Invqa-Maint -v db_name=invqa-cmdb \
+            -v owner_password=ci-owner -v app_password=ci-app -v maintenance_password=ci-maint \
+            -f ../sql/bootstrap/00_create_role_and_database.sql
+          export DATABASE_URL="postgres://invqa.api:ci-app@$U" MAINTENANCE_DATABASE_URL="postgres://Invqa-Maint:ci-maint@$U"
+          B=./target/release/shadoucmdb
+          MIGRATION_DATABASE_URL="postgres://invqa-owner:ci-owner@$U" $B migrate | tee migrate.txt
+          grep -q "API role: invqa.api" migrate.txt
+          grep -q "maintenance role: Invqa-Maint" migrate.txt
+          MIGRATION_DATABASE_URL="postgres://invqa-owner:ci-owner@$U" $B migrate | grep -q "nothing to do"
+          $B seed --demo
+          $B verify
+          $B prune-audit --older-than 180d
+          API_HOST=127.0.0.1 API_PORT=3002 $B serve > serve-custom.log &
+          PID=$!
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3002/healthz && break; sleep 1; done
+          curl -sf http://127.0.0.1:3002/readyz | grep -q '"upToDate":true'
+          API_URL=http://127.0.0.1:3002 node ../tools/smoke/smoke.ts
+          kill -TERM $PID && wait $PID
+          errors=$(grep -c '"level":"ERROR"' serve-custom.log || true)
+          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve-custom.log; exit 1; fi
+
       - name: systemd unit (deploy/systemd/shadoucmdb.service)
         run: |
           sudo install -m 0755 target/release/shadoucmdb /usr/local/bin/shadoucmdb
