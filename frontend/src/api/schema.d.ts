@@ -1838,7 +1838,7 @@ export interface paths {
         put?: never;
         /**
          * Add an OIDC provider or an LDAP/AD directory
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createIdentityProvider"];
         delete?: never;
@@ -1863,14 +1863,14 @@ export interface paths {
         post?: never;
         /**
          * Delete an identity provider that no account signs in through
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). 409 IN_USE while accounts belong to it: disable it instead.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). 409 IN_USE while accounts belong to it: disable it instead. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["deleteIdentityProvider"];
         options?: never;
         head?: never;
         /**
          * Change an identity provider (partial); groupMappings replaces all mappings
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updateIdentityProvider"];
         trace?: never;
