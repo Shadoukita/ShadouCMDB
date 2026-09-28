@@ -34,7 +34,9 @@ tells the CI form to edit the value in a multi-line text area and the detail pag
 breaks ([GH#109]). Administrators set or clear it when creating or editing a text attribute
 (`POST`/`PATCH /api/v1/attribute-definitions`; omitted from responses when false). It is only valid
 for `text` attributes (`400` otherwise). Text values were and are stored exactly as sent, line breaks
-included.
+included. In the class editor the option is **Multiline** on a text attribute; the CI form saves a
+multi-line value exactly as typed (indentation and trailing line breaks included), where single-line
+text is still trimmed.
 
 **Upgrade:** migration `0019_multiline_notes` sets `multiline` on the **Notes** fields that migration
 `0016_core_ci_model` created from the former `notes` column (`notes`, or `notes_<n>` where the key was
@@ -45,6 +47,14 @@ form edited Notes in a single-line input, so saving a CI could drop line breaks 
 saved that way are not restored.
 
 [GH#109]: https://github.com/Shadoukita/ShadouCMDB/issues/109
+
+### Fixed: Dropdowns row actions visible on laptop screens
+
+Administration › Data model › Dropdowns cut off the **Delete** button of each list at 1440 px and
+pushed it off-screen at 1280 px ([GH#110]). The Description column now takes the remaining width and
+truncates (the full text is in its tooltip), on the Lookups and dropdown value tables as well.
+
+[GH#110]: https://github.com/Shadoukita/ShadouCMDB/issues/110
 
 ### Changed (breaking API change): barebone CI core, fixed fields become class attributes
 

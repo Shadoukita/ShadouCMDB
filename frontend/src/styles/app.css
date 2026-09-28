@@ -1435,3 +1435,9 @@ table.data td.wrap {
   padding-top: 3px;
   padding-bottom: 3px;
 }
+/* A free-text column (a description) that takes the width the other columns leave and
+   truncates there, so it never pushes the row actions out of view. Pair it with a title. */
+table.data td.fill {
+  width: 100%;
+  max-width: 0;
+}

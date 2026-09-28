@@ -157,7 +157,7 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
               <slot v-if="slots.cell" name="cell" :row="r" :column="c.key" />
               <template v-else>{{ r[c.key] }}</template>
             </td>
-            <td class="muted">{{ r.description ?? "" }}</td>
+            <td class="muted fill" :title="r.description ?? undefined">{{ r.description ?? "" }}</td>
             <td>
               <span v-if="r.isActive" class="badge ok">Active</span>
               <span v-else class="badge off">Archived</span>
