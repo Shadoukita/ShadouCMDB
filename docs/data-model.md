@@ -13,7 +13,7 @@ that need to look at other rows), not only in the API.
 Migrations: [`sql/migrations/`](../sql/migrations/)
 (`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`,
 `0003_users_and_permission_profiles`, `0004_data_model_admin`, `0005_ui_settings`, `0006_auth_audit`,
-`0008_cmdb_schema_and_areas`, `0009_type_tables`).
+`0008_cmdb_schema_and_areas`, `0009_type_tables`, `0015_lookup_parent_lists`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -25,7 +25,8 @@ never collide with the application's.
 
 ```
 areas ─< ci_classes ─┬─< ci_attribute_definitions >─── (reference_class_id) ─> ci_classes
-(schema)  (parent)   │         └── (lookup_list_id) ─> lookup_lists ─< lookup_list_values
+(schema)  (parent)   │  (parent_attribute_id)   └── (lookup_list_id) ─> lookup_lists ─< lookup_list_values
+                     │                                             (parent_list_id)   (parent_value_id)
                      │                                                      ^ (lookup fields)
                      └─< configuration_items ─┬─── <area>.<type> (id = configuration_items.id)
                   │ │ │ │                     │        (reference fields) ──> configuration_items
@@ -52,9 +53,9 @@ ui_assets (logo, favicon)
 | --- | --- | --- |
 | `areas` | The top-level groups shown as menu tabs. `key` is the PostgreSQL schema holding the tables of the area's types. `is_active = false` archives the area. | unique `key`; key format `^[a-z][a-z0-9_]{0,62}$`; not a system schema (`cmdb`, `public`, `information_schema`, `pg_*`, `cmdb_*`); `key` immutable (trigger) |
 | `ci_classes` | CI types in a single-inheritance tree (`parent_id`). `is_abstract` classes group attributes and rules but hold no CIs. `icon`, `color` (`#rrggbb`) and `sort_order` drive menus and badges. `area_id` is the area whose schema holds the type's table, named after `key`. | unique `key` (across areas); key format check; at most 61 characters and no `v_` prefix (the reporting view is `v_<key>`); colour format; no self-parent; **no cycles** (trigger); `key` and `area_id` immutable (trigger) |
-| `ci_attribute_definitions` | Typed attribute per class, inherited by descendant classes. Types: `text`, `number`, `integer`, `boolean`, `enum`, `date`, `datetime`, `ip`, `cidr`, `reference`, `lookup`. `group_name` is the form section, `sort_order` the order within it; `help_text` is shown on forms; `default_value` (jsonb, same shape as an API value) is applied to new CIs. | unique (`class_id`, `key`); `enum_values` required iff enum; `reference_class_id` required iff reference; `lookup_list_id` required iff lookup (FK, RESTRICT); a default is never JSON null and never on a reference; `key` (the column name) and `class_id` immutable (trigger); `key` is never `id` |
-| `lookup_lists` | Lists an administrator defines, e.g. "Support contract". | unique `key`; key format; non-blank name |
-| `lookup_list_values` | The values of a list (`key`, `name`, `color`, `sort_order`, `is_active`). | unique (`list_id`, `key`); cascades with the list; cannot move to another list (trigger) |
+| `ci_attribute_definitions` | Typed attribute per class, inherited by descendant classes. Types: `text`, `number`, `integer`, `boolean`, `enum`, `date`, `datetime`, `ip`, `cidr`, `reference`, `lookup`. `group_name` is the form section, `sort_order` the order within it; `help_text` is shown on forms; `default_value` (jsonb, same shape as an API value) is applied to new CIs. | unique (`class_id`, `key`); `enum_values` required iff enum; `reference_class_id` required iff reference; `lookup_list_id` required iff lookup (FK, RESTRICT); `parent_attribute_id` only on a lookup field whose list has a parent list, pointing at a lookup field on that parent list, defined on the same class or an ancestor (trigger; FK); a default is never JSON null and never on a reference; `key` (the column name) and `class_id` immutable (trigger); `key` is never `id` |
+| `lookup_lists` | Lists an administrator defines, e.g. "Support contract". `parent_list_id` makes a list depend on another one ("Model" depends on "Manufacturer"), see [Dependent lookup lists](#dependent-lookup-lists). | unique `key`; key format; non-blank name; no self-parent, **no cycles** (trigger); a parent list cannot be deleted (FK, RESTRICT); after a change of `parent_list_id` no value or field of the list may keep a parent from another list (deferred constraint trigger) |
+| `lookup_list_values` | The values of a list (`key`, `name`, `color`, `sort_order`, `is_active`). `parent_value_id` is the value of the parent list it belongs to. | unique (`list_id`, `key`); cascades with the list; cannot move to another list (trigger); `parent_value_id` belongs to the list's parent list, is required on new values of a list with a parent list and cannot be cleared once assigned (trigger); a value other values belong to cannot be deleted (FK) |
 | `configuration_items` | CI instances with the common core: name, class, status, owner, location, environment, hostname, `ip_address inet`, serial, notes, plus `version` for optimistic locking. | FKs to class and every lookup; class must be concrete and active (trigger); non-blank name; hostname format |
 | `<area>.<type>` (type tables) | One per type, e.g. `bestand.netzwerk`: `id uuid PRIMARY KEY REFERENCES cmdb.configuration_items (id) ON DELETE CASCADE`, then one column per field of the type. A CI has a row in the table of its type **and of every ancestor type** (class table inheritance: a server's inherited `hardware` fields are in `infrastruktur.hardware`). Column types: text → `text`, enum → `text` with a CHECK on the allowed values, number → `numeric`, integer → `bigint`, boolean → `boolean`, date → `date`, datetime → `timestamptz`, ip → `inet`, cidr → `cidr`, reference → `uuid` FK to `configuration_items` (NO ACTION), lookup → `uuid` FK to `lookup_list_values` (RESTRICT). | PK/FK to the registry; enum CHECK `ck_<field id>_<hash of the values>`; FKs `fk_<field id>` with index `ix_<field id>`; a required, active field is `NOT NULL`. Constraint names never contain user text. That a reference points at a CI of the right type, that a lookup value belongs to the field's list, and min/max/pattern rules are checked by the API |
 | `<area>.v_<type>` (reporting views) | Read-only view per type: the registry columns (`id`, `name`, `type`, `status`, `environment`, `owner`, `location`, `hostname`, `ip_address`, `serial_number`, `notes`, `record_version`, `created_at`, `updated_at`, `deleted_at`) plus every field of the type and its ancestors; lookup fields show the value's key. Deleted CIs are included (filter on `deleted_at IS NULL` for the live inventory). | rebuilt by the DDL engine when the type or an ancestor changes; marked with a `shadoucmdb:<hash>` comment so the engine never touches a view it did not create: a view of the same name without that comment is left in place (the type then has no reporting view) and a schema change that would rebuild or drop it reports a `warning` instead |
@@ -321,6 +322,47 @@ audit trail: deleting or rewriting one user's rows is exactly what the trail exi
 prevent. Until that is decided separately, a person's authentication records leave with the
 180-day window, and their change history (`actor_name`, user snapshots) stays. Deleting a
 user removes their account and sessions, not their history.
+
+## Dependent lookup lists
+
+A lookup list can depend on another list (migration `0015_lookup_parent_lists`): each value of the
+child list names the value of the parent list it belongs to. The web UI then offers, in a child
+dropdown, only the values of the chosen parent value (`GET /api/v1/lookup-list-values?parentValueId=…`)
+and keeps the child empty until the parent is chosen.
+
+```
+lookup_lists:        manufacturer  <── (parent_list_id) ──  model
+lookup_list_values:  cisco         <── (parent_value_id) ── c9300, c9500
+                     hpe           <── (parent_value_id) ── dl380
+fields of "server":  manufacturer  <── (parent_attribute_id) ── model
+```
+
+- **Fields.** A lookup field on a child list names its parent field (`parent_attribute_id`): the
+  lookup field bound to the parent list, on the same class or an ancestor. When a CI is created or
+  updated, the API refuses (`400`, per field) a child value whose parent value is not the CI's value
+  of the parent field (`lookup_parent_mismatch`), and a child value while the parent field is empty
+  (`lookup_parent_missing`). A child may always be empty. The check covers the fields a request sets
+  or clears and those whose parent field it sets or clears, so editing another field of a CI stored
+  before the rule existed is not refused. The parent field is optional: a child-list field without
+  one accepts any active value of its list, as before.
+- **A list gets another parent list** (or none): in the same transaction the API unassigns every
+  value's `parent_value_id` and every bound field's `parent_attribute_id` (each change audited as an
+  `update`); the administrator then reassigns them. An unassigned value cannot be chosen on a field
+  with a parent field. Existing CI values are not changed.
+- **Retiring a parent value** (`isActive: false`) retires every active value that belongs to it,
+  down the chain of dependent lists, each audited. It is refused with `409 IN_USE` while CIs store one
+  of those dependent values, because the CIs would keep a model whose manufacturer can no longer be
+  chosen; change those CIs first. Reactivating a parent does not reactivate its dependents, and a
+  value whose parent is retired can be neither created nor reactivated (`parent_value_inactive`).
+- **Deleting a parent value** is refused (`409 IN_USE`, usage kind `childValues`) while any value
+  belongs to it; so is deleting a list other lists depend on (`childLists`) and purging a field that
+  other fields name as their parent field.
+- **Moving a type** to another parent type is refused while one of its fields (or of its subtypes)
+  would lose its parent field from the lineage (`parent_field_outside_lineage`).
+
+The database enforces the list, value and field rules (triggers and foreign keys, see `verify`);
+that a CI's value belongs to its parent field's value is checked by the API, because the values
+live in the per-type tables.
 
 ## Indexes for UI queries
 

@@ -183,7 +183,7 @@ $B --env-file shadoucmdb.env create-admin --username admin --display-name "Ops A
   Application, Database, Service and Location, with their relationship rules. You can also
   install it later from *Administration → Templates*. `--demo` adds a small sample inventory
   (only into an empty CI table).
-- `verify` ends with `22/22 checks passed (transaction rolled back, no data written)`.
+- `verify` ends with `23/23 checks passed (transaction rolled back, no data written)`.
 - `create-admin` needs a password of at least 12 characters. For scripts:
   `$B --env-file shadoucmdb.env create-admin --username admin --password-stdin < .pw-admin`.
   You can skip `create-admin` entirely: while no user exists, the web UI opens a
