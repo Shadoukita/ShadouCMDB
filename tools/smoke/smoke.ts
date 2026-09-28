@@ -1036,9 +1036,12 @@ async function identityProviders(builtin: Json, readers: Json) {
   await patch(`${base}/${directory.id}`, { ldap: { url: 'ldaps://dc.smoke.invalid:636' } }); // ldaps:// switches StartTLS off
   await patch(`${base}/${directory.id}`, { ldap: { startTls: true } }, 400); // not both
   const test = (await call('POST', `${base}/${created.id}/test`, {}, 200)).json;
-  check(test.ok === false && test.message.includes('idp.smoke.invalid'), `the connection test reports an unreachable issuer (${test.message})`);
+  // One generic text whatever the transport failure, without the host (GH#125: no port-scan oracle).
+  check(test.ok === false && test.message.startsWith('Could not reach the provider') && !test.message.includes('smoke.invalid'),
+    `the connection test reports an unreachable issuer generically (${test.message})`);
   const dirTest = (await call('POST', `${base}/${directory.id}/test`, { username: 'alice' }, 200)).json;
-  check(dirTest.ok === false && dirTest.user === null, `the connection test reports an unreachable directory (${dirTest.message})`);
+  check(dirTest.ok === false && dirTest.user === null && dirTest.message.startsWith('Could not reach the directory') && !dirTest.message.includes('smoke.invalid'),
+    `the connection test reports an unreachable directory generically (${dirTest.message})`);
 
   // The sign-in page and the OIDC routes (browser navigations: 302, never an error page).
   const options = (await as(null, () => get('/api/v1/auth/providers'))).json;

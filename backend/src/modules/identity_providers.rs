@@ -999,7 +999,10 @@ async fn test(
                 };
                 ConnectionTest { ok, message: message.into(), details, user: None }
             }
-            Err(e) => ConnectionTest { ok: false, message: e.0, details: Vec::new(), user: None },
+            Err(e) => {
+                tracing::warn!(provider = %row.name, error = %e, "identity provider connection test failed");
+                ConnectionTest { ok: false, message: e.summary().into(), details: Vec::new(), user: None }
+            }
         });
     }
     let settings = sso::ldap_settings(&row);
@@ -1053,7 +1056,10 @@ async fn test(
             details: Vec::new(),
             user: None,
         },
-        Err(e) => ConnectionTest { ok: false, message: e.0, details: Vec::new(), user: None },
+        Err(e) => {
+            tracing::warn!(provider = %row.name, error = %e, "identity provider connection test failed");
+            ConnectionTest { ok: false, message: e.summary().into(), details: Vec::new(), user: None }
+        }
     })
 }
 
@@ -1127,7 +1133,7 @@ pub fn routes() -> Vec<Route> {
             .tag(ROUTE_TAG)
             .summary("Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)")
             .description(format!(
-                "{ADMIN_ONLY} Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to."
+                "{ADMIN_ONLY} Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to."
             ))
             .requires(manage)
             .errors(&[ErrorCode::NotFound])

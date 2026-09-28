@@ -571,13 +571,13 @@ async fn oidc_callback(
         if let Some(iss) = q.get("iss")
             && iss != discovered.discovery.issuer
         {
-            return Err(oidc::OidcError(format!(
+            return Err(oidc::OidcError::new(format!(
                 "callback names issuer {iss:?}, not {:?}",
                 discovered.discovery.issuer
             )));
         }
         let code =
-            q.get("code").filter(|c| !c.is_empty()).ok_or_else(|| oidc::OidcError("callback has no code".into()))?;
+            q.get("code").filter(|c| !c.is_empty()).ok_or_else(|| oidc::OidcError::new("callback has no code"))?;
         let token = oidc::exchange_code(&discovered, &settings, &redirect_uri, code, &pending.code_verifier).await?;
         discovered.validate_id_token(&settings, &token, &pending.nonce, chrono::Utc::now().timestamp()).await
     }
