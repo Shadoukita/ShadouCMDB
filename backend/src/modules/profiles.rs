@@ -552,6 +552,7 @@ pub fn routes() -> Vec<Route> {
             .description("A non-administrator can only grant permissions they hold themselves (403 otherwise).")
             .status(StatusCode::CREATED)
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<ProfileCreate>>| async move {
                 Ok(Json(create(&api.pool, &api.ctx, &b).await?))
@@ -561,6 +562,7 @@ pub fn routes() -> Vec<Route> {
             .summary("Update a permission profile (partial; permission lists replace the current ones)")
             .description("The built-in Administrator profile accepts only `requireMfa` (409 for anything else). Takes effect on the holders' next request.")
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<ProfileUpdate>>| async move {
                 Ok(Json(update(&api.pool, &api.ctx, id, &b).await?))
@@ -570,6 +572,7 @@ pub fn routes() -> Vec<Route> {
             .summary("Delete a permission profile (users holding it lose it)")
             .description("The built-in Administrator profile cannot be deleted (409).")
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 remove(&api.pool, &api.ctx, id).await?;
@@ -580,6 +583,7 @@ pub fn routes() -> Vec<Route> {
             .summary("Copy a profile (including the built-in one) into a new, editable profile")
             .status(StatusCode::CREATED)
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<ProfileClone>>| async move {
                 Ok(Json(clone(&api.pool, &api.ctx, id, &b).await?))

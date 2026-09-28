@@ -1693,7 +1693,7 @@ export interface paths {
         get?: never;
         /**
          * Set a new password for a user, end their sessions and revoke their API tokens
-         * @description Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["resetUserPassword"];
         post?: never;
@@ -1718,7 +1718,7 @@ export interface paths {
         put?: never;
         /**
          * Create a permission profile
-         * @description Requires `profiles.manage`. A non-administrator can only grant permissions they hold themselves (403 otherwise).
+         * @description Requires `profiles.manage`. A non-administrator can only grant permissions they hold themselves (403 otherwise). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createPermissionProfile"];
         delete?: never;
@@ -1743,14 +1743,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a permission profile (users holding it lose it)
-         * @description Requires `profiles.manage`. The built-in Administrator profile cannot be deleted (409).
+         * @description Requires `profiles.manage`. The built-in Administrator profile cannot be deleted (409). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["deletePermissionProfile"];
         options?: never;
         head?: never;
         /**
          * Update a permission profile (partial; permission lists replace the current ones)
-         * @description Requires `profiles.manage`. The built-in Administrator profile accepts only `requireMfa` (409 for anything else). Takes effect on the holders' next request.
+         * @description Requires `profiles.manage`. The built-in Administrator profile accepts only `requireMfa` (409 for anything else). Takes effect on the holders' next request. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updatePermissionProfile"];
         trace?: never;
@@ -1766,7 +1766,7 @@ export interface paths {
         put?: never;
         /**
          * Copy a profile (including the built-in one) into a new, editable profile
-         * @description Requires `profiles.manage`.
+         * @description Requires `profiles.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["clonePermissionProfile"];
         delete?: never;
@@ -1783,7 +1783,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List API tokens (paginated, searchable, filterable by owner and status); never their secrets
+         * List API tokens (paginated, searchable, filterable by owner, creator and status); never their secrets
          * @description Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["listApiTokens"];
@@ -1926,7 +1926,7 @@ export interface paths {
         put?: never;
         /**
          * Import a configuration file (dry run or apply)
-         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited.
+         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["importConfig"];
         delete?: never;
@@ -1965,7 +1965,15 @@ export interface components {
             lastUsedAt: string | null;
             /** @description Client address of the last accepted request (evidence only) */
             lastUsedIp: string | null;
+            /** @description The creator's name, for display */
             createdBy: string | null;
+            /**
+             * Format: uuid
+             * @description The user who created the token; null when the CLI created it, the
+             *     creator was deleted, or (for a token older than this field) the
+             *     creator is unknown
+             */
+            createdByUserId: string | null;
             /** Format: date-time */
             createdAt: string;
         };
@@ -3904,7 +3912,10 @@ export interface operations {
                     username: string;
                     displayName: string;
                     email?: string | null;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                 };
             };
@@ -4249,7 +4260,10 @@ export interface operations {
             content: {
                 "application/json": {
                     currentPassword: string;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     newPassword: string;
                 };
             };
@@ -13151,7 +13165,10 @@ export interface operations {
                     username: string;
                     displayName: string;
                     email?: string | null;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                     /** @description Default true */
                     isActive?: boolean;
@@ -13512,7 +13529,10 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                 };
             };
@@ -14175,6 +14195,8 @@ export interface operations {
                 sort?: "createdAt" | "-createdAt" | "name" | "-name" | "expiresAt" | "-expiresAt" | "lastUsedAt" | "-lastUsedAt";
                 /** @description One or more ids, comma-separated */
                 userId?: string;
+                /** @description One or more ids, comma-separated */
+                createdBy?: string;
                 status?: "active" | "expired" | "revoked";
             };
             header?: never;

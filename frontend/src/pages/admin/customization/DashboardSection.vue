@@ -146,7 +146,7 @@ const staleSort = (w: UiWidget) => (classAttrs.value ? unavailableSortLabel(w.se
                   <div class="inline-control">
                     <label :for="`w-sort-${w.id}`">Sort by</label>
                     <select :id="`w-sort-${w.id}`" :value="w.search.sort?.field ?? ''" @change="setSortField(w, ($event.target as HTMLSelectElement).value)">
-                      <option value="">Label</option>
+                      <option value="">Default (label, ascending)</option>
                       <option v-for="s in sortOptions(w)" :key="s.field" :value="s.field">{{ s.label }}</option>
                       <option v-if="staleSort(w)" :value="w.search.sort!.field">{{ staleSort(w) }}</option>
                     </select>

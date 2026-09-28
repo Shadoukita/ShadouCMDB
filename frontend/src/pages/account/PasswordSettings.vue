@@ -39,7 +39,7 @@ function submit() {
   change.reset();
   const errs: Record<string, string> = {};
   if (!current.value) errs.currentPassword = "Required";
-  if (pw.value.length < 12) errs.newPassword = "Too short";
+  if ([...pw.value].length < 12) errs.newPassword = "Too short";
   if (pw.value !== pw2.value) errs.confirm = "The passwords do not match";
   local.value = errs;
   const first = Object.keys(errs)[0];

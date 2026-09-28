@@ -1708,6 +1708,7 @@ pub fn routes() -> Vec<Route> {
                  grant more than the importing user holds (403). Every applied change is audited.",
             )
             .requires(GlobalPermission::ConfigExportImport)
+            .session_only()
             .body_limit(IMPORT_BODY_LIMIT)
             .errors(&[ErrorCode::Conflict, ErrorCode::InUse, ErrorCode::PayloadTooLarge])
             .handle(
