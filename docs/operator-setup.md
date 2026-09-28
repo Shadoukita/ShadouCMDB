@@ -333,8 +333,12 @@ its demo inventory and creates more data through its API: a CI class with one at
 data type, CIs, a relationship, a deleted CI, a restricted permission profile and user, and the
 audit rows all of that writes. After the upgrade, `tools/upgrade/upgrade-check.ts` reads every
 object again and fails if an id, attribute value, relationship, profile grant or audit row is
-missing or changed, or if the restricted user sees anything other than before. Then `verify` and
-the smoke suite run against the upgraded instance.
+missing or changed, or if the restricted user sees anything other than before. The same data is
+then checked in the web UI (`frontend/e2e/core-upgrade.spec.ts`): the values of the former fixed
+CI fields (name, status, environment, owner, location, hostname, IP address, serial number,
+notes) show as fields of the CI's class, each CI is labelled by its former name, and the edit
+form saves them back unchanged. Then `verify` and the smoke suite run against the upgraded
+instance.
 
 One difference is expected when upgrading from a release before migration 0008: every CI class
 that existed before gets the time of the upgrade as its `updatedAt`, because 0008 assigns each
