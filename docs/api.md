@@ -163,7 +163,10 @@ Each authenticator code works once (a code already used, even within its 30 s, i
 drift either way is accepted. **Wrong codes are failed sign-ins**: they count towards the same per-username lock and
 the same server-wide budget as wrong passwords (see *Login backoff*), and the right password alone does not reset
 that count while a code is due. `DELETE /api/v1/auth/mfa/totp {currentPassword, code}` turns MFA off; the password
-and code checks on these self-service routes share the per-user lock of `PUT /auth/password`.
+and code checks on these self-service routes share the per-user lock of `PUT /auth/password`. Once MFA is set up,
+a right current password alone (on any of these routes or `PUT /auth/password`) does not reset that count either; only
+a right password together with a right code does, so holding a session and the password does not buy unlimited
+guesses at the code.
 
 A permission profile with `requireMfa: true` (any profile, including the built-in Administrator) makes MFA mandatory
 for its holders. They still sign in with their password, but until they have confirmed an authenticator every route
