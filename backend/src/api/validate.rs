@@ -25,6 +25,10 @@ pub fn pattern_message(pattern: &str) -> Option<&'static str> {
         super::schemas::KEY_PATTERN => "Must be lower_snake_case: a letter, then letters, digits or _ (max 63)",
         super::schemas::HOSTNAME_PATTERN => "Letters, digits, \".\", \"_\" and \"-\", starting with a letter or digit",
         super::schemas::NOT_BLANK_PATTERN => "Must not be blank",
+        crate::data::items::SORT_PATTERN => {
+            "One of label, ident, className, validFrom, validUntil, createdAt, updatedAt or attributes.<key>, \
+             optionally prefixed with \"-\""
+        }
         super::schemas::IDENT_PATTERN => {
             "Letters, digits, \".\", \"_\" and \"-\", starting with a letter or digit (max 64)"
         }

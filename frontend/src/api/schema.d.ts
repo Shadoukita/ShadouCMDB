@@ -3456,7 +3456,10 @@ export interface components {
                 [key: string]: string[];
             };
         };
-        /** @description Sort for an inventory list; `field` is one of the inventory sort fields */
+        /**
+         * @description Sort for an inventory list; `field` is one of the inventory sort fields or
+         *     `attributes.<key>` (the list's `sort` parameter without the "-")
+         */
         UiListSort: {
             field: string;
             /** @enum {string} */
@@ -4997,8 +5000,8 @@ export interface operations {
                 offset?: number;
                 /** @description Search label, ident and attribute values */
                 q?: string;
-                /** @description Sort field; prefix with "-" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt */
-                sort?: "label" | "-label" | "ident" | "-ident" | "className" | "-className" | "validFrom" | "-validFrom" | "validUntil" | "-validUntil" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
+                /** @description Sort field; prefix with "-" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt, or attributes.<key> (needs classId; the attribute must be the same one on every class in classId, and not a reference). Attributes sort case-insensitively for text, by address for IP/CIDR and by list order for lookups; CIs without a value come last. */
+                sort?: string;
                 /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
                 classId?: string;
                 includeSubclasses?: "true" | "false";
