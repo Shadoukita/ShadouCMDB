@@ -107,7 +107,7 @@ lookups. What `seed` loaded before SHAA-31 is now the **`it_infrastructure` star
 or `shadoucmdb seed --template it_infrastructure`, or with one click under *Administration › Templates* in
 the web UI. Installing matches rows by key, adds only what is missing, never changes existing rows and audits
 every row it creates, so it is idempotent. Everything the template adds (and anything else in the data model)
-can then be changed under *Administration › CI classes, Relationship types and Lookups*. Databases
+can then be changed under *Administration › CI classes, Relationship types, Dropdowns and Lookups*. Databases
 seeded before migration 0004 keep all their rows; the template then reports `installed`.
 
 The template contains:
@@ -359,6 +359,23 @@ fields of "server":  manufacturer  <── (parent_attribute_id) ── model
   other fields name as their parent field.
 - **Moving a type** to another parent type is refused while one of its fields (or of its subtypes)
   would lose its parent field from the lineage (`parent_field_outside_lineage`).
+
+**In the web UI** (*Administration › Data model › Dropdowns*, which replaces *Lookups › Lists*; the old
+address `/admin/lookups/lists` redirects there):
+
+- A list's **Parent list** is set in its edit dialog; the lists table shows it. Lists that depend on the
+  list being edited are not offered, since they would form a cycle.
+- The values of a child list show the parent value each **belongs to**. The value dialog picks it, and a
+  new value added while the table is filtered starts with that parent value. The values can be filtered
+  by parent value (or *Not assigned*); the filter is part of the URL (`?list=…&parent=<id>|none`) and is
+  applied by the API. Reordering a filtered table keeps the positions those values had among the others.
+- The attribute dialog of a lookup field on a child list offers **Parent field**: the lookup fields of the
+  class and its ancestors bound to the parent list. With exactly one candidate, a new field starts with it.
+- On the CI form a child dropdown is disabled with "Choose <parent field> first" until the parent field
+  has a value, and then lists only the values of that parent value. Choosing another parent value clears a
+  child value the new parent does not offer; clearing the parent clears the child. A stored child value
+  that does not belong to the current parent value (saved before the rule existed) is shown as such
+  rather than silently dropped.
 
 The database enforces the list, value and field rules (triggers and foreign keys, see `verify`);
 that a CI's value belongs to its parent field's value is checked by the API, because the values

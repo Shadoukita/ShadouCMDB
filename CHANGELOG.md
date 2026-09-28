@@ -25,6 +25,12 @@ as `formatVersion: 3` (with `parent` / `parentAttribute` keys); versions 1 and 2
 and leave existing parent links as they are. **Action** only for scripts that parse exported files
 and check `formatVersion === 2`: accept 3.
 
+Web UI: lookup lists moved from *Administration › Lookups › Lists* to the new *Administration › Data
+model › Dropdowns* (old bookmarks redirect). There a list gets its parent list and each value its parent
+value, values can be filtered by parent value, and the attribute dialog picks a lookup field's parent
+field. On the CI form a child dropdown stays disabled until its parent field is set, offers only that
+parent's values, and is cleared when the parent changes to one that does not offer it.
+
 ### Added: sign-in through OIDC providers and LDAP/AD directories
 
 Users can now sign in through OpenID Connect providers (Entra ID, Okta, Keycloak, ADFS, …) and
