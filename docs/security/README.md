@@ -10,6 +10,7 @@
 | [CRA incident reporting runbook](cra-incident-reporting.md) | security owner | The 24 h / 72 h / 14 day / 1 month reporting steps to ENISA and the BSI |
 | [Incident response plan](incident-response.md) | security owner, maintainers | What to do when our pipeline, accounts or signing keys are compromised |
 | [Product risk assessment](risk-assessment.md) | maintainers, auditors | Assets, threats, controls and residual risk (CRA Art. 13(2)) |
+| [Penetration test v0.1.0](pentest-v0.1.0.md) | maintainers, auditors, customers | Scope, method, results and open findings of the pre-release test; the DAST in CI |
 | [Security requirements for planned features](feature-requirements.md) | maintainers | Requirements for discovery, the credential vault, import/export and webhooks, set before they are built |
 
 ## Open decisions
