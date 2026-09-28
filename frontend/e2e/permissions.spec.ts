@@ -151,14 +151,14 @@ test("class permissions are enforced per class and per operation", async ({ requ
   const crmDb = await ciIdByName(request, "crm-db");
   const esx = await ciIdByName(request, "fra1-esx-01");
 
-  // View: lists only hold the classes the user may view; a CI of any other class is refused by id.
+  // View: lists only hold the classes the user may view; a CI of any other class answers 404 by id, like a missing one.
   const list = (await (await restricted.get("/configuration-items?limit=200")).json()) as { data: { classId: string }[] };
   expect(list.data.length).toBeGreaterThan(0);
   expect(new Set(list.data.map((c) => c.classId))).toEqual(new Set([applicationId, serverId]));
   const databases = await restricted.get(`/configuration-items?classId=${databaseId}`);
   expect(databases.status()).toBe(200);
   expect((await databases.json()).data).toEqual([]);
-  await expectError(await restricted.get(`/configuration-items/${crmDb}`), 403, "FORBIDDEN");
+  await expectError(await restricted.get(`/configuration-items/${crmDb}`), 404, "NOT_FOUND");
   expect((await restricted.get(`/configuration-items/${esx}`)).status()).toBe(200);
 
   // Create: allowed for Application only.
@@ -174,7 +174,7 @@ test("class permissions are enforced per class and per operation", async ({ requ
   const esxBefore = await apiGet<{ attributes: Record<string, unknown>; version: number }>(request, `/configuration-items/${esx}`);
   await expectError(await restricted.send("PATCH", `/configuration-items/${esx}`, { attributes: { notes: "should not stick" }, version: esxBefore.version }), 403, "FORBIDDEN");
   const dbBefore = await apiGet<{ version: number }>(request, `/configuration-items/${crmDb}`);
-  await expectError(await restricted.send("PATCH", `/configuration-items/${crmDb}`, { attributes: { notes: "should not stick" }, version: dbBefore.version }), 403, "FORBIDDEN");
+  await expectError(await restricted.send("PATCH", `/configuration-items/${crmDb}`, { attributes: { notes: "should not stick" }, version: dbBefore.version }), 404, "NOT_FOUND");
 
   // Delete: refused everywhere (the profile grants no delete).
   await expectError(await restricted.send("DELETE", `/configuration-items/${app.id}`), 403, "FORBIDDEN");
@@ -249,11 +249,12 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   await page.goto(`/cis/${esx}/edit`);
   await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
 
-  // A Database CI opened by URL: refused, not rendered.
+  // A Database CI opened by URL: not rendered, and indistinguishable from a
+  // missing id (the API answers 404 so its existence is not revealed).
   await page.goto(`/cis/${await ciIdByName(request, "crm-db")}`);
-  await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Permission denied");
-  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).not.toContainText("Not found");
+  await expect(page.getByRole("heading", { name: "Configuration item not found" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Not found");
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).not.toContainText("Permission denied");
   await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 1, name: "crm-db" })).toHaveCount(0);
   await snap(page, "31-restricted-denied");
@@ -345,8 +346,8 @@ test("audit.view shows a class-restricted auditor no values of CIs they may not 
     return ((await res.json()) as { data: Entry[] }).data;
   };
   try {
-    // The CI itself stays refused, and so do its values in the audit log: the rows are listed, the values are not.
-    await expectError(await auditor.get(`/configuration-items/${crmDb}`), 403, "FORBIDDEN");
+    // The CI itself stays hidden (404, as for an unknown id), and so do its values in the audit log: the rows are listed, the values are not.
+    await expectError(await auditor.get(`/configuration-items/${crmDb}`), 404, "NOT_FOUND");
     const dbRows = await log(auditor, `entityType=configuration_items&entityId=${crmDb}`);
     expect(dbRows.length).toBeGreaterThan(0);
     for (const row of dbRows) expect(row).toMatchObject({ oldValue: null, newValue: null, redacted: true });
