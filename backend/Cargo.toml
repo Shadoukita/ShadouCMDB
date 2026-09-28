@@ -36,7 +36,8 @@ regex = "1"
 # OIDC discovery, JWKS and token requests. rustls with the ring provider we configure
 # ourselves (the same one sqlx uses), so no second crypto library enters the build.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "form"] }
-# Verifies OIDC ID token signatures (RSA, ECDSA, Ed25519); already in the tree through rustls.
+# Verifies OIDC ID token signatures (RSA, ECDSA, Ed25519) and seals the OIDC sign-in
+# cookie (AES-256-GCM); already in the tree through rustls.
 ring = "0.17"
 # Reads the password for `create-admin` without echoing it.
 rpassword = "7"
