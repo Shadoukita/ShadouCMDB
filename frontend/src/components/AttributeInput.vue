@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { CiSummary } from "../api/queries";
-import { nowFormValue, NOW_HINT, type AttributeShape, type Validation } from "../lib/attributeValues";
+import { isMultiline, nowFormValue, NOW_HINT, type AttributeShape, type Validation } from "../lib/attributeValues";
 import CiPicker from "./CiPicker.vue";
 import LookupValueSelect, { type LookupParent } from "./LookupValueSelect.vue";
 
@@ -9,6 +9,7 @@ import LookupValueSelect, { type LookupParent } from "./LookupValueSelect.vue";
  * One input per attribute dataType. The value is always a string; see lib/attributeValues for conversion.
  * (Number inputs bind manually because v-model would cast them to numbers.)
  * Double-clicking a date or datetime input sets it to the current local date and time.
+ * A text attribute flagged validation.multiline gets a text area: a single-line input would drop its line breaks.
  */
 const props = defineProps<{
   def: AttributeShape;
@@ -90,5 +91,6 @@ function onReference(ci: CiSummary | null) {
     class="mono"
     spellcheck="false"
   />
+  <textarea v-else-if="isMultiline(def)" :id="id" v-model="model" v-bind="aria" rows="4" :maxlength="v.maxLength" />
   <input v-else :id="id" v-model="model" v-bind="aria" type="text" :maxlength="v.maxLength" />
 </template>

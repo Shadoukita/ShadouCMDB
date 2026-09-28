@@ -159,15 +159,14 @@ test("the edit form holds the migrated values and saves them back unchanged", as
 });
 
 test("multi-line notes keep their line breaks when edited in the form", async ({ page, request }) => {
-  // Known defect: the migrated Notes field is a single-line input, which drops line breaks (GH#109).
-  // Remove test.fail() with the fix.
-  test.fail(true, "GH#109: text attributes have no multi-line input");
+  // The migrated Notes field is a multi-line text area, so an edit keeps the line breaks (GH#109).
   const ci = server();
   test.skip(!ci.notes?.includes("\n"), "the seeded CI has no multi-line notes");
   const before = await apiGet<Ci>(request, `/configuration-items/${ci.id}`);
   await page.goto(`/cis/${ci.id}/edit`);
   const notes = page.locator("#attr-notes");
-  await notes.press("End");
+  await expect(notes).toHaveJSProperty("tagName", "TEXTAREA");
+  await notes.press("ControlOrMeta+End");
   await notes.pressSequentially(" Checked.");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));

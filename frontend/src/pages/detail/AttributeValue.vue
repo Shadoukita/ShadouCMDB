@@ -2,6 +2,7 @@
 import type { AttributeReference, EffectiveAttribute } from "../../api/queries";
 import CiLink from "../../components/CiLink.vue";
 import LookupValueName from "../../components/LookupValueName.vue";
+import { isMultiline } from "../../lib/attributeValues";
 import { formatDate, formatDateTime, HIDDEN_CI } from "../../lib/format";
 import type { TrailStep } from "../../lib/trail";
 
@@ -30,6 +31,7 @@ const isUrl = (v: unknown) => /^https?:\/\//.test(String(v));
     {{ refInfo?.name ?? String(value) }}{{ refInfo?.deleted ? " (deleted)" : "" }}
   </CiLink>
   <LookupValueName v-else-if="def.dataType === 'lookup'" :list-id="def.lookupListId" :value-id="String(value)" />
+  <span v-else-if="isMultiline(def)" class="multiline">{{ String(value) }}</span>
   <a v-else-if="def.dataType === 'text' && isUrl(value)" :href="String(value)" target="_blank" rel="noreferrer noopener">{{ String(value) }}</a>
   <template v-else>{{ String(value) }}</template>
 </template>

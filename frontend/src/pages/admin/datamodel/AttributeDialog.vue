@@ -70,6 +70,7 @@ const vMin = ref<string | number>("");
 const vMax = ref<string | number>("");
 const vMaxLength = ref<string | number>("");
 const vPattern = ref("");
+const vMultiline = ref(false);
 const vUnit = ref("");
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
@@ -80,6 +81,7 @@ interface Validation {
   maxLength?: number;
   pattern?: string;
   unit?: string;
+  multiline?: boolean;
 }
 
 function seed() {
@@ -101,6 +103,7 @@ function seed() {
   vMax.value = v.max?.toString() ?? "";
   vMaxLength.value = v.maxLength?.toString() ?? "";
   vPattern.value = v.pattern ?? "";
+  vMultiline.value = v.multiline === true;
   vUnit.value = v.unit ?? "";
   error.value = null;
   local.value = {};
@@ -134,7 +137,8 @@ const enumValues = computed(() =>
 const draft = computed<AttributeShape>(() => ({
   dataType: dataType.value,
   enumValues: dataType.value === "enum" ? enumValues.value : null,
-  validation: null,
+  // Only the flag that changes the input: a multi-line default value gets a text area too.
+  validation: dataType.value === "text" && vMultiline.value ? { multiline: true } : null,
   referenceClassId: referenceClassId.value || null,
   lookupListId: lookupListId.value || null,
 }));
@@ -170,6 +174,8 @@ function errorFor(field: string): string | undefined {
     .map(([, m]) => m);
   return messages.length ? messages.join("; ") : undefined;
 }
+/** An error on validation as a whole (not one of its rules) is shown next to the Multiline option. */
+const validationError = computed(() => apiErrors.value.validation);
 const PLACED = ["label", "key", "dataType", "referenceClassId", "lookupListId", "parentAttributeId", "enumValues", "validation", "groupName", "helpText", "description", "defaultValue", "isRequired"];
 const unplaced = computed(() =>
   error.value instanceof ApiError ? error.value.details.filter((d) => !PLACED.some((f) => d.field === f || d.field.startsWith(`${f}.`))) : [],
@@ -192,6 +198,8 @@ function validation(): Validation | null {
   if (vKind.value === "text") {
     if (numberOrUndefined(vMaxLength.value) !== undefined) v.maxLength = numberOrUndefined(vMaxLength.value);
     if (vPattern.value.trim()) v.pattern = vPattern.value.trim();
+    // Cleared by leaving the key out: validation is replaced as a whole.
+    if (vMultiline.value) v.multiline = true;
   }
   return Object.keys(v).length ? v : null;
 }
@@ -398,6 +406,14 @@ async function submit() {
         <FormField id="ad-pattern" v-slot="p" label="Pattern" :error="errorFor('validation.pattern')" hint="Regular expression the value must match">
           <input :id="p.id" v-model="vPattern" type="text" class="mono" spellcheck="false" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         </FormField>
+        <div class="field">
+          <span class="label">Multiline</span>
+          <label class="checkbox-row">
+            <input id="ad-multiline" v-model="vMultiline" type="checkbox" :aria-describedby="validationError ? 'ad-multiline-error' : undefined" />
+            Text area that keeps line breaks, e.g. notes or runbook steps
+          </label>
+          <span v-if="validationError" id="ad-multiline-error" class="error">{{ validationError }}</span>
+        </div>
       </template>
       <FormField
         id="ad-default"

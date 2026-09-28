@@ -624,6 +624,10 @@ dl.props dt {
 dl.props dd {
   word-break: break-word;
 }
+/* Multi-line text attributes keep their line breaks and indentation. */
+.multiline {
+  white-space: pre-wrap;
+}
 dl.props .group-title {
   grid-column: 1 / -1;
   font-size: var(--fs-xs);
