@@ -1,0 +1,36 @@
+# OWASP ZAP rule policy for .github/workflows/dast.yml (docs/security/pentest-v0.1.0.md).
+# Format: <rule id><TAB><IGNORE|INFO|WARN|FAIL><TAB>(<name>). Rules not listed WARN.
+# FAIL: controls ShadouCMDB has and must keep, and every injection class.
+# IGNORE only with a reason on the line above.
+# Passive (baseline and API scan)
+10010	FAIL	(Cookie No HttpOnly Flag)
+10017	FAIL	(Cross-Domain JavaScript Source File Inclusion)
+10020	FAIL	(Missing Anti-clickjacking Header)
+10021	FAIL	(X-Content-Type-Options Header Missing)
+10023	FAIL	(Information Disclosure - Debug Error Messages)
+10036	FAIL	(Server Leaks Version Information via Server HTTP Response Header Field)
+10037	FAIL	(Server Leaks Information via X-Powered-By HTTP Response Header Field(s))
+10038	FAIL	(Content Security Policy (CSP) Header Not Set)
+10054	FAIL	(Cookie without SameSite Attribute)
+10098	FAIL	(Cross-Domain Misconfiguration)
+90022	WARN	(Application Error Disclosure)
+# CI serves plain HTTP; Secure is set behind TLS (COOKIE_SECURE, unit-tested in auth/session.rs).
+10011	IGNORE	(Cookie Without Secure Flag)
+# Active (API scan): injection and server-side request classes.
+6	FAIL	(Path Traversal)
+7	FAIL	(Remote File Inclusion)
+40003	FAIL	(CRLF Injection)
+40008	WARN	(Parameter Tampering)
+40009	FAIL	(Server Side Include)
+40012	FAIL	(Cross Site Scripting (Reflected))
+40014	FAIL	(Cross Site Scripting (Persistent))
+40018	FAIL	(SQL Injection)
+40019	FAIL	(SQL Injection - MySQL)
+40022	FAIL	(SQL Injection - PostgreSQL)
+40024	FAIL	(SQL Injection - SQLite)
+40046	FAIL	(Server Side Request Forgery)
+90019	FAIL	(Server Side Code Injection)
+90020	FAIL	(Remote OS Command Injection)
+90021	FAIL	(XPath Injection)
+90023	FAIL	(XML External Entity Attack)
+90035	FAIL	(Server Side Template Injection)
