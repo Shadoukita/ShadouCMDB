@@ -129,6 +129,11 @@ or `Forwarded: proto=https`); `COOKIE_SECURE=always|never` overrides that.
 password. A success resets the counter. Unknown usernames are throttled the same way and cost the same argon2
 work, so neither the answer nor its timing reveals which usernames exist.
 
+The limits hold for concurrent requests too: an attempt is reserved when it passes the check and counts as if it
+had failed until it finishes. A username admits only as many attempts at once as it has free failures left (one at a
+time once it has been locked); further attempts that arrive meanwhile get `429` with `Retry-After: 1`. Attempts in
+progress also count towards the server-wide budget below.
+
 On top of that, the server counts failed sign-ins for all usernames together. Once 300 fall within any
 10 minutes, sign-in is slowed down, not refused: attempts wait in a single queue that lets one through every
 2 s, so guessing across all accounts stays at about 300 per 10 minutes while a correct password still signs in
