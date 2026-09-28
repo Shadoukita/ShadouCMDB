@@ -845,7 +845,7 @@
           "Authentication"
         ],
         "summary": "Start setting up an authenticator app: returns a new secret to confirm",
-        "description": "Nothing changes at sign-in until the secret is confirmed (POST /api/v1/auth/mfa/totp/confirm); calling this again replaces an unconfirmed secret. 409 when an authenticator is already set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Nothing changes at sign-in until the secret is confirmed (POST /api/v1/auth/mfa/totp/confirm); calling this again replaces an unconfirmed secret. 409 when an authenticator is already set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "startTotpEnrolment",
         "parameters": [],
         "requestBody": {
@@ -973,7 +973,7 @@
           "Authentication"
         ],
         "summary": "Turn your two-factor authentication off (or cancel an unfinished set-up)",
-        "description": "Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "disableTotp",
         "parameters": [],
         "requestBody": {
@@ -1225,7 +1225,7 @@
           "Authentication"
         ],
         "summary": "Replace your recovery codes with 10 new ones (shown once)",
-        "description": "Needs the password and a current code. The old codes stop working. 409 when MFA is not set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Needs the password and a current code. The old codes stop working. 409 when MFA is not set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "regenerateRecoveryCodes",
         "parameters": [],
         "requestBody": {

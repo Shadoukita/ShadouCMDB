@@ -480,12 +480,33 @@ fn principal(ctx: &RequestContext) -> Result<&Principal, AppError> {
 /// per user like login, so a stolen session cannot be turned into a known
 /// password by guessing the current one. An account of an identity provider
 /// has no password here: 409.
+///
+/// With MFA set up, a right password leaves the per-user count alone, as at
+/// login: were it to clear it, each right password would buy a fresh set of
+/// guesses at the code (GH#141). The count is then cleared only by a right
+/// password together with a right code ([`current_password_attempt`]).
 pub(crate) async fn check_current_password(
     pool: &PgPool,
     auth: &AuthState,
     me: &Principal,
     current_password: &str,
 ) -> Result<(), AppError> {
+    let attempt = current_password_attempt(pool, auth, me, current_password).await?;
+    if !mfa_data::get_totp(&mut *pool.acquire().await?, me.user_id, false).await?.is_some_and(|t| t.confirmed) {
+        attempt.success();
+    }
+    Ok(())
+}
+
+/// Checks the current password like [`check_current_password`] but leaves
+/// the verified attempt open: the caller reports how it ended once the second
+/// factor has been checked too, so a wrong code counts against the same lock.
+pub(crate) async fn current_password_attempt<'a>(
+    pool: &PgPool,
+    auth: &'a AuthState,
+    me: &Principal,
+    current_password: &str,
+) -> Result<Attempt<'a>, AppError> {
     let key = me.user_id.to_string();
     let hash = data::password_hash(&mut *pool.acquire().await?, me.user_id).await?;
     if let Some(None) = hash {
@@ -499,8 +520,7 @@ pub(crate) async fn check_current_password(
         tracing::warn!(user = %me.username, locked_secs = locked.map(|d| d.as_secs()), "wrong current password");
         return Err(AppError::field("currentPassword", "The current password is wrong", "invalid_credentials"));
     }
-    attempt.success();
-    Ok(())
+    Ok(attempt)
 }
 
 async fn change_password(
