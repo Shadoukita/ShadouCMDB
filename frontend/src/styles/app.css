@@ -609,9 +609,14 @@ table.data.loading tbody {
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--c-border);
 }
-.toolbar .field select,
 .toolbar .field input {
   width: 150px;
+}
+/* A filter select is as wide as its longest option, so its value is never clipped. */
+.toolbar .field select {
+  width: auto;
+  min-width: 150px;
+  max-width: 320px;
 }
 .toolbar .field.search input {
   width: 220px;
