@@ -104,7 +104,10 @@ something malicious. Include:
   a user's password also ends their sessions, revokes their API tokens and revokes the tokens they
   created for other accounts; revoke the API tokens of accounts whose password you keep on the
   **API tokens** administration page, and list what an account created with
-  `GET /api/v1/admin/api-tokens?createdBy=<user id>`), review the audit log for what each suspect
+  `GET /api/v1/admin/api-tokens?createdBy=<user id>`; reset or list a suspect account before you
+  delete or disable it, because neither revokes the tokens it created for others and deleting it
+  clears their creator, and revoke those tokens by hand for single sign-on accounts, whose
+  password cannot be reset), review the audit log for what each suspect
   account changed, including identity provider changes (`identity_providers` create and update
   rows by that actor: a provider or group mapping it added keeps signing people in), and restore
   the database from a backup older than the installation if data may have been altered;

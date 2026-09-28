@@ -258,7 +258,9 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
   working token the user created for another owner, since the account may have been compromised. The user's own
   password change (`PUT /auth/password`) revokes only their own tokens. `GET /admin/api-tokens?createdBy=<id>`
   lists what a user created. Tokens created before this field existed have it only where their `create` audit
-  row was still there when the upgrade ran; deleting the creator sets it to null and keeps the token.
+  row was still there when the upgrade ran; deleting the creator sets it to null and keeps the token. Disabling or
+  deleting a user does not revoke the tokens they created for others, and single sign-on accounts have no password
+  to reset: revoke those tokens by listing them with `createdBy` first.
 - Every request made with a known token, accepted or refused, writes a `token.use` audit row; creating and revoking
   write `create` and `update` rows (see [data model](data-model.md#auditing)).
 
