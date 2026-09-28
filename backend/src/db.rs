@@ -257,7 +257,8 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
         MIGRATOR.iter().filter(|m| m.migration_type.is_up_migration() && !applied.contains(&m.version)).collect();
     println!("Migrations: {expected} in binary, {} applied, {} pending", expected - pending.len(), pending.len());
 
-    for &(version, old) in SUPERSEDED_CHECKSUMS {
+    // Nothing recorded yet (the table may not exist): nothing to rewrite.
+    for &(version, old) in SUPERSEDED_CHECKSUMS.iter().filter(|_| !applied.is_empty()) {
         let Some(current) = MIGRATOR.iter().find(|m| m.version == version) else { continue };
         let updated = sqlx::query(
             "UPDATE public._sqlx_migrations SET checksum = $1 WHERE version = $2 AND checksum = decode($3, 'hex')",
@@ -453,6 +454,30 @@ mod tests {
             assert!(checksum_matches(version, &hex::encode(&*m.checksum)));
             assert!(!checksum_matches(version + 100, old));
         }
+    }
+
+    /// `shadoucmdb migrate` on an empty database, as on a first install.
+    #[tokio::test]
+    async fn migrate_runs_on_an_empty_database_and_again_as_a_no_op() {
+        let Some(db) = super::scratch::empty("migrate_runs_on_an_empty_database").await else { return };
+        let cfg = crate::config::DatabaseConfig {
+            url: None,
+            host: None,
+            port: 5432,
+            database: None,
+            user: None,
+            password: None,
+            ssl: crate::config::SslMode::Disable,
+            ssl_ca_file: None,
+            pool_max: 1,
+            statement_timeout: std::time::Duration::ZERO,
+            connect_timeout: std::time::Duration::from_secs(1),
+            roles: Default::default(),
+        };
+        super::migrate_with(&db.pool, &cfg, false).await.expect("first migrate");
+        super::migrate_with(&db.pool, &cfg, false).await.expect("second migrate");
+        assert_eq!(super::applied_count(&db.pool).await.unwrap(), super::expected_count());
+        db.drop().await;
     }
 
     #[test]
