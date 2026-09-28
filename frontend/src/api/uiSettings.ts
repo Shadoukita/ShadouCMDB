@@ -1,7 +1,7 @@
 // TanStack Query composables for UI settings (Administration › Customization)
 // and configuration export/import. Same rules as queries.ts: every request goes
 // through the typed client, and mutations invalidate exactly what they change.
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/vue-query";
 import { toValue, type MaybeRefOrGetter } from "vue";
 import { api, unwrap, type JsonBody, type Schemas } from "./client";
 
@@ -44,12 +44,14 @@ export const uiKeys = {
   version: (n: number) => ["ui-settings", "version", n] as const,
 };
 
+const fetchSettings = ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/ui-settings", { signal }));
+
 /** The effective settings every signed-in screen applies. */
 export function useUiSettings(enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery(() => ({
     queryKey: uiKeys.settings,
     enabled: toValue(enabled),
-    queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/ui-settings", { signal })),
+    queryFn: fetchSettings,
     staleTime: 60_000,
   }));
 }
@@ -57,18 +59,28 @@ export function useUiSettings(enabled: MaybeRefOrGetter<boolean> = true) {
 /** Branding without a session (login page, favicon, title). */
 export const fetchPublicBranding = () => unwrap(api.GET("/api/v1/ui-settings/branding"));
 
+const versionQuery = (n: number) => ({
+  queryKey: uiKeys.version(n),
+  queryFn: ({ signal }: { signal: AbortSignal }) =>
+    unwrap(api.GET("/api/v1/ui-settings/versions/{version}", { params: { path: { version: n } }, signal })),
+  staleTime: Infinity, // a saved version never changes
+});
+
 /** A saved version as stored (with references the effective settings leave out). */
 export function useUiSettingsVersion(version: MaybeRefOrGetter<number | undefined>) {
   return useQuery(() => {
     const n = toValue(version) ?? 0;
-    return {
-      queryKey: uiKeys.version(n),
-      enabled: n > 0,
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        unwrap(api.GET("/api/v1/ui-settings/versions/{version}", { params: { path: { version: n } }, signal })),
-      staleTime: Infinity, // a saved version never changes
-    };
+    return { ...versionQuery(n), enabled: n > 0 };
   });
+}
+
+/**
+ * The current settings and the stored document of their version, fresh from the
+ * API: what an editor starts from (the in-page layout editor).
+ */
+export async function fetchCurrentStoredSettings(qc: QueryClient) {
+  const current = await qc.fetchQuery({ queryKey: uiKeys.settings, queryFn: fetchSettings, staleTime: 0 });
+  return qc.fetchQuery(versionQuery(current.version));
 }
 
 export function useUiSettingsVersions(page: MaybeRefOrGetter<{ limit: number; offset: number }>) {

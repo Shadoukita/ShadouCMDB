@@ -320,13 +320,19 @@ export function normalizeLayout(l: UiClassLayout): UiClassLayout {
     tabs: (l.tabs ?? []).map((t) => ({
       key: t.key,
       label: t.label,
-      sections: (t.sections ?? []).map((s) => ({
-        key: s.key,
-        label: s.label,
-        columns: s.columns ?? GRID_COLUMNS,
-        collapsed: !!s.collapsed,
-        fields: (s.fields ?? []).map((f) => ({ field: f.field, width: f.width ?? 1 })),
-      })),
+      // Content blocks (a `kind` other than fields: notes, panels) are kept as stored, without fields.
+      sections: (t.sections ?? []).map((s) =>
+        (s as { kind?: string }).kind && (s as { kind?: string }).kind !== "fields"
+          ? s
+          : {
+              ...s,
+              key: s.key,
+              label: s.label,
+              columns: s.columns ?? GRID_COLUMNS,
+              collapsed: !!s.collapsed,
+              fields: (s.fields ?? []).map((f) => ({ field: f.field, width: f.width ?? 1 })),
+            },
+      ),
     })),
     hiddenFields: l.hiddenFields ?? [],
     readOnlyFields: l.readOnlyFields ?? [],

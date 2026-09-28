@@ -38,6 +38,6 @@ updated AS (
   RETURNING d.id, d.validation
 )
 INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, old_value, new_value)
-SELECT 'system', 'migration 0018', 'update', 'ci_attribute_definitions', u.id,
+SELECT 'system', 'migration 0019', 'update', 'ci_attribute_definitions', u.id,
        jsonb_build_object('validation', m.old_validation), jsonb_build_object('validation', u.validation)
 FROM updated u JOIN migrated m ON m.id = u.id;

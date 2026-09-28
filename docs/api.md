@@ -4,12 +4,17 @@ The backend is the only database client. Everything the UI needs goes through th
 
 - **Contract:** [`backend/openapi.json`](../backend/openapi.json) (OpenAPI 3.1). It is generated from the code
   (utoipa): the same route table builds the router and the document, and requests are validated against the
-  same JSON Schemas the document publishes. The running server also serves it at `GET /openapi.json`, with a
-  browsable UI (Swagger UI, bundled in the binary) at `GET /docs`.
+  same JSON Schemas the document publishes. The running server serves it at `GET /openapi.json`, with a
+  browsable UI (Swagger UI, bundled in the binary) at `GET /docs`, only when `API_DOCS` allows it: `off`
+  (default, 404), `authenticated` (any signed-in user; 401 otherwise) or `public`.
 - **Base path:** `/api/v1`. The health probes `/healthz` and `/readyz` sit at the root.
-- **Sign-in required:** every operation except `/healthz`, `/readyz`, `GET/POST /api/v1/setup` and
-  `POST /api/v1/auth/login` needs a session (see [Authentication and permissions](#authentication-and-permissions)).
-  The contract itself (`/openapi.json`, `/docs`) and the web UI's static files stay public.
+- **Sign-in required:** every operation except `/healthz`, `/readyz`, `GET /api/v1/version`,
+  `GET/POST /api/v1/setup` and `POST /api/v1/auth/login` needs a session (see
+  [Authentication and permissions](#authentication-and-permissions)). The web UI's static files stay public.
+- **Version:** `GET /healthz` returns `{"status":"ok","version":"…"}`; `GET /api/v1/version` returns the
+  version, the API major version (`v1`) and the number of migrations the build ships.
+- **Timeouts:** a request not answered within `HTTP_REQUEST_TIMEOUT_SECS` (default 120) gets
+  `408 REQUEST_TIMEOUT` and its transaction is rolled back.
 - **Regenerate the contract** after changing a route: `shadoucmdb openapi --out backend/openapi.json`
   (or `cargo run -- openapi --out openapi.json` in `backend/`). `shadoucmdb openapi --check backend/openapi.json`
   fails if the committed file is stale; CI runs it. Then refresh the UI types with `npm run api:types -w frontend`.
@@ -322,7 +327,7 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
 | `navigation.entries[]` | Menu order. `type: page` (`dashboard`, `inventory`, `search`, `audit_log`, `administration`), `type: class` (`classKey`) or `type: section` (`key`, `label`, `items[]` of classes). Each entry can be renamed (`label`) and `hidden`. Pages and classes not listed follow in their default order. |
 | `dashboard.widgets[]` | Widgets in order: `count_by_class` (optional `classKeys`), `count_by_lookup` (`lookupListKey`: CIs per value of that list, e.g. `status`), `recent_changes` (`limit`), `saved_search` (`search`: `classKeys`, `includeSubclasses`, `filters`, `sort`). `null` keeps the built-in dashboard. |
 | `listViews[]` | Per class: `columns` (built-in fields `label`, `ident`, `class`, `validFrom`, `validUntil`, `active`, `createdAt`, `updatedAt`, or `attributes.<key>`), `defaultSort`, `defaultFilters` (`q`, and `lookups`: lookup list key → value keys), `pageSize`. |
-| `layouts[]` | Per class (layout format v2): `tabs[]` (`key`, `label`, `sections[]`), each section `key` (unique in the layout), `label`, `columns` (1–4, default 3), `collapsed` and `fields[]` of `{ field, width }` (1–4 columns, at most the section's), plus `hiddenFields` and `readOnlyFields`. Fields no section places follow at the end of the first tab, grouped by attribute group. `ident`, `validFrom` and `validUntil` cannot be hidden. The older `panels[]` format is still accepted and converted to one "General" tab (see [data model](data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2)). |
+| `layouts[]` | Per class (layout format v2): `tabs[]` (`key`, `label`, `sections[]`), each section `key` (unique in the layout), `label`, `kind` (`fields` by default; `note` with `text`, or a built-in panel `relations`, `history` or `audit`, each once per layout), `columns` (1–4, default 3), `collapsed` and `fields[]` of `{ field, width }` (1–4 columns, at most the section's), plus `hiddenFields` and `readOnlyFields`. Fields no section places follow at the end of the first tab, grouped by attribute group. `ident`, `validFrom` and `validUntil` cannot be hidden. The older `panels[]` format is still accepted and converted to one "General" tab (see [data model](data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2)). |
 
 - **References are keys.** Classes, attributes and lookups are named by key, so a document moves between installs.
   A reference to something that does not exist is accepted: `GET` returns the *effective* settings without it and

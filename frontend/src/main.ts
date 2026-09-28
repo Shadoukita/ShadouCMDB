@@ -5,12 +5,16 @@ import { watch } from "vue";
 import { onMfaEnrolmentRequired, onSessionEnded } from "./api/client";
 import { queryClient } from "./api/queryClient";
 import App from "./App.vue";
+import { listenForLayoutUpdates } from "./lib/layoutEditor";
 import { router, TWO_FACTOR_SETUP } from "./router";
 import { useBrandingStore } from "./stores/branding";
 import { useSessionStore } from "./stores/session";
 import "./styles/app.css";
 
 const app = createApp(App).use(createPinia()).use(router).use(VueQueryPlugin, { queryClient });
+
+// A layout saved in the layout editor's window shows at once in this one.
+listenForLayoutUpdates(queryClient);
 
 // Any 401 on a signed-in request means the session ended (idle/absolute timeout,
 // signed out elsewhere, account disabled): go to sign-in, then come back here.

@@ -15,7 +15,7 @@ Migrations: [`sql/migrations/`](../sql/migrations/)
 `0003_users_and_permission_profiles`, `0004_data_model_admin`, `0005_ui_settings`, `0006_auth_audit`,
 `0007_audit_retention`, `0008_cmdb_schema_and_areas`, `0009_type_tables`, `0010_api_tokens` …
 `0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`,
-`0018_multiline_notes`).
+`0018_audit_hash_chain`, `0019_multiline_notes`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -143,7 +143,7 @@ fields and dropped the columns:
 | `name` | `name`, text, required, max. 200 | every root class; it is the title attribute of every class |
 | `status_id` | `status`, lookup (list `status`), required | the topmost classes whose CIs held a value |
 | `environment_id`, `owner_id`, `location_id` | `environment`, `owner`, `location`, lookups (lists of the same names) | the same rule |
-| `hostname`, `ip_address`, `serial_number`, `notes` | `hostname` (text, hostname pattern), `ip_address` (ip), `serial_number` (text, max. 200), `notes` (text, max. 4000, multi-line since migration 0018) | the same rule |
+| `hostname`, `ip_address`, `serial_number`, `notes` | `hostname` (text, hostname pattern), `ip_address` (ip), `serial_number` (text, max. 200), `notes` (text, max. 4000, multi-line since migration 0019) | the same rule |
 
 "Topmost" means: a class gets the field if its own CIs (deleted ones included) held a value and no
 ancestor already got it, so each CI's lineage has exactly one such field. A key already used in that
@@ -205,11 +205,22 @@ and fields by key. Administrators edit it in **Administration › Customization 
 ```
 layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   tabs[]:     { key, label, sections[] }                   key unique among the layout's tabs
-  sections[]: { key, label, columns 1–4 (default 3),       key unique across the whole layout
-                collapsed, fields[] }
+  sections[]: { key, label, kind (default fields),         key unique across the whole layout
+                columns 1–4 (default 3), collapsed,
+                fields[],                                  kind fields only
+                text }                                     kind note only: 1–4,000 characters
   fields[]:   { field, width 1–4 (default 1) }             field placed once; width ≤ the section's columns
 ```
 
+- **Section kinds.** `kind` says what a section shows. `fields` (the default when `kind` is absent) is a
+  grid of fields. `note` is static text an administrator writes in `text`: plain text or limited
+  Markdown, which the web UI renders without ever rendering raw HTML. `relations`, `history` and `audit`
+  are the detail page's built-in panels (relationships, version history, audit trail); placing one in a
+  section shows it there, in any tab, under the section's label and honouring `collapsed`. Each panel
+  can be placed once per layout, and a panel the layout does not place keeps its usual position on the
+  detail page. Notes and panels have no `fields`, and panels no `text`. The API writes `kind` only
+  for sections that are not `fields`, so layouts saved before section kinds existed round-trip
+  unchanged and need no migration.
 - `field` is a core field (`ident`, `validFrom`, `validUntil`), a detail-page field (`label`, `class`,
   `active`, `createdAt`, `updatedAt`) or `attributes.<key>`. Fields fill a section's grid row by row in
   the order given; `width` is the number of columns a field spans. Narrow screens use at most two
@@ -225,8 +236,47 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
 - **Server-side validation** on `PUT /api/v1/ui-settings` and configuration import: the schema (key
   patterns, 1–4 columns and widths, at most 20 tabs, 50 sections per tab, 200 fields per section) and
   the cross-field rules above (unique keys, a field placed once, width within the section's columns,
-  core fields not hidden). References to attributes that do not exist are accepted, dropped from the
+  core fields not hidden, each built-in panel once, `fields` and `text` only on sections of their kind,
+  note text not blank). References to attributes that do not exist are accepted, dropped from the
   effective settings and listed as `issues`, like everywhere else in the document.
+
+### Editing a layout on the CI page
+
+Users with **customization.manage** can also edit a class's layout on a real CI page: **Edit layout** on
+a CI's detail page, its edit form or the new-CI form opens the layout editor in a separate browser
+window. The designer's **Open on a CI** opens it too, on the class's first CI or, without CIs, on an
+empty form of the class. There is one editor window per class (named `layout-editor-<class key>`): a
+second click brings the open window to the front instead of loading it again. The page the editor was
+opened from stays as it is.
+
+The editor has its own route: the page's path plus `/layout-editor` (`/cis/<id>/layout-editor`,
+`/cis/<id>/edit/layout-editor`, `/cis/new/layout-editor?classId=<id>`). It shows the real page, with the
+CI's values, framed as being edited; the bar on top names the class, since the layout applies to all of
+its CIs. Users without the permission are sent to the page itself. If a popup blocker refuses the window,
+the editor opens in the same tab with a notice, and **Done** returns to the page.
+
+| To… | With the mouse | From the keyboard |
+|---|---|---|
+| Add a tab | **+ Tab** at the end of the tab bar; type its name | same (a button) |
+| Add a section | **+ Section** between or after sections; type its name | same |
+| Rename a tab or section | click its name (a tab: click the selected tab) | Enter on the name, or **✎** |
+| Move a field | drag it (by its grip) within a section, into another section, or onto a tab | on the grip: Alt+↑ / Alt+↓; the field's toolbar: **Move to section** |
+| Resize a field | drag its right edge | on the grip: Alt+← / Alt+→; toolbar ⇤ / ⇥ |
+| Hide / show a field | drag it onto **Hidden fields**, or **Hide**; **Show** in the tray | Delete on the grip |
+| Section order, columns, collapsed, tab, remove | the section's toolbar (hover) | Tab into the toolbar |
+| Read-only on the form | the field's toolbar (form only) | same |
+
+**Undo** / **Redo** (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y outside text fields), **Desktop** / **Tablet** /
+**Phone** widths, **Reset to built-in layout** (drops the class's own layout from the draft; undoable),
+**Save layout** with an optional note, **Discard** and **Done** (closes the editor's window) are in the
+bar. Leaving the editor or closing its window with unsaved changes asks first. After a save, the editor
+tells the other open windows of the web UI (BroadcastChannel `layout-updated`), which load the new
+settings; in a browser without BroadcastChannel, the page that opened the editor offers a reload. Saving goes through `PUT /api/v1/ui-settings` with the version the
+editor started from, like **Customization**: it creates a settings version (listed in **Customization ›
+History** with the note, and audited), and a `409 VERSION_CONFLICT` (someone saved in between) is shown
+with **Load the latest version**, which discards the draft. The same rules apply as in the designer
+(lib/layoutDesign in the web UI, and the API's validation). Users without the permission see the normal
+page at the editor's URL.
 
 **Layout format v1 and migration 0017.** Before 0017 a layout was `panels[]` (`key`, `label`,
 ordered `fields`, `collapsed`). Migration `0017_layout_tabs` converts the stored settings: the panels
@@ -353,7 +403,28 @@ names. Sign-ins refused with 429 while a name is locked are not recorded: they c
 server nothing, and recording them would let an anonymous client grow `audit_log` at will.
 Passwords, session tokens, token hashes and CSRF tokens are never written. The IP address is
 evidence, not an access control: see [deployment](deployment.md#https-and-session-cookies)
-for the proxy it assumes. Nothing alerts on these rows yet.
+for the proxy it assumes. Nothing alerts on these rows yet. With `AUDIT_CAPTURE_CLIENT_IP=false` or
+`AUDIT_CAPTURE_USER_AGENT=false` those fields are `null` here and in `sessions`, and nothing logs them.
+
+### Tamper evidence
+
+`audit_log` rejects `UPDATE`, `DELETE` and `TRUNCATE` (triggers), and every row is hash-chained
+(migration 0018). A `BEFORE INSERT` trigger sets `chain_seq` (1, 2, 3, … in commit order),
+`prev_hash` (the previous row's `row_hash`; 32 zero bytes for the first) and
+
+```
+row_hash = sha256(prev_hash || jsonb_build_array(chain_seq, occurred_at (UTC, µs), actor_type, actor_id,
+                  actor_name, action, entity_type, entity_id, old_value, new_value, request_id)::text)
+```
+
+whatever the inserting statement supplied. Inserts serialise on the one row of
+`audit_log_chain_head` until they commit; a rolled-back insert leaves no gap.
+`audit_log_verify()` (and `shadoucmdb audit-verify`, which exits non-zero) reports rows whose content no
+longer matches their hash (`altered`), broken links (`relinked`), missing `chain_seq` values (`gap`) and a
+deleted tail (`tail`). A superuser can still rewrite the whole chain consistently; the defence against that
+is the off-host copy: `AUDIT_EXPORT` sends every row with its `rowHash` to a SIEM, and `audit-verify`
+prints the chain head to compare with it. Rows that existed before migration 0018 were chained in `id`
+order when it ran.
 
 Two-factor authentication events have `entity_type = 'users'` and the user's id as `entity_id`, `old_value` NULL,
 and `userId`, `username`, `ipAddress`, `userAgent` in `new_value`:

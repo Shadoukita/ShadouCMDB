@@ -5,6 +5,28 @@ Changes operators need to act on. Everything else is in the generated notes of e
 
 ## Unreleased
 
+### Changed: API docs off by default; HTTP timeouts, audit hash chain and SIEM export
+
+Backend hardening ([SHAA-80]):
+
+- **`/openapi.json` and `/docs` are off by default** (`API_DOCS=off`). Set `API_DOCS=authenticated`
+  (any signed-in user) or `public` if tools or people read the contract from the server. The contract
+  is also in the repository as `backend/openapi.json`.
+- Request headers must arrive within `HTTP_HEADER_READ_TIMEOUT_SECS` (default 10), and a whole
+  request must be answered within `HTTP_REQUEST_TIMEOUT_SECS` (default 120); a slower one gets
+  `408 REQUEST_TIMEOUT` and its transaction is rolled back. Raise the second for very large imports.
+- `GET /api/v1/version` reports the build and the number of migrations it expects, without a database.
+- Migration `0018_audit_hash_chain` hash-chains every `audit_log` row, existing rows included (in `id`
+  order; on a large audit log, allow for it in the maintenance window). `shadoucmdb audit-verify`
+  checks the chain and prints its head; after retention runs, use `audit-verify --allow-gaps`.
+- `AUDIT_EXPORT` copies every new audit row to stdout, a file or syslog over UDP/TCP for a SIEM
+  (default off). `AUDIT_CAPTURE_CLIENT_IP` and `AUDIT_CAPTURE_USER_AGENT` (default true) turn off
+  recording the client's IP address or User-Agent where policy rules it out.
+- A three-role install that runs `sql/bootstrap/10_split_roles.sql` after upgrading needs this
+  release's version of the script (it also locks the API role out of the chain head).
+
+[SHAA-80]: docs/deployment.md#hardening-settings
+
 ### Added: multi-line text fields; Notes keep their line breaks
 
 Text attributes have a new validation rule `multiline` (`validation: {"multiline": true}`) that
@@ -14,10 +36,10 @@ breaks ([GH#109]). Administrators set or clear it when creating or editing a tex
 for `text` attributes (`400` otherwise). Text values were and are stored exactly as sent, line breaks
 included.
 
-**Upgrade:** migration `0018_multiline_notes` sets `multiline` on the **Notes** fields that migration
+**Upgrade:** migration `0019_multiline_notes` sets `multiline` on the **Notes** fields that migration
 `0016_core_ci_model` created from the former `notes` column (`notes`, or `notes_<n>` where the key was
 taken), identified by that migration's recorded schema change rather than by name; fields created by
-administrators are not touched. Each change is in the audit log (actor `migration 0018`). A fresh
+administrators are not touched. Each change is in the audit log (actor `migration 0019`). A fresh
 install's IT infrastructure template creates **Notes** as a multi-line field. Before this release the
 form edited Notes in a single-line input, so saving a CI could drop line breaks from its notes: values
 saved that way are not restored.
@@ -92,6 +114,33 @@ former fixed columns appear as ordinary field columns (`name`, `status` as the v
 
 [SHAA-267]: docs/data-model.md#the-ci-core-ident-validity-and-label
 
+### Added: a layout editor on the real CI page
+
+Users with **customization.manage** get an **Edit layout** button on the CI detail page and on the CI
+form (edit and new) ([SHAA-298]). It opens the layout editor in a separate browser window, one per class
+(a second click brings the open window to the front), while the page it came from stays as it is. The
+editor shows the real page, framed and with a sticky bar that names the class: the change applies to
+every CI of that class. The page keeps showing the
+CI's real values while tabs are added (**+ Tab** at the end of the tab bar), sections are added between
+and after sections (**+ Section**), tabs and sections are renamed by clicking their name, fields are
+dragged between sections and onto tabs and resized by their right edge, and a toolbar on each field and
+section moves, collapses, sets columns, hides and removes. Hidden fields are listed in a tray to show
+them again. The bar has undo and redo (Ctrl+Z, Ctrl+Shift+Z), desktop, tablet and phone widths,
+**Reset to built-in layout**, **Save layout** with an optional note, **Discard** and **Done** (closes
+the window); leaving or closing the window with unsaved changes asks first. Every drag has a keyboard
+equivalent. After a save, the other open windows of the web UI show the new layout without a reload.
+When a popup blocker refuses the window, the editor opens in the same tab and says so.
+
+Saving creates a new UI settings version exactly as **Customization** does (same API, permission check,
+history and audit trail). If someone else saved in the meantime, the save is refused with a message
+and a **Load the latest version** button. The designer in **Administration › Customization › Detail and
+form layout** stays available and gains **Open on a CI** (the class's first CI, or an empty form of the
+class when it has none), in the same editor window. The editor's URLs (`/cis/<id>/layout-editor`,
+`/cis/<id>/edit/layout-editor`, `/cis/new/layout-editor?classId=…`) show the normal page to users
+without the permission. No API or database change.
+
+[SHAA-298]: docs/data-model.md#editing-a-layout-on-the-ci-page
+
 ### Added: visual form designer; layouts get tabs, sections and a field grid
 
 **Administration › Customization › Detail and form layout** is now a visual designer ([SHAA-271]). It
@@ -115,6 +164,22 @@ deprecated: still accepted from older exports and API clients and converted to o
 never returned. New issue code `core_field_hidden`.
 
 [SHAA-271]: docs/data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2
+
+### Added: layout sections can hold a note or a built-in panel (API)
+
+A layout section has a new optional `kind` ([SHAA-299]): `fields` (the default, a grid of fields as
+before), `note` (static text written by an administrator in `text`, at most 4,000 characters, plain
+text or limited Markdown; the web UI never renders raw HTML from it), or one of the detail page's
+built-in panels `relations`, `history` and `audit`, which can then be placed in any tab. Each panel can
+be placed once per layout; a panel a layout does not place keeps its usual position. The API refuses a
+panel placed twice, `fields` or `text` on a section of the wrong kind and an empty or over-long note
+(`400` with the path). The editor for these sections follows in the web UI.
+
+**Upgrade:** nothing to do. The change is additive to layout format v2: saved layouts, earlier settings
+versions and configuration exports stay valid and are returned unchanged (`kind` is only written for
+sections that are not `fields`).
+
+[SHAA-299]: docs/data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2
 
 ### Changed: CI form and detail page start with the General section
 

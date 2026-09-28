@@ -21,6 +21,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Version of the running server
+         * @description Public, like /healthz: monitoring and vulnerability scanners need it without a session. Does not touch the database.
+         */
+        get: operations["getVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/readyz": {
         parameters: {
             query?: never;
@@ -2470,7 +2490,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "DATABASE_UNAVAILABLE" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
                 message: string;
                 details?: {
                     /** @enum {string} */
@@ -2626,6 +2646,8 @@ export interface components {
         Liveness: {
             /** @enum {string} */
             status: "ok";
+            /** @description Version of the running server, e.g. 0.1.0 */
+            version: string;
         };
         Location: {
             /** Format: uuid */
@@ -3374,18 +3396,29 @@ export interface components {
             fields?: string[];
             collapsed?: boolean;
         };
-        /** @description A section (card) of a tab: a heading and a grid of fields */
+        /**
+         * @description A section (card) of a tab: a heading and, depending on `kind`, a grid of fields, a note or a built-in
+         *     panel of the detail page
+         */
         UiLayoutSection: {
             /** @description Stable machine key, lower_snake_case */
             key: string;
             label: string;
+            /**
+             * @description What the section shows (absent: fields): fields (a grid of `fields`), note (static `text`), or a built-in panel of the detail page (relations, history, audit). Each panel can be placed once per layout; one that is not placed keeps its usual position on the detail page.
+             * @enum {string}
+             */
+            kind?: "fields" | "note" | "relations" | "history" | "audit";
             /**
              * Format: int32
              * @description Grid columns on a wide screen; narrow screens use fewer
              * @default 3
              */
             columns: number;
+            /** @description fields: the grid (other kinds have none) */
             fields?: components["schemas"]["UiLayoutField"][];
+            /** @description note: the text (required for that kind). Plain text or limited Markdown (emphasis, lists, links); raw HTML is shown as text, never rendered */
+            text?: string;
             /** @description Start collapsed on the detail page */
             collapsed?: boolean;
         };
@@ -3675,6 +3708,14 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         }[];
+        VersionInfo: {
+            /** @description Version of the running server (SemVer), e.g. 0.1.0; compare it with security advisories */
+            version: string;
+            /** @description REST API major version this server speaks */
+            apiVersion: string;
+            /** @description Database migrations shipped with this build */
+            migrations: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -3704,6 +3745,44 @@ export interface operations {
             };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionInfo"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -153,6 +153,7 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
         }
         ErrorCode::UnsupportedMediaType => (415, "Body is not application/json"),
         ErrorCode::PayloadTooLarge => (413, "Body too large"),
+        ErrorCode::RequestTimeout => (408, "Request not completed in time (code REQUEST_TIMEOUT)"),
         ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated => (
             503,
             "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run \

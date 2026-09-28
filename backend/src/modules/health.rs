@@ -1,4 +1,4 @@
-//! `/healthz` (liveness) and `/readyz` (readiness).
+//! `/healthz` (liveness), `/readyz` (readiness) and `/api/v1/version`.
 
 use axum::http::{Method, StatusCode};
 use serde::Serialize;
@@ -14,11 +14,27 @@ pub enum LiveStatus {
     Ok,
 }
 
+/// The running build's version (Cargo package version, SemVer).
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Liveness {
     #[schema(inline)]
     status: LiveStatus,
+    /// Version of the running server, e.g. 0.1.0
+    version: &'static str,
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VersionInfo {
+    /// Version of the running server (SemVer), e.g. 0.1.0; compare it with security advisories
+    version: &'static str,
+    /// REST API major version this server speaks
+    api_version: &'static str,
+    /// Database migrations shipped with this build
+    migrations: usize,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -88,7 +104,17 @@ pub fn routes() -> Vec<Route> {
             .summary("Liveness: the process is up (does not touch the database)")
             .public()
             .handle(|_, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async {
-                Ok(Json(Liveness { status: LiveStatus::Ok }))
+                Ok(Json(Liveness { status: LiveStatus::Ok, version: VERSION }))
+            }),
+        route(Method::GET, "/api/v1/version", "getVersion")
+            .tag("Health")
+            .summary("Version of the running server")
+            .public()
+            .description(
+                "Public, like /healthz: monitoring and vulnerability scanners need it without a session. Does not touch the database.",
+            )
+            .handle(|_, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async {
+                Ok(Json(VersionInfo { version: VERSION, api_version: "v1", migrations: db::expected_count() }))
             }),
         route(Method::GET, "/readyz", "getReadiness")
             .tag("Health")

@@ -1,4 +1,4 @@
-//! Migration 0018 (multi-line text) against an install upgraded through 0016:
+//! Migration 0019 (multi-line text) against an install upgraded through 0016:
 //! the notes fields 0016 made of the old column become multi-line, fields an
 //! administrator created are left alone, and every change is audited.
 
@@ -51,7 +51,7 @@ async fn notes_fields_from_0016_become_multiline() {
     let pool = &db.pool;
     MIGRATOR.run_to(15, pool).await.expect("migrations up to 0015");
     pool.execute(sqlx::AssertSqlSafe(BEFORE)).await.expect("data before the upgrade");
-    MIGRATOR.run_to(17, pool).await.expect("migrations up to 0017");
+    MIGRATOR.run_to(18, pool).await.expect("migrations up to 0018");
 
     // After 0016: an administrator cleared the rules of one migrated field and
     // created a text field "notes" and a number field "notes_3" of their own.
@@ -75,7 +75,7 @@ async fn notes_fields_from_0016_become_multiline() {
         ]
     );
 
-    MIGRATOR.run(pool).await.expect("migration 0018");
+    MIGRATOR.run(pool).await.expect("migration 0019");
 
     assert_eq!(
         text_fields(pool).await,
@@ -109,13 +109,13 @@ async fn notes_fields_from_0016_become_multiline() {
         audit,
         [
             (
-                "migration 0018".into(),
+                "migration 0019".into(),
                 "app".into(),
                 json!({ "validation": null }),
                 json!({ "validation": { "multiline": true } })
             ),
             (
-                "migration 0018".into(),
+                "migration 0019".into(),
                 "server".into(),
                 json!({ "validation": { "maxLength": 4000 } }),
                 json!({ "validation": { "maxLength": 4000, "multiline": true } })
@@ -126,12 +126,12 @@ async fn notes_fields_from_0016_become_multiline() {
 }
 
 #[tokio::test]
-async fn fresh_install_is_unchanged_by_0018() {
-    let Some(db) = scratch::empty("fresh_install_is_unchanged_by_0018").await else { return };
+async fn fresh_install_is_unchanged_by_0019() {
+    let Some(db) = scratch::empty("fresh_install_is_unchanged_by_0019").await else { return };
     let pool = &db.pool;
-    MIGRATOR.run_to(17, pool).await.expect("migrations up to 0017");
-    MIGRATOR.run(pool).await.expect("migration 0018");
-    let audited: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE actor_name = 'migration 0018'")
+    MIGRATOR.run_to(18, pool).await.expect("migrations up to 0018");
+    MIGRATOR.run(pool).await.expect("migration 0019");
+    let audited: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE actor_name = 'migration 0019'")
         .fetch_one(pool)
         .await
         .unwrap();
