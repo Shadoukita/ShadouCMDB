@@ -327,6 +327,21 @@ async function main() {
   await get(`/api/v1/lookup-list-values?listId=${contracts.id}&sort=sortOrder`);
   await get(`/api/v1/lookup-list-values/${gold.id}`);
   await patch(`/api/v1/lookup-list-values/${silver.id}`, { name: 'Silver (8x5)' });
+  // Dependent lists: a model belongs to a manufacturer.
+  const makers = (await post('/api/v1/lookup-lists', { key: `smoke_maker_${RUN}`, name: 'Manufacturer' })).json;
+  const models = (await post('/api/v1/lookup-lists', { key: `smoke_model_${RUN}`, name: 'Model', parentListId: makers.id })).json;
+  await patch(`/api/v1/lookup-lists/${makers.id}`, { parentListId: models.id }, 400); // cycle
+  await get(`/api/v1/lookup-lists?parentListId=${makers.id}`);
+  const acme = (await post('/api/v1/lookup-list-values', { listId: makers.id, key: 'acme', name: 'Acme' })).json;
+  const rocket = (await post('/api/v1/lookup-list-values', { listId: models.id, key: 'rocket', name: 'Rocket', parentValueId: acme.id })).json;
+  await post('/api/v1/lookup-list-values', { listId: models.id, key: 'orphan', name: 'Orphan' }, 400); // needs a parent value
+  await post('/api/v1/lookup-list-values', { listId: models.id, key: 'nested', name: 'Nested', parentValueId: rocket.id }, 400); // not a manufacturer
+  const offered = (await get(`/api/v1/lookup-list-values?parentValueId=${acme.id}`)).json;
+  check(offered.data.length === 1 && offered.data[0].id === rocket.id, 'a dependent list offers the values of the chosen parent value');
+  await del(`/api/v1/lookup-list-values/${acme.id}`, 409); // a model belongs to it
+  await patch(`/api/v1/lookup-list-values/${acme.id}`, { isActive: false });
+  check((await get(`/api/v1/lookup-list-values/${rocket.id}`)).json.isActive === false, 'retiring a parent value retires its dependent values');
+  await patch(`/api/v1/lookup-list-values/${rocket.id}`, { isActive: true }, 400); // its manufacturer is retired
 
   // --- Classes and attribute definitions ----------------------------------------
   console.log('\n# CI classes / attribute definitions');
@@ -1326,7 +1341,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 2 && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 3 && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -1372,7 +1387,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 3 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 4 }, 400);
   await post('/api/v1/admin/config/import', file, 400); // mode is required
   await post('/api/v1/admin/config/import?mode=later', file, 400);
 
