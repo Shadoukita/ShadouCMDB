@@ -220,7 +220,11 @@ the directory could not be asked.
 
 `POST /api/v1/admin/identity-providers/{id}/test` checks the saved settings (OIDC: discovery and keys; LDAP: TLS,
 service bind and, with `{"username": "..."}`, the entry, its groups and the profiles they map to) and answers
-`200 { ok, message, details, user }` without changing anything. The OIDC client secret and the LDAP bind password
+`200 { ok, message, details, user }` without changing anything. When no answer came back over verified TLS
+(refused, timed out, TLS or StartTLS failed, not an LDAP server), `message` is the same generic text whatever the
+cause, so its text no longer tells closed, filtered and non-TLS ports apart; the exact error is logged on the
+server (`identity provider connection test failed`). The time to answer still differs (a refused connection fails at
+once, a filtered one after the 10 s timeout); the test is for administrators only. The OIDC client secret and the LDAP bind password
 are write-only (`clientSecretSet`, `bindPasswordSet`); they are stored in the database so the server can present
 them, like the TOTP secrets, so protect database access and backups accordingly. SAML is not supported.
 

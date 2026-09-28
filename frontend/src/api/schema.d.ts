@@ -1886,7 +1886,7 @@ export interface paths {
         put?: never;
         /**
          * Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to.
          */
         post: operations["testIdentityProvider"];
         delete?: never;
