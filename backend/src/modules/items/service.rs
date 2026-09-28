@@ -771,7 +771,7 @@ pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Config
     let Some(row) = data::summary(&mut conn, id).await? else {
         return Err(AppError::missing("Configuration item", id));
     };
-    ctx.require_class(row.class_id, ClassOp::View)?;
+    ctx.require_class_visible(row.class_id, "Configuration item", id)?;
     let model = Model::load(&mut conn).await?;
     let visible = ctx.class_scope(ClassOp::View);
     let dto = with_attributes(&mut conn, &model, vec![row], visible.as_deref()).await?.pop();
@@ -832,6 +832,7 @@ pub async fn update(
 ) -> Result<ConfigurationItem, AppError> {
     let mut tx = pool.begin().await?;
     let before = data::lock(&mut tx, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))?;
+    ctx.require_class_visible(before.class_id, "Configuration item", id)?;
     ctx.require_class(before.class_id, ClassOp::Edit)?;
     // Moving a CI to another class also needs create rights there.
     if let Some(new_class) = input.class_id.filter(|c| *c != before.class_id) {
@@ -936,7 +937,10 @@ pub async fn update(
 pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
     match data::lock(&mut tx, id).await? {
-        Some(row) if row.deleted_at.is_none() => ctx.require_class(row.class_id, ClassOp::Delete)?,
+        Some(row) if row.deleted_at.is_none() => {
+            ctx.require_class_visible(row.class_id, "Configuration item", id)?;
+            ctx.require_class(row.class_id, ClassOp::Delete)?
+        }
         _ => return Err(AppError::missing("Configuration item", id)),
     }
     let model = Model::load(&mut tx).await?;
@@ -978,7 +982,7 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
     let Some(root) = data::summary(&mut conn, root_id).await? else {
         return Err(AppError::missing("Configuration item", root_id));
     };
-    ctx.require_class(root.class_id, ClassOp::View)?;
+    ctx.require_class_visible(root.class_id, "Configuration item", root_id)?;
     let visible = ctx.class_scope(ClassOp::View);
     let visible = visible.as_deref();
     let direction = match q.direction {

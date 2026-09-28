@@ -723,19 +723,20 @@ async function permissions(x: Json) {
     const list = (await get('/api/v1/configuration-items?limit=200')).json;
     check(list.data.length > 0 && list.data.every((c: Json) => c.classId === serverClass), 'inventory only lists classes the user may view');
     await get(`/api/v1/configuration-items/${server.id}`);
-    await get(`/api/v1/configuration-items/${app.id}`, 403);
+    await get(`/api/v1/configuration-items/${app.id}`, 404); // a hidden class's CI does not exist for the caller
     await post('/api/v1/configuration-items', newServer('nope'), 403);
     await patch(`/api/v1/configuration-items/${server.id}`, { attributes: { notes: 'nope' } }, 403);
     await del(`/api/v1/configuration-items/${server.id}`, 403);
     const g = (await get(`/api/v1/configuration-items/${server.id}/graph?depth=2`)).json;
     check(g.nodes.every((n: Json) => n.classId === serverClass) && g.edges.length === 0, 'graph leaves out classes the user may not view');
-    await get(`/api/v1/configuration-items/${app.id}/graph`, 403);
+    await get(`/api/v1/configuration-items/${app.id}/graph`, 404);
     const found = (await get(`/api/v1/search?q=smoke-`)).json;
     check(found.data.every((h: Json) => h.item.classId === serverClass), 'search only returns classes the user may view');
     const edges = (await get(`/api/v1/relationships?ciId=${app.id}`)).json;
     check(edges.page.total === 0, 'relationships to hidden classes are not listed');
-    await get(`/api/v1/relationships/${r1.id}`, 403);
-    await post('/api/v1/relationships', { relationshipTypeId: r1.relationshipTypeId, sourceCiId: app.id, targetCiId: database.id }, 403);
+    await get(`/api/v1/relationships/${r1.id}`, 404);
+    await post('/api/v1/relationships', { relationshipTypeId: r1.relationshipTypeId, sourceCiId: app.id, targetCiId: database.id }, 400); // not_found, as for missing CIs
+    await get(`/api/v1/ci-classes/${serverClass}/usage`, 403); // counts span every class
     await get('/api/v1/statuses?limit=5'); // the data model and lookups are readable
     await get(`/api/v1/ci-classes/${serverClass}/attributes`);
     await post('/api/v1/statuses', { key: `nope_${RUN}`, name: 'Nope' }, 403);
@@ -940,7 +941,7 @@ async function permissions(x: Json) {
   await as(null, async () => {
     const list = (await call('GET', '/api/v1/configuration-items?limit=200', undefined, 200, readerBearer)).json;
     check(list.data.length > 0 && list.data.every((c: Json) => c.classId === serverClass), 'a token sees what its owner may see, not what its scope alone allows');
-    await call('GET', `/api/v1/configuration-items/${app.id}`, undefined, 403, readerBearer);
+    await call('GET', `/api/v1/configuration-items/${app.id}`, undefined, 404, readerBearer);
     await call('GET', '/api/v1/admin/users', undefined, 403, readerBearer);
     await call('GET', tokens, undefined, 403, readerBearer, { cover: false }); // token administration needs a session
     await call('GET', '/api/v1/auth/me', undefined, 403, readerBearer);
