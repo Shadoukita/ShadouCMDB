@@ -278,7 +278,7 @@ Attribute values are sent and returned as JSON scalars, keyed by attribute key:
 
 | `dataType` | JSON |
 | --- | --- |
-| `text`, `enum` | string (`enum` must be one of `enumValues`; `text` honours `validation.pattern` / `maxLength`) |
+| `text`, `enum` | string (`enum` must be one of `enumValues`; `text` honours `validation.pattern` / `maxLength` and is stored exactly as sent, line breaks (`\n`, `\r\n`) and surrounding whitespace included; `validation.multiline: true` tells forms to edit it in a text area) |
 | `number`, `integer` | number (`validation.min` / `max` apply) |
 | `boolean` | boolean |
 | `date` / `datetime` | `"2025-03-01"` / ISO 8601 with offset |
@@ -327,7 +327,7 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
 | `navigation.entries[]` | Menu order. `type: page` (`dashboard`, `inventory`, `search`, `audit_log`, `administration`), `type: class` (`classKey`) or `type: section` (`key`, `label`, `items[]` of classes). Each entry can be renamed (`label`) and `hidden`. Pages and classes not listed follow in their default order. |
 | `dashboard.widgets[]` | Widgets in order: `count_by_class` (optional `classKeys`), `count_by_lookup` (`lookupListKey`: CIs per value of that list, e.g. `status`), `recent_changes` (`limit`), `saved_search` (`search`: `classKeys`, `includeSubclasses`, `filters`, `sort`). `null` keeps the built-in dashboard. |
 | `listViews[]` | Per class: `columns` (built-in fields `label`, `ident`, `class`, `validFrom`, `validUntil`, `active`, `createdAt`, `updatedAt`, or `attributes.<key>`), `defaultSort`, `defaultFilters` (`q`, and `lookups`: lookup list key → value keys), `pageSize`. |
-| `layouts[]` | Per class (layout format v2): `tabs[]` (`key`, `label`, `sections[]`), each section `key` (unique in the layout), `label`, `kind` (`fields` by default; `note` with `text`, or a built-in panel `relations`, `history` or `audit`, each once per layout), `columns` (1–4, default 3), `collapsed` and `fields[]` of `{ field, width }` (1–4 columns, at most the section's), plus `hiddenFields` and `readOnlyFields`. Fields no section places follow at the end of the first tab, grouped by attribute group. `ident`, `validFrom` and `validUntil` cannot be hidden. The older `panels[]` format is still accepted and converted to one "General" tab (see [data model](data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2)). |
+| `layouts[]` | Per class (layout format v2): `tabs[]` (`key`, `label`, `sections[]`), each section `key` (unique in the layout), `label`, `kind` (`fields` by default; `note` with `text`, or a built-in panel `relations`, `history` or `audit`, each once per layout), `width` on the tab's 12-column grid (1–12, default 12: sections fill rows in order, so two of width 6 sit side by side), `newRow`, `minHeight` (field rows, 1–50), `columns` of its field grid (1–12, default 3), `collapsed` and `fields[]` of `{ field, width }` (1–12 columns, at most the section's), plus `hiddenFields` and `readOnlyFields`. Fields no section places follow at the end of the first tab, grouped by attribute group. `ident`, `validFrom` and `validUntil` cannot be hidden. The older `panels[]` format is still accepted and converted to one "General" tab (see [data model](data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2)). |
 
 - **References are keys.** Classes, attributes and lookups are named by key, so a document moves between installs.
   A reference to something that does not exist is accepted: `GET` returns the *effective* settings without it and

@@ -14,7 +14,8 @@ Migrations: [`sql/migrations/`](../sql/migrations/)
 (`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`,
 `0003_users_and_permission_profiles`, `0004_data_model_admin`, `0005_ui_settings`, `0006_auth_audit`,
 `0007_audit_retention`, `0008_cmdb_schema_and_areas`, `0009_type_tables`, `0010_api_tokens` …
-`0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`).
+`0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`,
+`0018_audit_hash_chain`, `0019_multiline_notes`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -142,7 +143,7 @@ fields and dropped the columns:
 | `name` | `name`, text, required, max. 200 | every root class; it is the title attribute of every class |
 | `status_id` | `status`, lookup (list `status`), required | the topmost classes whose CIs held a value |
 | `environment_id`, `owner_id`, `location_id` | `environment`, `owner`, `location`, lookups (lists of the same names) | the same rule |
-| `hostname`, `ip_address`, `serial_number`, `notes` | `hostname` (text, hostname pattern), `ip_address` (ip), `serial_number` (text, max. 200), `notes` (text, max. 4000) | the same rule |
+| `hostname`, `ip_address`, `serial_number`, `notes` | `hostname` (text, hostname pattern), `ip_address` (ip), `serial_number` (text, max. 200), `notes` (text, max. 4000, multi-line since migration 0019) | the same rule |
 
 "Topmost" means: a class gets the field if its own CIs (deleted ones included) held a value and no
 ancestor already got it, so each CI's lineage has exactly one such field. A key already used in that
@@ -205,10 +206,11 @@ and fields by key. Administrators edit it in **Administration › Customization 
 layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   tabs[]:     { key, label, sections[] }                   key unique among the layout's tabs
   sections[]: { key, label, kind (default fields),         key unique across the whole layout
-                columns 1–4 (default 3), collapsed,
+                width 1–12 (default 12), newRow, minHeight 1–50,   placement on the tab's 12-column grid
+                columns 1–12 (default 3), collapsed,       columns of the section's own field grid
                 fields[],                                  kind fields only
                 text }                                     kind note only: 1–4,000 characters
-  fields[]:   { field, width 1–4 (default 1) }             field placed once; width ≤ the section's columns
+  fields[]:   { field, width 1–12 (default 1) }            field placed once; width ≤ the section's columns
 ```
 
 - **Section kinds.** `kind` says what a section shows. `fields` (the default when `kind` is absent) is a
@@ -220,10 +222,22 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   detail page. Notes and panels have no `fields`, and panels no `text`. The API writes `kind` only
   for sections that are not `fields`, so layouts saved before section kinds existed round-trip
   unchanged and need no migration.
+- **Sections on the tab's grid.** Every tab is a grid of 12 columns. A section spans `width` of them
+  (default 12, the full width) and sections fill the grid row by row in the order given: two sections
+  of width 6 sit side by side, a third one starts the next row. `newRow: true` starts a new row even if
+  the section would still fit next to the previous one. `minHeight` is optional: the section is at least
+  that many field rows tall (one field row is the height of a row of fields, so it scales with the font
+  size); without it a section is as tall as its content.
+- **Responsive, never in pixels.** Widths are fractions of the available width, never pixel sizes, so a
+  layout works on every screen. Below the tablet breakpoint (820 px of content width, which includes
+  tablets in portrait at 768 px and every phone) sections stack at the full width in their order and
+  `newRow` has no effect; the side-by-side arrangement is the desktop layout.
 - `field` is a core field (`ident`, `validFrom`, `validUntil`), a detail-page field (`label`, `class`,
   `active`, `createdAt`, `updatedAt`) or `attributes.<key>`. Fields fill a section's grid row by row in
-  the order given; `width` is the number of columns a field spans. Narrow screens use at most two
-  columns (below 820 px of content width) and then one (below 520 px); widths shrink with them.
+  the order given; `width` is the number of the section's `columns` a field spans. A grid of 12 columns
+  allows fine sizes (a field of width 4 is a third of the section); the earlier 1–4 values keep their
+  meaning. Narrow screens use at most two columns (below 820 px of content width) and then one (below
+  520 px); widths shrink with them.
 - **Unplaced fields are never lost.** Anything the tabs do not place and that is not hidden (an
   attribute added to the class later, for example) follows at the end of the first tab: a General
   section with the core fields and the attributes without a group, then the attribute groups. The
@@ -233,11 +247,16 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   They can still be read-only on the form. A required attribute that a layout hides or makes read-only
   stays editable on a new CI and is reported as the issue `required_field_not_editable`.
 - **Server-side validation** on `PUT /api/v1/ui-settings` and configuration import: the schema (key
-  patterns, 1–4 columns and widths, at most 20 tabs, 50 sections per tab, 200 fields per section) and
+  patterns, section widths, columns and field widths of 1–12, `minHeight` of 1–50, at most 20 tabs, 50 sections per tab, 200 fields per section) and
   the cross-field rules above (unique keys, a field placed once, width within the section's columns,
   core fields not hidden, each built-in panel once, `fields` and `text` only on sections of their kind,
   note text not blank). References to attributes that do not exist are accepted, dropped from the
   effective settings and listed as `issues`, like everywhere else in the document.
+
+**Layouts saved before the grid** (no section `width`, `columns` and field widths of 1–4) stay valid
+unchanged and render as before: every section is 12 wide, so they stack at the full width. There is
+no migration; the API fills in `width: 12` when it returns a layout or saves it again. `newRow` and
+`minHeight` are only written when set.
 
 ### Editing a layout on the CI page
 

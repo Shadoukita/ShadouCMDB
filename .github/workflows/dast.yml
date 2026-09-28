@@ -1,0 +1,161 @@
+name: DAST
+
+# Dynamic application security testing with OWASP ZAP against the release
+# binary and PostgreSQL, set up like the e2e job in ci.yml (docs/security/sdl.md).
+# - Baseline scan (every run): spiders the web UI and the public API without
+#   attacking it and checks the passive rules (security headers, cookies, CSP,
+#   error and information disclosure).
+# - API scan: imports backend/openapi.json and actively attacks every
+#   operation (injection, path traversal, SSRF, ...) with an administrator's
+#   API token, capped at 20 minutes.
+# Pass/fail per rule is in .zap/rules.tsv. The reports are kept for 90 days as
+# release evidence (docs/security/pentest-v0.1.0.md).
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+  schedule:
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # ZAP 2.17.0 ("stable" when pinned); bump the tag and digest together.
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:2.17.0@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef
+
+jobs:
+  zap:
+    name: OWASP ZAP (baseline, API scan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: shadoucmdb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CARGO_TERM_COLOR: always
+      SQLX_OFFLINE: "true"
+      # Throwaway credentials for the CI-only PostgreSQL service container.
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGDATABASE: shadoucmdb
+      PGUSER: ci
+      PGPASSWORD: ci-only-password
+      DATABASE_SSL: disable
+      API_HOST: 127.0.0.1
+      API_PORT: "3000"
+      # Throwaway administrator for the CI-only database.
+      DAST_USERNAME: dast-admin
+      DAST_PASSWORD: dast-ci-only-password
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --workspace frontend --include-workspace-root --no-audit --no-fund
+      # Built before cargo: rust-embed puts frontend/dist into the binary.
+      - run: npm run build --workspace frontend
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: backend
+      - run: cargo build --release --locked
+        working-directory: backend
+
+      - name: Pull ZAP
+        run: docker pull "$ZAP_IMAGE"
+
+      - name: migrate, seed --demo, create-admin, serve
+        run: |
+          B=backend/target/release/shadoucmdb
+          $B migrate
+          $B seed --demo
+          printf '%s\n' "$DAST_PASSWORD" | $B create-admin --username "$DAST_USERNAME" --display-name "DAST admin" --password-stdin
+          $B serve > serve.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/readyz && break; sleep 1; done
+          curl -sf http://127.0.0.1:3000/readyz | grep -q '"upToDate":true'
+
+      # ZAP runs as uid 1000 in the container and writes its reports here.
+      - run: mkdir -m 777 zap && cp .zap/rules.tsv zap/ && cp backend/openapi.json zap/
+
+      # Both scans run even if the first fails; the last step fails the job.
+      - name: ZAP baseline scan (web UI and public API, passive)
+        id: baseline
+        continue-on-error: true
+        run: |
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" "$ZAP_IMAGE" \
+            zap-baseline.py -t http://127.0.0.1:3000/ -c rules.tsv -I -j -m 3 \
+              -r baseline.html -J baseline.json -w baseline.md
+      - run: cat zap/baseline.md >> "$GITHUB_STEP_SUMMARY"
+        if: always()
+
+      - name: API token for the API scan
+        run: |
+          jar=$(mktemp)
+          csrf=$(curl -sf -c "$jar" -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg u "$DAST_USERNAME" --arg p "$DAST_PASSWORD" '{username: $u, password: $p}')" \
+            http://127.0.0.1:3000/api/v1/auth/login | jq -r .csrfToken)
+          profile=$(curl -sf -b "$jar" 'http://127.0.0.1:3000/api/v1/admin/profiles?limit=200' | jq -r '.data[] | select(.isBuiltin) | .id' | head -1)
+          token=$(curl -sf -b "$jar" -H "X-CSRF-Token: $csrf" -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg p "$profile" --arg e "$(date -u -d '+1 day' +%FT%TZ)" '{name: "DAST API scan", profileId: $p, expiresAt: $e}')" \
+            http://127.0.0.1:3000/api/v1/admin/api-tokens | jq -r .secret)
+          test -n "$token" && test "$token" != null
+          echo "::add-mask::$token"
+          echo "DAST_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: ZAP API scan (every OpenAPI operation, active, as an administrator)
+        id: api
+        continue-on-error: true
+        run: |
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" \
+            -e ZAP_AUTH_HEADER=Authorization -e ZAP_AUTH_HEADER_VALUE="Bearer $DAST_TOKEN" -e ZAP_AUTH_HEADER_SITE=127.0.0.1 \
+            "$ZAP_IMAGE" \
+            zap-api-scan.py -t openapi.json -f openapi -O http://127.0.0.1:3000 -c rules.tsv -I \
+              -z "-config scanner.maxScanDurationInMins=20 -config scanner.maxRuleDurationInMins=3" \
+              -r api.html -J api.json -w api.md
+      - run: cat zap/api.md >> "$GITHUB_STEP_SUMMARY"
+        if: always()
+
+      # The active scan sends malformed input on purpose; a 5xx it provoked is
+      # in the report (rule 90022), the server's side of it is in this log.
+      - name: Error-level server log lines
+        if: always()
+        run: |
+          errors=$(grep -c '"level":"ERROR"' serve.log || true)
+          echo "error-level log lines: $errors"
+          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log | head -50; fi
+
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zap-reports
+          path: |
+            zap/*.html
+            zap/*.json
+            zap/*.md
+            serve.log
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Scan verdict (FAIL rules in .zap/rules.tsv)
+        env:
+          BASELINE: ${{ steps.baseline.outcome }}
+          API: ${{ steps.api.outcome }}
+        run: |
+          echo "baseline: $BASELINE, API scan: $API"
+          test "$BASELINE" = success && test "$API" = success

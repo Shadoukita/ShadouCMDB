@@ -495,3 +495,5 @@ mod tests {
 mod upgrade_0016;
 #[cfg(test)]
 mod upgrade_0017;
+#[cfg(test)]
+mod upgrade_0019;

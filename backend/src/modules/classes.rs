@@ -874,6 +874,10 @@ pub struct ValidationRules {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false, max_length = 500)]
     pub pattern: Option<String>,
+    /// text: the value may hold line breaks; forms edit it in a multi-line text area.
+    /// Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multiline: bool,
     /// Display unit, e.g. "GB"
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false, max_length = 20)]
@@ -888,6 +892,9 @@ impl ValidationRules {
         }
         if (self.pattern.is_some() || self.max_length.is_some()) && data_type != AttributeDataType::Text {
             errors.push(custom("validation", "pattern/maxLength apply to text attributes only"));
+        }
+        if self.multiline && data_type != AttributeDataType::Text {
+            errors.push(custom("validation", "multiline applies to text attributes only"));
         }
         if let (Some(min), Some(max)) = (&self.min, &self.max)
             && min.as_f64() > max.as_f64()
@@ -1879,6 +1886,74 @@ mod tests {
 
     fn body<T: serde::de::DeserializeOwned>(value: Value) -> T {
         serde_json::from_value(value).unwrap()
+    }
+
+    /// GH#109: text attributes can be flagged multi-line, and their values keep
+    /// their line breaks exactly as sent.
+    #[tokio::test]
+    async fn multiline_text_attributes_keep_line_breaks() {
+        use crate::api::route::Check;
+        let Some(db) = scratch::database("multiline_text_attributes_keep_line_breaks").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("multiline-test", "multiline-test");
+
+        let class: CiClass = simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Note Box"}))).await.unwrap();
+        let create = json!({"classId": class.id, "key": "remarks", "label": "Remarks", "dataType": "text",
+                            "validation": {"maxLength": 100, "multiline": true}});
+        assert!(body::<AttributeDefinitionCreate>(create.clone()).check().is_empty());
+        let field: AttributeDefinition =
+            simple::create::<AttributeDefinitions>(pool, &ctx, &body(create)).await.unwrap();
+        assert_eq!(serde_json::to_value(&field).unwrap()["validation"], json!({"maxLength": 100, "multiline": true}));
+
+        // Only for text attributes.
+        let number = body::<AttributeDefinitionCreate>(json!({"classId": class.id, "label": "Count",
+            "dataType": "number", "validation": {"multiline": true}}));
+        let errors = number.check();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].message, "multiline applies to text attributes only");
+        // An update is checked against the stored definition.
+        let count: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "label": "Count", "dataType": "number"})),
+        )
+        .await
+        .unwrap();
+        let err = simple::update::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            count.id,
+            &body(json!({"validation": {"multiline": true}})),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ValidationError, "{err:?}");
+
+        // Cleared by leaving it out (or sending false, which is not stored).
+        let cleared: AttributeDefinition = simple::update::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            field.id,
+            &body(json!({"validation": {"maxLength": 100, "multiline": false}})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(serde_json::to_value(&cleared).unwrap()["validation"], json!({"maxLength": 100}));
+        simple::update::<AttributeDefinitions>(pool, &ctx, field.id, &body(json!({"validation": {"multiline": true}})))
+            .await
+            .unwrap();
+
+        let text = "  Line 1\nLine 2\r\n\r\n\tLine 4\n";
+        let item = body::<CreateItemBody>(json!({"classId": class.id, "attributes": {"remarks": text}}));
+        let id = items_service::create(pool, &ctx, &item).await.unwrap().summary.id;
+        let stored = items_service::get(pool, &ctx, id).await.unwrap();
+        assert_eq!(serde_json::to_value(&stored).unwrap()["attributes"]["remarks"], json!(text));
+        let update =
+            body::<crate::modules::items::schemas::UpdateItemBody>(json!({"attributes": {"remarks": "a\r\nb\n"}}));
+        items_service::update(pool, &ctx, id, &update).await.unwrap();
+        let stored = items_service::get(pool, &ctx, id).await.unwrap();
+        assert_eq!(serde_json::to_value(&stored).unwrap()["attributes"]["remarks"], json!("a\r\nb\n"));
+        db.drop().await;
     }
 
     #[tokio::test]

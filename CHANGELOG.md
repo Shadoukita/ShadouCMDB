@@ -5,6 +5,26 @@ Changes operators need to act on. Everything else is in the generated notes of e
 
 ## Unreleased
 
+### Added: sections side by side and a finer grid in detail and form layouts
+
+Each tab of a class layout is now a grid of 12 columns ([SHAA-303]). A section has a `width` (1–12,
+default 12, the full width) and sections fill the grid row by row, so two sections of width 6 sit side
+by side; `newRow: true` starts a new row early, and the optional `minHeight` keeps a section at least
+that many field rows tall. A section's own field grid (`columns`) and field widths go up to 12, for
+finer sizes than the earlier 1–4. Sizes are fractions of the width, never pixels: below the tablet
+breakpoint (820 px) sections stack at the full width. The form designer's drag handles for this follow
+separately.
+
+**Upgrade:** nothing to do. Layouts and exports saved before stay valid and look the same (every
+section is full width); there is no migration.
+
+**API (additive):** `UiLayoutSection` gets `width` (always returned, default 12), `newRow` and
+`minHeight` (returned only when set); the maximum of `columns` and `UiLayoutField.width` is now 12, and
+a field's width must still fit its section's columns (`400` with the path otherwise). API clients that
+rebuild a layout from its known keys should keep the new ones, or saving drops them.
+
+[SHAA-303]: docs/data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2
+
 ### Changed: API docs off by default; HTTP timeouts, audit hash chain and SIEM export
 
 Backend hardening ([SHAA-80]):
@@ -26,6 +46,25 @@ Backend hardening ([SHAA-80]):
   release's version of the script (it also locks the API role out of the chain head).
 
 [SHAA-80]: docs/deployment.md#hardening-settings
+
+### Added: multi-line text fields; Notes keep their line breaks
+
+Text attributes have a new validation rule `multiline` (`validation: {"multiline": true}`) that
+tells the CI form to edit the value in a multi-line text area and the detail page to show its line
+breaks ([GH#109]). Administrators set or clear it when creating or editing a text attribute
+(`POST`/`PATCH /api/v1/attribute-definitions`; omitted from responses when false). It is only valid
+for `text` attributes (`400` otherwise). Text values were and are stored exactly as sent, line breaks
+included.
+
+**Upgrade:** migration `0019_multiline_notes` sets `multiline` on the **Notes** fields that migration
+`0016_core_ci_model` created from the former `notes` column (`notes`, or `notes_<n>` where the key was
+taken), identified by that migration's recorded schema change rather than by name; fields created by
+administrators are not touched. Each change is in the audit log (actor `migration 0019`). A fresh
+install's IT infrastructure template creates **Notes** as a multi-line field. Before this release the
+form edited Notes in a single-line input, so saving a CI could drop line breaks from its notes: values
+saved that way are not restored.
+
+[GH#109]: https://github.com/Shadoukita/ShadouCMDB/issues/109
 
 ### Changed (breaking API change): barebone CI core, fixed fields become class attributes
 
