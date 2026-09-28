@@ -1693,7 +1693,7 @@ export interface paths {
         get?: never;
         /**
          * Set a new password for a user, end their sessions and revoke their API tokens
-         * @description Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["resetUserPassword"];
         post?: never;
@@ -1783,7 +1783,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List API tokens (paginated, searchable, filterable by owner and status); never their secrets
+         * List API tokens (paginated, searchable, filterable by owner, creator and status); never their secrets
          * @description Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["listApiTokens"];
@@ -1965,7 +1965,15 @@ export interface components {
             lastUsedAt: string | null;
             /** @description Client address of the last accepted request (evidence only) */
             lastUsedIp: string | null;
+            /** @description The creator's name, for display */
             createdBy: string | null;
+            /**
+             * Format: uuid
+             * @description The user who created the token; null when the CLI created it, the
+             *     creator was deleted, or (for a token older than this field) the
+             *     creator is unknown
+             */
+            createdByUserId: string | null;
             /** Format: date-time */
             createdAt: string;
         };
@@ -14187,6 +14195,8 @@ export interface operations {
                 sort?: "createdAt" | "-createdAt" | "name" | "-name" | "expiresAt" | "-expiresAt" | "lastUsedAt" | "-lastUsedAt";
                 /** @description One or more ids, comma-separated */
                 userId?: string;
+                /** @description One or more ids, comma-separated */
+                createdBy?: string;
                 status?: "active" | "expired" | "revoked";
             };
             header?: never;

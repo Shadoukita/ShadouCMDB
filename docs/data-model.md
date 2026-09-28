@@ -16,7 +16,7 @@ Migrations: [`sql/migrations/`](../sql/migrations/)
 `0007_audit_retention`, `0008_cmdb_schema_and_areas`, `0009_type_tables`, `0010_api_tokens` …
 `0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`,
 `0018_audit_hash_chain`, `0019_multiline_notes`, `0020_attribute_sorts`,
-`0021_stateless_oidc_start`).
+`0021_stateless_oidc_start`, `0022_api_token_creator`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -78,7 +78,7 @@ ui_assets (logo, favicon)
 | `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
 | `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
-| `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by`. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted |
+| `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by` (the creator's name, for display) and `created_by_user_id` (the creating user; NULL for the CLI, a deleted creator, or an older token whose audit `create` row was purged). An administrator's password reset revokes the working tokens they created for other users. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted, `created_by_user_id` set NULL when the creator is deleted |
 | `user_totp` | A user's authenticator: the 160-bit TOTP `secret` (stored as is: checking a code needs it; whoever reads it still needs the password), `confirmed_at` (NULL while the set-up is unconfirmed, which does not count as MFA), `last_used_step` (the last accepted 30 s step, so no code works twice). | PK `user_id`, cascades with the user; secret exactly 20 bytes |
 | `user_recovery_codes` | Ten one-time codes per confirmed authenticator: SHA-256 of each (`code_hash`, 80 random bits per code), `used_at`. | unique (`user_id`, `code_hash`); 32-byte hash; cascades with the user |
 | `mfa_challenges` | A sign-in whose password was right and whose code is due: SHA-256 of the `shadoucmdb_mfa` cookie token, `expires_at` (5 minutes), `failed_attempts`. Never backed up. | unique `token_hash` (32 bytes); cascades with the user |
