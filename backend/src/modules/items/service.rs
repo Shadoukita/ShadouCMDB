@@ -1122,7 +1122,7 @@ mod tests {
         let editor = user_ctx(false);
         let admin = user_ctx(true);
 
-        let body = |v: Value| parse::<CreateItemBody>(v).unwrap_or_else(|e| panic!("{:?}", e.errors));
+        let body = |v: Value| parse::<CreateItemBody>(v).unwrap_or_else(|_| panic!("create body failed validation"));
         let created = create(
             pool,
             &editor,
@@ -1146,7 +1146,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code, ErrorCode::Forbidden);
-        let update_body = |v: Value| parse::<UpdateItemBody>(v).unwrap_or_else(|e| panic!("{:?}", e.errors));
+        let update_body = |v: Value| parse::<UpdateItemBody>(v).unwrap_or_else(|_| panic!("update body failed validation"));
         let err = update(pool, &editor, ci.id, &update_body(json!({ "ident": "SRV-0001" }))).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::Forbidden);
         update(pool, &editor, ci.id, &update_body(json!({ "ident": ci.ident, "attributes": { "name": "web-01a" } })))
