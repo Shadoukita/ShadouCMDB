@@ -27,6 +27,7 @@ use crate::api::route::{In, Json, NoBody, NoPath, NoQuery, PathInput, QueryInput
 use crate::api::schemas::USERNAME_PATTERN;
 use crate::api::validate;
 use crate::auth::events::{self, LoginMethod};
+use crate::auth::sso::login_state::LoginState;
 use crate::auth::sso::{ldap, oidc};
 use crate::auth::{AuthState, session};
 use crate::data::auth as auth_data;
@@ -39,8 +40,6 @@ pub const LDAP: &str = "ldap";
 
 /// How long the browser has to come back from the provider.
 const LOGIN_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-/// Pending OIDC sign-ins kept at most (anonymous callers create them).
-const MAX_PENDING: i64 = 10_000;
 const CALLBACK_PATH: &str = "/api/v1/auth/oidc/callback";
 const DISPLAY_NAME_MAX: usize = 200;
 
@@ -487,26 +486,17 @@ async fn oidc_start(
             return Ok(failed(auth, headers, "unavailable"));
         }
     };
-    let pending: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM oidc_login_states WHERE expires_at > now()").fetch_one(pool).await?;
-    if pending >= MAX_PENDING {
-        tracing::warn!(pending, "too many pending OIDC sign-ins; refusing new ones until they expire");
-        return Ok(failed(auth, headers, "unavailable"));
-    }
     let (state, nonce, verifier) = (oidc::random_value(), oidc::random_value(), oidc::random_value());
-    let return_to = safe_return_to(q.get("returnTo"));
-    data::create_login_state(
-        pool,
-        &data::NewLoginState {
-            state_hash: &session::token_hash(&state),
-            provider_id: provider.id,
-            nonce: &nonce,
-            code_verifier: &verifier,
-            return_to: return_to.as_deref(),
-            ttl: LOGIN_STATE_TTL,
-        },
-    )
-    .await?;
+    // Nothing is stored for an anonymous caller: the pending sign-in travels
+    // sealed in the cookie (GH#122).
+    let sealed = auth.oidc_state_key(pool).await?.seal(&LoginState {
+        provider_id: provider.id,
+        state: state.clone(),
+        nonce: nonce.clone(),
+        code_verifier: verifier.clone(),
+        return_to: safe_return_to(q.get("returnTo")),
+        exp: chrono::Utc::now().timestamp() + LOGIN_STATE_TTL.as_secs() as i64,
+    });
     let request = oidc::AuthorizationRequest {
         redirect_uri: &redirect_uri,
         state: &state,
@@ -520,7 +510,7 @@ async fn oidc_start(
             return Ok(failed(auth, headers, "unavailable"));
         }
     };
-    let cookie = session::oidc_cookie(auth.session_cookie_secure(headers), &state, LOGIN_STATE_TTL);
+    let cookie = session::oidc_cookie(auth.session_cookie_secure(headers), &sealed, LOGIN_STATE_TTL);
     Ok(Redirect { location, cookies: vec![cookie] })
 }
 
@@ -543,16 +533,19 @@ async fn oidc_callback(
     ctx: &RequestContext,
     q: &NavigationQuery,
 ) -> Result<Redirect, AppError> {
-    // Only a callback carrying the state of this browser's own sign-in goes further.
+    // Only a callback carrying the state of this browser's own sign-in goes
+    // further: the sealed cookie must open, be under 10 minutes old and hold
+    // the `state` the provider sent back.
     let (Some(state), Some(cookie)) = (q.get("state"), session::cookie(headers, session::OIDC_COOKIE)) else {
         return Ok(failed(auth, headers, "expired"));
     };
-    if !session::constant_time_eq(state.as_bytes(), cookie.as_bytes()) {
-        return Ok(failed(auth, headers, "expired"));
-    }
-    let Some(pending) = data::take_login_state(pool, &session::token_hash(state)).await? else {
+    let key = auth.oidc_state_key(pool).await?;
+    let Some(pending) = key.open(cookie, chrono::Utc::now().timestamp()) else {
         return Ok(failed(auth, headers, "expired"));
     };
+    if !session::constant_time_eq(state.as_bytes(), pending.state.as_bytes()) {
+        return Ok(failed(auth, headers, "expired"));
+    }
     let provider = data::get(&mut *pool.acquire().await?, pending.provider_id, false).await?;
     let Some(provider) = provider.filter(|p| p.is_enabled && p.kind == OIDC) else {
         return Ok(failed(auth, headers, "unavailable"));
@@ -605,7 +598,9 @@ async fn oidc_callback(
     let mut cookies =
         super::auth::open_session(pool, auth, headers, ctx, user_id, &username, LoginMethod::Oidc).await?;
     cookies.push(session::clear_oidc_cookie(session::secure_cookies(&auth.config, headers)));
-    let location = to_ui(auth, pending.return_to.as_deref().unwrap_or("/"));
+    // Checked when sealed; checked again in case the key ever leaks.
+    let return_to = safe_return_to(pending.return_to.as_deref());
+    let location = to_ui(auth, return_to.as_deref().unwrap_or("/"));
     Ok(Redirect { location, cookies })
 }
 
@@ -710,5 +705,221 @@ mod tests {
         assert_eq!(usable_email(Some("a@b.test")).as_deref(), Some("a@b.test"));
         assert_eq!(usable_email(Some("not an email")), None);
         assert_eq!(usable_email(Some("a@b@c")), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // The OIDC redirect flow against a real database and a stand-in provider
+    // -----------------------------------------------------------------------
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use axum::http::HeaderValue;
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    use crate::auth::sso::login_state::SealingKey;
+    use crate::config::{AuthConfig, CookieSecure};
+    use crate::db::scratch;
+
+    const PUBLIC_URL: &str = "https://cmdb.example.test";
+
+    /// An OIDC provider on a loopback port: discovery and an empty key set,
+    /// and a token endpoint that counts its calls and refuses every code.
+    struct Idp {
+        issuer: String,
+        token_calls: Arc<AtomicUsize>,
+    }
+
+    async fn idp() -> Idp {
+        use axum::routing::{get, post};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let issuer = format!("http://{}", listener.local_addr().unwrap());
+        let token_calls = Arc::new(AtomicUsize::new(0));
+        let discovery = serde_json::json!({
+            "issuer": issuer,
+            "authorization_endpoint": format!("{issuer}/authorize"),
+            "token_endpoint": format!("{issuer}/token"),
+            "jwks_uri": format!("{issuer}/jwks"),
+        });
+        let calls = token_calls.clone();
+        let app = axum::Router::new()
+            .route("/.well-known/openid-configuration", get(move || async move { axum::Json(discovery) }))
+            .route("/jwks", get(|| async { axum::Json(serde_json::json!({ "keys": [] })) }))
+            .route(
+                "/token",
+                post(move || async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({ "error": "invalid_grant" })))
+                }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Idp { issuer, token_calls }
+    }
+
+    fn auth_state() -> AuthState {
+        AuthState::new(AuthConfig {
+            session_idle: std::time::Duration::from_secs(3600),
+            session_max_age: std::time::Duration::from_secs(3600),
+            cookie_secure: CookieSecure::Never,
+            public_url: Some(PUBLIC_URL.into()),
+        })
+    }
+
+    async fn add_provider(pool: &PgPool, issuer: &str) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO identity_providers (kind, name, issuer_url, client_id, scopes, username_claim, groups_claim)
+             VALUES ('oidc', 'Test IdP', $1, 'cmdb', 'profile', 'preferred_username', 'groups') RETURNING id",
+        )
+        .bind(issuer)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    fn nav(pairs: &[(&str, &str)]) -> NavigationQuery {
+        NavigationQuery(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+    }
+
+    fn with_cookie(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("cookie", HeaderValue::from_str(&format!("{}={value}", session::OIDC_COOKIE)).unwrap());
+        h
+    }
+
+    fn cookie_set(r: &Redirect) -> Option<String> {
+        r.cookies.iter().find_map(|c| session::cookie_value(c, session::OIDC_COOKIE))
+    }
+
+    fn param(location: &str, name: &str) -> Option<String> {
+        url::Url::parse(location).ok()?.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned())
+    }
+
+    async fn start(pool: &PgPool, auth: &AuthState, id: Uuid, return_to: &str) -> Redirect {
+        oidc_start(pool, auth, &HeaderMap::new(), Some(id), &nav(&[("returnTo", return_to)])).await.unwrap()
+    }
+
+    async fn callback(pool: &PgPool, auth: &AuthState, cookie: &str, state: &str) -> Redirect {
+        let ctx = RequestContext::anonymous(String::new());
+        oidc_callback(pool, auth, &with_cookie(cookie), &ctx, &nav(&[("state", state), ("code", "the-code")]))
+            .await
+            .unwrap()
+    }
+
+    /// Rows in the tables a sign-in start could plausibly write.
+    async fn written(pool: &PgPool) -> (i64, i64, i64) {
+        sqlx::query_as(
+            "SELECT (SELECT count(*) FROM server_keys), (SELECT count(*) FROM sessions), (SELECT count(*) FROM audit_log)",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// GH#122: anonymous starts used to fill a table capped at 10,000 pending
+    /// sign-ins shared by everybody, after which nobody could sign in.
+    #[tokio::test]
+    async fn anonymous_starts_do_not_lock_others_out() {
+        let Some(db) = scratch::database("anonymous_starts_do_not_lock_others_out").await else { return };
+        let (pool, auth, idp) = (&db.pool, auth_state(), idp().await);
+        let id = add_provider(pool, &idp.issuer).await;
+        assert!(cookie_set(&start(pool, &auth, id, "/").await).is_some());
+        let before = written(pool).await;
+        assert_eq!(before.0, 1, "the first start stored the sealing key");
+
+        for _ in 0..10_000 {
+            let r = start(pool, &auth, id, "/").await;
+            assert!(r.location.starts_with(&idp.issuer), "{}", r.location);
+        }
+        // Somebody else, after the flood: still sent to the provider.
+        let other = start(pool, &auth, id, "/items").await;
+        assert!(other.location.starts_with(&format!("{}/authorize?", idp.issuer)), "{}", other.location);
+        assert!(cookie_set(&other).is_some());
+        assert_eq!(written(pool).await, before, "a start writes nothing");
+        let old_table: Option<String> =
+            sqlx::query_scalar("SELECT to_regclass('cmdb.oidc_login_states')::text").fetch_one(pool).await.unwrap();
+        assert_eq!(old_table, None);
+        db.drop().await;
+    }
+
+    #[tokio::test]
+    async fn callback_refuses_cookies_it_cannot_trust() {
+        let Some(db) = scratch::database("callback_refuses_cookies_it_cannot_trust").await else { return };
+        let (pool, auth, idp) = (&db.pool, auth_state(), idp().await);
+        let id = add_provider(pool, &idp.issuer).await;
+        let r = start(pool, &auth, id, "/items").await;
+        let (good, state) = (cookie_set(&r).unwrap(), param(&r.location, "state").unwrap());
+        let wire = URL_SAFE_NO_PAD.decode(&good).unwrap();
+        let edited = |f: &dyn Fn(&mut Vec<u8>)| {
+            let mut w = wire.clone();
+            f(&mut w);
+            URL_SAFE_NO_PAD.encode(w)
+        };
+        let key = auth.oidc_state_key(pool).await.unwrap();
+        let sealed = |exp: i64, key: &SealingKey| {
+            key.seal(&LoginState {
+                provider_id: id,
+                state: state.clone(),
+                nonce: oidc::random_value(),
+                code_verifier: oidc::random_value(),
+                return_to: None,
+                exp,
+            })
+        };
+        let now = chrono::Utc::now().timestamp();
+        let mut other_secret = [0u8; 32];
+        getrandom::fill(&mut other_secret).unwrap();
+        let cases = [
+            ("one byte flipped", edited(&|w| *w.last_mut().unwrap() ^= 0x01)),
+            ("truncated", edited(&|w| w.truncate(w.len() - 1))),
+            ("unknown key id", edited(&|w| w[0] = w[0].wrapping_add(1))),
+            ("expired", sealed(now - 1, key)),
+            ("another key", sealed(now + 600, &SealingKey::new(1, &other_secret).unwrap())),
+            ("not base64", "%%%".into()),
+        ];
+        for (what, cookie) in &cases {
+            let r = callback(pool, &auth, cookie, &state).await;
+            assert_eq!(r.location, format!("{PUBLIC_URL}/login?ssoError=expired"), "{what}");
+            assert_eq!(cookie_set(&r).as_deref(), Some(""), "{what}: the cookie is cleared");
+        }
+        // The state the provider sends back must be the sealed one.
+        let r = callback(pool, &auth, &good, &oidc::random_value()).await;
+        assert_eq!(r.location, format!("{PUBLIC_URL}/login?ssoError=expired"), "another state");
+        assert_eq!(idp.token_calls.load(Ordering::SeqCst), 0, "the provider was never asked for a token");
+
+        // The untouched cookie with its own state gets as far as the code
+        // exchange (which this provider refuses), and is cleared too.
+        let r = callback(pool, &auth, &good, &state).await;
+        assert_eq!(r.location, format!("{PUBLIC_URL}/login?ssoError=failed"));
+        assert_eq!(cookie_set(&r).as_deref(), Some(""));
+        assert_eq!(idp.token_calls.load(Ordering::SeqCst), 1);
+        db.drop().await;
+    }
+
+    /// Replicas behind a load balancer: whichever starts the sign-in, any of
+    /// them completes it.
+    #[tokio::test]
+    async fn replicas_share_one_sealing_key() {
+        let Some(db) = scratch::database("replicas_share_one_sealing_key").await else { return };
+        let pool = &db.pool;
+        let (a, b) = (auth_state(), auth_state());
+        let (ka, kb) = tokio::join!(a.oidc_state_key(pool), b.oidc_state_key(pool));
+        let (ka, kb) = (ka.unwrap(), kb.unwrap());
+        let s = LoginState {
+            provider_id: Uuid::new_v4(),
+            state: oidc::random_value(),
+            nonce: oidc::random_value(),
+            code_verifier: oidc::random_value(),
+            return_to: Some(format!("/{}", "x".repeat(2047))),
+            exp: chrono::Utc::now().timestamp() + 600,
+        };
+        let now = chrono::Utc::now().timestamp();
+        assert_eq!(kb.open(&ka.seal(&s), now).as_ref(), Some(&s));
+        assert_eq!(ka.open(&kb.seal(&s), now).as_ref(), Some(&s));
+        // A restarted process reads the same key back.
+        assert_eq!(auth_state().oidc_state_key(pool).await.unwrap().open(&ka.seal(&s), now), Some(s));
+        let keys: i64 = sqlx::query_scalar("SELECT count(*) FROM server_keys").fetch_one(pool).await.unwrap();
+        assert_eq!(keys, 1);
+        db.drop().await;
     }
 }

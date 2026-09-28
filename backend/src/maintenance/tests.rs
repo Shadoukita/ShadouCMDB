@@ -125,7 +125,7 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     assert!(header.total_rows() > 20, "demo data is in the backup");
     assert_eq!(
         header.excluded_tables,
-        ["cmdb.mfa_challenges", "cmdb.oidc_login_states", "cmdb.sessions"].map(str::to_owned).to_vec()
+        ["cmdb.mfa_challenges", "cmdb.server_keys", "cmdb.sessions"].map(str::to_owned).to_vec()
     );
     assert!(!header.tables.iter().any(|t| EXCLUDED_TABLES.contains(&t.name.as_str())));
     // The system tables, then the type tables of the area.
