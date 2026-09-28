@@ -174,7 +174,10 @@ impl Resource for Statuses {
         "id, key, name, description, sort_order, is_active, created_at, updated_at, is_operational";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
     const DEPRECATED: Option<&'static str> = Some(
-        "Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.",
+    );
+    const WRITES_GONE: Option<&'static str> = Some(
+        "Statuses are read-only since migration 0016: CIs take their status from the lookup list \"status\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
     );
     const USAGE: &'static [Usage] = &[Usage {
         kind: "configurationItems",
@@ -318,7 +321,10 @@ impl Resource for Environments {
     const COLUMNS: &'static str = "id, key, name, description, sort_order, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
     const DEPRECATED: Option<&'static str> = Some(
-        "Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.",
+    );
+    const WRITES_GONE: Option<&'static str> = Some(
+        "Environments are read-only since migration 0016: CIs take their environment from the lookup list \"environment\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
     );
     const USAGE: &'static [Usage] = &[Usage {
         kind: "configurationItems",
@@ -543,7 +549,10 @@ impl Resource for Locations {
         "id, key, name, description, sort_order, is_active, created_at, updated_at, parent_id, location_type, address";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description", "address"];
     const DEPRECATED: Option<&'static str> = Some(
-        "Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.",
+    );
+    const WRITES_GONE: Option<&'static str> = Some(
+        "Locations are read-only since migration 0016: CIs take their location from the lookup list \"location\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
     );
     const USAGE: &'static [Usage] = &[
         Usage {
@@ -743,7 +752,10 @@ impl Resource for Owners {
     const COLUMNS: &'static str = "id, kind, name, email, external_ref, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["name", "email", "external_ref"];
     const DEPRECATED: Option<&'static str> = Some(
-        "Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.",
+    );
+    const WRITES_GONE: Option<&'static str> = Some(
+        "Owners are read-only since migration 0016: CIs take their owner from the lookup list \"owner\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
     );
     const USAGE: &'static [Usage] = &[Usage {
         kind: "configurationItems",
@@ -1527,5 +1539,98 @@ mod tests {
             .await
             .unwrap();
         db.drop().await;
+    }
+
+    /// GH#111: the legacy lookups keep their reads, and their writes answer 410 GONE
+    /// (after the permission and CSRF checks) without changing anything.
+    #[tokio::test]
+    async fn legacy_lookup_writes_are_gone() {
+        use axum::http::header;
+
+        use crate::modules::api_tokens::tests::{Creds, app, call, code};
+
+        let Some(db) = scratch::database("legacy_lookup_writes_are_gone").await else { return };
+        let pool = &db.pool;
+        let app = app(pool.clone());
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let s = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+        let status_id: Uuid =
+            sqlx::query_scalar("INSERT INTO statuses (key, name) VALUES ('legacy', 'Legacy') RETURNING id")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let audit_rows = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log WHERE entity_type = 'statuses'")
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        };
+        let before = audit_rows().await;
+
+        for base in ["/api/v1/statuses", "/api/v1/environments", "/api/v1/locations", "/api/v1/owners"] {
+            let (status, v, _) = call(&app, "GET", base, &s, None).await;
+            assert_eq!(status, 200, "{base}: {v}");
+            let (status, v, _) = call(&app, "POST", base, &s, Some(json!({ "key": "x", "name": "X" }))).await;
+            assert_eq!((status, code(&v)), (410, "GONE"), "{base}: {v}");
+            assert!(v["error"]["message"].as_str().unwrap().contains("/api/v1/lookup-list-values"), "{v}");
+        }
+        let one = format!("/api/v1/statuses/{status_id}");
+        let (status, v, _) = call(&app, "PATCH", &one, &s, Some(json!({ "name": "Renamed" }))).await;
+        assert_eq!((status, code(&v)), (410, "GONE"), "{v}");
+        let (status, v, _) = call(&app, "DELETE", &one, &s, None).await;
+        assert_eq!((status, code(&v)), (410, "GONE"), "{v}");
+        // Even a body that the old endpoint refused is answered 410, not 400.
+        let (status, v, _) = call(&app, "POST", "/api/v1/statuses", &s, Some(json!({ "bogus": 1 }))).await;
+        assert_eq!((status, code(&v)), (410, "GONE"), "{v}");
+
+        // The checks before it are unchanged.
+        let no_csrf = Creds { csrf: None, ..s.clone() };
+        let (status, v, _) = call(&app, "DELETE", &one, &no_csrf, None).await;
+        assert_eq!((status, code(&v)), (403, "CSRF_TOKEN_INVALID"), "{v}");
+        let (status, v, _) = call(&app, "DELETE", &one, &Creds::default(), None).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+
+        // Nothing changed.
+        let (status, row, _) = call(&app, "GET", &one, &s, None).await;
+        assert_eq!((status, row["name"].as_str()), (200, Some("Legacy")), "{row}");
+        let (status, v, _) = call(&app, "GET", &format!("{one}/usage"), &s, None).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(audit_rows().await, before);
+        let created: i64 = sqlx::query_scalar(
+            "SELECT (SELECT count(*) FROM statuses WHERE key = 'x') + (SELECT count(*) FROM environments WHERE key = 'x')
+                  + (SELECT count(*) FROM locations WHERE key = 'x') + (SELECT count(*) FROM owners WHERE name = 'X')",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(created, 0);
+        db.drop().await;
+    }
+
+    /// The contract says so too: 410 and no request body on the writes, reads unchanged.
+    #[test]
+    fn legacy_lookup_writes_are_documented_as_gone() {
+        let doc = serde_json::to_value(crate::api::openapi::document(&routes())).unwrap();
+        for (path, method) in
+            [("/api/v1/owners", "post"), ("/api/v1/owners/{id}", "patch"), ("/api/v1/owners/{id}", "delete")]
+        {
+            let op = &doc["paths"][path][method];
+            assert_eq!(op["deprecated"], true, "{path} {method}");
+            assert!(op["requestBody"].is_null(), "{path} {method}");
+            assert!(op["responses"]["410"].is_object(), "{path} {method}");
+            let successes: Vec<&String> =
+                op["responses"].as_object().unwrap().keys().filter(|k| k.starts_with('2')).collect();
+            assert!(successes.is_empty(), "{path} {method}: {successes:?}");
+        }
+        assert!(doc["paths"]["/api/v1/owners"]["get"]["responses"]["200"].is_object());
+        assert!(doc["paths"]["/api/v1/lookup-list-values"]["post"]["requestBody"].is_object());
     }
 }

@@ -139,6 +139,7 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
              first (code MFA_ENROLMENT_REQUIRED)",
         ),
         ErrorCode::NotFound => (404, "Not found (code NOT_FOUND)"),
+        ErrorCode::Gone => (410, "The operation was removed (code GONE); the message names its replacement"),
         ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => (
             409,
             "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
@@ -263,6 +264,8 @@ pub fn document(routes: &[Route]) -> OpenApi {
                 schemas.push((doc.name.clone(), doc.schema.clone()));
                 schemas.extend(doc.nested.iter().cloned());
             }
+            // An operation that only answers an error (410 GONE) is documented by its error code.
+            None if r.status.is_client_error() => {}
             None if r.status.is_redirection() => {
                 let description = "Redirect: the browser follows the Location header";
                 responses.insert(r.status.as_u16(), ResponseBuilder::new().description(description).build());
