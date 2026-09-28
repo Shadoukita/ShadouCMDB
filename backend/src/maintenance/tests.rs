@@ -125,7 +125,7 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     assert!(header.total_rows() > 20, "demo data is in the backup");
     assert_eq!(
         header.excluded_tables,
-        ["cmdb.mfa_challenges", "cmdb.oidc_login_states", "cmdb.sessions"].map(str::to_owned).to_vec()
+        ["cmdb.mfa_challenges", "cmdb.server_keys", "cmdb.sessions"].map(str::to_owned).to_vec()
     );
     assert!(!header.tables.iter().any(|t| EXCLUDED_TABLES.contains(&t.name.as_str())));
     // The system tables, then the type tables of the area.
@@ -241,6 +241,35 @@ async fn a_backup_from_an_older_schema_is_upgraded_on_restore() {
     assert_eq!(report.migrations_applied_after, 1);
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM public._sqlx_migrations").fetch_one(&mut *cb).await.unwrap();
     assert_eq!(n as usize, crate::db::expected_count());
+
+    drop((ca, cb));
+    a.drop().await;
+    b.drop().await;
+}
+
+/// Releases at levels 0014–0020 left `oidc_login_states` out of their backups;
+/// migration 0021 dropped the table, but restoring such a backup creates it
+/// again on the way up and must not refuse it as missing.
+#[tokio::test]
+async fn a_backup_from_before_the_stateless_oidc_start_still_restores() {
+    let Some(a) = scratch::database("restore_level_20").await else { return };
+    let Some(b) = scratch::database("restore_level_20_b").await else { return };
+    let mut ca = a.pool.acquire().await.unwrap();
+    reset::decommission(&mut ca).await.unwrap();
+    MIGRATOR.run_to(20, &mut *ca).await.unwrap();
+    let (buf, header) = take_backup(&mut ca).await;
+    assert_eq!(header.migration_level(), Some(20));
+    assert!(header.excluded_tables.contains(&"cmdb.oidc_login_states".to_owned()), "{:?}", header.excluded_tables);
+    assert!(!header.tables.iter().any(|t| t.name == "oidc_login_states"));
+
+    let mut cb = b.pool.acquire().await.unwrap();
+    let report = restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    assert!(report.migrations_applied_after >= 1);
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM public._sqlx_migrations").fetch_one(&mut *cb).await.unwrap();
+    assert_eq!(n as usize, crate::db::expected_count());
+    let gone: Option<String> =
+        sqlx::query_scalar("SELECT to_regclass('cmdb.oidc_login_states')::text").fetch_one(&mut *cb).await.unwrap();
+    assert_eq!(gone, None, "migration 0021 dropped it again");
 
     drop((ca, cb));
     a.drop().await;

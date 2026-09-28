@@ -39,6 +39,9 @@ the database credentials can.
   when an administrator edits a type.
 - **Not the sessions.** Restoring them would sign people back in with tokens from
   the past. After a restore, everyone signs in again.
+- **Not the server's own keys** (`server_keys`). The restored server generates a
+  new key for OIDC sign-ins; a sign-in in progress during the restore ends with
+  "expired", and the user starts it again.
 - **Not what lives outside the database:** the env file (database password,
   settings), log files and the binary. Keep a copy of the env file in your
   secrets store. It is configuration, not data, and it must not sit next to the

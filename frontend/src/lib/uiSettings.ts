@@ -76,7 +76,7 @@ export const BUILTIN_FIELDS: BuiltinField[] = [
 ];
 export const BUILTIN = new Map(BUILTIN_FIELDS.map((f) => [f.key, f]));
 
-/** Sort fields the list API accepts, with labels. */
+/** Built-in sort fields the list API accepts, with labels (attributes.<key> needs a class). */
 export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUILTIN_FIELDS.filter((f) => f.sort).map((f) => ({
   field: f.sort!,
   label: f.label,
@@ -93,6 +93,67 @@ export interface AttributeLike {
   label: string;
   groupName: string | null;
   sortOrder: number;
+}
+
+/** An attribute as far as sorting is concerned: the list API sorts by any but a reference. */
+export interface SortableAttribute {
+  key: string;
+  label: string;
+  dataType: string;
+  isActive: boolean;
+}
+export const isSortableAttribute = (a: SortableAttribute) => a.dataType !== "reference";
+
+/** Sort choices for a class's active, sortable attributes (`attributes.<key>`). */
+export function attributeSortFields(attrs: readonly SortableAttribute[]): { field: string; label: string }[] {
+  return attrs.filter((a) => a.isActive && isSortableAttribute(a)).map((a) => ({ field: `${ATTRIBUTE_PREFIX}${a.key}`, label: `${a.label} (attribute)` }));
+}
+
+/**
+ * The attributes every one of several classes can be sorted by: the same key and
+ * data type on each (the first class's order and labels). Lookups sort by their
+ * list's order, which only the API knows, so rows of several classes could not be
+ * merged by them: they are left out when there is more than one class.
+ */
+export function sharedSortAttributes<T extends SortableAttribute>(perClass: readonly (readonly T[])[]): T[] {
+  if (perClass.length === 0) return [];
+  const [first, ...rest] = perClass;
+  return first.filter(
+    (a) =>
+      a.isActive &&
+      isSortableAttribute(a) &&
+      (rest.length === 0 || a.dataType !== "lookup") &&
+      rest.every((attrs) => attrs.some((b) => b.key === a.key && b.dataType === a.dataType && b.isActive)),
+  );
+}
+
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/;
+const ipv4Number = (s: string) => {
+  const m = IPV4.exec(s);
+  // The address, then the prefix length (a bare address counts as /32).
+  return m ? (((+m[1] * 256 + +m[2]) * 256 + +m[3]) * 256 + +m[4]) * 64 + (m[5] ? +m[5] : 32) : null;
+};
+
+/**
+ * Orders two field values of rows merged from several list requests the way the
+ * list API does: numbers by value, IPv4 addresses by address, text
+ * case-insensitively (digits by number), and missing values last in either direction.
+ */
+export function compareValues(a: unknown, b: unknown, dir = 1): number {
+  const none = (v: unknown) => v === null || v === undefined || v === "";
+  if (none(a) || none(b)) return none(a) === none(b) ? 0 : none(a) ? 1 : -1;
+  if (typeof a === "number" && typeof b === "number") return dir * (a - b);
+  const [x, y] = [String(a), String(b)];
+  const [ix, iy] = [ipv4Number(x), ipv4Number(y)];
+  if (ix !== null && iy !== null) return dir * (ix - iy);
+  return dir * x.localeCompare(y, undefined, { numeric: true, sensitivity: "base" });
+}
+
+/** A sort's field, whether or not it is an attribute, among the choices offered; a label for one that is not. */
+export function unavailableSortLabel(field: string | undefined, offered: readonly { field: string }[]): string | null {
+  if (!field || offered.some((s) => s.field === field)) return null;
+  const a = attributeKey(field);
+  return a === null ? `${field} (not a sort field)` : `${a} (not available: pick another sort)`;
 }
 
 export function fieldLabel(field: string, attrs: readonly AttributeLike[]): string {

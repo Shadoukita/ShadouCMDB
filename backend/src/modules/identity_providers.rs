@@ -999,7 +999,10 @@ async fn test(
                 };
                 ConnectionTest { ok, message: message.into(), details, user: None }
             }
-            Err(e) => ConnectionTest { ok: false, message: e.0, details: Vec::new(), user: None },
+            Err(e) => {
+                tracing::warn!(provider = %row.name, error = %e, "identity provider connection test failed");
+                ConnectionTest { ok: false, message: e.summary().into(), details: Vec::new(), user: None }
+            }
         });
     }
     let settings = sso::ldap_settings(&row);
@@ -1053,7 +1056,10 @@ async fn test(
             details: Vec::new(),
             user: None,
         },
-        Err(e) => ConnectionTest { ok: false, message: e.0, details: Vec::new(), user: None },
+        Err(e) => {
+            tracing::warn!(provider = %row.name, error = %e, "identity provider connection test failed");
+            ConnectionTest { ok: false, message: e.summary().into(), details: Vec::new(), user: None }
+        }
     })
 }
 
@@ -1095,6 +1101,7 @@ pub fn routes() -> Vec<Route> {
             ))
             .status(StatusCode::CREATED)
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<IdentityProviderCreate>>| async move {
                 Ok(Json(create(&api.pool, &api.auth, &api.ctx, &b).await?))
@@ -1106,6 +1113,7 @@ pub fn routes() -> Vec<Route> {
                 "{ADMIN_ONLY} The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts."
             ))
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<IdentityProviderUpdate>>| async move {
                 Ok(Json(update(&api.pool, &api.auth, &api.ctx, id, &b).await?))
@@ -1115,6 +1123,7 @@ pub fn routes() -> Vec<Route> {
             .summary("Delete an identity provider that no account signs in through")
             .description(format!("{ADMIN_ONLY} 409 IN_USE while accounts belong to it: disable it instead."))
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::InUse])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 remove(&api.pool, &api.auth, &api.ctx, id).await?;
@@ -1124,7 +1133,7 @@ pub fn routes() -> Vec<Route> {
             .tag(ROUTE_TAG)
             .summary("Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)")
             .description(format!(
-                "{ADMIN_ONLY} Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to."
+                "{ADMIN_ONLY} Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to."
             ))
             .requires(manage)
             .errors(&[ErrorCode::NotFound])

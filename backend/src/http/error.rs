@@ -29,6 +29,8 @@ pub enum ErrorCode {
     Conflict,
     InUse,
     VersionConflict,
+    /// The operation was removed; the message names its replacement (410)
+    Gone,
     /// A technical name (area, type or field) is malformed, reserved or already taken (422)
     InvalidName,
     /// A data model change was refused because it would lose or break stored data (422)
@@ -62,6 +64,7 @@ impl ErrorCode {
                 StatusCode::FORBIDDEN
             }
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
+            ErrorCode::Gone => StatusCode::GONE,
             ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => {
                 StatusCode::CONFLICT
             }

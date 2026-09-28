@@ -1,8 +1,8 @@
 // TanStack Query composables over the typed client. Query keys live here so that
 // mutations invalidate exactly what they change. Arguments are refs or getters,
 // so a query refetches when the URL or form state it depends on changes.
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
-import { toValue, type MaybeRefOrGetter } from "vue";
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/vue-query";
+import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { ApiError, api, unwrap, type Schemas } from "./client";
 import type { paths } from "./schema";
 import { bySortOrder, flattenTree } from "../lib/tree";
@@ -251,6 +251,24 @@ export function useClassAttributes(classId: MaybeRefOrGetter<string | undefined>
         unwrap(api.GET("/api/v1/ci-classes/{id}/attributes", { params: { path: { id } }, signal })).then((r) => r.data),
     };
   });
+}
+
+/** The attributes of several classes (same cache as useClassAttributes): class id -> attributes, once all have loaded. */
+export function useAttributesOfClasses(classIds: MaybeRefOrGetter<readonly string[]>) {
+  const ids = computed(() => [...new Set(toValue(classIds))]);
+  const results = useQueries({
+    queries: computed(() =>
+      ids.value.map((id) => ({
+        queryKey: keys.classAttributes(id),
+        staleTime: 60_000,
+        queryFn: ({ signal }: { signal: AbortSignal }) =>
+          unwrap(api.GET("/api/v1/ci-classes/{id}/attributes", { params: { path: { id } }, signal })).then((r) => r.data),
+      })),
+    ),
+  });
+  return computed(() =>
+    results.value.every((r) => r.data) ? new Map(ids.value.map((id, i) => [id, results.value[i].data!])) : undefined,
+  );
 }
 
 // ---------- Older lookups (Administration › Lookups; CIs use lookup list attributes instead) ----------

@@ -220,7 +220,10 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   dedicated group per profile ("CMDB-Admins" → Administrator) rather than a company-wide group,
   and review the mappings like any other admin rights: whoever controls a mapped group in the
   provider controls who holds that profile here. Only holders of the Administrator profile can
-  change providers and mappings.
+  change providers and mappings, and only from a signed-in session: API tokens, even with the
+  Administrator profile, can read providers and run the connection test but get `403` on every
+  change, so a leaked token cannot add a provider or remap a group that keeps signing people in
+  after the token is revoked.
 - **Directory service account read-only.** It only searches for users; it needs no write rights.
   Prefer `ldaps://`; `ldap://` is accepted only with StartTLS, and certificates are always
   verified. For a private CA paste its certificate into the directory's `caCertificate`, or
