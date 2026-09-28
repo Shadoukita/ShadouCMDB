@@ -677,3 +677,81 @@ pub fn routes() -> Vec<Route> {
             }),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::http::header;
+    use serde_json::json;
+
+    use crate::db::scratch;
+    use crate::modules::api_tokens::tests::{Creds, app, call, code};
+
+    /// Section kinds through the real router: saved, returned, validated (SHAA-299).
+    #[tokio::test]
+    async fn layouts_place_notes_and_built_in_panels() {
+        let Some(db) = scratch::database("layouts_place_notes_and_built_in_panels").await else { return };
+        let app = app(db.pool.clone());
+        let body = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(body)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let s = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+        let (status, v, _) =
+            call(&app, "POST", "/api/v1/ci-classes", &s, Some(json!({ "key": "server", "name": "Server" }))).await;
+        assert_eq!(status, 201, "{v}");
+        let (_, current, _) = call(&app, "GET", "/api/v1/ui-settings", &s, None).await;
+        let version = current["version"].as_i64().unwrap();
+
+        let layout = json!({ "classKey": "server", "tabs": [
+            { "key": "main", "label": "Main", "sections": [
+                { "key": "hint", "label": "Read me", "kind": "note", "text": "Patch window: *Sunday* 02:00." },
+                { "key": "core", "label": "Core", "fields": [{ "field": "ident", "width": 1 }] } ] },
+            { "key": "context", "label": "Context", "sections": [
+                { "key": "rel", "label": "Relationships", "kind": "relations" },
+                { "key": "log", "label": "Audit trail", "kind": "audit", "collapsed": true } ] } ] });
+        let put = |settings| json!({ "version": version, "settings": settings });
+
+        // Each built-in panel once per layout: the later placement is the one reported.
+        let mut twice = layout.clone();
+        twice["tabs"][0]["sections"][1] = json!({ "key": "rel2", "label": "Again", "kind": "relations" });
+        let (status, v, _) =
+            call(&app, "PUT", "/api/v1/ui-settings", &s, Some(put(json!({ "layouts": [twice] })))).await;
+        assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+        assert_eq!(v["error"]["details"][0]["field"], "settings.layouts.0.tabs.1.sections.0.kind", "{v}");
+        // Note text is limited.
+        let mut long = layout.clone();
+        long["tabs"][0]["sections"][0]["text"] = json!("x".repeat(super::document::NOTE_MAX_CHARS + 1));
+        let (status, v, _) =
+            call(&app, "PUT", "/api/v1/ui-settings", &s, Some(put(json!({ "layouts": [long] })))).await;
+        assert_eq!(status, 400, "{v}");
+        assert_eq!(v["error"]["details"][0]["field"], "settings.layouts.0.tabs.0.sections.0.text", "{v}");
+        // Unknown kinds are refused by the schema.
+        let mut html = layout.clone();
+        html["tabs"][0]["sections"][0]["kind"] = json!("html");
+        let (status, _, _) =
+            call(&app, "PUT", "/api/v1/ui-settings", &s, Some(put(json!({ "layouts": [html] })))).await;
+        assert_eq!(status, 400);
+
+        let (status, saved, _) =
+            call(&app, "PUT", "/api/v1/ui-settings", &s, Some(put(json!({ "layouts": [layout.clone()] })))).await;
+        assert_eq!(status, 200, "{saved}");
+        assert_eq!(saved["issues"], json!([]), "{saved}");
+        let (_, got, _) = call(&app, "GET", "/api/v1/ui-settings", &s, None).await;
+        let tabs = &got["settings"]["layouts"][0]["tabs"];
+        assert_eq!(tabs[0]["sections"][0]["kind"], "note");
+        assert_eq!(tabs[0]["sections"][0]["text"], "Patch window: *Sunday* 02:00.");
+        assert!(tabs[0]["sections"][1].get("kind").is_none(), "field sections stay as before: {got}");
+        assert_eq!(tabs[1]["sections"][0]["kind"], "relations");
+        assert_eq!(
+            (tabs[1]["sections"][1]["kind"].as_str(), tabs[1]["sections"][1]["collapsed"].as_bool()),
+            (Some("audit"), Some(true))
+        );
+
+        db.drop().await;
+    }
+}

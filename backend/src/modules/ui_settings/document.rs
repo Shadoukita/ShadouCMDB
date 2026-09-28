@@ -398,7 +398,73 @@ pub struct UiLayoutField {
     pub width: u8,
 }
 
-/// A section (card) of a tab: a heading and a grid of fields
+/// Longest note text, in characters.
+pub const NOTE_MAX_CHARS: usize = 4000;
+
+/// What a section shows. Absent means `fields`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UiSectionKind {
+    /// A grid of fields (`fields`)
+    #[default]
+    Fields,
+    /// Static text written by an administrator (`text`): plain text or limited Markdown, never raw HTML
+    Note,
+    /// The detail page's relationships panel
+    Relations,
+    /// The detail page's version history panel
+    History,
+    /// The detail page's audit trail panel
+    Audit,
+}
+
+impl UiSectionKind {
+    /// Built-in panels of the detail page: each at most once per layout; where a layout does not place
+    /// one, the page shows it at its usual position.
+    pub fn is_panel(self) -> bool {
+        matches!(self, Self::Relations | Self::History | Self::Audit)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Fields => "fields",
+            Self::Note => "note",
+            Self::Relations => "relations",
+            Self::History => "history",
+            Self::Audit => "audit",
+        }
+    }
+}
+
+fn is_fields(k: &UiSectionKind) -> bool {
+    *k == UiSectionKind::Fields
+}
+
+fn section_kind_schema() -> Schema {
+    string()
+        .enum_values(Some(["fields", "note", "relations", "history", "audit"]))
+        .description(Some(
+            "What the section shows (absent: fields): fields (a grid of `fields`), note (static `text`), or a built-in panel of the \
+             detail page (relations, history, audit). Each panel can be placed once per layout; one that is not \
+             placed keeps its usual position on the detail page.",
+        ))
+        .into()
+}
+
+fn note_text_schema() -> Schema {
+    string()
+        .min_length(Some(1))
+        .max_length(Some(NOTE_MAX_CHARS))
+        .pattern(Some(NOT_BLANK_PATTERN))
+        .description(Some(
+            "note: the text (required for that kind). Plain text or limited Markdown (emphasis, lists, links); \
+             raw HTML is shown as text, never rendered",
+        ))
+        .into()
+}
+
+/// A section (card) of a tab: a heading and, depending on `kind`, a grid of fields, a note or a built-in
+/// panel of the detail page
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiLayoutSection {
@@ -407,13 +473,20 @@ pub struct UiLayoutSection {
     pub key: String,
     #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
     pub label: String,
+    #[serde(default, skip_serializing_if = "is_fields")]
+    #[schema(schema_with = section_kind_schema)]
+    pub kind: UiSectionKind,
     /// Grid columns on a wide screen; narrow screens use fewer
     #[serde(default = "default_columns")]
     #[schema(minimum = 1, maximum = 4, default = 3)]
     pub columns: u8,
+    /// fields: the grid (other kinds have none)
     #[serde(default)]
     #[schema(max_items = 200)]
     pub fields: Vec<UiLayoutField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(schema_with = note_text_schema)]
+    pub text: Option<String>,
     /// Start collapsed on the detail page
     #[serde(default)]
     pub collapsed: bool,
@@ -515,8 +588,10 @@ pub fn convert_panels(panels: Vec<UiLayoutPanel>) -> Vec<UiLayoutTab> {
         .map(|p| UiLayoutSection {
             key: p.key,
             label: p.label,
+            kind: UiSectionKind::Fields,
             columns: DEFAULT_COLUMNS,
             fields: p.fields.into_iter().map(|field| UiLayoutField { field, width: 1 }).collect(),
+            text: None,
             collapsed: p.collapsed,
         })
         .collect();
@@ -684,6 +759,7 @@ impl UiSettingsDocument {
             let mut tabs = HashSet::new();
             let mut sections = HashSet::new();
             let mut placed = HashSet::new();
+            let mut panels = HashSet::new();
             for (t, tab) in l.tabs.iter().enumerate() {
                 let pt = format!("{p}.tabs.{t}");
                 if !tabs.insert(tab.key.as_str()) {
@@ -693,6 +769,30 @@ impl UiSettingsDocument {
                     let ps = format!("{pt}.sections.{j}");
                     if !sections.insert(s.key.as_str()) {
                         e.push(custom(at(format!("{ps}.key")), "Section keys must be unique in a layout"));
+                    }
+                    if s.kind.is_panel() && !panels.insert(s.kind) {
+                        e.push(custom(
+                            at(format!("{ps}.kind")),
+                            format!("The {} panel can be placed once in a layout", s.kind.as_str()),
+                        ));
+                    }
+                    if s.kind != UiSectionKind::Fields && !s.fields.is_empty() {
+                        e.push(custom(at(format!("{ps}.fields")), "Only sections of kind fields hold fields"));
+                    }
+                    match (&s.text, s.kind) {
+                        (None, UiSectionKind::Note) => {
+                            e.push(custom(at(format!("{ps}.text")), "Required for note sections"))
+                        }
+                        (Some(text), UiSectionKind::Note) if text.trim().is_empty() => {
+                            e.push(custom(at(format!("{ps}.text")), "Required for note sections"))
+                        }
+                        (Some(text), UiSectionKind::Note) if text.chars().count() > NOTE_MAX_CHARS => {
+                            e.push(custom(at(format!("{ps}.text")), format!("At most {NOTE_MAX_CHARS} characters")))
+                        }
+                        (Some(_), k) if k != UiSectionKind::Note => {
+                            e.push(custom(at(format!("{ps}.text")), "Only allowed for note sections"))
+                        }
+                        _ => {}
                     }
                     for (k, f) in s.fields.iter().enumerate() {
                         if !placed.insert(f.field.as_str()) {
@@ -1142,6 +1242,99 @@ mod tests {
         let search = effective.dashboard.widgets.unwrap()[0].search.clone().unwrap();
         assert_eq!(search.class_keys, ["server"]);
         assert_eq!(search.filters.lookups, BTreeMap::from([("status".to_owned(), vec!["in_service".to_owned()])]));
+    }
+
+    #[test]
+    fn sections_can_hold_a_note_or_a_built_in_panel() {
+        let d = doc(json!({"layouts": [{"classKey": "server", "tabs": [
+            {"key": "main", "label": "Main", "sections": [
+                {"key": "hint", "label": "Before you edit", "kind": "note", "text": "Owned by **Ops**. See the runbook."},
+                {"key": "hw", "label": "Hardware", "fields": [{"field": "attributes.cpu_cores"}]},
+            ]},
+            {"key": "links", "label": "Links", "sections": [
+                {"key": "rel", "label": "Relationships", "kind": "relations"},
+                {"key": "hist", "label": "History", "kind": "history", "collapsed": true},
+                {"key": "log", "label": "Audit trail", "kind": "audit"},
+            ]},
+        ]}]}));
+        assert!(d.check().is_empty(), "{:?}", d.check());
+        let kinds: Vec<UiSectionKind> = d.layouts[0].tabs.iter().flat_map(|t| &t.sections).map(|s| s.kind).collect();
+        use UiSectionKind::*;
+        assert_eq!(kinds, [Note, Fields, Relations, History, Audit]);
+        // Round trip: `kind` is written except for field sections, `text` only for notes.
+        let out = serde_json::to_value(&d).unwrap();
+        let tabs = &out["layouts"][0]["tabs"];
+        assert_eq!(tabs[0]["sections"][0]["kind"], "note");
+        assert_eq!(tabs[0]["sections"][0]["text"], "Owned by **Ops**. See the runbook.");
+        assert!(tabs[0]["sections"][1].get("kind").is_none(), "{out}");
+        assert!(tabs[1]["sections"][0].get("text").is_none(), "{out}");
+        assert_eq!(serde_json::from_value::<UiSettingsDocument>(out).unwrap(), d);
+        // Panels and notes carry no field references to resolve.
+        assert_eq!(resolve(&d, &model()), (d.clone(), vec![]));
+    }
+
+    #[test]
+    fn documents_without_section_kinds_read_and_write_back_unchanged() {
+        let stored = json!({"layouts": [{"classKey": "server", "tabs": [
+            {"key": "general", "label": "General", "sections": [
+                {"key": "main", "label": "Main", "columns": 2, "collapsed": false,
+                 "fields": [{"field": "ident", "width": 2}, {"field": "attributes.cpu_cores", "width": 1}]},
+            ]},
+        ], "hiddenFields": [], "readOnlyFields": []}]});
+        let d = doc(stored.clone());
+        assert_eq!(d.layouts[0].tabs[0].sections[0].kind, UiSectionKind::Fields);
+        assert!(d.check().is_empty());
+        assert_eq!(serde_json::to_value(&d).unwrap()["layouts"], stored["layouts"]);
+        // v1 panels still convert to field sections.
+        let v1 = doc(
+            json!({"layouts": [{"classKey": "server", "panels": [{"key": "p", "label": "P", "fields": ["ident"]}]}]}),
+        );
+        assert_eq!(v1.layouts[0].tabs[0].sections[0].kind, UiSectionKind::Fields);
+        assert!(serde_json::to_value(&v1).unwrap()["layouts"][0]["tabs"][0]["sections"][0].get("kind").is_none());
+    }
+
+    #[test]
+    fn notes_and_panels_follow_their_rules() {
+        let long = "x".repeat(NOTE_MAX_CHARS + 1);
+        let d = doc(json!({"layouts": [{"classKey": "server", "tabs": [
+            {"key": "a", "label": "A", "sections": [
+                {"key": "n1", "label": "N", "kind": "note"},
+                {"key": "n2", "label": "N", "kind": "note", "text": "  "},
+                {"key": "n3", "label": "N", "kind": "note", "text": long},
+                {"key": "n4", "label": "N", "kind": "note", "text": "ok", "fields": [{"field": "ident"}]},
+                {"key": "f", "label": "F", "text": "stray"},
+                {"key": "r1", "label": "R", "kind": "relations"},
+            ]},
+            {"key": "b", "label": "B", "sections": [
+                {"key": "r2", "label": "R", "kind": "relations", "text": "stray"},
+                {"key": "h", "label": "H", "kind": "history", "fields": [{"field": "label"}]},
+                {"key": "r1", "label": "Dup", "kind": "audit"},
+            ]},
+        ]}]}));
+        let fields: Vec<String> = d.check().into_iter().map(|e| e.field).collect();
+        assert_eq!(
+            fields,
+            [
+                "layouts.0.tabs.0.sections.0.text",
+                "layouts.0.tabs.0.sections.1.text",
+                "layouts.0.tabs.0.sections.2.text",
+                "layouts.0.tabs.0.sections.3.fields",
+                "layouts.0.tabs.0.sections.4.text",
+                "layouts.0.tabs.1.sections.0.kind",
+                "layouts.0.tabs.1.sections.0.text",
+                "layouts.0.tabs.1.sections.1.fields",
+                "layouts.0.tabs.1.sections.2.key",
+            ]
+        );
+        // The same panel in two layouts is fine: the rule is per layout.
+        let two = doc(json!({"layouts": [
+            {"classKey": "server", "tabs": [{"key": "t", "label": "T", "sections": [{"key": "r", "label": "R", "kind": "relations"}]}]},
+            {"classKey": "application", "tabs": [{"key": "t", "label": "T", "sections": [{"key": "r", "label": "R", "kind": "relations"}]}]},
+        ]}));
+        assert!(two.check().is_empty());
+        let unknown = serde_json::from_value::<UiSettingsDocument>(json!({"layouts": [{"classKey": "server",
+            "tabs": [{"key": "t", "label": "T", "sections": [{"key": "s", "label": "S", "kind": "html"}]}]}]}));
+        assert!(unknown.is_err());
     }
 
     #[test]

@@ -23847,7 +23847,7 @@
       },
       "UiLayoutSection": {
         "type": "object",
-        "description": "A section (card) of a tab: a heading and a grid of fields",
+        "description": "A section (card) of a tab: a heading and, depending on `kind`, a grid of fields, a note or a built-in\npanel of the detail page",
         "required": [
           "key",
           "label"
@@ -23864,6 +23864,17 @@
             "minLength": 1,
             "pattern": "\\S"
           },
+          "kind": {
+            "type": "string",
+            "description": "What the section shows (absent: fields): fields (a grid of `fields`), note (static `text`), or a built-in panel of the detail page (relations, history, audit). Each panel can be placed once per layout; one that is not placed keeps its usual position on the detail page.",
+            "enum": [
+              "fields",
+              "note",
+              "relations",
+              "history",
+              "audit"
+            ]
+          },
           "columns": {
             "type": "integer",
             "format": "int32",
@@ -23877,7 +23888,15 @@
             "items": {
               "$ref": "#/components/schemas/UiLayoutField"
             },
+            "description": "fields: the grid (other kinds have none)",
             "maxItems": 200
+          },
+          "text": {
+            "type": "string",
+            "description": "note: the text (required for that kind). Plain text or limited Markdown (emphasis, lists, links); raw HTML is shown as text, never rendered",
+            "maxLength": 4000,
+            "minLength": 1,
+            "pattern": "\\S"
           },
           "collapsed": {
             "type": "boolean",
