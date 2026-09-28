@@ -112,3 +112,29 @@ export async function applySchemaChange(page: Page, button: string, expectSql?: 
   await dialog.getByRole("button", { name: button, exact: true }).click();
   await expect(dialog).toHaveCount(0);
 }
+
+/** The CSRF token of the signed-in API request context, for writes sent with `request` directly. */
+export async function csrf(request: APIRequestContext) {
+  return (await request.storageState()).cookies.find((c) => c.name === "shadoucmdb_csrf")?.value ?? "";
+}
+
+const BUILT_IN_SETTINGS = {
+  branding: { appName: null, primaryColor: null, accentColor: null, defaultTheme: "system" },
+  navigation: { entries: [] },
+  dashboard: { widgets: null },
+  listViews: [],
+  layouts: [],
+};
+
+/** Back to the built-in UI settings (Customization) and no images, so other specs see the stock UI. */
+export async function resetUiSettings(request: APIRequestContext) {
+  const s = await apiGet<{ version: number; settings: unknown; assets: { logo: unknown; favicon: unknown } }>(request, "/ui-settings");
+  const headers = { "X-CSRF-Token": await csrf(request) };
+  if (JSON.stringify(s.settings) !== JSON.stringify(BUILT_IN_SETTINGS)) {
+    const res = await request.put("/api/v1/ui-settings", { data: { version: s.version, settings: {}, comment: "e2e reset" }, headers });
+    expect(res.ok(), `reset → ${res.status()} ${await res.text()}`).toBeTruthy();
+  }
+  for (const kind of ["logo", "favicon"] as const) {
+    if (s.assets[kind]) expect((await request.delete(`/api/v1/ui-settings/assets/${kind}`, { headers })).ok()).toBeTruthy();
+  }
+}

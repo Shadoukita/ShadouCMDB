@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { apiGet, ciIdByName, classIdByName, expect, snap, test } from "./support";
+import { apiGet, ciIdByName, classIdByName, csrf, expect, resetUiSettings as resetSettings, snap, test } from "./support";
 
 // Administration › Customization and Export / import, against the demo seed (the Server class
 // and its attributes). The settings apply to every user, so the walk starts from and ends with
@@ -15,32 +15,7 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 interface Settings {
   version: number;
   settings: Record<string, unknown>;
-  assets: { logo: unknown; favicon: unknown };
 }
-
-async function csrf(request: APIRequestContext) {
-  return (await request.storageState()).cookies.find((c) => c.name === "shadoucmdb_csrf")?.value ?? "";
-}
-
-/** Back to the built-in settings and no images. */
-async function resetSettings(request: APIRequestContext) {
-  const s = await apiGet<Settings>(request, "/ui-settings");
-  const headers = { "X-CSRF-Token": await csrf(request) };
-  if (JSON.stringify(s.settings) !== JSON.stringify(EMPTY)) {
-    const res = await request.put("/api/v1/ui-settings", { data: { version: s.version, settings: {}, comment: "e2e reset" }, headers });
-    expect(res.ok(), `reset → ${res.status()} ${await res.text()}`).toBeTruthy();
-  }
-  for (const kind of ["logo", "favicon"] as const) {
-    if (s.assets[kind]) expect((await request.delete(`/api/v1/ui-settings/assets/${kind}`, { headers })).ok()).toBeTruthy();
-  }
-}
-const EMPTY = {
-  branding: { appName: null, primaryColor: null, accentColor: null, defaultTheme: "system" },
-  navigation: { entries: [] },
-  dashboard: { widgets: null },
-  listViews: [],
-  layouts: [],
-};
 
 async function save(page: Page, comment: string) {
   const bar = page.getByRole("region", { name: "Save changes" });
