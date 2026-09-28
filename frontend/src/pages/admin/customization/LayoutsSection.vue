@@ -10,6 +10,8 @@ import {
   addTab,
   adoptFields,
   allSections,
+  canRemoveSection as canRemoveSectionIn,
+  canRemoveTab as canRemoveTabIn,
   findSection,
   hideField,
   isCore,
@@ -20,18 +22,18 @@ import {
   moveSectionToTab,
   moveTab,
   placeField,
+  removalSummary,
   removeSection,
   removeTab,
-  sectionFallback,
   setColumns,
   setWidth,
-  tabFallback,
   type LayoutSection,
   type LayoutTab,
 } from "../../../lib/layoutDesign";
 import { ATTRIBUTE_PREFIX, attributeKey, CORE_FIELDS, fieldLabel, gridClass, MAX_COLUMNS, resolveLayout } from "../../../lib/uiSettings";
 import ClassPicker from "./ClassPicker.vue";
 import DesignerField from "./designer/DesignerField.vue";
+import OpenOnCiLink from "./designer/OpenOnCiLink.vue";
 
 /**
  * Customization › Detail and form layout: a visual designer for one class's
@@ -193,14 +195,7 @@ const removeTitle = computed(() => {
 const removeText = computed(() => {
   const c = confirmRemove.value;
   if (!c || !layout.value) return "";
-  if (c.kind === "tab") {
-    const n = (c.tab.sections ?? []).reduce((sum, s) => sum + (s.fields?.length ?? 0), 0);
-    const into = tabFallback(layout.value, c.tab);
-    return n === 0 ? `The tab has no fields.` : `Its ${n} field${n === 1 ? "" : "s"} move to the end of the section ${into?.label}.`;
-  }
-  const n = c.section.fields?.length ?? 0;
-  const into = sectionFallback(layout.value, c.section);
-  return n === 0 ? `The section has no fields.` : `Its ${n} field${n === 1 ? "" : "s"} move to the end of the section ${into?.label}.`;
+  return removalSummary(layout.value, c.kind === "tab" ? { tab: c.tab } : { section: c.section });
 });
 function doRemove() {
   const c = confirmRemove.value;
@@ -215,9 +210,8 @@ function doRemove() {
   }
   select(null);
 }
-const canRemoveTab = (t: LayoutTab) =>
-  tabs.value.length > 1 && !!layout.value && (!!tabFallback(layout.value, t) || (t.sections ?? []).every((s) => !s.fields?.length));
-const canRemoveSection = (s: LayoutSection) => !!layout.value && !!sectionFallback(layout.value, s);
+const canRemoveTab = (t: LayoutTab) => !!layout.value && canRemoveTabIn(layout.value, t);
+const canRemoveSection = (s: LayoutSection) => !!layout.value && canRemoveSectionIn(layout.value, s);
 const sectionIndexInTab = (s: LayoutSection) => sectionOptions.value.find((x) => x.section === s)?.tab.sections?.indexOf(s) ?? -1;
 
 // ---------- Drag and drop ----------
@@ -322,6 +316,7 @@ function setPreview(w: number | null) {
     <div class="panel-header"><h2>Detail and form layout</h2><span class="muted">Tabs, sections and fields of one class, for the form and the detail page</span></div>
     <div class="panel-body">
       <ClassPicker v-model:selected="cls" :customized="doc.layouts.map((l) => l.classKey)" noun="layout" />
+      <OpenOnCiLink v-if="cls" :key="cls.id" :cls="cls" />
     </div>
     <div v-if="cls && !layout" class="panel-body">
       <p>

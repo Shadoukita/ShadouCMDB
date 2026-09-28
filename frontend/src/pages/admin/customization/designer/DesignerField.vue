@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { EffectiveAttribute } from "../../../../api/queries";
+import { startGridResize } from "../../../../lib/gridResize";
 import { cellClass } from "../../../../lib/uiSettings";
 
 /**
@@ -80,34 +81,8 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
-// Resizing: the new width is the number of grid columns the pointer reaches from the field's left edge.
-function onResizeStart(e: PointerEvent) {
-  const cell = el.value;
-  const grid = cell?.parentElement;
-  if (!cell || !grid) return;
-  e.preventDefault();
-  e.stopPropagation();
-  const handle = e.currentTarget as HTMLElement;
-  handle.setPointerCapture(e.pointerId);
-  const style = getComputedStyle(grid);
-  const tracks = style.gridTemplateColumns.split(" ").filter(Boolean).length || props.columns;
-  const gap = parseFloat(style.columnGap) || 0;
-  const track = (grid.clientWidth - gap * (tracks - 1)) / tracks;
-  const left = cell.getBoundingClientRect().left;
-  const onMove = (ev: PointerEvent) => {
-    const w = Math.round((ev.clientX - left + gap) / (track + gap));
-    const next = Math.max(1, Math.min(w, tracks, props.columns));
-    if (next !== props.width) emit("resize", next);
-  };
-  const onUp = () => {
-    handle.removeEventListener("pointermove", onMove);
-    handle.removeEventListener("pointerup", onUp);
-    handle.removeEventListener("pointercancel", onUp);
-  };
-  handle.addEventListener("pointermove", onMove);
-  handle.addEventListener("pointerup", onUp);
-  handle.addEventListener("pointercancel", onUp);
-}
+const onResizeStart = (e: PointerEvent) =>
+  startGridResize(e, el.value, props.columns, () => props.width, (w) => emit("resize", w));
 
 defineExpose({ focus: () => el.value?.focus() });
 </script>

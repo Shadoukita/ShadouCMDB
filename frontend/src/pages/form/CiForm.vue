@@ -13,11 +13,14 @@ import {
 } from "../../api/queries";
 import AttributeInput from "../../components/AttributeInput.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import LayoutEditView from "../../components/layoutEdit/LayoutEditView.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import type { LookupParent } from "../../components/LookupValueSelect.vue";
 import { useAppSettings } from "../../lib/appSettings";
 import { HIDDEN_CI } from "../../lib/format";
 import { hintFor, nowFormValue, NOW_HINT, toApiValue, toFormValue, type FormValue } from "../../lib/attributeValues";
+import type { LayoutEditor } from "../../lib/layoutEditor";
+import { createReusableTemplate } from "../../lib/reusableTemplate";
 import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, builtInLayout, cellClass, CORE_FIELDS, gridClass, layoutFor, resolveLayout } from "../../lib/uiSettings";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
@@ -37,8 +40,13 @@ import FormField from "./FormField.vue";
  * read-only. Required fields stay editable on a new CI whatever the layout says,
  * or it could never be saved. Every tab stays in the page (only one is shown),
  * so the whole form is submitted and a tab holding an error says so.
+ *
+ * In layout edit mode (`editor` active, see lib/layoutEditor) the form's fields
+ * are shown on the layout canvas instead, inert, with what has been typed so far.
  */
-const props = defineProps<{ mode: "create" | "edit"; classId: string; className: string; ci?: Ci }>();
+const props = defineProps<{ mode: "create" | "edit"; classId: string; className: string; ci?: Ci; editor?: LayoutEditor }>();
+/** One field of the form, as the form and the layout canvas show it. */
+const [DefineField, FormCell] = createReusableTemplate<{ f: string; width?: number }>();
 
 /** Core CI fields (CORE_FIELDS). These belong to every CI regardless of class; class-specific fields come from the API. */
 type CoreField = "ident" | "validFrom" | "validUntil";
@@ -71,7 +79,10 @@ const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive ||
 
 const settings = useAppSettings();
 const classes = useCiClasses();
-const layout = computed(() => layoutFor(settings.doc.value, classes.data.value?.find((c) => c.id === props.classId)?.key));
+const classKey = computed(() => classes.data.value?.find((c) => c.id === props.classId)?.key);
+/** The class's layout; in layout edit mode the draft, so the fields show what is being set (read-only). */
+const layout = computed(() => (props.editor?.active && props.editor.layout) || layoutFor(settings.doc.value, classKey.value));
+const activeAttrs = computed(() => attrs.data.value?.filter((d) => d.isActive));
 const requiredField = (f: string) => !!defs.value.find((d) => `${ATTRIBUTE_PREFIX}${d.key}` === f && d.isRequired && d.isActive);
 const keepEditable = (f: string) => props.mode === "create" && requiredField(f);
 const readOnly = computed(() => new Set((layout.value?.readOnlyFields ?? []).filter((f) => !keepEditable(f))));
@@ -223,7 +234,69 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
 </script>
 
 <template>
-  <form novalidate :aria-label="mode === 'create' ? `New ${className}` : `Edit ${ci?.label}`" @submit.prevent="onSubmit">
+  <DefineField v-slot="{ f, width }">
+    <FormField
+      v-if="BUILTIN.has(f)"
+      :id="FIELD_IDS[f]"
+      v-slot="p"
+      :class="width ? cellClass(width) : undefined"
+      :label="BUILTIN.get(f)!.label"
+      :error="coreError(f)"
+      :hint="coreHint(f)"
+      :required="f === 'validFrom'"
+    >
+      <fieldset class="ro-wrap" :disabled="coreDisabled(f)">
+        <input
+          v-if="f === 'ident'"
+          :id="p.id"
+          v-model="core.ident"
+          type="text"
+          class="mono"
+          spellcheck="false"
+          :placeholder="mode === 'create' ? 'Generated' : undefined"
+          :aria-invalid="p.invalid || undefined"
+          :aria-describedby="p.describedBy"
+        />
+        <input
+          v-else-if="f === 'validFrom' || f === 'validUntil'"
+          :id="p.id"
+          v-model="core[f]"
+          type="datetime-local"
+          :title="NOW_HINT"
+          :aria-invalid="p.invalid || undefined"
+          :aria-describedby="p.describedBy"
+          @dblclick="core[f] = nowFormValue('datetime')"
+        />
+      </fieldset>
+    </FormField>
+    <FormField
+      v-else-if="defFor(f)"
+      :id="`attr-${defFor(f)!.key}`"
+      v-slot="p"
+      :class="width ? cellClass(width) : undefined"
+      :label="defFor(f)!.label"
+      :required="defFor(f)!.isRequired"
+      :error="fieldErrors[f]"
+      :hint="attrHint(defFor(f)!)"
+    >
+      <fieldset class="ro-wrap" :disabled="readOnly.has(f)">
+        <AttributeInput
+          v-model="values[defFor(f)!.key]"
+          :def="defFor(f)!"
+          :id="p.id"
+          :invalid="p.invalid"
+          :described-by="p.describedBy"
+          :reference-name="refNames[defFor(f)!.key]"
+          :lookup-parent="lookupParent(defFor(f)!)"
+          @reference-name="(name) => (refNames[defFor(f)!.key] = name)"
+        />
+      </fieldset>
+    </FormField>
+  </DefineField>
+  <LayoutEditView v-if="editor?.active && classKey" :editor="editor" :class-name="className" :class-key="classKey" :attrs="activeAttrs" :attrs-error="attrs.error.value" form>
+    <template #field="{ field }"><FormCell :f="field" /></template>
+  </LayoutEditView>
+  <form v-else novalidate :aria-label="mode === 'create' ? `New ${className}` : `Edit ${ci?.label}`" @submit.prevent="onSubmit">
     <FormErrorBanner v-if="error != null" :error="error" :unplaced="unplaced" :version-conflict-href="ci ? `/cis/${ci.id}` : undefined" />
     <div class="layout-container">
       <div v-if="tabs.length > 1" class="tabs" role="tablist" aria-label="Form tabs">
@@ -266,65 +339,7 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
               />
             </template>
             <div :class="gridClass(sec.columns)">
-              <template v-for="{ field: f, width } in sec.fields" :key="f">
-                <FormField
-                  v-if="BUILTIN.has(f)"
-                  :id="FIELD_IDS[f]"
-                  v-slot="p"
-                  :class="cellClass(width)"
-                  :label="BUILTIN.get(f)!.label"
-                  :error="coreError(f)"
-                  :hint="coreHint(f)"
-                  :required="f === 'validFrom'"
-                >
-                  <fieldset class="ro-wrap" :disabled="coreDisabled(f)">
-                    <input
-                      v-if="f === 'ident'"
-                      :id="p.id"
-                      v-model="core.ident"
-                      type="text"
-                      class="mono"
-                      spellcheck="false"
-                      :placeholder="mode === 'create' ? 'Generated' : undefined"
-                      :aria-invalid="p.invalid || undefined"
-                      :aria-describedby="p.describedBy"
-                    />
-                    <input
-                      v-else-if="f === 'validFrom' || f === 'validUntil'"
-                      :id="p.id"
-                      v-model="core[f]"
-                      type="datetime-local"
-                      :title="NOW_HINT"
-                      :aria-invalid="p.invalid || undefined"
-                      :aria-describedby="p.describedBy"
-                      @dblclick="core[f] = nowFormValue('datetime')"
-                    />
-                  </fieldset>
-                </FormField>
-                <FormField
-                  v-else-if="defFor(f)"
-                  :id="`attr-${defFor(f)!.key}`"
-                  v-slot="p"
-                  :class="cellClass(width)"
-                  :label="defFor(f)!.label"
-                  :required="defFor(f)!.isRequired"
-                  :error="fieldErrors[f]"
-                  :hint="attrHint(defFor(f)!)"
-                >
-                  <fieldset class="ro-wrap" :disabled="readOnly.has(f)">
-                    <AttributeInput
-                      v-model="values[defFor(f)!.key]"
-                      :def="defFor(f)!"
-                      :id="p.id"
-                      :invalid="p.invalid"
-                      :described-by="p.describedBy"
-                      :reference-name="refNames[defFor(f)!.key]"
-                      :lookup-parent="lookupParent(defFor(f)!)"
-                      @reference-name="(name) => (refNames[defFor(f)!.key] = name)"
-                    />
-                  </fieldset>
-                </FormField>
-              </template>
+              <FormCell v-for="{ field: f, width } in sec.fields" :key="f" :f="f" :width="width" />
             </div>
           </div>
         </details>
