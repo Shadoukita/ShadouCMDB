@@ -33,6 +33,7 @@ on:
       - backend/.cargo/**
       - backend/build.rs
       - tools/sbom/**
+      - tools/changelog/**
   workflow_dispatch:
 
 permissions:
@@ -104,6 +105,19 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" != pull_request ] || [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then sign=true; else sign=false; fi
           echo "version=$version publish=$publish prerelease=$prerelease sign=$sign latest=$latest latest_major=$latest_major" | tee -a "$GITHUB_STEP_SUMMARY"
           { echo "version=$version"; echo "publish=$publish"; echo "prerelease=$prerelease"; echo "sign=$sign"; echo "latest=$latest"; echo "latest_major=$latest_major"; } >> "$GITHUB_OUTPUT"
+      # A release never ships with uncollected changelog fragments (CONTRIBUTING.md#changelog):
+      # a stable tag needs its `## <version>` section in CHANGELOG.md and an empty changelog.d/.
+      # Pre-releases and dry runs only check that the fragments are valid.
+      - name: Changelog collected
+        env:
+          PUBLISH: ${{ steps.v.outputs.publish }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          if [ "$PUBLISH" = true ]; then
+            node tools/changelog/collect.mjs --verify-release "$VERSION"
+          else
+            node tools/changelog/collect.mjs --check
+          fi
 
   ui:
     name: Web UI (built once)
