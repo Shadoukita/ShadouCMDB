@@ -47,6 +47,8 @@ pub enum EntityType {
     ApiTokens,
     /// OIDC providers and LDAP/AD directories, with their group mappings
     IdentityProviders,
+    LookupLists,
+    LookupListValues,
 }
 
 impl EntityType {
@@ -72,6 +74,8 @@ impl EntityType {
             EntityType::SchemaChanges => "schema_changes",
             EntityType::ApiTokens => "api_tokens",
             EntityType::IdentityProviders => "identity_providers",
+            EntityType::LookupLists => "lookup_lists",
+            EntityType::LookupListValues => "lookup_list_values",
         }
     }
 }

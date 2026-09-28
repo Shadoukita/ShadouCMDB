@@ -22,8 +22,10 @@ use crate::api::schemas::{self, OwnerKind, description_schema, key_schema, name_
 use crate::auth::permissions::GlobalPermission;
 
 pub const FORMAT: &str = "shadoucmdb.config";
-/// Version 2 adds areas (and the area of each class); version 1 files are still read.
-pub const FORMAT_VERSION: i32 = 2;
+/// Version 2 adds areas (and the area of each class), version 3 dependent
+/// lookup lists (the parent of a list, a value and a field); versions 1 and 2
+/// are still read.
+pub const FORMAT_VERSION: i32 = 3;
 
 fn yes() -> bool {
     true
@@ -143,6 +145,11 @@ pub struct AttributeSpec {
     #[schema(schema_with = nullable_key_schema)]
     #[serde(default)]
     pub lookup_list: Option<String>,
+    /// lookup attributes on a list with a parent list: key of the field bound to the parent list, defined on
+    /// this class or an ancestor. Left out in files before version 3: an existing field keeps its parent field.
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default)]
+    pub parent_attribute: Option<String>,
     #[schema(schema_with = crate::modules::classes::validation_schema)]
     #[serde(default)]
     pub validation: Option<ValidationRules>,
@@ -342,6 +349,10 @@ pub struct LookupValueSpec {
     pub sort_order: i32,
     #[serde(default = "yes")]
     pub is_active: bool,
+    /// Values of a list with a parent list: key of the value of the parent list it belongs to
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default)]
+    pub parent: Option<String>,
 }
 
 fn values_schema() -> Schema {
@@ -365,6 +376,10 @@ pub struct LookupListSpec {
     pub sort_order: i32,
     #[serde(default = "yes")]
     pub is_active: bool,
+    /// Key of the list this list depends on (in the file or already in the target)
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default)]
+    pub parent: Option<String>,
     #[schema(schema_with = values_schema)]
     #[serde(default)]
     pub values: Vec<LookupValueSpec>,
@@ -487,8 +502,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 2 and reads 1 and 2
-    #[schema(minimum = 1, maximum = 2)]
+    /// File format version; this server writes version 3 and reads 1 to 3
+    #[schema(minimum = 1, maximum = 3)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]

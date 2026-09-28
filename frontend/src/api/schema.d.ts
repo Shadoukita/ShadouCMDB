@@ -689,7 +689,7 @@ export interface paths {
         head?: never;
         /**
          * Update a attribute definition (partial)
-         * @description Requires `datamodel.manage`. `dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. Preview any change with `POST /api/v1/schema-changes/preview`.
+         * @description Requires `datamodel.manage`. `dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. `parentAttributeId` (lookup fields on a list with a parent list) names the field bound to the parent list, on this class or an ancestor; CI writes then only accept a value that belongs to the CI's value of that field. Preview any change with `POST /api/v1/schema-changes/preview`.
          */
         patch: operations["updateAttributeDefinition"];
         trace?: never;
@@ -725,7 +725,7 @@ export interface paths {
         put?: never;
         /**
          * Purge an archived field: drop its column and values
-         * @description Requires `datamodel.manage`. Irreversible. The field must be archived (DELETE) and `confirm` must repeat its technical name. Drops the column (and every stored value) from the type's table and rebuilds the reporting views. Returns the schema change that ran.
+         * @description Requires `datamodel.manage`. Irreversible. The field must be archived (DELETE) and `confirm` must repeat its technical name. Drops the column (and every stored value) from the type's table and rebuilds the reporting views. Returns the schema change that ran. Refused (409 IN_USE) while other fields name it as their parent field.
          */
         post: operations["purgeAttributeDefinition"];
         delete?: never;
@@ -1282,14 +1282,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a lookup list
-         * @description Requires `datamodel.manage`. Hard delete of the list and its values, allowed only while no attribute definition uses the list (409 IN_USE otherwise). Retire it with `PATCH {"isActive": false}` instead.
+         * @description Requires `datamodel.manage`. Hard delete of the list and its values, allowed only while no attribute definition uses the list and no other list depends on it (409 IN_USE otherwise). Retire it with `PATCH {"isActive": false}` instead.
          */
         delete: operations["deleteLookupList"];
         options?: never;
         head?: never;
         /**
          * Update a lookup list (partial)
-         * @description Requires `datamodel.manage`.
+         * @description Requires `datamodel.manage`. `parentListId` makes the list depend on another list (no cycles). Setting, changing or clearing it unassigns every value's `parentValueId` and every bound field's `parentAttributeId` in the same transaction (each change audited): reassign them afterwards with `PATCH /api/v1/lookup-list-values/{id}` and `PATCH /api/v1/attribute-definitions/{id}`. Until a value is assigned, it cannot be chosen on a field that has a parent field.
          */
         patch: operations["updateLookupList"];
         trace?: never;
@@ -1303,7 +1303,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list
-         * @description Counts of attributeDefinitions, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getLookupListUsage"];
         put?: never;
@@ -1351,14 +1351,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a lookup list value
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Hard delete, allowed only while no CI stores the value, no attribute uses it as default and no value of a dependent list belongs to it (409 IN_USE otherwise; the details name what still refers to it). Retire it with `PATCH {"isActive": false}` instead.
          */
         delete: operations["deleteLookupListValue"];
         options?: never;
         head?: never;
         /**
          * Update a lookup list value (partial)
-         * @description Requires `datamodel.manage`.
+         * @description Requires `datamodel.manage`. `isActive: false` on a value that other values belong to retires those too (and theirs, down the chain), each change audited. It is refused (409 IN_USE) while CIs store one of those active dependent values: the parent could then no longer be chosen while its children stay on the CIs. Reactivating a value does not reactivate its dependents, and a value whose parent value is retired cannot be reactivated or created.
          */
         patch: operations["updateLookupListValue"];
         trace?: never;
@@ -1372,7 +1372,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list value
-         * @description Counts of attributeValues, attributeDefaults. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getLookupListValueUsage"];
         put?: never;
@@ -1980,6 +1980,12 @@ export interface components {
              * @description When dataType is "lookup": the admin-defined list its values come from
              */
             lookupListId: string | null;
+            /**
+             * Format: uuid
+             * @description When the lookup list has a parent list: the field (on this class or an ancestor) bound to the parent
+             *     list. A CI's value must then belong to the CI's value of that field.
+             */
+            parentAttributeId: string | null;
             validation: {
                 [key: string]: unknown;
             } | null;
@@ -2101,7 +2107,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 2 and reads 1 and 2
+             * @description File format version; this server writes version 3 and reads 1 to 3
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -2272,6 +2278,7 @@ export interface components {
                 enumValues?: string[] | null;
                 referenceClass?: string | null;
                 lookupList?: string | null;
+                parentAttribute?: string | null;
                 validation?: {
                     /** @description number/integer: minimum */
                     min?: number;
@@ -2347,6 +2354,12 @@ export interface components {
              * @description When dataType is "lookup": the admin-defined list its values come from
              */
             lookupListId: string | null;
+            /**
+             * Format: uuid
+             * @description When the lookup list has a parent list: the field (on this class or an ancestor) bound to the parent
+             *     list. A CI's value must then belong to the CI's value of that field.
+             */
+            parentAttributeId: string | null;
             validation: {
                 [key: string]: unknown;
             } | null;
@@ -2607,6 +2620,11 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+            /**
+             * Format: uuid
+             * @description The list this one depends on (e.g. "Model" depends on "Manufacturer"): each value names its parent value
+             */
+            parentListId: string | null;
         };
         LookupListList: {
             data: components["schemas"]["LookupList"][];
@@ -2630,6 +2648,12 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+            /**
+             * Format: uuid
+             * @description The value of the parent list this value belongs to (lists with a parent list only). Null on a value
+             *     left unassigned when its list got another parent list: it cannot be chosen until it is assigned again.
+             */
+            parentValueId: string | null;
         };
         LookupListValueList: {
             data: components["schemas"]["LookupListValue"][];
@@ -2687,6 +2711,7 @@ export interface components {
                 description?: string | null;
                 sortOrder?: number;
                 isActive?: boolean;
+                parent?: string | null;
                 values?: {
                     /** @description Stable machine key, lower_snake_case */
                     key: string;
@@ -2695,6 +2720,7 @@ export interface components {
                     color?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parent?: string | null;
                 }[];
             }[];
         };
@@ -7240,6 +7266,7 @@ export interface operations {
                     dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
                     referenceClassId?: string | null;
                     lookupListId?: string | null;
+                    parentAttributeId?: string | null;
                     label: string;
                     description?: string | null;
                     isRequired?: boolean;
@@ -7550,6 +7577,7 @@ export interface operations {
                     defaultValue?: string | number | boolean | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parentAttributeId?: string | null;
                 };
             };
         };
@@ -11321,6 +11349,8 @@ export interface operations {
                 /** @description Sort field; prefix with "-" for descending. One of: sortOrder, name, key, createdAt, updatedAt */
                 sort?: "sortOrder" | "-sortOrder" | "name" | "-name" | "key" | "-key" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
                 isActive?: "true" | "false";
+                /** @description Lists that depend on this list; "none" for lists without a parent list */
+                parentListId?: "none" | string;
             };
             header?: never;
             path?: never;
@@ -11400,6 +11430,7 @@ export interface operations {
                     description?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parentListId?: string | null;
                 };
             };
         };
@@ -11655,6 +11686,7 @@ export interface operations {
                     description?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parentListId?: string | null;
                 };
             };
         };
@@ -11832,6 +11864,8 @@ export interface operations {
                 /** @description Values of these lists (comma-separated ids) */
                 listId?: string;
                 isActive?: "true" | "false";
+                /** @description Values that belong to this value of the parent list (what a dependent dropdown offers once its parent is chosen); "none" for values without a parent value */
+                parentValueId?: "none" | string;
             };
             header?: never;
             path?: never;
@@ -11914,6 +11948,7 @@ export interface operations {
                     color?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parentValueId?: string | null;
                 };
             };
         };
@@ -12170,6 +12205,7 @@ export interface operations {
                     color?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parentValueId?: string | null;
                 };
             };
         };
@@ -13141,7 +13177,7 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values";
                 /** @description History of these entities */
                 entityId?: string;
                 action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes";
@@ -15281,7 +15317,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 2 and reads 1 and 2
+                     * @description File format version; this server writes version 3 and reads 1 to 3
                      */
                     formatVersion: number;
                     exportedAt?: string | null;

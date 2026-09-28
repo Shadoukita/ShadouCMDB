@@ -265,6 +265,73 @@ async fn check_reference_classes(conn: &mut PgConnection, prepared: &Prepared<'_
     if errors.is_empty() { Ok(()) } else { Err(AppError::validation(errors)) }
 }
 
+/// Dependent dropdowns: a value of a field with a parent field must belong to
+/// the CI's value of that field (`current` holds the CI's values before this
+/// write). Checked for the fields this write sets or clears and for those
+/// whose parent field it sets or clears, so an unrelated edit of a CI whose
+/// values predate the rule is not refused.
+async fn check_parent_values(
+    conn: &mut PgConnection,
+    defs: &[EffectiveAttributeRow],
+    prepared: &Prepared<'_>,
+    current: Option<&Map<String, Value>>,
+) -> Result<(), AppError> {
+    let dependent: Vec<(&EffectiveAttributeRow, &EffectiveAttributeRow)> =
+        defs.iter().filter_map(|d| Some((d, defs.iter().find(|p| Some(p.id) == d.parent_attribute_id)?))).collect();
+    if dependent.is_empty() {
+        return Ok(());
+    }
+    let mut value: HashMap<Uuid, Option<Uuid>> = HashMap::new();
+    let mut touched: HashSet<Uuid> = prepared.clear.iter().copied().collect();
+    for (def, stored) in &prepared.set {
+        touched.insert(def.id);
+        value.insert(def.id, if let StoredValue::Lookup(id) = stored { Some(*id) } else { None });
+    }
+    for id in &prepared.clear {
+        value.insert(*id, None);
+    }
+    let value_of = |def: &EffectiveAttributeRow| -> Option<Uuid> {
+        match value.get(&def.id) {
+            Some(v) => *v,
+            None => current?.get(&def.key)?.as_str().and_then(|s| Uuid::parse_str(s).ok()),
+        }
+    };
+    let checks: Vec<(&EffectiveAttributeRow, &EffectiveAttributeRow, Uuid)> = dependent
+        .into_iter()
+        .filter(|(d, p)| touched.contains(&d.id) || touched.contains(&p.id))
+        .filter_map(|(d, p)| Some((d, p, value_of(d)?)))
+        .collect();
+    if checks.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<Uuid> = checks.iter().map(|(_, _, v)| *v).collect();
+    let parents: HashMap<Uuid, Option<Uuid>> =
+        sqlx::query_as("SELECT id, parent_value_id FROM lookup_list_values WHERE id = ANY($1)")
+            .bind(&ids)
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .collect();
+    let mut errors = Vec::new();
+    for (def, parent_def, child) in checks {
+        let field = format!("attributes.{}", def.key);
+        match value_of(parent_def) {
+            None => errors.push(body_error(
+                field,
+                format!("Choose {} first; this value depends on it", parent_def.label),
+                "lookup_parent_missing",
+            )),
+            Some(parent) if parents.get(&child).copied().flatten() != Some(parent) => errors.push(body_error(
+                field,
+                format!("Not a value of the chosen {}", parent_def.label),
+                "lookup_parent_mismatch",
+            )),
+            Some(_) => {}
+        }
+    }
+    if errors.is_empty() { Ok(()) } else { Err(AppError::validation(errors)) }
+}
+
 /// Attribute checks for a new CI: the values (defaults filled in), the classes
 /// they reference, and that every required attribute has one.
 async fn prepare_new<'d>(
@@ -277,6 +344,7 @@ async fn prepare_new<'d>(
     let attributes = with_defaults(defs, input);
     let prepared = prepare_attributes(conn, defs, Some(&attributes), class_key, None, false, access).await?;
     check_reference_classes(conn, &prepared).await?;
+    check_parent_values(conn, defs, &prepared, None).await?;
     let given: HashSet<Uuid> = prepared.set.iter().map(|(d, _)| d.id).collect();
     let missing: Vec<FieldError> = defs
         .iter()
@@ -375,7 +443,8 @@ async fn check_changed_attributes(
     let visible = ctx.class_scope(ClassOp::View);
     let access = RefAccess { visible: visible.as_deref(), current: Some(&current) };
     let prepared = prepare_attributes(&mut conn, &defs, Some(input), &key, Some(id), class_changes, access).await?;
-    check_reference_classes(&mut conn, &prepared).await
+    check_reference_classes(&mut conn, &prepared).await?;
+    check_parent_values(&mut conn, &defs, &prepared, Some(&current)).await
 }
 
 /// The input plus the default of every active attribute it leaves out.
@@ -761,6 +830,7 @@ pub async fn update(
     let prepared =
         prepare_attributes(&mut tx, &defs, input.attributes.as_ref(), &key, Some(id), class_changes, access).await?;
     check_reference_classes(&mut tx, &prepared).await?;
+    check_parent_values(&mut tx, &defs, &prepared, Some(&before_dto.attributes)).await?;
     let old_lineage: Vec<Uuid> = model.lineage(before.class_id).iter().map(|c| c.id).collect();
     let new_lineage: Vec<Uuid> = model.lineage(class_id).iter().map(|c| c.id).collect();
 

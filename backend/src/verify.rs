@@ -33,6 +33,7 @@ const CHECKS: &[&str] = &[
     "Guard: the last active Administrator cannot be disabled or lose the profile",
     "Guard: lookup values must exist and cannot be deleted while stored",
     "Guard: one UI settings row, append-only version history, image types and sizes",
+    "Guard: dependent lookup lists: no cycles, parent values and fields from the parent list",
 ];
 
 /// Placeholder that satisfies users_password_hash_argon2id; nobody can sign in with it.
@@ -599,6 +600,75 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             Ok(format!(
                 "second settings row {second}; rewriting history {rewrite}; current version not in history {unknown}; \
                  HTML as an image {html}; favicon over 128 KiB {big}"
+            ))
+        }
+        22 => {
+            let list = |key: &'static str, parent: Option<Uuid>| {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO lookup_lists (key, name, parent_list_id) VALUES ($1, $1, $2) RETURNING id",
+                )
+                .bind(key)
+                .bind(parent)
+            };
+            let value = |list_id: Uuid, key: &'static str, parent: Option<Uuid>| {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO lookup_list_values (list_id, key, name, parent_value_id) VALUES ($1, $2, $2, $3) RETURNING id",
+                )
+                .bind(list_id)
+                .bind(key)
+                .bind(parent)
+            };
+            let makers = list("verify_maker", None).fetch_one(&mut *c).await?;
+            let models = list("verify_model", Some(makers)).fetch_one(&mut *c).await?;
+            let cycle = reject!(
+                c,
+                "lookup_lists_no_cycle",
+                sqlx::query("UPDATE lookup_lists SET parent_list_id = $2 WHERE id = $1")
+                    .bind(makers)
+                    .bind(models)
+                    .execute(&mut *c)
+            )?;
+            let cisco = value(makers, "cisco", None).fetch_one(&mut *c).await?;
+            let c9300 = value(models, "c9300", Some(cisco)).fetch_one(&mut *c).await?;
+            let orphan =
+                reject!(c, "lookup_list_values_parent_required", value(models, "orphan", None).fetch_one(&mut *c))?;
+            let wrong =
+                reject!(c, "lookup_list_values_parent_list", value(models, "nested", Some(c9300)).fetch_one(&mut *c))?;
+            let delete = reject!(
+                c,
+                "lookup_list_values_parent_value_id_fkey",
+                sqlx::query("DELETE FROM lookup_list_values WHERE id = $1").bind(cisco).execute(&mut *c)
+            )?;
+            let server = id_by_key(c, "ci_classes", "server").await?;
+            let field = |key: &'static str, list_id: Uuid, parent: Option<Uuid>| {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO ci_attribute_definitions (class_id, key, label, data_type, lookup_list_id, parent_attribute_id)
+                     VALUES ($1, $2, $2, 'lookup', $3, $4) RETURNING id",
+                )
+                .bind(server)
+                .bind(key)
+                .bind(list_id)
+                .bind(parent)
+            };
+            let maker_field = field("verify_maker", makers, None).fetch_one(&mut *c).await?;
+            let bad_field = reject!(
+                c,
+                "ci_attribute_definitions_parent_attribute",
+                field("verify_maker2", makers, Some(maker_field)).fetch_one(&mut *c)
+            )?;
+            field("verify_model", models, Some(maker_field)).fetch_one(&mut *c).await?;
+            let stale = reject!(c, "lookup_lists_parent_values", async {
+                sqlx::query("UPDATE lookup_lists SET parent_list_id = NULL WHERE id = $1")
+                    .bind(models)
+                    .execute(&mut *c)
+                    .await?;
+                c.execute("SET CONSTRAINTS ALL IMMEDIATE").await
+            })?;
+            c.execute("SET CONSTRAINTS ALL DEFERRED").await?;
+            Ok(format!(
+                "list cycle {cycle}; value without parent {orphan}; parent from another list {wrong}; deleting a parent \
+                 value {delete}; parent field on another list {bad_field}; new parent list with stale parents {stale} \
+                 (that a CI's value belongs to its parent field's value is checked by the API)"
             ))
         }
         _ => unreachable!("unknown check {i}"),

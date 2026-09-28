@@ -29,6 +29,9 @@ erDiagram
     configuration_items |o--o{ area_schema__type_table : "reference field (FK)"
     lookup_lists |o--o{ ci_attribute_definitions : "lookup_list_id"
     lookup_lists ||--o{ lookup_list_values : "list_id"
+    lookup_lists |o--o{ lookup_lists : "parent_list_id"
+    lookup_list_values |o--o{ lookup_list_values : "parent_value_id"
+    ci_attribute_definitions |o--o{ ci_attribute_definitions : "parent_attribute_id"
     lookup_list_values |o--o{ area_schema__type_table : "lookup field (FK, RESTRICT)"
 
     relationship_types ||--o{ relationship_type_rules : "relationship_type_id"
@@ -78,6 +81,7 @@ erDiagram
         jsonb enum_values
         uuid reference_class_id FK
         uuid lookup_list_id FK
+        uuid parent_attribute_id FK "lookup field on the parent list"
         text group_name
         text help_text
         jsonb default_value
@@ -86,11 +90,13 @@ erDiagram
         uuid id PK
         text key UK
         text name
+        uuid parent_list_id FK "no cycles"
         boolean is_active
     }
     lookup_list_values {
         uuid id PK
         uuid list_id FK
+        uuid parent_value_id FK "value of the parent list"
         text key
         text name
         text color
