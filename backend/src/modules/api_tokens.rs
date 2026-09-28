@@ -261,6 +261,16 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> 
     };
 
     let mut tx = pool.begin().await?;
+    // Serialised with a password change of the owner or the caller (GH#143):
+    // it either revokes this token, or it ended the caller's session first
+    // and the mint is refused here.
+    let locked: Vec<Uuid> = std::iter::once(owner_id).chain(me.filter(|&id| id != owner_id)).collect();
+    auth_data::share_lock_users(&mut tx, &locked).await?;
+    if let Some(session_id) = ctx.principal().and_then(|p| p.session_id())
+        && !auth_data::session_exists(&mut tx, session_id).await?
+    {
+        return Err(AppError::new(ErrorCode::Unauthenticated, "Your session has ended; sign in again"));
+    }
     let owner = auth_data::get_user(&mut tx, owner_id, false).await?;
     let Some(owner) = owner else {
         return Err(AppError::field("userId", "User does not exist", "not_found"));
@@ -1041,6 +1051,76 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         assert_eq!(creator, None);
+
+        db.drop().await;
+    }
+
+    /// A mint in flight while the owner's password is reset waits for the
+    /// reset and is then refused, as the reset ended the session it came
+    /// with: no token minted with the old password survives (GH#143).
+    #[tokio::test]
+    async fn a_token_minted_during_a_password_reset_does_not_survive_it() {
+        let Some(db) = scratch::database("a_token_minted_during_a_password_reset_does_not_survive_it").await else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let alice = json!({ "username": "alice", "displayName": "Alice", "password": "alice first password",
+            "profileIds": [administrators] });
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(alice)).await;
+        assert_eq!(status, 201, "{v}");
+        let alice_id: uuid::Uuid = v["id"].as_str().unwrap().parse().unwrap();
+        let login = json!({ "username": "alice", "password": "alice first password" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+        assert_eq!(status, 200, "{me}");
+        let alice_session = session_of(&me, &headers);
+
+        // The reset's steps, held open: Alice's row locked, her sessions ended,
+        // her tokens (none yet) revoked.
+        let mut reset = pool.begin().await.unwrap();
+        crate::data::auth::get_user(&mut reset, alice_id, true).await.unwrap();
+        crate::data::auth::delete_user_sessions(&mut reset, alice_id, None).await.unwrap();
+        let ctx = crate::api::context::RequestContext::system("admin", "reset");
+        super::revoke_all_of_user(&mut reset, &ctx, alice_id).await.unwrap();
+
+        // Her session passed authentication before the reset commits.
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let body = json!({ "name": "raced", "profileId": administrators, "expiresAt": expires });
+        let mint = tokio::spawn({
+            let app = app.clone();
+            async move { call(&app, "POST", super::BASE, &alice_session, Some(body)).await }
+        });
+        let mut waiting = false;
+        for _ in 0..200 {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if n > 0 {
+                waiting = true;
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(25)).await;
+        }
+        assert!(waiting, "the mint waits for the reset's lock on the owner");
+        reset.commit().await.unwrap();
+
+        let (status, v, _) = mint.await.unwrap();
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+        let tokens: i64 = sqlx::query_scalar("SELECT count(*) FROM api_tokens").fetch_one(pool).await.unwrap();
+        assert_eq!(tokens, 0);
 
         db.drop().await;
     }
