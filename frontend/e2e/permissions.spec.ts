@@ -312,6 +312,67 @@ test("a reference into a class the user may not view shows a placeholder, not a 
   }
 });
 
+test("audit.view shows a class-restricted auditor no values of CIs they may not view", async ({ playwright, baseURL, request }) => {
+  // An auditor with audit.view who may view Applications only. CRM (Application) references crm-db (Database).
+  const crm = await ciIdByName(request, "CRM");
+  const crmDb = await ciIdByName(request, "crm-db");
+  const auditorProfile = (
+    await apiSend<{ id: string }>(request, "POST", "/admin/profiles", {
+      name: `E2E auditors ${stamp}`,
+      globalPermissions: ["audit.view"],
+      classPermissions: [{ classId: applicationId, view: true, create: false, edit: false, delete: false }],
+    })
+  ).id;
+  const auditorName = `e2e-auditor-${stamp}`;
+  await apiSend(request, "POST", "/admin/users", { username: auditorName, displayName: `E2E Auditor ${stamp}`, password: PASSWORD, profileIds: [auditorProfile] });
+  const auditor = await apiSignIn(playwright, baseURL!, auditorName, PASSWORD);
+
+  // Fresh audit rows for both CIs and for an edge between them, written by the administrator.
+  const secret = `audit-secret-${stamp}`;
+  for (const id of [crmDb, crm]) {
+    const { version } = await apiGet<{ version: number }>(request, `/configuration-items/${id}`);
+    await apiSend(request, "PATCH", `/configuration-items/${id}`, { attributes: { notes: secret }, version });
+  }
+  const edge = (await apiGet<{ data: { id: string; notes: string | null }[] }>(request, `/relationships?sourceCiId=${crm}&targetCiId=${crmDb}`)).data[0]
+    ?? (await apiGet<{ data: { id: string; notes: string | null }[] }>(request, `/relationships?ciId=${crmDb}`)).data[0];
+  expect(edge, "a relationship with crm-db in the demo data").toBeTruthy();
+  await apiSend(request, "PATCH", `/relationships/${edge.id}`, { notes: secret });
+
+  type Entry = { entityId: string; oldValue: Record<string, unknown> | null; newValue: Record<string, unknown> | null; redacted: boolean };
+  const log = async (who: ApiSession, query: string) => {
+    const res = await who.get(`/audit-log?${query}&limit=200`);
+    expect(res.status(), await res.text()).toBe(200);
+    return ((await res.json()) as { data: Entry[] }).data;
+  };
+  try {
+    // The CI itself stays refused, and so do its values in the audit log: the rows are listed, the values are not.
+    await expectError(await auditor.get(`/configuration-items/${crmDb}`), 403, "FORBIDDEN");
+    const dbRows = await log(auditor, `entityType=configuration_items&entityId=${crmDb}`);
+    expect(dbRows.length).toBeGreaterThan(0);
+    for (const row of dbRows) expect(row).toMatchObject({ oldValue: null, newValue: null, redacted: true });
+    const edgeRows = await log(auditor, `entityType=ci_relationships&entityId=${edge.id}`);
+    expect(edgeRows.length).toBeGreaterThan(0);
+    for (const row of edgeRows) expect(row).toMatchObject({ oldValue: null, newValue: null, redacted: true });
+    // Nowhere in the whole CI and relationship history does the secret or crm-db's name appear.
+    const everything = JSON.stringify([...(await log(auditor, "entityType=configuration_items")), ...(await log(auditor, "entityType=ci_relationships"))]);
+    expect(everything).not.toContain("crm-db");
+    expect(everything.split(secret).length - 1).toBe(1); // CRM's own update, which the auditor may see
+
+    // An Application the auditor may view keeps its values; its reference into Databases keeps only the id.
+    const [crmRow] = await log(auditor, `entityType=configuration_items&entityId=${crm}`);
+    expect(crmRow.redacted).toBe(false);
+    expect((crmRow.newValue!.attributes as Record<string, unknown>).notes).toBe(secret);
+    expect((crmRow.newValue!.attributeReferences as Record<string, unknown>).primary_database).toEqual({ id: crmDb, name: null, deleted: false, hidden: true });
+
+    // The administrator still sees everything.
+    const [adminDbRow] = (await apiGet<{ data: Entry[] }>(request, `/audit-log?entityType=configuration_items&entityId=${crmDb}`)).data;
+    expect(adminDbRow.redacted).toBe(false);
+    expect((adminDbRow.newValue!.attributes as Record<string, unknown>).notes).toBe(secret);
+  } finally {
+    await auditor.ctx.dispose();
+  }
+});
+
 test("signing out ends the session on the server, not only in the browser", async ({ playwright, baseURL }) => {
   const s = await apiSignIn(playwright, baseURL!, USERNAME, PASSWORD);
   const cookies = (await s.ctx.storageState()).cookies;
