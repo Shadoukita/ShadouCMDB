@@ -10,7 +10,7 @@
 --
 -- Order:
 --   1. Install the new binary and run `shadoucmdb migrate` as before (as
---      shadoucmdb_app), so migrations 0007 to 0018 are applied.
+--      shadoucmdb_app), so migrations 0007 to 0020 are applied.
 --   2. Stop the server. Run this script as an administrator, connected to the
 --      ShadouCMDB database:
 --        psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
@@ -46,8 +46,9 @@ DO $$
 BEGIN
   IF to_regprocedure('cmdb.prune_audit_log(interval, text, boolean, text)') IS NULL
      OR to_regclass('cmdb.areas') IS NULL
-     OR to_regclass('cmdb.audit_log_chain_head') IS NULL THEN
-    RAISE EXCEPTION 'migrations 0007 to 0018 are not applied: run `shadoucmdb migrate` first';
+     OR to_regclass('cmdb.audit_log_chain_head') IS NULL
+     OR to_regclass('cmdb.server_keys') IS NULL THEN
+    RAISE EXCEPTION 'migrations 0007 to 0020 are not applied: run `shadoucmdb migrate` first';
   END IF;
 END;
 $$;
@@ -120,7 +121,7 @@ SELECT format('GRANT CONNECT ON DATABASE %I TO %I, %I', current_database(), :'ap
 -- New areas are new schemas, created by the API.
 SELECT format('GRANT CREATE ON DATABASE %I TO %I', current_database(), :'app_role') \gexec
 
--- Same grants as migrations 0007, 0008 and 0018 make on a fresh three-role install.
+-- Same grants as migrations 0007, 0008, 0018 and 0020 make on a fresh three-role install.
 GRANT USAGE ON SCHEMA cmdb TO :"app_role", :"maintenance_role";
 GRANT EXECUTE ON FUNCTION cmdb.prune_audit_log(interval, text, boolean, text) TO :"maintenance_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA cmdb TO :"app_role";
@@ -131,6 +132,8 @@ GRANT SELECT ON public._sqlx_migrations TO :"app_role";
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._sqlx_migrations FROM :"app_role";
 -- Only the audit_log trigger moves the hash-chain head (migration 0018).
 REVOKE ALL ON cmdb.audit_log_chain_head FROM :"app_role";
+-- Server keys are read and added, never changed (migration 0020).
+REVOKE UPDATE, DELETE, TRUNCATE ON cmdb.server_keys FROM :"app_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"app_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb
