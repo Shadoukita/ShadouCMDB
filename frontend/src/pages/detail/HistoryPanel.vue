@@ -8,7 +8,8 @@ import { formatDateTime } from "../../lib/format";
 import AuditActor from "../admin/AuditActor.vue";
 
 /** Change history from GET /audit-log?entityId=… with a field-level diff of each update. */
-const props = defineProps<{ ci: Ci }>();
+/** `embedded`: placed in a layout section, which gives the frame and the heading. */
+const props = defineProps<{ ci: Ci; embedded?: boolean }>();
 
 /**
  * Bookkeeping and derived fields (the label follows the title attribute, `active` the validity period).
@@ -53,7 +54,7 @@ const actionTone = (action: string) => (action === "delete" ? "danger" : action 
   <LoadingState v-if="log.isLoading.value" label="Loading history…" />
   <ErrorAlert v-else-if="log.isError.value" :error="log.error.value" :on-retry="() => log.refetch()" />
   <EmptyState v-else-if="entries.length === 0" title="No recorded changes">This CI has no audit entries yet.</EmptyState>
-  <section v-else class="panel">
+  <section v-else :class="{ panel: !embedded }">
     <div class="table-wrap">
       <table class="data">
         <thead>
