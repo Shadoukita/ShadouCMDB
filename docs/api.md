@@ -276,9 +276,14 @@ several; their effective permissions are the union.
 - A class grant applies to exactly that class, not its subclasses; the wildcard also covers classes added later.
 - Every signed-in user can read the data model and lookups: the UI needs them to render CIs.
 - CI lists, search and the graph only contain CIs of classes the user may view (the graph does not traverse
-  through hidden CIs). Reading or changing one CI of another class answers `403`.
+  through hidden CIs). A CI of a class the user may not view answers `404 NOT_FOUND` by id, exactly like a
+  missing one, so the status does not reveal that it exists; changing a CI the user may view but not edit or
+  delete answers `403`.
 - Relationships: reading needs `view` on both CIs' classes; creating, changing or removing one needs `edit` on
-  the source CI's class and `view` on the target's.
+  the source CI's class and `view` on the target's. A relationship with an endpoint the user may not view
+  answers `404`, and creating one to such a CI fails with the same `not_found` field error as a missing CI.
+- The `GET …/{id}/usage` routes of the data model and lookups need `datamodel.manage`, like the changes they
+  prepare: their counts span every CI class.
 - Moving a CI to another class needs `edit` on the old class and `create` on the new one.
 
 **The built-in Administrator profile** holds every permission, including every class. It cannot be changed or
