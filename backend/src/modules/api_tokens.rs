@@ -77,8 +77,14 @@ pub struct ApiToken {
     /// Client address of the last accepted request (evidence only)
     #[schema(required = true)]
     pub last_used_ip: Option<String>,
+    /// The creator's name, for display
     #[schema(required = true)]
     pub created_by: Option<String>,
+    /// The user who created the token; null when the CLI created it, the
+    /// creator was deleted, or (for a token older than this field) the
+    /// creator is unknown
+    #[schema(required = true)]
+    pub created_by_user_id: Option<Uuid>,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
 }
@@ -109,6 +115,7 @@ impl From<TokenRow> for ApiToken {
             last_used_at: r.last_used_at,
             last_used_ip: r.last_used_ip.map(|n| n.ip().to_string()),
             created_by: r.created_by,
+            created_by_user_id: r.created_by_user_id,
             created_at: r.created_at,
         }
     }
@@ -180,6 +187,9 @@ pub struct ApiTokenList {
     /// Tokens owned by any of these users
     #[param(schema_with = schemas::uuid_list_schema)]
     user_id: Option<UuidList>,
+    /// Tokens created by any of these users (for any owner)
+    #[param(schema_with = schemas::uuid_list_schema)]
+    created_by: Option<UuidList>,
     #[param(inline)]
     status: Option<TokenStatus>,
 }
@@ -209,6 +219,9 @@ pub async fn list(pool: &PgPool, q: &ApiTokenList) -> Result<Page<ApiToken>, App
         }
         if let Some(ids) = &q.user_id {
             w.and().push("t.user_id = ANY(").push_bind(ids.0.clone()).push(")");
+        }
+        if let Some(ids) = &q.created_by {
+            w.and().push("t.created_by_user_id = ANY(").push_bind(ids.0.clone()).push(")");
         }
         match q.status {
             Some(TokenStatus::Active) => w.and_sql("t.revoked_at IS NULL AND t.expires_at > now()"),
@@ -274,6 +287,7 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> 
             token_prefix: &prefix,
             expires_at: b.expires_at,
             created_by: ctx.actor.name.as_deref(),
+            created_by_user_id: me,
         },
     )
     .await?;
@@ -325,13 +339,37 @@ pub async fn revoke_all_of_user(
     ctx: &RequestContext,
     user_id: Uuid,
 ) -> Result<usize, AppError> {
+    let rows = data::active_of_user(conn, user_id).await?;
+    revoke_rows(conn, ctx, rows, "API token revoked with the password change").await
+}
+
+/// Revokes every working token the user created for another owner, in the
+/// transaction of an administrator's reset of their password: the account may
+/// have been compromised, and a token it minted for someone else would
+/// otherwise outlive the reset (GH#145). Each gets an update row; returns how
+/// many were revoked.
+pub async fn revoke_created_for_others(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    creator_id: Uuid,
+) -> Result<usize, AppError> {
+    let rows = data::active_created_for_others(conn, creator_id).await?;
+    revoke_rows(conn, ctx, rows, "API token revoked with its creator's password reset").await
+}
+
+async fn revoke_rows(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    rows: Vec<TokenRow>,
+    message: &str,
+) -> Result<usize, AppError> {
     let by = ctx.actor.name.clone().unwrap_or_else(|| ctx.actor.actor_type.as_str().to_owned());
     let mut entries = Vec::new();
-    for row in data::active_of_user(conn, user_id).await? {
+    for row in rows {
         let before = ApiToken::from(row);
         data::revoke(conn, before.id, &by).await?;
         let after = load(conn, before.id, false).await?;
-        tracing::info!(token = %after.token_prefix, "API token revoked with the password change");
+        tracing::info!(token = %after.token_prefix, owner = %after.username, "{message}");
         entries.push(AuditEntry {
             action: AuditAction::Update,
             entity_type: TOKEN_ENTITY,
@@ -382,7 +420,7 @@ pub fn routes() -> Vec<Route> {
     vec![
         route(Method::GET, BASE, "listApiTokens")
             .tag(TAG)
-            .summary("List API tokens (paginated, searchable, filterable by owner and status); never their secrets")
+            .summary("List API tokens (paginated, searchable, filterable by owner, creator and status); never their secrets")
             .requires(manage)
             .session_only()
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ApiTokenList>, NoBody>| async move {
@@ -884,6 +922,125 @@ pub(crate) mod tests {
             summary,
             vec![("admin", Some("alice script"), Some("revoked")), ("alice", Some("alice again"), Some("revoked"))]
         );
+
+        db.drop().await;
+    }
+
+    /// An administrator's reset of a user's password also revokes the tokens
+    /// that user minted for other owners; their own password change does not.
+    /// `createdBy` finds them either way (GH#145).
+    #[tokio::test]
+    async fn resetting_a_password_revokes_the_tokens_the_user_minted_for_others() {
+        let Some(db) = scratch::database("resetting_a_password_revokes_tokens_minted_for_others").await else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let mut ids = Vec::new();
+        for name in ["alice", "bob"] {
+            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+                "profileIds": [administrators] });
+            let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            ids.push(v["id"].as_str().unwrap().to_owned());
+        }
+        let (alice_id, bob_id) = (ids[0].clone(), ids[1].clone());
+        let sign_in = |password: &'static str| {
+            let app = app.clone();
+            async move {
+                let login = json!({ "username": "alice", "password": password });
+                let (status, me, headers) =
+                    call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+                assert_eq!(status, 200, "{me}");
+                session_of(&me, &headers)
+            }
+        };
+        let alice = sign_in("alice first password").await;
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let mint = |session: Creds, owner: String, name: &'static str| {
+            let app = app.clone();
+            let expires = expires.clone();
+            async move {
+                let body = json!({ "name": name, "userId": owner, "profileId": administrators, "expiresAt": expires });
+                let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(body)).await;
+                assert_eq!(status, 201, "{created}");
+                Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() }
+            }
+        };
+        let works = |tok: Creds| {
+            let app = app.clone();
+            async move { call(&app, "GET", "/api/v1/audit-log?limit=1", &tok, None).await }
+        };
+
+        // Alice mints a token for Bob; the administrator mints one for Bob too.
+        let alices_for_bob = mint(alice.clone(), bob_id.clone(), "minted by alice").await;
+        let admins_for_bob = mint(admin.clone(), bob_id.clone(), "minted by admin").await;
+        let (status, v, _) = call(&app, "GET", &format!("{}?createdBy={alice_id}", super::BASE), &admin, None).await;
+        assert_eq!(status, 200, "{v}");
+        let listed: Vec<(&str, &str, &str)> = v["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (t["name"].as_str().unwrap(), t["userId"].as_str().unwrap(), t["createdByUserId"].as_str().unwrap())
+            })
+            .collect();
+        assert_eq!(listed, vec![("minted by alice", bob_id.as_str(), alice_id.as_str())]);
+
+        // Her own password change leaves the token she minted for Bob alone.
+        let change = json!({ "currentPassword": "alice first password", "newPassword": "alice second password" });
+        let (status, v, _) = call(&app, "PUT", "/api/v1/auth/password", &alice, Some(change)).await;
+        assert!(status < 300, "{status} {v}");
+        assert_eq!(works(alices_for_bob.clone()).await.0, 200);
+
+        // The issue's repro: the administrator resets Alice's password.
+        let reset = json!({ "password": "alice third password" });
+        let (status, v, _) =
+            call(&app, "PUT", &format!("/api/v1/admin/users/{alice_id}/password"), &admin, Some(reset)).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = works(alices_for_bob).await;
+        assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
+        assert_eq!(works(admins_for_bob).await.0, 200, "Bob's token from another creator keeps working");
+        let revoked: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT name, revoked_by FROM api_tokens WHERE revoked_at IS NOT NULL ORDER BY name")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(revoked, vec![("minted by alice".to_owned(), Some("admin".to_owned()))]);
+        let audited: Vec<(String, Value)> = sqlx::query_as(
+            "SELECT a.actor_name, a.new_value FROM audit_log a
+             WHERE a.entity_type = 'api_tokens' AND a.action = 'update' ORDER BY a.id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let summary: Vec<(&str, Option<&str>, Option<&str>)> =
+            audited.iter().map(|(a, v)| (a.as_str(), v["name"].as_str(), v["status"].as_str())).collect();
+        assert_eq!(summary, vec![("admin", Some("minted by alice"), Some("revoked"))]);
+
+        // A deleted creator is forgotten; the token stays with its owner.
+        let alice = sign_in("alice third password").await;
+        let again = mint(alice, bob_id.clone(), "minted before deletion").await;
+        let (status, v, _) = call(&app, "DELETE", &format!("/api/v1/admin/users/{alice_id}"), &admin, None).await;
+        assert_eq!(status, 204, "{v}");
+        assert_eq!(works(again).await.0, 200);
+        let (creator,): (Option<uuid::Uuid>,) =
+            sqlx::query_as("SELECT created_by_user_id FROM api_tokens WHERE name = 'minted before deletion'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(creator, None);
 
         db.drop().await;
     }

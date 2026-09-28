@@ -449,7 +449,9 @@ pub async fn update(pool: &PgPool, ctx: &RequestContext, id: Uuid, b: &UserUpdat
 }
 
 /// Sets a new password, ends the user's sessions (all but the caller's own)
-/// and revokes their API tokens.
+/// and revokes their API tokens. An administrator's reset (not the user's own
+/// change) also revokes the tokens the user created for other owners: the
+/// account may have been compromised (GH#145).
 pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_password: &str) -> Result<User, AppError> {
     let hash = password::hash(new_password).await?;
     let mut tx = pool.begin().await?;
@@ -467,6 +469,9 @@ pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_pas
     let reason = if own.is_some() { RevokeReason::PasswordChanged } else { RevokeReason::PasswordReset };
     events::revoked(&mut tx, ctx, &ended, reason).await?;
     api_tokens::revoke_all_of_user(&mut tx, ctx, id).await?;
+    if own.is_none() {
+        api_tokens::revoke_created_for_others(&mut tx, ctx, id).await?;
+    }
     let dto = load(&mut tx, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
@@ -566,7 +571,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::PUT, "/api/v1/admin/users/{id}/password", "resetUserPassword")
             .tag(TAG)
             .summary("Set a new password for a user, end their sessions and revoke their API tokens")
-            .description("Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. 409 for an account that signs in through an identity provider (it has no password here).")
+            .description("Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here).")
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])

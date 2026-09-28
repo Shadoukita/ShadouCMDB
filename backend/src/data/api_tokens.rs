@@ -93,6 +93,7 @@ pub struct TokenRow {
     pub last_used_at: Option<DateTime<Utc>>,
     pub last_used_ip: Option<IpNetwork>,
     pub created_by: Option<String>,
+    pub created_by_user_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -102,7 +103,7 @@ pub const FROM: &str =
 pub const COLUMNS: &str = "t.id, t.name, t.user_id, u.username, u.is_active AS user_active, t.profile_id,
     p.name AS profile_name, p.is_builtin AS profile_is_builtin, t.token_prefix, t.expires_at,
     t.expires_at <= now() AS expired, t.revoked_at, t.revoked_by, t.last_used_at, t.last_used_ip,
-    t.created_by, t.created_at";
+    t.created_by, t.created_by_user_id, t.created_at";
 
 pub async fn get(conn: &mut PgConnection, id: Uuid, for_update: bool) -> sqlx::Result<Option<TokenRow>> {
     let lock = if for_update { " FOR UPDATE OF t" } else { "" };
@@ -120,12 +121,14 @@ pub struct NewToken<'a> {
     pub token_prefix: &'a str,
     pub expires_at: DateTime<Utc>,
     pub created_by: Option<&'a str>,
+    pub created_by_user_id: Option<Uuid>,
 }
 
 pub async fn insert(conn: &mut PgConnection, t: &NewToken<'_>) -> sqlx::Result<Uuid> {
     sqlx::query_scalar(
-        "INSERT INTO api_tokens (name, user_id, profile_id, token_hash, token_prefix, expires_at, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+        "INSERT INTO api_tokens (name, user_id, profile_id, token_hash, token_prefix, expires_at, created_by,
+                                 created_by_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
     )
     .bind(t.name)
     .bind(t.user_id)
@@ -134,6 +137,7 @@ pub async fn insert(conn: &mut PgConnection, t: &NewToken<'_>) -> sqlx::Result<U
     .bind(t.token_prefix)
     .bind(t.expires_at)
     .bind(t.created_by)
+    .bind(t.created_by_user_id)
     .fetch_one(conn)
     .await
 }
@@ -154,6 +158,18 @@ pub async fn active_of_user(conn: &mut PgConnection, user_id: Uuid) -> sqlx::Res
          ORDER BY t.created_at, t.id FOR UPDATE OF t"
     )))
     .bind(user_id)
+    .fetch_all(conn)
+    .await
+}
+
+/// Tokens the user created for other owners that still authenticate, locked.
+pub async fn active_created_for_others(conn: &mut PgConnection, creator_id: Uuid) -> sqlx::Result<Vec<TokenRow>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM {FROM}
+         WHERE t.created_by_user_id = $1 AND t.user_id <> $1 AND t.revoked_at IS NULL AND t.expires_at > now()
+         ORDER BY t.created_at, t.id FOR UPDATE OF t"
+    )))
+    .bind(creator_id)
     .fetch_all(conn)
     .await
 }

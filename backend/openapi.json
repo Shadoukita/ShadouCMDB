@@ -15152,7 +15152,7 @@
           "Users"
         ],
         "summary": "Set a new password for a user, end their sessions and revoke their API tokens",
-        "description": "Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "resetUserPassword",
         "parameters": [
           {
@@ -16182,7 +16182,7 @@
         "tags": [
           "API tokens"
         ],
-        "summary": "List API tokens (paginated, searchable, filterable by owner and status); never their secrets",
+        "summary": "List API tokens (paginated, searchable, filterable by owner, creator and status); never their secrets",
         "description": "Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "listApiTokens",
         "parameters": [
@@ -16245,6 +16245,15 @@
           },
           {
             "name": "userId",
+            "in": "query",
+            "description": "One or more ids, comma-separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "createdBy",
             "in": "query",
             "description": "One or more ids, comma-separated",
             "required": false,
@@ -18058,6 +18067,7 @@
           "lastUsedAt",
           "lastUsedIp",
           "createdBy",
+          "createdByUserId",
           "createdAt"
         ],
         "properties": {
@@ -18138,7 +18148,16 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The creator's name, for display"
+          },
+          "createdByUserId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The user who created the token; null when the CLI created it, the\ncreator was deleted, or (for a token older than this field) the\ncreator is unknown"
           },
           "createdAt": {
             "type": "string",
