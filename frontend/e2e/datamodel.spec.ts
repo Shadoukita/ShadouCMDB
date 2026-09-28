@@ -242,41 +242,32 @@ test("a relationship type with a rule", async ({ page, request }) => {
   expect(legal.data.map((t) => t.name)).toContain(REL);
 });
 
-test("lookups: add, archive and delete; values in use cannot be deleted", async ({ page }) => {
-  const ENV = `E2E env ${stamp}`;
+test("lookups are read only and point to Dropdowns; values in use cannot be deleted", async ({ page }) => {
+  // The pre-0016 tables are history: no add, edit, reorder, archive or delete.
   await page.goto("/admin/lookups/environments");
-  await page.getByRole("button", { name: "+ Add environment" }).first().click();
-  await page.locator("#environments-name").fill(ENV);
-  await page.getByRole("button", { name: "Add environment", exact: true }).click();
-  await expect(page.getByRole("status").filter({ hasText: `Added environment ${ENV}.` })).toBeVisible();
-  const row = page.getByRole("row", { name: new RegExp(ENV) });
-  await row.getByRole("button", { name: "Archive" }).click();
-  await expect(row.getByText("Archived", { exact: true })).toBeVisible();
-  await row.getByRole("button", { name: `Delete environment “${ENV}”` }).click();
-  await expect(page.getByRole("dialog")).toContainText("Nothing refers to it");
-  await page.getByRole("dialog").getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(page.getByRole("status").filter({ hasText: `Deleted environment ${ENV}.` })).toBeVisible();
-  await expect(page.getByRole("row", { name: new RegExp(ENV) })).toHaveCount(0);
+  await expect(page.getByRole("note")).toContainText("Read only.");
+  const envs = page.getByRole("region", { name: "Environments" });
+  await expect(envs.getByRole("button")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^\+ Add/ })).toHaveCount(0);
+  await page.getByRole("note").getByRole("link", { name: "Edit the “Environment” list under Dropdowns" }).click();
+  await expect(page).toHaveURL(/\/admin\/dropdowns\?list=/);
+  await expect(page.getByRole("heading", { name: "Values of “Environment”" })).toBeVisible();
 
   // CIs hold their status as a value of the "status" lookup list, under Dropdowns.
-  await page.goto("/admin/dropdowns");
-  await page.getByRole("region", { name: "Lookup lists" }).getByRole("link", { name: "Status", exact: true }).click();
+  await page.goto("/admin/lookups/statuses");
+  await page.getByRole("note").getByRole("link", { name: "Edit the “Status” list under Dropdowns" }).click();
   await page.getByRole("button", { name: "Delete value “In service”" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("cannot be deleted while it is in use");
   await expect(dialog.getByRole("button", { name: "Archive instead" })).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
-  const TEAM = `E2E team ${stamp}`;
+  // Owners and locations stay searchable, with the search in the URL.
   await page.goto("/admin/lookups/owners");
-  await page.getByRole("button", { name: "+ Add owner" }).first().click();
-  await page.locator("#own-name").fill(TEAM);
-  await page.getByRole("button", { name: "Add owner", exact: true }).click();
-  await expect(page.getByRole("status").filter({ hasText: `Added owner ${TEAM}.` })).toBeVisible();
-  await page.locator("#own-q").fill(TEAM);
+  await expect(page.getByRole("button", { name: "+ Add owner" })).toHaveCount(0);
+  await page.locator("#own-q").fill("nobody-" + stamp);
   await expect(page).toHaveURL(/\/admin\/lookups\/owners\?q=/);
-  await expect(page.locator("tbody tr")).toHaveCount(1);
-  await expect(page.getByRole("row", { name: new RegExp(TEAM) })).toContainText("Team");
+  await expect(page.getByRole("heading", { name: "No owners match these filters" })).toBeVisible();
 });
 
 test("a fresh install guides the administrator to the data model", async ({ page }) => {
