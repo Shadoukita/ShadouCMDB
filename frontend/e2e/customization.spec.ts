@@ -26,8 +26,19 @@ async function save(page: Page, comment: string) {
   await expect(bar.getByText("No unsaved changes")).toBeVisible();
 }
 
+// Servers created for the sort walk. They are deleted afterwards: "e2e-sort-…" sorts before the demo
+// servers, and later specs open the first Server by label and expect its demo relationships.
+const sortCis: string[] = [];
+
 test.beforeAll(async ({ request }) => resetSettings(request));
-test.afterAll(async ({ request }) => resetSettings(request));
+test.afterAll(async ({ request }) => {
+  await resetSettings(request);
+  const headers = { "X-CSRF-Token": await csrf(request) };
+  for (const id of sortCis.splice(0)) {
+    const res = await request.delete(`/api/v1/configuration-items/${id}`, { headers });
+    expect(res.ok(), `delete ${id} → ${res.status()}`).toBeTruthy();
+  }
+});
 
 test("branding: name, colour, theme and logo apply app-wide and on the sign-in page", async ({ page, browser }) => {
   await page.goto("/admin");
@@ -168,7 +179,7 @@ test("list views: an attribute default sort, and attribute column headers sort t
   const serverId = await classIdByName(request, "Server");
   // Text order would put .100 before .11 before .9; the API sorts IP addresses by address, hostnames case-insensitively.
   for (const [n, host, ip] of [["x", "b-sort", "10.99.0.100"], ["y", "A-sort", "10.99.0.9"], ["z", "c-sort", "10.99.0.11"]]) {
-    await createCi(request, serverId, `e2e-sort-${stamp}-${n}`, { hostname: `${host}-${stamp}`, ip_address: ip });
+    sortCis.push((await createCi(request, serverId, `e2e-sort-${stamp}-${n}`, { hostname: `${host}-${stamp}`, ip_address: ip })).id);
   }
   await page.goto("/admin/customization/list-views?class=server");
   const customize = page.getByRole("button", { name: "Customize the Server list" });
