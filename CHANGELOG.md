@@ -18,7 +18,7 @@ Migration `0015_lookup_parent_lists` adds nullable columns (`lookup_lists.parent
 integrity triggers; existing lists, values, fields and CI values are unchanged. `migrate` applies it
 as usual; `verify` now runs 23 checks.
 
-API: new nullable fields `parentListId`, `parentValueId`, `parentAttributeId` on lookup lists,
+API: the audit log can now be filtered by `entityType=lookup_lists` and `lookup_list_values`. New nullable fields `parentListId`, `parentValueId`, `parentAttributeId` on lookup lists,
 values and attribute definitions (responses and create/update bodies), list filters
 `parentListId` and `parentValueId`, and new `409 IN_USE` cases. Configuration files are now written
 as `formatVersion: 3` (with `parent` / `parentAttribute` keys); versions 1 and 2 are still imported

@@ -15128,7 +15128,9 @@
                 "areas",
                 "schema_changes",
                 "api_tokens",
-                "identity_providers"
+                "identity_providers",
+                "lookup_lists",
+                "lookup_list_values"
               ]
             }
           },

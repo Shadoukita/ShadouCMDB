@@ -13177,7 +13177,7 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values";
                 /** @description History of these entities */
                 entityId?: string;
                 action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes";

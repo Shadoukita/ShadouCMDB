@@ -41,6 +41,8 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   schema_changes: "Schema change",
   api_tokens: "API token",
   identity_providers: "Identity provider",
+  lookup_lists: "Lookup list",
+  lookup_list_values: "Lookup list value",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));
 const ACTION_SET: Record<Action, true> = {
