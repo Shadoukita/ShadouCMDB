@@ -651,4 +651,100 @@ pub(crate) mod tests {
 
         db.drop().await;
     }
+
+    /// A token scoped to users.manage may read accounts but not create,
+    /// change, delete or set the password of one: a credential it minted
+    /// would outlive the token's revocation (GH #119).
+    #[tokio::test]
+    async fn user_administration_needs_a_session() {
+        let Some(db) = scratch::database("user_administration_needs_a_session").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let session = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+
+        let managers: uuid::Uuid =
+            sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ('User managers') RETURNING id")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        sqlx::query(
+            "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'users.manage')",
+        )
+        .bind(managers)
+        .execute(pool)
+        .await
+        .unwrap();
+        let peer = json!({ "username": "peer", "displayName": "Peer", "password": "another long passphrase" });
+        let (status, peer, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(peer)).await;
+        assert_eq!(status, 201, "{peer}");
+        let peer_id = peer["id"].as_str().unwrap().to_owned();
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let create = json!({ "name": "provisioning", "profileId": managers, "expiresAt": expires });
+        let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(create)).await;
+        assert_eq!(status, 201, "{created}");
+        let tok = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+
+        // Reading stays open to the token.
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &tok, None).await;
+        assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(2)), "{v}");
+        let peer_path = format!("/api/v1/admin/users/{peer_id}");
+        let (status, _, _) = call(&app, "GET", &peer_path, &tok, None).await;
+        assert_eq!(status, 200);
+
+        // Every account write is refused.
+        let minted = json!({ "username": "minted", "displayName": "Minted", "password": "a token-made passphrase",
+            "profileIds": [managers] });
+        let writes = [
+            ("POST", "/api/v1/admin/users".to_owned(), Some(minted)),
+            ("PATCH", peer_path.clone(), Some(json!({ "profileIds": [managers] }))),
+            ("PATCH", peer_path.clone(), Some(json!({ "isActive": false }))),
+            ("PUT", format!("{peer_path}/password"), Some(json!({ "password": "a token-chosen passphrase" }))),
+            ("DELETE", peer_path.clone(), None),
+        ];
+        for (method, path, body) in writes {
+            let (status, v, _) = call(&app, method, &path, &tok, body).await;
+            assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{method} {path}: {v}");
+        }
+
+        let (users, peer_active): (i64, bool) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM users), (SELECT is_active FROM users WHERE username = 'peer')",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!((users, peer_active), (2, true));
+        let outcomes: Vec<String> =
+            sqlx::query_scalar("SELECT new_value->>'outcome' FROM audit_log WHERE action = 'token.use' ORDER BY id")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            outcomes,
+            ["accepted", "accepted", "session_only", "session_only", "session_only", "session_only", "session_only"]
+        );
+
+        // A session still administers accounts.
+        let (status, v, _) = call(
+            &app,
+            "PUT",
+            &format!("{peer_path}/password"),
+            &session,
+            Some(json!({ "password": "a fresh long passphrase" })),
+        )
+        .await;
+        assert_eq!(status, 200, "{v}");
+
+        db.drop().await;
+    }
 }

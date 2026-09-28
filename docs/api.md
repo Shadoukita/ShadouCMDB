@@ -237,8 +237,10 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
   header (and `CORS_ORIGINS` does not allow it), and adding one cannot take a browser's session past the CSRF
   check. Other schemes (a proxy's `Basic` auth) are ignored and the session applies as usual.
 - The same server-side checks apply as for a session: the route's global permission, then class permissions in the
-  service. Sign-out, `/auth/me`, the password change and token administration need a session and answer tokens with
-  `403 FORBIDDEN`, so a token cannot mint a longer-lived token.
+  service. Sign-out, `/auth/me`, the password change, MFA administration, token administration and account
+  changes (creating, updating, deleting a user and setting their password) need a session and answer tokens with
+  `403 FORBIDDEN`, so a token cannot mint a credential (a token, an account or a password) that outlives its
+  revocation. Listing and reading accounts accept tokens.
 - Managing tokens needs `users.manage`. As for accounts, a non-administrator can only create or revoke tokens for
   users whose permissions they hold themselves (their own tokens are always revocable).
 - Every request made with a known token, accepted or refused, writes a `token.use` audit row; creating and revoking
