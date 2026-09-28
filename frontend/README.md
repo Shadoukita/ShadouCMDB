@@ -118,15 +118,26 @@ One settings document (`GET /ui-settings`, see `docs/api.md`) applies to every u
   and page size, and default filters. Default filters are written into the URL when the operator navigates to the
   class list without filters (menu, links); a reload or Back keeps the URL as it is, so a cleared filter stays
   cleared. Attribute columns read the values the list API returns with each CI.
-- **Detail and form layout** (`detail/LayoutPanels.vue`, `form/CiForm.vue`): per class, panels of fields in
-  order (collapsed ones start closed), hidden fields, and fields read-only on the form. Fields no panel places
-  follow in a General panel and their attribute groups. Required fields stay editable on a new CI whatever the
-  layout says, or it could not be saved.
+- **Detail and form layout** (`detail/LayoutPanels.vue`, `form/CiForm.vue`, `lib/uiSettings.ts`
+  `resolveLayout`): per class, tabs of sections, each a grid of 1–4 columns whose fields span 1–4 of them
+  (collapsed sections start closed on the detail page), hidden fields, and fields read-only on the form. Fields
+  no section places follow at the end of the first tab, in a General section and their attribute groups. The
+  grid answers to the width of its container (CSS container queries), so it narrows to two columns and then one
+  on small screens and in the designer's preview alike. The form keeps every tab in the page, shows the tab of
+  the first missing or rejected field and counts errors per tab. Required fields stay editable on a new CI
+  whatever the layout says, or it could not be saved.
 
 The editor (`src/pages/admin/customization/`) works on the *stored* document of the current version, which keeps
 references to classes that do not exist right now, and saves the whole document with the version it loaded
 (`409 VERSION_CONFLICT` if someone saved in between). Branding and navigation preview live in the real header and
-menu while the editor is open; the dashboard, list view and layout sections preview inline. The issues the API
+menu while the editor is open; the dashboard and list view sections preview inline. The layout section is a
+visual form designer (`admin/customization/LayoutsSection.vue`, `designer/`, edits in `lib/layoutDesign.ts`):
+the canvas is the class's form with every field drawn as it will appear; fields are dragged between sections and
+tabs (or onto a tab), resized by dragging their right edge, and the preview frame can be resized or set to
+laptop, tablet and phone widths. Everything has a keyboard path: Enter selects a field, Alt+↑/↓ moves it,
+Alt+←/→ changes its width, Delete hides it, and the properties bar offers the same as buttons and selects,
+announced to screen readers. Core fields (ident, valid from, valid until) can be moved but not hidden. Leaving
+Customization or reloading with unsaved changes asks first. The issues the API
 reports (unknown classes, a required attribute hidden by a layout) are listed above the sections.
 
 ### Errors, states and navigation
@@ -151,7 +162,8 @@ src/api/queries.ts     TanStack Query composables and cache keys; components nev
 src/api/admin.ts       the same for sign-in, users, permission profiles and the audit log
 src/api/datamodel.ts   the same for classes, attributes, relationship types/rules, lookups, lists and templates
 src/api/uiSettings.ts  the same for UI settings, their versions and images, and configuration export/import
-src/lib/uiSettings.ts  how the settings document is applied: menu merge, list columns, layout panels
+src/lib/uiSettings.ts  how the settings document is applied: menu merge, list columns, layout tabs and grid
+src/lib/layoutDesign.ts the form designer's edits on a class layout (move, resize, tabs, sections)
 src/lib/permissions.ts permission checks mirrored from the server
 src/router.ts          routes (Vue Router, HTML5 history) and the setup → sign-in → app guard
 src/stores/            Pinia stores (the session, branding and theme, the one-shot "Created …/Saved …" notice)

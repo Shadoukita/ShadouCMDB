@@ -45,7 +45,7 @@ export function normalizeDocument(doc: Partial<UiSettingsDocument> | undefined):
         ) ?? null,
     },
     listViews: (d.listViews ?? []).map((v) => ({ columns: [], defaultSort: null, pageSize: null, ...v, defaultFilters: { ...EMPTY_FILTERS, lookups: {}, ...v.defaultFilters } })),
-    layouts: (d.layouts ?? []).map((l) => ({ ...l, panels: l.panels ?? [], hiddenFields: l.hiddenFields ?? [], readOnlyFields: l.readOnlyFields ?? [] })),
+    layouts: (d.layouts ?? []).map(normalizeLayout),
   };
 }
 
@@ -308,30 +308,74 @@ export function layoutFor(doc: UiSettingsDocument | undefined, classKey: string 
   return classKey ? doc?.layouts.find((l) => l.classKey === classKey) : undefined;
 }
 
-export interface ResolvedPanel {
+/** Grid columns of a section that does not say (the API's default). */
+export const GRID_COLUMNS = 3;
+/** The most columns a section's grid has, and the widest a field can be. */
+export const MAX_COLUMNS = 4;
+
+/** Every optional part of a layout filled in (tabs, sections, columns, widths), without the old `panels`. */
+export function normalizeLayout(l: UiClassLayout): UiClassLayout {
+  return {
+    classKey: l.classKey,
+    tabs: (l.tabs ?? []).map((t) => ({
+      key: t.key,
+      label: t.label,
+      sections: (t.sections ?? []).map((s) => ({
+        key: s.key,
+        label: s.label,
+        columns: s.columns ?? GRID_COLUMNS,
+        collapsed: !!s.collapsed,
+        fields: (s.fields ?? []).map((f) => ({ field: f.field, width: f.width ?? 1 })),
+      })),
+    })),
+    hiddenFields: l.hiddenFields ?? [],
+    readOnlyFields: l.readOnlyFields ?? [],
+  };
+}
+
+export interface ResolvedField {
+  field: string;
+  /** Columns spanned, at most the section's columns. */
+  width: number;
+}
+export interface ResolvedSection {
   key: string;
   label: string;
   collapsed: boolean;
-  fields: string[];
+  columns: number;
+  fields: ResolvedField[];
+  /** Placed by the built-in rules, not by the administrator: fields no section of the layout holds. */
+  auto: boolean;
+}
+export interface ResolvedTab {
+  key: string;
+  label: string;
+  sections: ResolvedSection[];
 }
 
 /** An empty layout: what a class without one in Customization gets. */
-export const builtInLayout = (classKey: string): UiClassLayout => ({ classKey, panels: [], hiddenFields: [], readOnlyFields: [] });
+export const builtInLayout = (classKey: string): UiClassLayout => ({ classKey, tabs: [], hiddenFields: [], readOnlyFields: [] });
+
+/** Fields shown right after another one wherever that is placed, unless placed themselves (the detail page's "Active"). */
+const COMPANIONS: Record<string, string> = { validUntil: "active" };
 
 /**
- * A class layout as panels of fields: the administrator's panels in order, then
- * everything they do not place — a "General" panel with the unplaced `core`
- * fields and the attributes without a group, the other attribute groups, and
- * finally a "Record" panel with the unplaced `record` fields (class,
- * timestamps). Hidden fields and built-in fields in neither list are left out.
- * Without a layout of its own a class gets `builtInLayout`: General, then its groups.
+ * A class layout as tabs of sections: the administrator's tabs, sections and
+ * field widths in order; then, at the end of the first tab, everything they do
+ * not place — a "General" section with the unplaced `core` fields and the
+ * attributes without a group, the other attribute groups, and finally a
+ * "Record" section with the unplaced `record` fields (class, timestamps).
+ * Hidden fields, built-in fields in neither list, and empty sections and tabs
+ * are left out. Without a layout of its own a class gets `builtInLayout`: one
+ * General tab with General, then its attribute groups.
  */
 export function resolveLayout(
   layout: UiClassLayout,
   attrs: readonly AttributeLike[],
   core: readonly string[],
   record: readonly string[] = [],
-): ResolvedPanel[] {
+  keepEmpty = false,
+): ResolvedTab[] {
   const hidden = new Set(layout.hiddenFields ?? []);
   const attrKeys = new Set(attrs.map((a) => a.key));
   const usable = (f: string) => {
@@ -340,22 +384,62 @@ export function resolveLayout(
     return a === null ? core.includes(f) || record.includes(f) : attrKeys.has(a);
   };
   const placed = new Set<string>();
-  const panels: ResolvedPanel[] = [];
-  for (const p of layout.panels ?? []) {
-    const fields = (p.fields ?? []).filter((f) => usable(f) && !placed.has(f));
-    fields.forEach((f) => placed.add(f));
-    panels.push({ key: p.key, label: p.label, collapsed: !!p.collapsed, fields });
-  }
-  const general = core.filter((f) => usable(f) && !placed.has(f));
-  const rest = attrs.filter((a) => usable(`${ATTRIBUTE_PREFIX}${a.key}`) && !placed.has(`${ATTRIBUTE_PREFIX}${a.key}`));
+  for (const t of layout.tabs ?? []) for (const s of t.sections ?? []) for (const f of s.fields ?? []) if (usable(f.field)) placed.add(f.field);
+  const companion = (f: string) => {
+    const c = COMPANIONS[f];
+    return c && usable(c) && !placed.has(c) ? c : null;
+  };
+  const taken = new Set<string>();
+  const tabs: ResolvedTab[] = (layout.tabs ?? []).map((t) => ({
+    key: t.key,
+    label: t.label,
+    sections: (t.sections ?? []).map((s) => {
+      const columns = Math.min(Math.max(s.columns ?? GRID_COLUMNS, 1), MAX_COLUMNS);
+      const fields: ResolvedField[] = [];
+      for (const f of s.fields ?? []) {
+        if (!usable(f.field) || taken.has(f.field)) continue;
+        taken.add(f.field);
+        fields.push({ field: f.field, width: Math.min(Math.max(f.width ?? 1, 1), columns) });
+        const c = companion(f.field);
+        if (c && !taken.has(c)) {
+          taken.add(c);
+          fields.push({ field: c, width: 1 });
+        }
+      }
+      return { key: s.key, label: s.label, collapsed: !!s.collapsed, columns, fields, auto: false };
+    }),
+  }));
+  const one = (field: string): ResolvedField => ({ field, width: 1 });
+  const auto = (key: string, label: string, fields: string[]): ResolvedSection => ({
+    key,
+    label,
+    collapsed: false,
+    columns: GRID_COLUMNS,
+    fields: fields.map(one),
+    auto: true,
+  });
+  const general = core.filter((f) => usable(f) && !taken.has(f));
+  const rest = attrs.filter((a) => usable(`${ATTRIBUTE_PREFIX}${a.key}`) && !taken.has(`${ATTRIBUTE_PREFIX}${a.key}`));
   const groups = groupAttributes(rest).map(([group, items]) => ({ group, fields: items.map((a) => `${ATTRIBUTE_PREFIX}${a.key}`) }));
   const ungrouped = groups[0]?.group === GENERAL_SECTION ? groups.shift()!.fields : [];
-  panels.push({ key: "_general", label: GENERAL_SECTION, collapsed: false, fields: [...general, ...ungrouped] });
-  for (const g of groups) panels.push({ key: `_group:${g.group}`, label: g.group, collapsed: false, fields: g.fields });
-  const rec = record.filter((f) => usable(f) && !placed.has(f));
-  panels.push({ key: "_record", label: "Record", collapsed: false, fields: rec });
-  return panels.filter((p) => p.fields.length > 0);
+  const trailing = [
+    auto("_general", GENERAL_SECTION, [...general, ...ungrouped]),
+    ...groups.map((g) => auto(`_group:${g.group}`, g.group, g.fields)),
+    auto("_record", "Record", record.filter((f) => usable(f) && !taken.has(f))),
+  ];
+  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, sections: [] });
+  tabs[0].sections.push(...trailing);
+  if (keepEmpty) return tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => !s.auto || s.fields.length > 0) }));
+  const shown = tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => s.fields.length > 0) })).filter((t) => t.sections.length > 0);
+  return shown.length > 0 ? shown : [{ ...tabs[0], sections: [] }];
 }
+
+/**
+ * The CSS classes that put a section's grid and its fields in place: `lg-cols-N`
+ * on the grid, `lg-w-N` on a field (the stylesheet narrows both on small screens).
+ */
+export const gridClass = (columns: number) => `lg-grid lg-cols-${columns}`;
+export const cellClass = (width: number) => `lg-cell lg-w-${width}`;
 
 /** The core fields of every CI, which the form edits: the General section starts with them. */
 export const CORE_FIELDS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key);

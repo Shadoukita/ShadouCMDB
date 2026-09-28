@@ -133,7 +133,7 @@ async fn fixed_columns_become_class_fields_without_losing_a_value() {
     // The operator's check, part 1 (sql/checks/).
     pool.execute(sqlx::AssertSqlSafe(include_str!("../../../sql/checks/core_ci_upgrade_1_before.sql"))).await.unwrap();
 
-    MIGRATOR.run(pool).await.expect("migration 0016");
+    MIGRATOR.run_to(16, pool).await.expect("migration 0016");
 
     let after: String = scalar(pool, stamps).await;
     assert_eq!(before, after, "the backfills are not edits: updated_at is kept");

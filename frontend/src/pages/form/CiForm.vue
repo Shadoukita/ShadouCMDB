@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { ApiError } from "../../api/client";
 import {
@@ -18,7 +18,7 @@ import type { LookupParent } from "../../components/LookupValueSelect.vue";
 import { useAppSettings } from "../../lib/appSettings";
 import { HIDDEN_CI } from "../../lib/format";
 import { hintFor, nowFormValue, NOW_HINT, toApiValue, toFormValue, type FormValue } from "../../lib/attributeValues";
-import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, builtInLayout, CORE_FIELDS, layoutFor, resolveLayout } from "../../lib/uiSettings";
+import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, builtInLayout, cellClass, CORE_FIELDS, gridClass, layoutFor, resolveLayout } from "../../lib/uiSettings";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import FormErrorBanner from "./FormErrorBanner.vue";
@@ -32,9 +32,11 @@ import FormField from "./FormField.vue";
  *
  * Every class starts with a General section: ident, valid from, valid until and
  * the attributes without a group; the other attribute groups follow as sections.
- * A class layout (Administration › Customization › Detail and form layout) adds
- * panels before that, hides fields and makes fields read-only. Required fields
- * stay editable on a new CI whatever the layout says, or it could never be saved.
+ * A class layout (Administration › Customization › Detail and form layout) arranges
+ * the fields in tabs and sections on a grid, hides fields and makes fields
+ * read-only. Required fields stay editable on a new CI whatever the layout says,
+ * or it could never be saved. Every tab stays in the page (only one is shown),
+ * so the whole form is submitted and a tab holding an error says so.
  */
 const props = defineProps<{ mode: "create" | "edit"; classId: string; className: string; ci?: Ci }>();
 
@@ -75,10 +77,30 @@ const keepEditable = (f: string) => props.mode === "create" && requiredField(f);
 const readOnly = computed(() => new Set((layout.value?.readOnlyFields ?? []).filter((f) => !keepEditable(f))));
 
 /** The class's layout, or the built-in one: General (core fields and ungrouped attributes), then the attribute groups. */
-const sections = computed(() => {
+const tabs = computed(() => {
   const l = layout.value ?? builtInLayout("");
   return resolveLayout({ ...l, hiddenFields: (l.hiddenFields ?? []).filter((f) => !keepEditable(f)) }, defs.value, CORE_FIELDS);
 });
+const activeTab = ref(0);
+const tabIndex = computed(() => Math.min(activeTab.value, tabs.value.length - 1));
+const tabFields = (i: number) => tabs.value[i]?.sections.flatMap((sec) => sec.fields.map((c) => c.field)) ?? [];
+const tabErrorCount = (i: number) => tabFields(i).filter((f) => fieldErrors.value[f]).length;
+/** Arrow keys, Home and End move between the tabs (the tab list is one stop in the tab order). */
+function onTabKey(e: KeyboardEvent) {
+  const n = tabs.value.length;
+  const to = { ArrowRight: tabIndex.value + 1, ArrowLeft: tabIndex.value - 1 + n, Home: 0, End: n - 1 }[e.key];
+  if (to === undefined) return;
+  e.preventDefault();
+  activeTab.value = to % n;
+  void nextTick(() => document.getElementById(`form-tab-${tabs.value[activeTab.value].key}`)?.focus());
+}
+/** Shows the tab holding `field` and puts the cursor in it. */
+async function focusField(field: string) {
+  const i = tabs.value.findIndex((_, j) => tabFields(j).includes(field));
+  if (i >= 0) activeTab.value = i;
+  await nextTick();
+  document.getElementById(fieldIdFor(field))?.focus();
+}
 const FIELD_IDS: Record<string, string> = { ident: "f-ident", validFrom: "f-valid-from", validUntil: "f-valid-until" };
 const defFor = (f: string) => defs.value.find((d) => d.key === attributeKey(f));
 /** A dependent lookup's parent field (Manufacturer for Model): its label and the value chosen in it. */
@@ -123,14 +145,14 @@ async function onSubmit() {
   // Catch empty required fields before the round trip; everything else is validated by the API.
   const req: Record<string, string> = {};
   if (!core.value.validFrom) req.validFrom = "Required";
-  const shown = new Set(sections.value.flatMap((sec) => sec.fields));
+  const shown = new Set(tabs.value.flatMap((_, i) => tabFields(i)));
   for (const d of defs.value) {
     const f = `${ATTRIBUTE_PREFIX}${d.key}`;
     if (d.isRequired && d.isActive && shown.has(f) && (values.value[d.key] ?? "") === "") req[f] = "Required";
   }
   missing.value = req;
   if (Object.keys(req).length > 0) {
-    document.getElementById(fieldIdFor(Object.keys(req)[0]))?.focus();
+    await focusField(Object.keys(req)[0]);
     return;
   }
   const attributes: Record<string, unknown> = {};
@@ -167,6 +189,9 @@ async function onSubmit() {
     }
   } catch (err) {
     error.value = err;
+    // Show the first tab with a rejected field, so the message next to it is in view.
+    const withError = tabs.value.findIndex((_, i) => tabErrorCount(i) > 0);
+    if (withError >= 0) activeTab.value = withError;
     window.scrollTo({ top: 0 });
   }
 }
@@ -200,73 +225,111 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
 <template>
   <form novalidate :aria-label="mode === 'create' ? `New ${className}` : `Edit ${ci?.label}`" @submit.prevent="onSubmit">
     <FormErrorBanner v-if="error != null" :error="error" :unplaced="unplaced" :version-conflict-href="ci ? `/cis/${ci.id}` : undefined" />
-    <details v-for="(sec, i) in sections" :key="sec.key" class="panel layout-panel" :open="!sec.collapsed">
-      <summary class="panel-header">
-        <h2>{{ sec.label }}</h2>
-      </summary>
-      <div class="panel-body">
-        <template v-if="i === 0">
-          <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
-          <ErrorAlert
-            v-if="attrs.isError.value"
-            :error="attrs.error.value"
-            title="Could not load this class's attributes"
-            :on-retry="() => attrs.refetch()"
-          />
-        </template>
-        <div class="form-grid">
-          <template v-for="f in sec.fields" :key="f">
-            <FormField v-if="BUILTIN.has(f)" :id="FIELD_IDS[f]" v-slot="p" :label="BUILTIN.get(f)!.label" :error="coreError(f)" :hint="coreHint(f)" :required="f === 'validFrom'">
-              <fieldset class="ro-wrap" :disabled="coreDisabled(f)">
-                <input
-                  v-if="f === 'ident'"
-                  :id="p.id"
-                  v-model="core.ident"
-                  type="text"
-                  class="mono"
-                  spellcheck="false"
-                  :placeholder="mode === 'create' ? 'Generated' : undefined"
-                  :aria-invalid="p.invalid || undefined"
-                  :aria-describedby="p.describedBy"
-                />
-                <input
-                  v-else-if="f === 'validFrom' || f === 'validUntil'"
-                  :id="p.id"
-                  v-model="core[f]"
-                  type="datetime-local"
-                  :title="NOW_HINT"
-                  :aria-invalid="p.invalid || undefined"
-                  :aria-describedby="p.describedBy"
-                  @dblclick="core[f] = nowFormValue('datetime')"
-                />
-              </fieldset>
-            </FormField>
-            <FormField
-              v-else-if="defFor(f)"
-              :id="`attr-${defFor(f)!.key}`"
-              v-slot="p"
-              :label="defFor(f)!.label"
-              :required="defFor(f)!.isRequired"
-              :error="fieldErrors[f]"
-              :hint="attrHint(defFor(f)!)"
-            >
-              <fieldset class="ro-wrap" :disabled="readOnly.has(f)">
-                <AttributeInput
-                  v-model="values[defFor(f)!.key]"
-                  :def="defFor(f)!"
-                  :id="p.id"
-                  :invalid="p.invalid"
-                  :described-by="p.describedBy"
-                  :reference-name="refNames[defFor(f)!.key]"
-                  :lookup-parent="lookupParent(defFor(f)!)"
-                  @reference-name="(name) => (refNames[defFor(f)!.key] = name)"
-                />
-              </fieldset>
-            </FormField>
-          </template>
-        </div>
+    <div class="layout-container">
+      <div v-if="tabs.length > 1" class="tabs" role="tablist" aria-label="Form tabs">
+        <button
+          v-for="(t, i) in tabs"
+          :id="`form-tab-${t.key}`"
+          :key="t.key"
+          type="button"
+          role="tab"
+          :aria-selected="i === tabIndex"
+          :aria-controls="`form-tabpanel-${t.key}`"
+          :tabindex="i === tabIndex ? 0 : -1"
+          @click="activeTab = i"
+          @keydown="onTabKey"
+        >
+          {{ t.label }}<span v-if="tabErrorCount(i) > 0" class="badge danger tab-errors">{{ tabErrorCount(i) }} error{{ tabErrorCount(i) === 1 ? "" : "s" }}</span>
+        </button>
       </div>
-    </details>
+      <div
+        v-for="(t, i) in tabs"
+        v-show="i === tabIndex"
+        :id="`form-tabpanel-${t.key}`"
+        :key="t.key"
+        :role="tabs.length > 1 ? 'tabpanel' : undefined"
+        :aria-labelledby="tabs.length > 1 ? `form-tab-${t.key}` : undefined"
+        class="layout-panels"
+      >
+        <details v-for="(sec, j) in t.sections" :key="sec.key" class="panel layout-panel" :open="!sec.collapsed">
+          <summary class="panel-header">
+            <h2>{{ sec.label }}</h2>
+          </summary>
+          <div class="panel-body">
+            <template v-if="i === 0 && j === 0">
+              <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
+              <ErrorAlert
+                v-if="attrs.isError.value"
+                :error="attrs.error.value"
+                title="Could not load this class's attributes"
+                :on-retry="() => attrs.refetch()"
+              />
+            </template>
+            <div :class="gridClass(sec.columns)">
+              <template v-for="{ field: f, width } in sec.fields" :key="f">
+                <FormField
+                  v-if="BUILTIN.has(f)"
+                  :id="FIELD_IDS[f]"
+                  v-slot="p"
+                  :class="cellClass(width)"
+                  :label="BUILTIN.get(f)!.label"
+                  :error="coreError(f)"
+                  :hint="coreHint(f)"
+                  :required="f === 'validFrom'"
+                >
+                  <fieldset class="ro-wrap" :disabled="coreDisabled(f)">
+                    <input
+                      v-if="f === 'ident'"
+                      :id="p.id"
+                      v-model="core.ident"
+                      type="text"
+                      class="mono"
+                      spellcheck="false"
+                      :placeholder="mode === 'create' ? 'Generated' : undefined"
+                      :aria-invalid="p.invalid || undefined"
+                      :aria-describedby="p.describedBy"
+                    />
+                    <input
+                      v-else-if="f === 'validFrom' || f === 'validUntil'"
+                      :id="p.id"
+                      v-model="core[f]"
+                      type="datetime-local"
+                      :title="NOW_HINT"
+                      :aria-invalid="p.invalid || undefined"
+                      :aria-describedby="p.describedBy"
+                      @dblclick="core[f] = nowFormValue('datetime')"
+                    />
+                  </fieldset>
+                </FormField>
+                <FormField
+                  v-else-if="defFor(f)"
+                  :id="`attr-${defFor(f)!.key}`"
+                  v-slot="p"
+                  :class="cellClass(width)"
+                  :label="defFor(f)!.label"
+                  :required="defFor(f)!.isRequired"
+                  :error="fieldErrors[f]"
+                  :hint="attrHint(defFor(f)!)"
+                >
+                  <fieldset class="ro-wrap" :disabled="readOnly.has(f)">
+                    <AttributeInput
+                      v-model="values[defFor(f)!.key]"
+                      :def="defFor(f)!"
+                      :id="p.id"
+                      :invalid="p.invalid"
+                      :described-by="p.describedBy"
+                      :reference-name="refNames[defFor(f)!.key]"
+                      :lookup-parent="lookupParent(defFor(f)!)"
+                      @reference-name="(name) => (refNames[defFor(f)!.key] = name)"
+                    />
+                  </fieldset>
+                </FormField>
+              </template>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
     <div class="panel form-footer">
       <button type="submit" class="btn btn-primary" :disabled="pending || attrs.isLoading.value || attrs.isError.value">
         {{ pending ? "Saving…" : mode === "create" ? `Create ${className}` : "Save changes" }}
