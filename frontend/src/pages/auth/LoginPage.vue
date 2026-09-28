@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../api/client";
+import { oidcStartHref, useSignInOptions } from "../../api/identityProviders";
 import { normaliseCode } from "../../api/mfa";
 import BrandMark from "../../components/BrandMark.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
@@ -14,6 +15,10 @@ import { useSessionStore } from "../../stores/session";
  * Sign-in: username and password, then — for users with two-factor authentication —
  * a code from their authenticator app or a recovery code. After an expired session the
  * operator lands here with ?redirect=… and goes back there.
+ *
+ * Enterprise sign-in: one button per enabled OIDC provider (a browser navigation to the
+ * API, which comes back to ?redirect's path, or to /login?ssoError=<code> on a problem).
+ * Directory (LDAP / AD) accounts use the username/password form.
  */
 useDocumentTitle("Sign in");
 const route = useRoute();
@@ -29,6 +34,28 @@ const error = ref<unknown>(null);
 /** Why the operator is back at the password form (the code step timed out or took too many wrong codes). */
 const restarted = ref<string | null>(null);
 const redirect = computed(() => safeRedirect(route.query.redirect));
+const options = useSignInOptions();
+const oidc = computed(() => options.data.value?.oidc ?? []);
+const directory = computed(() => !!options.data.value?.directory);
+
+/** Why the last OIDC sign-in did not go through; the server never says more than the code. */
+const SSO_ERRORS: Record<string, string> = {
+  expired: "The sign-in took too long or was started in another browser tab. Start again.",
+  cancelled: "The sign-in was cancelled at the identity provider.",
+  failed: "The identity provider's answer could not be verified. Start again; if it keeps failing, ask an administrator to check the provider settings.",
+  unavailable: "The identity provider could not be reached or is disabled. Try again later, or sign in with a local account.",
+  not_configured: "Single sign-on is not fully set up on this server (PUBLIC_URL is missing). Ask an administrator.",
+  not_authorised: "None of your groups gives access to ShadouCMDB. Ask an administrator for access.",
+  account_conflict: "A ShadouCMDB account with your username already exists and does not belong to this identity provider. Ask an administrator to resolve the conflict.",
+  account_disabled: "Your ShadouCMDB account is disabled. Ask an administrator.",
+  invalid_username: "Your identity provider did not send a usable username. Ask an administrator to check the provider settings.",
+  last_administrator: "Signing in would leave ShadouCMDB without an active administrator, because your groups no longer map to the Administrator profile. Ask another administrator to check the group mappings.",
+};
+const ssoCode = computed(() => (typeof route.query.ssoError === "string" ? route.query.ssoError : null));
+const ssoError = computed(() =>
+  ssoCode.value ? (SSO_ERRORS[ssoCode.value] ?? `Single sign-on failed (${ssoCode.value}). Try again, or ask an administrator.`) : null,
+);
+const startHref = (startUrl: string) => oidcStartHref(startUrl, redirect.value);
 
 const apiError = computed(() => (error.value instanceof ApiError ? error.value : null));
 /** Wrong credentials and lockouts are expected answers, phrased for the operator; anything else shows in full. */
@@ -39,6 +66,9 @@ const known = computed(() => {
     return "Wrong username or password, or the account is disabled.";
   }
   if (e?.code === "RATE_LIMITED") return e.message || "Too many failed attempts. Wait a moment and try again.";
+  if (e?.code === "IDENTITY_PROVIDER_UNAVAILABLE") {
+    return "The directory (LDAP / Active Directory) could not be reached, so directory accounts cannot sign in right now. Local accounts still work. Try again later or tell an administrator.";
+  }
   if (e?.code === "VALIDATION_ERROR" && step.value === "code") return e.fieldErrors().code ?? e.message;
   return null;
 });
@@ -48,6 +78,7 @@ async function submit() {
   busy.value = true;
   error.value = null;
   restarted.value = null;
+  if (ssoCode.value) void router.replace({ query: { ...route.query, ssoError: undefined } });
   try {
     const result = await session.login({ username: username.value.trim(), password: password.value });
     password.value = "";
@@ -110,8 +141,19 @@ function toggleRecovery() {
         Your session has ended. Sign in again to continue where you left off.
       </div>
       <div v-if="restarted" class="alert alert-warn" role="status">{{ restarted }}</div>
+      <div v-if="ssoError" class="alert alert-error" role="alert" data-testid="sso-error">
+        <strong>Single sign-on did not work.</strong>
+        <div>{{ ssoError }}</div>
+      </div>
       <div v-if="known" class="alert alert-error" role="alert">{{ known }}</div>
       <ErrorAlert v-else-if="error" :error="error" title="Could not sign in" />
+      <template v-if="oidc.length > 0">
+        <nav class="sso" aria-label="Single sign-on">
+          <!-- Real links: the API redirects the browser to the provider and back. -->
+          <a v-for="p in oidc" :key="p.id" class="btn block" :href="startHref(p.startUrl)">Sign in with {{ p.name }}</a>
+        </nav>
+        <div class="sso-divider" role="separator"><span>or with a username and password</span></div>
+      </template>
       <div class="field">
         <label for="login-username">Username</label>
         <input id="login-username" v-model="username" v-autofocus type="text" autocomplete="username" required />
@@ -121,6 +163,9 @@ function toggleRecovery() {
         <input id="login-password" v-model="password" v-autofocus="!!username" type="password" autocomplete="current-password" required />
       </div>
       <button type="submit" class="btn btn-primary block" :disabled="busy">{{ busy ? "Signing in…" : "Sign in" }}</button>
+      <p v-if="directory" class="hint" data-testid="directory-hint">
+        You can also sign in with your directory account (LDAP / Active Directory): use your usual network username and password.
+      </p>
       <p class="hint">Lost access to every administrator account? Run <code>shadoucmdb create-admin</code> on the server.</p>
     </form>
 
@@ -179,6 +224,24 @@ function toggleRecovery() {
 </template>
 
 <style scoped>
+.sso {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.sso-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+.sso-divider::before,
+.sso-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--c-border);
+}
 .code-input {
   font-size: var(--fs-lg);
   letter-spacing: 0.2em;

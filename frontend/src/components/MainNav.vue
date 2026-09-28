@@ -29,7 +29,7 @@ const areas = useAreas();
 const { doc } = useAppSettings();
 const preview = useNavPreviewStore();
 
-const hasAdmin = computed(() => visibleSections(session.can).length > 0);
+const hasAdmin = computed(() => visibleSections(session.adminAccess).length > 0);
 function showPage(p: UiPage): boolean {
   if (p === "audit_log") return session.can("audit.view");
   if (p === "administration") return hasAdmin.value;

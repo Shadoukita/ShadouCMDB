@@ -122,6 +122,10 @@ export const useSessionStore = defineStore("session", () => {
   const can = (perm: GlobalPermission) => hasGlobal(permissions.value, perm);
   const canOnClass = (classId: string | undefined, right: ClassRight) => canClass(permissions.value, classId, right);
   const canOnAnyClass = (right: ClassRight) => canAnyClass(permissions.value, right);
+  /** Holds the built-in Administrator profile (some screens need exactly that, not a permission). */
+  const isAdministrator = computed(() => !!user.value?.isAdministrator);
+  /** For the Administration sections: what they need is a permission, or the Administrator profile. */
+  const adminAccess = computed(() => ({ can, isAdministrator: isAdministrator.value }));
 
   return {
     status,
@@ -139,6 +143,8 @@ export const useSessionStore = defineStore("session", () => {
     markExpired,
     refresh,
     can,
+    isAdministrator,
+    adminAccess,
     canOnClass,
     canOnAnyClass,
   };
