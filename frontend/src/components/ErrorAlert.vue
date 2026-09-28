@@ -23,6 +23,8 @@ function headingFor(e: ApiError | null): string {
       return "API unreachable";
     case "DATABASE_UNAVAILABLE":
       return "The CMDB database is unavailable";
+    case "IDENTITY_PROVIDER_UNAVAILABLE":
+      return "The directory is unreachable";
     case "SCHEMA_NOT_MIGRATED":
       return "The database is not migrated yet";
     case "NOT_FOUND":
