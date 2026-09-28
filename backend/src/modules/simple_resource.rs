@@ -102,6 +102,11 @@ pub trait Resource: Send + Sync + 'static {
     /// deprecated in the OpenAPI document and its description starts with this.
     const DEPRECATED: Option<&'static str> = None;
 
+    /// Set for resources whose data moved elsewhere: create, update and delete
+    /// still need the write permission but then answer 410 GONE with this
+    /// message (which names the replacement) and change nothing. Reads stay.
+    const WRITES_GONE: Option<&'static str> = None;
+
     /// Description of the PATCH operation (empty: none).
     const UPDATE_DESCRIPTION: &'static str = "";
 
@@ -371,42 +376,11 @@ pub fn routes<R: Resource>() -> Vec<Route> {
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 Ok(Json(get::<R>(&api.pool, id).await?))
             }),
-        route(Method::POST, R::BASE_PATH, format!("create{}", cap(R::SINGULAR)))
-            .tag(R::TAG)
-            .summary(format!("Create a {label}"))
-            .requires(GlobalPermission::DatamodelManage)
-            .status(StatusCode::CREATED)
-            .errors(&[ErrorCode::Conflict])
-            .errors(R::WRITE_ERRORS)
-            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<R::Create>>| async move {
-                Ok(Json(create::<R>(&api.pool, &api.ctx, &b).await?))
-            }),
-        route(Method::PATCH, by_id.clone(), format!("update{}", cap(R::SINGULAR)))
-            .tag(R::TAG)
-            .summary(format!("Update a {label} (partial)"))
-            .description(R::UPDATE_DESCRIPTION)
-            .requires(GlobalPermission::DatamodelManage)
-            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
-            .errors(R::WRITE_ERRORS)
-            .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<R::Update>>| async move {
-                Ok(Json(update::<R>(&api.pool, &api.ctx, id, &b).await?))
-            }),
-        route(Method::DELETE, by_id, format!("delete{}", cap(R::SINGULAR)))
-            .tag(R::TAG)
-            .summary(format!("Delete a {label}"))
-            .requires(GlobalPermission::DatamodelManage)
-            .description(R::DELETE_DESCRIPTION)
-            .errors(if R::ARCHIVE_ON_DELETE {
-                &[ErrorCode::NotFound]
-            } else {
-                &[ErrorCode::NotFound, ErrorCode::InUse]
-            })
-            .errors(R::WRITE_ERRORS)
-            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                remove::<R>(&api.pool, &api.ctx, id).await?;
-                Ok(NoContent)
-            }),
     ];
+    match R::WRITES_GONE {
+        None => routes.extend(write_routes::<R>(&label, &by_id)),
+        Some(message) => routes.extend(gone_routes::<R>(&label, &by_id, message)),
+    }
     if !R::USAGE.is_empty() {
         let kinds: Vec<&str> = R::USAGE.iter().map(|u| u.kind).collect();
         routes.push(
@@ -433,6 +407,74 @@ pub fn routes<R: Resource>() -> Vec<Route> {
         }
     }
     routes
+}
+
+fn write_routes<R: Resource>(label: &str, by_id: &str) -> Vec<Route> {
+    vec![
+        route(Method::POST, R::BASE_PATH, format!("create{}", cap(R::SINGULAR)))
+            .tag(R::TAG)
+            .summary(format!("Create a {label}"))
+            .requires(GlobalPermission::DatamodelManage)
+            .status(StatusCode::CREATED)
+            .errors(&[ErrorCode::Conflict])
+            .errors(R::WRITE_ERRORS)
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<R::Create>>| async move {
+                Ok(Json(create::<R>(&api.pool, &api.ctx, &b).await?))
+            }),
+        route(Method::PATCH, by_id, format!("update{}", cap(R::SINGULAR)))
+            .tag(R::TAG)
+            .summary(format!("Update a {label} (partial)"))
+            .description(R::UPDATE_DESCRIPTION)
+            .requires(GlobalPermission::DatamodelManage)
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .errors(R::WRITE_ERRORS)
+            .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<R::Update>>| async move {
+                Ok(Json(update::<R>(&api.pool, &api.ctx, id, &b).await?))
+            }),
+        route(Method::DELETE, by_id, format!("delete{}", cap(R::SINGULAR)))
+            .tag(R::TAG)
+            .summary(format!("Delete a {label}"))
+            .requires(GlobalPermission::DatamodelManage)
+            .description(R::DELETE_DESCRIPTION)
+            .errors(if R::ARCHIVE_ON_DELETE {
+                &[ErrorCode::NotFound]
+            } else {
+                &[ErrorCode::NotFound, ErrorCode::InUse]
+            })
+            .errors(R::WRITE_ERRORS)
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                remove::<R>(&api.pool, &api.ctx, id).await?;
+                Ok(NoContent)
+            }),
+    ]
+}
+
+/// Create, update and delete of a resource whose writes moved elsewhere ([`Resource::WRITES_GONE`]):
+/// same paths, operation ids and permission as before, so a client learns why instead of getting 404/405.
+fn gone_routes<R: Resource>(label: &str, by_id: &str, message: &'static str) -> Vec<Route> {
+    let gone = move || async move { Err::<NoContent, _>(AppError::new(ErrorCode::Gone, message)) };
+    let removed = |method: Method, path: &str, op: String, summary: String| {
+        route(method, path, op)
+            .tag(R::TAG)
+            .summary(summary)
+            .description(message)
+            .requires(GlobalPermission::DatamodelManage)
+            .status(StatusCode::GONE)
+            .errors(&[ErrorCode::Gone])
+    };
+    vec![
+        removed(
+            Method::POST,
+            R::BASE_PATH,
+            format!("create{}", cap(R::SINGULAR)),
+            format!("Create a {label} (removed)"),
+        )
+        .handle(move |_, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| gone()),
+        removed(Method::PATCH, by_id, format!("update{}", cap(R::SINGULAR)), format!("Update a {label} (removed)"))
+            .handle(move |_, In(IdPath(_), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| gone()),
+        removed(Method::DELETE, by_id, format!("delete{}", cap(R::SINGULAR)), format!("Delete a {label} (removed)"))
+            .handle(move |_, In(IdPath(_), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| gone()),
+    ]
 }
 
 /// `isActive=true|false` and similar boolean column filters.

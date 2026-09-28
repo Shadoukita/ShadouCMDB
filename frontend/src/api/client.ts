@@ -7,7 +7,7 @@ import type { components, paths } from "./schema";
 
 export type Schemas = components["schemas"];
 
-/** The JSON request body of an operation, e.g. JsonBody<"/api/v1/statuses", "post">. */
+/** The JSON request body of an operation, e.g. JsonBody<"/api/v1/lookup-lists", "post">. */
 export type JsonBody<P extends keyof paths, M extends "post" | "patch" | "put"> = NonNullable<
   (paths[P][M] & { requestBody?: { content: { "application/json": unknown } } })["requestBody"]
 >["content"]["application/json"];

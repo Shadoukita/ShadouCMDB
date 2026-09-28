@@ -8947,7 +8947,7 @@
           "Statuses"
         ],
         "summary": "List status records (paginated, searchable, sortable)",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. `q` matches key, name, description (case-insensitive substring).",
         "operationId": "listStatuses",
         "parameters": [
           {
@@ -9110,81 +9110,11 @@
         "tags": [
           "Statuses"
         ],
-        "summary": "Create a status",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "summary": "Create a status (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list \"status\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "createStatus",
         "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "key",
-                  "name"
-                ],
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "Stable machine key, lower_snake_case",
-                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
-                  },
-                  "name": {
-                    "type": "string",
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "pattern": "\\S"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4000
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "sortOrder": {
-                    "type": "integer",
-                    "maximum": 1000000,
-                    "minimum": -1000000
-                  },
-                  "isActive": {
-                    "type": "boolean"
-                  },
-                  "isOperational": {
-                    "type": "boolean"
-                  }
-                },
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Status"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
@@ -9205,18 +9135,8 @@
               }
             }
           },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Body is not application/json",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -9264,7 +9184,7 @@
           "Statuses"
         ],
         "summary": "Get one status",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.",
         "operationId": "getStatus",
         "parameters": [
           {
@@ -9363,8 +9283,8 @@
         "tags": [
           "Statuses"
         ],
-        "summary": "Delete a status",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "summary": "Delete a status (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list \"status\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "deleteStatus",
         "parameters": [
           {
@@ -9378,9 +9298,6 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "Success, no content"
-          },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
             "content": {
@@ -9411,18 +9328,8 @@
               }
             }
           },
-          "404": {
-            "description": "Not found (code NOT_FOUND)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -9467,8 +9374,8 @@
         "tags": [
           "Statuses"
         ],
-        "summary": "Update a status (partial)",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "summary": "Update a status (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list \"status\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "updateStatus",
         "parameters": [
           {
@@ -9481,63 +9388,7 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "Stable machine key, lower_snake_case",
-                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
-                  },
-                  "name": {
-                    "type": "string",
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "pattern": "\\S"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4000
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "sortOrder": {
-                    "type": "integer",
-                    "maximum": 1000000,
-                    "minimum": -1000000
-                  },
-                  "isActive": {
-                    "type": "boolean"
-                  },
-                  "isOperational": {
-                    "type": "boolean"
-                  }
-                },
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Status"
-                }
-              }
-            }
-          },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
             "content": {
@@ -9568,28 +9419,8 @@
               }
             }
           },
-          "404": {
-            "description": "Not found (code NOT_FOUND)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Body is not application/json",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -9637,7 +9468,7 @@
           "Statuses"
         ],
         "summary": "What still refers to a status",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
         "operationId": "getStatusUsage",
         "parameters": [
           {
@@ -9739,7 +9570,7 @@
           "Environments"
         ],
         "summary": "List environment records (paginated, searchable, sortable)",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. `q` matches key, name, description (case-insensitive substring).",
         "operationId": "listEnvironments",
         "parameters": [
           {
@@ -9890,78 +9721,11 @@
         "tags": [
           "Environments"
         ],
-        "summary": "Create a environment",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "summary": "Create a environment (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list \"environment\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "createEnvironment",
         "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "key",
-                  "name"
-                ],
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "Stable machine key, lower_snake_case",
-                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
-                  },
-                  "name": {
-                    "type": "string",
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "pattern": "\\S"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4000
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "sortOrder": {
-                    "type": "integer",
-                    "maximum": 1000000,
-                    "minimum": -1000000
-                  },
-                  "isActive": {
-                    "type": "boolean"
-                  }
-                },
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Environment"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
@@ -9982,18 +9746,8 @@
               }
             }
           },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Body is not application/json",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -10041,7 +9795,7 @@
           "Environments"
         ],
         "summary": "Get one environment",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.",
         "operationId": "getEnvironment",
         "parameters": [
           {
@@ -10140,8 +9894,8 @@
         "tags": [
           "Environments"
         ],
-        "summary": "Delete a environment",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "summary": "Delete a environment (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list \"environment\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "deleteEnvironment",
         "parameters": [
           {
@@ -10155,9 +9909,6 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "Success, no content"
-          },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
             "content": {
@@ -10188,18 +9939,8 @@
               }
             }
           },
-          "404": {
-            "description": "Not found (code NOT_FOUND)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -10244,8 +9985,8 @@
         "tags": [
           "Environments"
         ],
-        "summary": "Update a environment (partial)",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "summary": "Update a environment (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list \"environment\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "updateEnvironment",
         "parameters": [
           {
@@ -10258,60 +9999,7 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "Stable machine key, lower_snake_case",
-                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
-                  },
-                  "name": {
-                    "type": "string",
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "pattern": "\\S"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4000
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "sortOrder": {
-                    "type": "integer",
-                    "maximum": 1000000,
-                    "minimum": -1000000
-                  },
-                  "isActive": {
-                    "type": "boolean"
-                  }
-                },
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Environment"
-                }
-              }
-            }
-          },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
             "content": {
@@ -10342,28 +10030,8 @@
               }
             }
           },
-          "404": {
-            "description": "Not found (code NOT_FOUND)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Body is not application/json",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -10411,7 +10079,7 @@
           "Environments"
         ],
         "summary": "What still refers to a environment",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
         "operationId": "getEnvironmentUsage",
         "parameters": [
           {
@@ -10513,7 +10181,7 @@
           "Locations"
         ],
         "summary": "List location records (paginated, searchable, sortable)",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description, address (case-insensitive substring).",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. `q` matches key, name, description, address (case-insensitive substring).",
         "operationId": "listLocations",
         "parameters": [
           {
@@ -10702,114 +10370,11 @@
         "tags": [
           "Locations"
         ],
-        "summary": "Create a location",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "summary": "Create a location (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list \"location\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "createLocation",
         "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "key",
-                  "name",
-                  "locationType"
-                ],
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "Stable machine key, lower_snake_case",
-                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
-                  },
-                  "name": {
-                    "type": "string",
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "pattern": "\\S"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4000
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "sortOrder": {
-                    "type": "integer",
-                    "maximum": 1000000,
-                    "minimum": -1000000
-                  },
-                  "isActive": {
-                    "type": "boolean"
-                  },
-                  "parentId": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "uuid"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "locationType": {
-                    "type": "string",
-                    "enum": [
-                      "region",
-                      "site",
-                      "building",
-                      "floor",
-                      "room",
-                      "rack",
-                      "cloud_region",
-                      "other"
-                    ]
-                  },
-                  "address": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 1000
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Location"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
@@ -10830,18 +10395,8 @@
               }
             }
           },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Body is not application/json",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -10889,7 +10444,7 @@
           "Locations"
         ],
         "summary": "Get one location",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.",
         "operationId": "getLocation",
         "parameters": [
           {
@@ -10988,8 +10543,8 @@
         "tags": [
           "Locations"
         ],
-        "summary": "Delete a location",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "summary": "Delete a location (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list \"location\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "deleteLocation",
         "parameters": [
           {
@@ -11003,9 +10558,6 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "Success, no content"
-          },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
             "content": {
@@ -11036,18 +10588,8 @@
               }
             }
           },
-          "404": {
-            "description": "Not found (code NOT_FOUND)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -11092,8 +10634,8 @@
         "tags": [
           "Locations"
         ],
-        "summary": "Update a location (partial)",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "summary": "Update a location (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list \"location\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "updateLocation",
         "parameters": [
           {
@@ -11106,95 +10648,7 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "Stable machine key, lower_snake_case",
-                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
-                  },
-                  "name": {
-                    "type": "string",
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "pattern": "\\S"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4000
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "sortOrder": {
-                    "type": "integer",
-                    "maximum": 1000000,
-                    "minimum": -1000000
-                  },
-                  "isActive": {
-                    "type": "boolean"
-                  },
-                  "parentId": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "uuid"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "locationType": {
-                    "type": "string",
-                    "enum": [
-                      "region",
-                      "site",
-                      "building",
-                      "floor",
-                      "room",
-                      "rack",
-                      "cloud_region",
-                      "other"
-                    ]
-                  },
-                  "address": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 1000
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Location"
-                }
-              }
-            }
-          },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
             "content": {
@@ -11225,28 +10679,8 @@
               }
             }
           },
-          "404": {
-            "description": "Not found (code NOT_FOUND)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Body is not application/json",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -11294,7 +10728,7 @@
           "Locations"
         ],
         "summary": "What still refers to a location",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
         "operationId": "getLocationUsage",
         "parameters": [
           {
@@ -11396,7 +10830,7 @@
           "Owners"
         ],
         "summary": "List owner records (paginated, searchable, sortable)",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches name, email, external_ref (case-insensitive substring).",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. `q` matches name, email, external_ref (case-insensitive substring).",
         "operationId": "listOwners",
         "parameters": [
           {
@@ -11568,89 +11002,11 @@
         "tags": [
           "Owners"
         ],
-        "summary": "Create a owner",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "summary": "Create a owner (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list \"owner\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "createOwner",
         "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "kind",
-                  "name"
-                ],
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "enum": [
-                      "person",
-                      "team"
-                    ]
-                  },
-                  "name": {
-                    "type": "string",
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "pattern": "\\S"
-                  },
-                  "email": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "email",
-                        "maxLength": 320
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "externalRef": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 500,
-                        "minLength": 1,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "isActive": {
-                    "type": "boolean"
-                  }
-                },
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Owner"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "401": {
             "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
             "content": {
@@ -11671,18 +11027,8 @@
               }
             }
           },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Body is not application/json",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -11730,7 +11076,7 @@
           "Owners"
         ],
         "summary": "Get one owner",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.",
         "operationId": "getOwner",
         "parameters": [
           {
@@ -11829,8 +11175,8 @@
         "tags": [
           "Owners"
         ],
-        "summary": "Delete a owner",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "summary": "Delete a owner (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list \"owner\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "deleteOwner",
         "parameters": [
           {
@@ -11844,9 +11190,6 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "Success, no content"
-          },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
             "content": {
@@ -11877,18 +11220,8 @@
               }
             }
           },
-          "404": {
-            "description": "Not found (code NOT_FOUND)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -11933,8 +11266,8 @@
         "tags": [
           "Owners"
         ],
-        "summary": "Update a owner (partial)",
-        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+        "summary": "Update a owner (removed)",
+        "description": "Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list \"owner\" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.",
         "operationId": "updateOwner",
         "parameters": [
           {
@@ -11947,71 +11280,7 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "enum": [
-                      "person",
-                      "team"
-                    ]
-                  },
-                  "name": {
-                    "type": "string",
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "pattern": "\\S"
-                  },
-                  "email": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "email",
-                        "maxLength": 320
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "externalRef": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 500,
-                        "minLength": 1,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "isActive": {
-                    "type": "boolean"
-                  }
-                },
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Owner"
-                }
-              }
-            }
-          },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
             "content": {
@@ -12042,28 +11311,8 @@
               }
             }
           },
-          "404": {
-            "description": "Not found (code NOT_FOUND)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Body is not application/json",
+          "410": {
+            "description": "The operation was removed (code GONE); the message names its replacement",
             "content": {
               "application/json": {
                 "schema": {
@@ -12111,7 +11360,7 @@
           "Owners"
         ],
         "summary": "What still refers to a owner",
-        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "description": "Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
         "operationId": "getOwnerUsage",
         "parameters": [
           {
@@ -20784,6 +20033,7 @@
                   "CONFLICT",
                   "IN_USE",
                   "VERSION_CONFLICT",
+                  "GONE",
                   "INVALID_NAME",
                   "SCHEMA_CHANGE_REFUSED",
                   "LAST_ADMINISTRATOR",
