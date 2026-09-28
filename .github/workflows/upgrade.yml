@@ -159,13 +159,15 @@ jobs:
           "$NEW" migrate | tee migrate.txt
           "$NEW" seed
           "$NEW" verify
+          # The audit rows of the old release were hash-chained by migration 0018.
+          "$NEW" audit-verify
 
       - name: Every object, audit row and permission is unchanged, also in the UI; smoke suite
         env:
           SMOKE_USERNAME: upgrade-admin
           SMOKE_PASSWORD: ci-upgrade-admin-password
         run: |
-          "$NEW" serve > new.log 2>&1 &
+          API_DOCS=public "$NEW" serve > new.log 2>&1 &
           PID=$!
           for i in $(seq 1 30); do curl -sf "$API_URL/readyz" && break; sleep 1; done
           curl -sf "$API_URL/readyz" | tee readyz.json
