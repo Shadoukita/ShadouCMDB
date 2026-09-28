@@ -36,7 +36,9 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   move: [delta: -1 | 1];
-  resize: [width: number];
+  /** A new width; `drag` while the right edge is dragged (one undo step until resizeEnd). */
+  resize: [width: number, drag?: boolean];
+  resizeEnd: [];
   hide: [];
   place: [section: string];
   readOnly: [on: boolean];
@@ -65,13 +67,31 @@ function onKey(e: KeyboardEvent) {
     emit("hide");
   }
 }
-const onResizeStart = (e: PointerEvent) => startGridResize(e, el.value, props.columns, () => props.width, (w) => emit("resize", w));
+/** The width shown by the live guide while the right edge is dragged. */
+const guide = ref<number | null>(null);
+function onResizeStart(e: PointerEvent) {
+  guide.value = props.width;
+  startGridResize(
+    e,
+    el.value,
+    props.columns,
+    () => props.width,
+    (w) => {
+      guide.value = w;
+      emit("resize", w, true);
+    },
+    () => {
+      guide.value = null;
+      emit("resizeEnd");
+    },
+  );
+}
 </script>
 
 <template>
   <div
     ref="el"
-    :class="[cellClass(auto ? 1 : width), 'le-field', { 'drop-before': dropBefore, dragging, auto }]"
+    :class="[cellClass(auto ? 1 : width, columns), 'le-field', { 'drop-before': dropBefore, dragging, auto }]"
     :data-field="field"
     draggable="true"
     @dragstart="emit('dragstart', $event)"
@@ -107,7 +127,8 @@ const onResizeStart = (e: PointerEvent) => startGridResize(e, el.value, props.co
     <div class="le-field-body" inert>
       <slot />
     </div>
-    <span v-if="!auto" class="resize-handle" aria-hidden="true" title="Drag to resize" @pointerdown="onResizeStart" @click.stop />
+    <span v-if="!auto" class="resize-handle" aria-hidden="true" title="Drag to resize (snaps to the section's columns)" @pointerdown="onResizeStart" @click.stop />
+    <span v-if="guide !== null" class="lg-size-guide" role="status">{{ guide }} / {{ columns }}</span>
   </div>
 </template>
 

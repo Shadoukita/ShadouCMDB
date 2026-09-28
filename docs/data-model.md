@@ -200,7 +200,10 @@ A class's layout lives in the UI settings document (`ui_settings.settings.layout
 validated by the API as `UiClassLayout`) and applies to both the CI form and the detail page. It is
 presentation, not data, so it is JSON in the settings document rather than tables, and it names classes
 and fields by key. Administrators edit it in **Administration › Customization › Detail and form layout**
-(the form designer).
+(the form designer). The designer has the same section handles as the layout editor below (resize by the
+edges, place side by side by the grip, **+** next to a section), and its **Properties** panel sets a
+section's width, **Start a new row** and its columns from the keyboard. Its preview frame is resized by
+the grip on its right edge; **Full width** / **Laptop** / **Tablet** / **Phone** are shortcuts.
 
 ```
 layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
@@ -236,8 +239,10 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   `active`, `createdAt`, `updatedAt`) or `attributes.<key>`. Fields fill a section's grid row by row in
   the order given; `width` is the number of the section's `columns` a field spans. A grid of 12 columns
   allows fine sizes (a field of width 4 is a third of the section); the earlier 1–4 values keep their
-  meaning. Narrow screens use at most two columns (below 820 px of content width) and then one (below
-  520 px); widths shrink with them.
+  meaning. A section's field grid narrows with the section's own width: at most two columns below
+  820 px (a field then takes both when it spans more than half of the section, and grids of up to 4
+  columns keep their earlier rule) and one below 520 px. A half-width section on a wide screen therefore
+  gets the grid it would get on a tablet.
 - **Unplaced fields are never lost.** Anything the tabs do not place and that is not hidden (an
   attribute added to the class later, for example) follows at the end of the first tab: a General
   section with the core fields and the attributes without a group, then the attribute groups. The
@@ -276,16 +281,25 @@ the editor opens in the same tab with a notice, and **Done** returns to the page
 | To… | With the mouse | From the keyboard |
 |---|---|---|
 | Add a tab | **+ Tab** at the end of the tab bar; type its name | same (a button) |
-| Add a section | **+ Section** between or after sections; type its name | same |
+| Add a section | **+ Section** below a section (on hover) or at the end of the tab; type its name | same (buttons) |
+| Add a section next to another | the **+** on a section's right edge (on hover): the new section shares the row | same (a button) |
+| Resize a section | drag its right edge; it snaps to the tab's 12 columns and shows e.g. "6 / 12" while you drag. Between two sections in a row, drag the left edge of the second to share the row differently | on the section's grip: Alt+← / Alt+→; the toolbar's width (1–12 / 12) |
+| Place a section beside another | drag it by the grip on its top edge onto the other section's left or right edge (a bar shows where it goes) | the toolbar's width and **New row**, and Alt+↑ / Alt+↓ on the grip for the order |
+| Move a section up or down, or to another tab | drag its grip above or below another section, or onto a tab | on the grip: Alt+↑ / Alt+↓; toolbar ↑ / ↓ and the tab select |
 | Rename a tab or section | click its name (a tab: click the selected tab) | Enter on the name, or **✎** |
 | Move a field | drag it (by its grip) within a section, into another section, or onto a tab | on the grip: Alt+↑ / Alt+↓; the field's toolbar: **Move to section** |
 | Resize a field | drag its right edge | on the grip: Alt+← / Alt+→; toolbar ⇤ / ⇥ |
 | Hide / show a field | drag it onto **Hidden fields**, or **Hide**; **Show** in the tray | Delete on the grip |
-| Section order, columns, collapsed, tab, remove | the section's toolbar (hover) | Tab into the toolbar |
+| Section columns, collapsed, remove | the section's toolbar (hover) | Tab into the toolbar |
+| Try another screen width | drag the grip on the preview's right edge to any width | on the grip: ← / → (10 px, Shift: 50 px), Home, End |
 | Read-only on the form | the field's toolbar (form only) | same |
 
+Placing a section beside another fits it into the row: it takes the columns the row leaves free (a 6
+next to a 6), and when the row is full the section it is dropped on gives up half of its width. Every
+drag is one undo step, however far the edge travelled.
+
 **Undo** / **Redo** (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y outside text fields), **Desktop** / **Tablet** /
-**Phone** widths, **Reset to built-in layout** (drops the class's own layout from the draft; undoable),
+**Phone** as shortcuts for the preview width, **Reset to built-in layout** (drops the class's own layout from the draft; undoable),
 **Save layout** with an optional note, **Discard** and **Done** (closes the editor's window) are in the
 bar. Leaving the editor or closing its window with unsaved changes asks first. After a save, the editor
 tells the other open windows of the web UI (BroadcastChannel `layout-updated`), which load the new

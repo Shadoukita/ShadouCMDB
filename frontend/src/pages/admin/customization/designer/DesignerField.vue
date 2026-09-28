@@ -29,7 +29,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [];
   move: [delta: -1 | 1];
-  resize: [width: number];
+  /** A new width; `drag` while the right edge is dragged (one undo step until resizeEnd). */
+  resize: [width: number, drag?: boolean];
+  resizeEnd: [];
   hide: [];
   dragstart: [e: DragEvent];
   dragend: [];
@@ -81,8 +83,25 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
-const onResizeStart = (e: PointerEvent) =>
-  startGridResize(e, el.value, props.columns, () => props.width, (w) => emit("resize", w));
+/** The width shown by the live guide while the right edge is dragged. */
+const guide = ref<number | null>(null);
+function onResizeStart(e: PointerEvent) {
+  guide.value = props.width;
+  startGridResize(
+    e,
+    el.value,
+    props.columns,
+    () => props.width,
+    (w) => {
+      guide.value = w;
+      emit("resize", w, true);
+    },
+    () => {
+      guide.value = null;
+      emit("resizeEnd");
+    },
+  );
+}
 
 defineExpose({ focus: () => el.value?.focus() });
 </script>
@@ -91,7 +110,7 @@ defineExpose({ focus: () => el.value?.focus() });
   <div
     :id="`designer-field-${field}`"
     ref="el"
-    :class="[cellClass(width), 'designer-field', { selected, 'drop-before': dropBefore, dragging }]"
+    :class="[cellClass(width, columns), 'designer-field', { selected, 'drop-before': dropBefore, dragging }]"
     :data-field="field"
     tabindex="0"
     role="button"
@@ -121,7 +140,8 @@ defineExpose({ focus: () => el.value?.focus() });
       <input v-else-if="kind === 'text'" type="text" :class="{ mono: field === 'ident' }" :placeholder="placeholder" tabindex="-1" aria-hidden="true" />
       <span v-else class="muted">Value</span>
     </div>
-    <span class="resize-handle" aria-hidden="true" title="Drag to resize" @pointerdown="onResizeStart" @click.stop />
+    <span class="resize-handle" aria-hidden="true" title="Drag to resize (snaps to the section's columns)" @pointerdown="onResizeStart" @click.stop />
+    <span v-if="guide !== null" class="lg-size-guide" role="status">{{ guide }} / {{ columns }}</span>
   </div>
 </template>
 

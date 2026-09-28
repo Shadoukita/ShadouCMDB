@@ -1,6 +1,6 @@
 import type { UiClassLayout } from "../api/uiSettings";
 import { suggestKey } from "./keys";
-import { CORE_FIELDS, GRID_COLUMNS, MAX_COLUMNS, SECTION_GRID, panelLabel, placedPanels, resolveLayout, sectionKind, type AttributeLike, type PanelKind } from "./uiSettings";
+import { CORE_FIELDS, GRID_COLUMNS, MAX_COLUMNS, SECTION_GRID, panelLabel, placedPanels, resolveLayout, sectionKind, sectionWidth, type AttributeLike, type PanelKind } from "./uiSettings";
 
 /**
  * The form designer's edits (Customization › Detail and form layout) on a class
@@ -11,6 +11,12 @@ import { CORE_FIELDS, GRID_COLUMNS, MAX_COLUMNS, SECTION_GRID, panelLabel, place
  * core fields (ident, valid from, valid until) never hidden or dropped.
  * Content blocks (notes and the built-in panels) are sections without fields:
  * fields never go into one, and each panel is placed at most once.
+ *
+ * Sections sit on their tab's grid of 12 columns (SECTION_GRID) and fill it row
+ * by row in their order: a section's `width` is how many of the 12 it spans, so
+ * two sections of 6 sit side by side. Resizing a section, placing one beside
+ * another or adding one next to another only changes widths, `newRow` and the
+ * order; the screen sizes are the stylesheet's business.
  */
 
 export type LayoutTab = NonNullable<UiClassLayout["tabs"]>[number];
@@ -125,6 +131,148 @@ export function setWidth(l: UiClassLayout, field: string, width: number): number
 export function setColumns(section: LayoutSection, columns: number): void {
   section.columns = Math.max(1, Math.min(columns, MAX_COLUMNS));
   for (const f of fieldsOf(section)) f.width = Math.min(f.width ?? 1, section.columns);
+}
+
+/** Sets how many of the tab's 12 columns a section spans. Returns the width it got. */
+export function setSectionWidth(section: LayoutSection, width: number): number {
+  section.width = Math.max(1, Math.min(Math.round(width), SECTION_GRID));
+  return section.width;
+}
+
+/** Whether a section starts a new row of its tab's grid even when it would fit next to the one before. */
+export function setNewRow(section: LayoutSection, on: boolean): void {
+  if (on) section.newRow = true;
+  else delete section.newRow;
+}
+
+export interface SectionPlace {
+  /** Row of the tab's grid, from 0. */
+  row: number;
+  /** First column the section takes, from 0. */
+  start: number;
+  width: number;
+}
+
+/**
+ * Where each section of a tab lands on the 12-column grid on a wide screen, the
+ * way the page lays them out: in order, row by row, a section that does not fit
+ * the rest of the row (or says `newRow`) starting the next one.
+ */
+export function sectionPlaces(sections: readonly LayoutSection[]): SectionPlace[] {
+  let row = 0;
+  let col = 0;
+  return sections.map((s) => {
+    const width = sectionWidth(s);
+    if (col > 0 && (s.newRow || col + width > SECTION_GRID)) {
+      row += 1;
+      col = 0;
+    }
+    const place = { row, start: col, width };
+    col += width;
+    return place;
+  });
+}
+
+/** The section directly left of `section` in the same row of its tab's grid, if any. */
+export function leftNeighbour(tab: LayoutTab, section: LayoutSection): LayoutSection | undefined {
+  const list = sectionsOf(tab);
+  const i = list.indexOf(section);
+  if (i <= 0) return undefined;
+  const places = sectionPlaces(list);
+  return places[i - 1].row === places[i].row ? list[i - 1] : undefined;
+}
+
+/**
+ * Moves the border between `section` and the section directly left of it to
+ * column `column` of the tab's grid (0–12): the left one ends there and
+ * `section` starts there, so the row keeps its total width. Each keeps at least
+ * one column. Returns the two widths, or undefined without such a neighbour.
+ */
+export function moveSectionBorder(tab: LayoutTab, section: LayoutSection, column: number): { left: number; right: number } | undefined {
+  const left = leftNeighbour(tab, section);
+  if (!left) return undefined;
+  const list = sectionsOf(tab);
+  const places = sectionPlaces(list);
+  const lp = places[list.indexOf(left)];
+  const end = lp.start + lp.width + sectionWidth(section);
+  const border = Math.max(lp.start + 1, Math.min(Math.round(column), end - 1));
+  left.width = border - lp.start;
+  section.width = end - border;
+  return { left: left.width, right: section.width };
+}
+
+/**
+ * Makes room for `section` next to `beside` in `beside`'s row (`section` is not
+ * in the tab yet): it takes the columns the row leaves free, up to its own
+ * width; when the row is full, `beside` gives up half of its width (rounded
+ * down) to it. `section` loses a `newRow`, since it continues the row.
+ */
+function shareRow(tab: LayoutTab, beside: LayoutSection, section: LayoutSection): void {
+  const list = sectionsOf(tab);
+  const places = sectionPlaces(list);
+  const row = places[list.indexOf(beside)].row;
+  const used = places.filter((p) => p.row === row).reduce((sum, p) => sum + p.width, 0);
+  const free = SECTION_GRID - used;
+  delete section.newRow;
+  if (free >= 1) {
+    section.width = Math.min(sectionWidth(section), free);
+    return;
+  }
+  const b = sectionWidth(beside);
+  if (b === 1) {
+    section.width = SECTION_GRID; // nothing to share: it goes to the next row
+    return;
+  }
+  beside.width = Math.ceil(b / 2);
+  section.width = b - beside.width;
+}
+
+/**
+ * Places `section` next to `target`, on its left or right, in `target`'s tab
+ * (taking it from wherever it was). It shares `target`'s row: it takes the
+ * columns the row leaves free, or half of `target`'s when the row is full (see
+ * shareRow). Placed on the left, `section` takes over `target`'s `newRow`.
+ */
+export function placeSectionBeside(l: UiClassLayout, section: LayoutSection, target: LayoutSection, side: "left" | "right"): boolean {
+  if (section === target) return false;
+  const tab = allSections(l).find((x) => x.section === target)?.tab;
+  if (!tab) return false;
+  for (const t of tabsOf(l)) t.sections = sectionsOf(t).filter((s) => s !== section);
+  shareRow(tab, target, section);
+  const list = sectionsOf(tab);
+  const i = list.indexOf(target);
+  if (side === "right") {
+    list.splice(i + 1, 0, section);
+  } else {
+    list.splice(i, 0, section);
+    setNewRow(section, !!target.newRow);
+    delete target.newRow;
+  }
+  return true;
+}
+
+/**
+ * Moves `section` before or after `target` in the reading order of `target`'s
+ * tab (taking it from wherever it was), keeping its width: sections of 12
+ * stack, narrower ones share rows as their widths allow.
+ */
+export function placeSectionAt(l: UiClassLayout, section: LayoutSection, target: LayoutSection, where: "before" | "after"): boolean {
+  if (section === target) return false;
+  const tab = allSections(l).find((x) => x.section === target)?.tab;
+  if (!tab) return false;
+  for (const t of tabsOf(l)) t.sections = sectionsOf(t).filter((s) => s !== section);
+  const list = sectionsOf(tab);
+  list.splice(list.indexOf(target) + (where === "after" ? 1 : 0), 0, section);
+  return true;
+}
+
+/** Adds an empty section right of `beside`, sharing its row (see placeSectionBeside). */
+export function addSectionBeside(l: UiClassLayout, tab: LayoutTab, beside: LayoutSection, label: string): LayoutSection {
+  const section = addSection(l, tab, label, sectionsOf(tab).indexOf(beside) + 1);
+  sectionsOf(tab).splice(sectionsOf(tab).indexOf(section), 1);
+  shareRow(tab, beside, section);
+  sectionsOf(tab).splice(sectionsOf(tab).indexOf(beside) + 1, 0, section);
+  return section;
 }
 
 export function addTab(l: UiClassLayout, label: string): LayoutTab {

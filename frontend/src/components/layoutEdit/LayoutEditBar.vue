@@ -52,10 +52,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <button type="button" class="btn btn-sm" :disabled="!editor.canUndo" title="Undo (Ctrl+Z)" @click="editor.undo()">Undo</button>
         <button type="button" class="btn btn-sm" :disabled="!editor.canRedo" title="Redo (Ctrl+Shift+Z)" @click="editor.redo()">Redo</button>
       </span>
-      <span class="le-bar-group" role="group" aria-label="Preview width">
+      <span class="le-bar-group" role="group" aria-label="Preview width" title="Shortcuts: drag the grip on the preview's right edge to any width">
+        <span class="muted">Preview</span>
         <button v-for="p in WIDTH_PRESETS" :key="p.label" type="button" class="btn btn-sm" :aria-pressed="editor.previewWidth === p.width" @click="editor.previewWidth = p.width">
           {{ p.label }}
         </button>
+        <span v-if="editor.previewWidth" class="muted" data-testid="le-preview-width">{{ editor.previewWidth }} px</span>
       </span>
       <button type="button" class="btn btn-sm" :disabled="editor.builtIn" @click="confirmReset = true">Reset to built-in layout</button>
       <RouterLink class="btn btn-sm" :to="{ path: '/admin/customization/layouts', query: { class: classKey } }">Open in the designer</RouterLink>
