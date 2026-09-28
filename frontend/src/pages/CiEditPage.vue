@@ -13,7 +13,7 @@ import CiForm from "./form/CiForm.vue";
 
 const route = useRoute();
 const ci = useCi(() => String(route.params.id));
-useDocumentTitle(() => (ci.data.value ? `Edit ${ci.data.value.name}` : "Edit CI"));
+useDocumentTitle(() => (ci.data.value ? `Edit ${ci.data.value.label}` : "Edit CI"));
 const c = computed(() => ci.data.value);
 const session = useSessionStore();
 const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.value.code === "FORBIDDEN");
@@ -39,14 +39,14 @@ const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.
       :items="[
         { label: 'Inventory', to: '/cis' },
         { label: c.class.name, to: `/cis?classId=${c.classId}` },
-        { label: c.name, to: `/cis/${c.id}` },
+        { label: c.label, to: `/cis/${c.id}` },
         { label: 'Edit' },
       ]"
     />
     <div class="page-header">
       <div class="title">
-        <h1>Edit {{ c.name }}</h1>
-        <span class="muted">{{ c.class.name }} · version {{ c.version }}</span>
+        <h1>Edit {{ c.label }}</h1>
+        <span class="muted">{{ c.class.name }} · <span class="mono">{{ c.ident }}</span> · version {{ c.version }}</span>
       </div>
     </div>
     <CiForm :key="`${c.id}-${c.version}`" mode="edit" :class-id="c.classId" :class-name="c.class.name" :ci="c" />

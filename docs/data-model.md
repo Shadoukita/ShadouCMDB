@@ -13,7 +13,8 @@ that need to look at other rows), not only in the API.
 Migrations: [`sql/migrations/`](../sql/migrations/)
 (`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`,
 `0003_users_and_permission_profiles`, `0004_data_model_admin`, `0005_ui_settings`, `0006_auth_audit`,
-`0008_cmdb_schema_and_areas`, `0009_type_tables`, `0015_lookup_parent_lists`).
+`0007_audit_retention`, `0008_cmdb_schema_and_areas`, `0009_type_tables`, `0010_api_tokens` …
+`0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -26,14 +27,14 @@ never collide with the application's.
 ```
 areas ─< ci_classes ─┬─< ci_attribute_definitions >─── (reference_class_id) ─> ci_classes
 (schema)  (parent)   │  (parent_attribute_id)   └── (lookup_list_id) ─> lookup_lists ─< lookup_list_values
-                     │                                             (parent_list_id)   (parent_value_id)
+(title_attribute_id) │                                             (parent_list_id)   (parent_value_id)
                      │                                                      ^ (lookup fields)
                      └─< configuration_items ─┬─── <area>.<type> (id = configuration_items.id)
-                  │ │ │ │                     │        (reference fields) ──> configuration_items
-   statuses ──────┘ │ │ │                     └─< ci_relationships (source / target)
-   environments ────┘ │ │                        │
-   owners ────────────┘ │           relationship_types ─< relationship_type_rules >─ ci_classes (source / target)
-   locations (parent) ──┘
+                         (ident, validity,    │        (reference fields) ──> configuration_items
+                          label)              └─< ci_relationships (source / target)
+                                                   │
+                                    relationship_types ─< relationship_type_rules >─ ci_classes (source / target)
+statuses, environments, owners, locations (deprecated since 0016: no longer referenced by CIs)
 audit_log (append-only; entity_type + entity_id point at any row)
 
 users ─< user_permission_profiles >─ permission_profiles ─┬─< permission_profile_global_permissions
@@ -52,21 +53,21 @@ ui_assets (logo, favicon)
 | Table | Purpose | Key constraints |
 | --- | --- | --- |
 | `areas` | The top-level groups shown as menu tabs. `key` is the PostgreSQL schema holding the tables of the area's types. `is_active = false` archives the area. | unique `key`; key format `^[a-z][a-z0-9_]{0,62}$`; not a system schema (`cmdb`, `public`, `information_schema`, `pg_*`, `cmdb_*`); `key` immutable (trigger) |
-| `ci_classes` | CI types in a single-inheritance tree (`parent_id`). `is_abstract` classes group attributes and rules but hold no CIs. `icon`, `color` (`#rrggbb`) and `sort_order` drive menus and badges. `area_id` is the area whose schema holds the type's table, named after `key`. | unique `key` (across areas); key format check; at most 61 characters and no `v_` prefix (the reporting view is `v_<key>`); colour format; no self-parent; **no cycles** (trigger); `key` and `area_id` immutable (trigger) |
+| `ci_classes` | CI types in a single-inheritance tree (`parent_id`). `is_abstract` classes group attributes and rules but hold no CIs. `icon`, `color` (`#rrggbb`) and `sort_order` drive menus and badges. `area_id` is the area whose schema holds the type's table, named after `key`. `title_attribute_id` is the field whose value labels the type's CIs (see [The CI core](#the-ci-core-ident-validity-and-label)). | unique `key` (across areas); key format check; at most 61 characters and no `v_` prefix (the reporting view is `v_<key>`); colour format; no self-parent; **no cycles** (trigger); `key` and `area_id` immutable (trigger); the title attribute is a field of the class or an ancestor, of type text, enum, number, integer, date, datetime, ip or cidr (trigger; FK `ON DELETE SET NULL`) |
 | `ci_attribute_definitions` | Typed attribute per class, inherited by descendant classes. Types: `text`, `number`, `integer`, `boolean`, `enum`, `date`, `datetime`, `ip`, `cidr`, `reference`, `lookup`. `group_name` is the form section, `sort_order` the order within it; `help_text` is shown on forms; `default_value` (jsonb, same shape as an API value) is applied to new CIs. | unique (`class_id`, `key`); `enum_values` required iff enum; `reference_class_id` required iff reference; `lookup_list_id` required iff lookup (FK, RESTRICT); `parent_attribute_id` only on a lookup field whose list has a parent list, pointing at a lookup field on that parent list, defined on the same class or an ancestor (trigger; FK); a default is never JSON null and never on a reference; `key` (the column name) and `class_id` immutable (trigger); `key` is never `id` |
 | `lookup_lists` | Lists an administrator defines, e.g. "Support contract". `parent_list_id` makes a list depend on another one ("Model" depends on "Manufacturer"), see [Dependent lookup lists](#dependent-lookup-lists). | unique `key`; key format; non-blank name; no self-parent, **no cycles** (trigger); a parent list cannot be deleted (FK, RESTRICT); after a change of `parent_list_id` no value or field of the list may keep a parent from another list (deferred constraint trigger) |
 | `lookup_list_values` | The values of a list (`key`, `name`, `color`, `sort_order`, `is_active`). `parent_value_id` is the value of the parent list it belongs to. | unique (`list_id`, `key`); cascades with the list; cannot move to another list (trigger); `parent_value_id` belongs to the list's parent list, is required on new values of a list with a parent list and cannot be cleared once assigned (trigger); a value other values belong to cannot be deleted (FK) |
-| `configuration_items` | CI instances with the common core: name, class, status, owner, location, environment, hostname, `ip_address inet`, serial, notes, plus `version` for optimistic locking. | FKs to class and every lookup; class must be concrete and active (trigger); non-blank name; hostname format |
+| `configuration_items` | The registry of every CI, with only what every CI has whatever its class: `class_id`, `ident`, `valid_from`, `valid_until`, the derived `label`, `version` for optimistic locking, timestamps and `deleted_at`. Everything else (name, status, hostname, …) is a class field in the type tables. | FK to the class; class must be concrete and active (trigger); `ident` unique regardless of case (`lower(ident)`) and of the form `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`; `valid_until` after `valid_from`; non-blank `label` |
 | `<area>.<type>` (type tables) | One per type, e.g. `bestand.netzwerk`: `id uuid PRIMARY KEY REFERENCES cmdb.configuration_items (id) ON DELETE CASCADE`, then one column per field of the type. A CI has a row in the table of its type **and of every ancestor type** (class table inheritance: a server's inherited `hardware` fields are in `infrastruktur.hardware`). Column types: text → `text`, enum → `text` with a CHECK on the allowed values, number → `numeric`, integer → `bigint`, boolean → `boolean`, date → `date`, datetime → `timestamptz`, ip → `inet`, cidr → `cidr`, reference → `uuid` FK to `configuration_items` (NO ACTION), lookup → `uuid` FK to `lookup_list_values` (RESTRICT). | PK/FK to the registry; enum CHECK `ck_<field id>_<hash of the values>`; FKs `fk_<field id>` with index `ix_<field id>`; a required, active field is `NOT NULL`. Constraint names never contain user text. That a reference points at a CI of the right type, that a lookup value belongs to the field's list, and min/max/pattern rules are checked by the API |
-| `<area>.v_<type>` (reporting views) | Read-only view per type: the registry columns (`id`, `name`, `type`, `status`, `environment`, `owner`, `location`, `hostname`, `ip_address`, `serial_number`, `notes`, `record_version`, `created_at`, `updated_at`, `deleted_at`) plus every field of the type and its ancestors; lookup fields show the value's key. Deleted CIs are included (filter on `deleted_at IS NULL` for the live inventory). | rebuilt by the DDL engine when the type or an ancestor changes; marked with a `shadoucmdb:<hash>` comment so the engine never touches a view it did not create: a view of the same name without that comment is left in place (the type then has no reporting view) and a schema change that would rebuild or drop it reports a `warning` instead |
+| `<area>.v_<type>` (reporting views) | Read-only view per type: the registry columns (`id`, `ident`, `label`, `type`, `valid_from`, `valid_until`, `active`, `record_version`, `created_at`, `updated_at`, `deleted_at`) plus every field of the type and its ancestors (the former fixed columns `name`, `status`, `hostname`, … among them); lookup fields show the value's key. Deleted CIs are included (filter on `deleted_at IS NULL` for the live inventory). | rebuilt by the DDL engine when the type or an ancestor changes; marked with a `shadoucmdb:<hash>` comment so the engine never touches a view it did not create: a view of the same name without that comment is left in place (the type then has no reporting view) and a schema change that would rebuild or drop it reports a `warning` instead |
 | `schema_changes` | Every DDL plan the application ran: actor, time, request id, a one-line summary, the exact statements in order, and their impact on data (rows converted, values dropped, warnings). | **UPDATE/DELETE rejected** (trigger); at least one statement |
 | `relationship_types` | `runs_on`, `depends_on`, `located_in`, `connected_to`, …, with `forward_label` / `reverse_label` and `is_directional`. | unique `key` |
 | `relationship_type_rules` | Legal (source class, target class) pairs per type. A rule matches the named class **and all its descendants**. | unique triple |
 | `ci_relationships` | Typed, directional edge `source_ci_id → target_ci_id`. | **no self-edges** (check); **no duplicate live edges** (partial unique index); for non-directional types the reverse edge also counts as a duplicate (trigger + advisory lock); endpoints must satisfy a rule and must not be soft-deleted (trigger) |
-| `statuses` | CI lifecycle (`planned`, `in_service`, `maintenance`, `retired`, `disposed`). `is_operational` flags "live" statuses for reporting. | unique `key` |
-| `environments` | `production`, `staging`, `test`, `development`, `disaster_recovery`. | unique `key` |
-| `locations` | Location hierarchy (region › site › building › floor › room › rack, plus `cloud_region`). | unique `key`; `location_type` check; no cycles (trigger) |
-| `owners` | Accountable people or teams (`kind` = `person` / `team`). This is not a login table (see `users`). `external_ref` is the seam for a later directory/IdP link. | `kind` check; unique `external_ref`; email format |
+| `statuses` | **Deprecated (0016).** CI lifecycle as it was before the barebone core; `is_operational` flagged "live" statuses. Migration 0016 copied the rows into the lookup list `status` with the same ids; CIs hold those values. Kept unchanged for existing integrations and history; will be removed in a later release. | unique `key` |
+| `environments` | **Deprecated (0016)**, copied into the lookup list `environment`. | unique `key` |
+| `locations` | **Deprecated (0016)**, copied into the lookup list `location` (flat; the hierarchy, type and address stay here). | unique `key`; `location_type` check; no cycles (trigger) |
+| `owners` | **Deprecated (0016)**, copied into the lookup list `owner` (key derived from the name; kind and e-mail in the value's description). This is not a login table (see `users`). | `kind` check; unique `external_ref`; email format |
 | `users` | Accounts: `username`, `display_name`, `email`, `is_active`, argon2id `password_hash` (PHC string, never returned by the API), `password_changed_at`, `last_login_at`. An account created by an identity provider has `identity_provider_id` and `external_id` (the OIDC `sub`, or the directory entry's `objectGUID`/`entryUUID`/DN) and no password. | unique `lower(username)`; username format; `password_hash LIKE '$argon2id$%'`; a password **iff** local (check); `identity_provider_id` and `external_id` together, unique as a pair; provider FK `RESTRICT`; email format |
 | `identity_providers` | OIDC providers (`kind = 'oidc'`: `issuer_url`, `client_id`, `client_secret`, `scopes`, `username_claim`, `groups_claim`) and LDAP/AD directories (`kind = 'ldap'`: `ldap_url`, `start_tls`, `bind_dn`, `bind_password`, `user_base_dn`, `user_filter`, attribute names), with `name`, `is_enabled`, `sort_order` and an optional `ca_certificate` (PEM). Secrets are stored as is (the server presents them) and never returned by the API. | unique `lower(name)`; the columns of its kind required and the other kind's NULL (checks); issuer `https://` (or loopback `http://`); `ldaps://`, or `ldap://` with `start_tls` (check); bind DN and password together; filter contains `{username}`; `kind` immutable (trigger) |
 | `identity_provider_group_mappings` | A group the provider reports (`group_name`: an OIDC groups-claim value or an LDAP group DN) grants a permission profile. | unique (`provider_id`, `lower(group_name)`, `profile_id`); cascades with the provider and the profile |
@@ -95,8 +96,62 @@ All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which 
   (also `Database runs_on Server|VM` and `VM runs_on Server`).
 - **Device → Location:** `<any hardware> located_in <Location CI>`. The rule is declared on the
   abstract `hardware` class, so servers, network devices and any future hardware class are covered.
-  A Location-class CI sets its core `location_id` to the matching `locations` row, which ties the
-  relationship graph to the lookup hierarchy used for filtering.
+  Hardware also has a `location` lookup field (list `location`) for filtering by site or rack.
+
+## The CI core: ident, validity and label
+
+Since migration `0016_core_ci_model` (SHAA-267) a CI has only a barebone core; every other field
+comes from its class.
+
+- **`ident`**: a short, readable identifier, unique regardless of case. The database generates it
+  (`cmdb.new_ci_ident()`: `CI-` and 8 Crockford base32 characters from 40 random bits, e.g.
+  `CI-7K3M9Q2X`). It is immutable for everyone but users holding the **Administrator** profile: the
+  API answers `403 FORBIDDEN` to anyone else who sends a different ident on create or update (resending
+  the current one is fine). An administrator may set any `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (a legacy
+  asset number, say); a taken ident is `409 CONFLICT`. The change is in the CI's `update` audit row
+  (`oldValue.ident`, `newValue.ident`).
+- **`valid_from`** (default: now) and **`valid_until`** (optional, after `valid_from`): the validity
+  period. A CI is **active** while `valid_from <= now() < valid_until` (open-ended without
+  `valid_until`), so a future `valid_until` schedules the deactivation. `active` is derived at query
+  time (`schema::ACTIVE_SQL`), never stored. Lists and search show active CIs unless
+  `active=false|all`. Inactive is not deleted: the CI stays editable and linkable, and soft delete
+  (`deleted_at`) is separate.
+- **`label`**: the display name used in lists (and their default sort), references, relationships,
+  the graph and search. It is the value of the class's **title attribute**
+  (`ci_classes.title_attribute_id`) as text (at most 500 characters; an IP without its `/32`, a
+  datetime in UTC), or the ident when the class has none or the CI has no value. The API recomputes it
+  in the same transaction as every change that affects it (a CI's values, a class's title attribute or
+  parent, a title field's type change or purge); clients never write it. A new subtype takes its
+  parent's title attribute.
+
+**Former fixed columns.** Until 0016 every CI had `name`, `status_id`, `environment_id`, `owner_id`,
+`location_id`, `hostname`, `ip_address`, `serial_number` and `notes`. The migration made them class
+fields and dropped the columns:
+
+| Column | Field | Placed on |
+| --- | --- | --- |
+| `name` | `name`, text, required, max. 200 | every root class; it is the title attribute of every class |
+| `status_id` | `status`, lookup (list `status`), required | the topmost classes whose CIs held a value |
+| `environment_id`, `owner_id`, `location_id` | `environment`, `owner`, `location`, lookups (lists of the same names) | the same rule |
+| `hostname`, `ip_address`, `serial_number`, `notes` | `hostname` (text, hostname pattern), `ip_address` (ip), `serial_number` (text, max. 200), `notes` (text, max. 4000) | the same rule |
+
+"Topmost" means: a class gets the field if its own CIs (deleted ones included) held a value and no
+ancestor already got it, so each CI's lineage has exactly one such field. A key already used in that
+lineage gets a suffix (`hostname_2`) and a warning in `schema_changes`. The lookup lists get the rows of
+`statuses`, `environments`, `owners` and `locations` **with the same ids** (a list key already taken
+gets a suffix too), so an id stored anywhere keeps its meaning. For every field the number of values
+written must equal the number of CIs that held one, or the migration fails and nothing changes.
+`updated_at` of CIs and classes is kept (the backfill is not an edit), and stored UI settings are
+rewritten to the new field names in a new settings version. `sql/checks/core_ci_upgrade_1_before.sql`
+and `_2_after.sql` compare every value before and after the upgrade.
+
+**Dashboards and operational status.** Status is now an ordinary lookup field, so "counts by status"
+keep working through it: the built-in dashboard and `count_by_lookup` widgets count CIs per value of
+a lookup list with `lookupValueId` (the migration turned `count_by_status` / `count_by_environment`
+widgets into `count_by_lookup` widgets on the migrated lists, and saved-search status, environment and
+location filters into `lookups` filters). The `is_operational` flag of the old `statuses` table is no
+longer used: whether a CI is live is its validity (`active`), which is independent of any class
+field. Reports that want "operational" should filter on `active` in the reporting views.
 
 ### Bare start and the IT infrastructure starter template
 
@@ -113,15 +168,19 @@ seeded before migration 0004 keep all their rows; the template then reports `ins
 The template contains:
 
 - Classes: `hardware` (abstract) › `server`, `network_device`; `virtual_machine`, `application`,
-  `database`, `service`, `location`. There are 35 attribute definitions across them, including an
-  `application.primary_database` **reference** attribute.
+  `database`, `service`, `location`. There are 69 attribute definitions across them, including an
+  `application.primary_database` **reference** attribute. Every root class has `name` (the title
+  attribute), `status` and, where it makes sense, `environment`, `owner` and `notes`; hardware also
+  `location`, `hostname`, `ip_address` and `serial_number`, virtual machines `hostname` and `ip_address`.
+  A template field whose key a class of the same lineage already has (e.g. `status` on `server` after the
+  0016 upgrade) counts as present.
 - Relationship rules: `runs_on` (app→server/VM, db→server/VM, VM→server), `depends_on`
   (app→db/app, service→app/service), `located_in` (hardware→location, location→location),
   `connected_to` (hardware↔hardware).
-- Statuses, environments and a small location tree (EMEA › FRA1 › room › rack, Americas › NYC1,
-  AWS eu-central-1).
-- `seed --demo` installs the template, then adds three owner teams, 8 CIs, 24 attribute values and
-  8 relationships (a CRM service down to its rack).
+- Lookup lists `status` (planned, in service, maintenance, retired, disposed), `environment`,
+  `owner` (empty) and `location` (EMEA, FRA1, its room and rack, Americas, NYC1, AWS eu-central-1).
+- `seed --demo` installs the template, then adds three owner teams to the `owner` list, 8 CIs with
+  their names, statuses and other values, and 8 relationships (a CRM service down to its rack).
 - It installs into the area **Infrastruktur** (schema `infrastruktur`), creating the area if needed,
   and builds the type tables and reporting views in the same transaction.
 
@@ -136,8 +195,9 @@ created. The API derives it from the display name unless one is given: lower cas
 match `^[a-z][a-z0-9_]{0,62}$` (types: at most 61 characters, since the view adds `v_`), so it never
 needs quoting in a report. Refused with `422 INVALID_NAME` and the reason: reserved SQL keywords,
 `pg_` prefixes, system schemas (`cmdb`, `public`, `information_schema`, `cmdb_*`), the database
-role prefix `shadoucmdb_*` for areas, `v_` for types, registry column names (`id`, `name`,
-`status`, …) for fields, and names already taken (types are unique across areas; a field is unique
+role prefix `shadoucmdb_*` for areas, `v_` for types, registry column names of the reporting views
+(`id`, `ident`, `label`, `type`, `valid_from`, `valid_until`, `active`, `record_version`, `created_at`,
+`updated_at`, `deleted_at`) for fields, and names already taken (types are unique across areas; a field is unique
 within its type's lineage; an area may not match an existing schema or database role, since a schema
 named after a role comes first on that role's default search_path).
 
@@ -195,7 +255,7 @@ value before and after the upgrade.
 | `ci_relationships` | **Soft delete** (`deleted_at`) | Answers "what did this app run on before the migration?" Uniqueness applies only to live edges, so a removed edge can be re-created. When the API soft-deletes a CI, it also soft-deletes that CI's live relationships in the same transaction. |
 | Type tables (`<area>.<type>`) | **Follow the registry** | A CI's rows live as long as its `configuration_items` row (so a soft-deleted CI keeps its values). Clearing a field sets the column to NULL; the old value is kept in `audit_log`. |
 | `areas`, `ci_classes`, `ci_attribute_definitions` | **Archive, then purge** (`is_active = false`) | They are database objects. DELETE archives and keeps all data; only a purge, typed to confirm, drops the schema, table or column. `schema_changes` and `audit_log` keep the history of both; purging a type also writes a `delete` row with the last state of every CI and relationship it removes. |
-| `relationship_types`, `statuses`, `environments`, `locations`, `owners`, `lookup_lists`, `lookup_list_values` | **Retire, don't delete** (`is_active = false`) | These are referenced by history. FKs are `ON DELETE RESTRICT`, so a referenced row cannot be hard-deleted (the API checks first and answers `409 IN_USE` with the counts, see `GET …/{id}/usage`); inactive rows keep resolving for old CIs and are hidden from pickers. Inactive classes cannot receive new CIs, inactive attributes and lookup values cannot receive new values, and inactive relationship types cannot receive new edges. An unused lookup list is deleted together with its values. |
+| `relationship_types`, `lookup_lists`, `lookup_list_values` (and the deprecated `statuses`, `environments`, `locations`, `owners`, which no CI references any more) | **Retire, don't delete** (`is_active = false`) | These are referenced by history. FKs are `ON DELETE RESTRICT`, so a referenced row cannot be hard-deleted (the API checks first and answers `409 IN_USE` with the counts, see `GET …/{id}/usage`); inactive rows keep resolving for old CIs and are hidden from pickers. Inactive classes cannot receive new CIs, inactive attributes and lookup values cannot receive new values, and inactive relationship types cannot receive new edges. An unused lookup list is deleted together with its values. |
 | `relationship_type_rules` | **Hard delete** | Pure configuration. Removing a rule blocks new edges and leaves existing edges alone. |
 | `audit_log` | **Append-only; pruned by age only** | UPDATE, DELETE and TRUNCATE are rejected by trigger and not granted to the API role. The only deletion path is the operator's `shadoucmdb prune-audit`, see [Retention and personal data](#retention-and-personal-data). |
 | `users` | **Disable** (`is_active = false`), hard delete allowed | Disabling is the normal way to remove access and ends the user's sessions. A hard delete is allowed because nothing references a user by foreign key: `audit_log` keeps `actor_id` and `actor_name` as text, so history still names them. |
@@ -385,10 +445,13 @@ live in the per-type tables.
 
 | Query | Index |
 | --- | --- |
-| Inventory list sorted by name / recently updated | `configuration_items_live_name_idx` (`lower(name), id`), `configuration_items_live_updated_idx`; both partial on live rows, keyset-pagination friendly |
-| Filter by class / status / owner / location / environment | `configuration_items_{class,status,owner,location,environment}_idx` (partial, live rows) |
-| Global search | `search_vector` (generated tsvector over name, hostname, serial, notes) with GIN; trigram GIN on `name`, `hostname`, `serial_number` for `ILIKE '%…%'` |
-| IP lookup and subnet containment | GiST `inet_ops` on `ip_address` (`ip_address << '10.0.0.0/8'`) |
+| Inventory list sorted by label / recently updated | `configuration_items_live_label_idx` (`lower(label), id`), `configuration_items_live_updated_idx`; both partial on live rows, keyset-pagination friendly |
+| Filter by class (sorted by label) | `configuration_items_class_label_idx` (`class_id, lower(label)`, live rows) |
+| Active / inactive | `configuration_items_validity_idx` (`valid_until, valid_from`, live rows) |
+| Ident lookup | `configuration_items_ident_uq` (unique, `lower(ident)`) and trigram GIN on `ident` |
+| Global search | `search_vector` (generated tsvector over label and ident) with GIN; trigram GIN on `label` for `ILIKE '%…%'`; field values (hostname, notes, …) through the type tables, see below |
+| Filter by status, environment, owner, location or any lookup value | `lookupValueId`: the lookup columns' `ix_<field id>` indexes in the type tables |
+| IP lookup and subnet containment | `ipWithin` and IP search scan the ip columns of the type tables (`<<=`); add a GiST `inet_ops` index on a hot column by hand if needed |
 | Relationship traversal (outgoing / incoming) | `ci_relationships_source_idx`, `ci_relationships_target_idx` (partial, live edges) |
 | Field values | Each type table is keyed by `id`; reference and lookup columns have an index (`ix_<field id>`) for reverse lookups and deletes. Search over text/enum/ip/cidr columns scans the type tables (`OR ci.id IN (SELECT id FROM <table> WHERE …)`); add an index on a hot column by hand if needed, the engine leaves foreign indexes alone |
 | Entity history | `audit_log_entity_idx` (`entity_type, entity_id, occurred_at desc`) |
@@ -438,3 +501,6 @@ other names are left alone.
   (`audit_log.actor_type = 'import'`), integrations and reporting.
 - Class permissions do not inherit down the class tree: a grant on `hardware` does not cover
   `server`. Use the wildcard or grant each class.
+- The label is maintained by the API. A value written into a type table by hand (never do that)
+  leaves the label stale until the CI is next saved or its class's title attribute changes.
+- Only the Administrator profile may change idents; there is no separate permission for it.

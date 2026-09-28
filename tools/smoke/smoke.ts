@@ -205,6 +205,15 @@ async function idByKey(collection: string, key: string): Promise<string> {
   return row.id;
 }
 
+/** Id of a lookup list value, by list key and value key. */
+async function valueId(listKey: string, key: string): Promise<string> {
+  const list = await idByKey('lookup-lists', listKey);
+  const { json } = await get(`/api/v1/lookup-list-values?listId=${list}&limit=200&q=${key}`);
+  const row = json.data.find((r: Json) => r.key === key);
+  if (!row) throw new Error(`lookup value ${listKey}/${key} not found; run \`shadoucmdb seed --demo\` first`);
+  return row.id;
+}
+
 async function main() {
   // --- OpenAPI + health --------------------------------------------------------
   const spec = (await get('/openapi.json')).json;
@@ -267,7 +276,9 @@ async function main() {
   check(adminMe.user.username === ADMIN_USERNAME && adminMe.csrfToken === admin.csrf, '/auth/me returns the user and the CSRF token');
 
   // --- Lookups ------------------------------------------------------------------
-  console.log('\n# Statuses / environments / locations / owners');
+  // Deprecated since migration 0016: CIs hold lookup list values (same ids) instead of these rows.
+  // A fresh install has none of them; the smoke creates its own.
+  console.log('\n# Statuses / environments / locations / owners (deprecated)');
   await get('/api/v1/statuses?sort=-name&isOperational=true');
   const status = (await post('/api/v1/statuses', { key: `smoke_${RUN}`, name: 'Smoke status', isOperational: false })).json;
   await get(`/api/v1/statuses/${status.id}`);
@@ -275,8 +286,8 @@ async function main() {
   await post('/api/v1/statuses', { key: `smoke_${RUN}`, name: 'dup' }, 409);
   await post('/api/v1/statuses', { key: 'Bad Key', name: '' }, 400);
   await patch(`/api/v1/statuses/${status.id}`, {}, 400);
-  const inService = await idByKey('statuses', 'in_service');
-  await del(`/api/v1/statuses/${inService}`, 409);
+  const legacyUsage = (await get(`/api/v1/statuses/${status.id}/usage`)).json;
+  check(!legacyUsage.inUse && legacyUsage.data[0]?.kind === 'configurationItems', 'a legacy status is never in use (CIs hold lookup values)');
   await del(`/api/v1/statuses/${status.id}`);
   await get(`/api/v1/statuses/${status.id}`, 404);
 
@@ -284,11 +295,11 @@ async function main() {
   const env = (await post('/api/v1/environments', { key: `smoke_env_${RUN}`, name: 'Smoke env' })).json;
   await get(`/api/v1/environments/${env.id}`);
   await patch(`/api/v1/environments/${env.id}`, { isActive: false });
+  await get(`/api/v1/environments/${env.id}/usage`);
   await del(`/api/v1/environments/${env.id}`);
-  const production = await idByKey('environments', 'production');
 
   await get('/api/v1/locations?parentId=none&sort=name');
-  const fra1 = await idByKey('locations', 'fra1');
+  const fra1 = (await post('/api/v1/locations', { key: `smoke_site_${RUN}`, name: 'Smoke site', locationType: 'site' })).json.id;
   await get(`/api/v1/locations?parentId=${fra1}`);
   const room = (await post('/api/v1/locations', { key: `smoke_room_${RUN}`, name: 'Smoke room', locationType: 'room', parentId: fra1 })).json;
   await get(`/api/v1/locations/${room.id}`);
@@ -306,7 +317,8 @@ async function main() {
   console.log('\n# Templates');
   const templates = (await get('/api/v1/admin/templates')).json;
   const itTemplate = templates.data.find((t: Json) => t.key === 'it_infrastructure');
-  check(itTemplate?.status === 'installed' && itTemplate.contents.classes === 8 && itTemplate.contents.attributeDefinitions === 35,
+  check(itTemplate?.status === 'installed' && itTemplate.contents.classes === 8 && itTemplate.contents.attributeDefinitions === 69
+    && itTemplate.contents.lookupLists === 4,
     'the IT infrastructure template is listed as installed (seed --demo installs it)');
   const reinstall = (await post('/api/v1/admin/templates/it_infrastructure/install', undefined, 200)).json;
   check(Object.values(reinstall.created as Record<string, number>).every((n) => n === 0) && reinstall.existing.classes === 8,
@@ -342,6 +354,13 @@ async function main() {
   await patch(`/api/v1/lookup-list-values/${acme.id}`, { isActive: false });
   check((await get(`/api/v1/lookup-list-values/${rocket.id}`)).json.isActive === false, 'retiring a parent value retires its dependent values');
   await patch(`/api/v1/lookup-list-values/${rocket.id}`, { isActive: true }, 400); // its manufacturer is retired
+
+  // The former fixed CI fields are lookup attributes on these lists (template or migration 0016).
+  const inService = await valueId('status', 'in_service');
+  const retired = await valueId('status', 'retired');
+  const production = await valueId('environment', 'production');
+  const ownerValue = (await post('/api/v1/lookup-list-values', { listId: await idByKey('lookup-lists', 'owner'), key: `smoke_${RUN}`, name: `Smoke team ${RUN}` })).json;
+  const roomValue = (await post('/api/v1/lookup-list-values', { listId: await idByKey('lookup-lists', 'location'), key: `smoke_room_${RUN}`, name: 'Smoke room' })).json;
 
   // --- Classes and attribute definitions ----------------------------------------
   console.log('\n# CI classes / attribute definitions');
@@ -381,6 +400,9 @@ async function main() {
   const eff = (await get(`/api/v1/ci-classes/${lb.id}/attributes`)).json;
   check(eff.data.some((a: Json) => a.key === 'manufacturer' && a.inherited) && eff.data.some((a: Json) => a.key === 'algorithm' && !a.inherited),
     'load balancer inherits hardware attributes and has its own');
+  check(lb.titleAttributeId && eff.data.some((a: Json) => a.id === lb.titleAttributeId && a.key === 'name'), 'a new subtype is labelled by its parent\'s title attribute (name)');
+  await patch(`/api/v1/ci-classes/${lb.id}`, { titleAttributeId: support.id }, 400); // a lookup cannot be a title
+  await patch(`/api/v1/ci-classes/${lb.id}`, { titleAttributeId: '00000000-0000-4000-8000-000000000000' }, 400);
 
   // --- Relationship types and rules ---------------------------------------------
   console.log('\n# Relationship types / rules');
@@ -401,45 +423,51 @@ async function main() {
   // --- Configuration items ------------------------------------------------------
   console.log('\n# Configuration items');
   await get('/api/v1/configuration-items?limit=5&sort=-updatedAt');
-  await get(`/api/v1/configuration-items?classId=${hardware}&statusId=${inService}&sort=className`);
-  await get('/api/v1/configuration-items?ipWithin=10.0.0.0/8&sort=ipAddress');
+  await get(`/api/v1/configuration-items?classId=${hardware}&lookupValueId=${inService}&sort=className`);
+  await get('/api/v1/configuration-items?ipWithin=10.0.0.0/8&sort=ident&active=all');
+  await get('/api/v1/configuration-items?statusId=x', 400); // removed in 0016
   const server = (await post('/api/v1/configuration-items', {
-    classId: serverClass, name: `smoke-srv-${RUN}`, statusId: inService, environmentId: production, ownerId: owner.id, locationId: room.id,
-    hostname: `smoke-srv-${RUN}.example.internal`, ipAddress: '10.77.0.10', serialNumber: `SN-SMOKE-${RUN}`,
-    notes: 'Primary smoke-test host in the blue zone',
-    attributes: { cpu_cores: 16, memory_gb: 64, os_family: 'linux', os_version: 'Debian 13', management_ip: '10.77.1.10', purchase_date: '2025-03-01' },
+    classId: serverClass,
+    attributes: {
+      name: `smoke-srv-${RUN}`, status: inService, environment: production, owner: ownerValue.id, location: roomValue.id,
+      hostname: `smoke-srv-${RUN}.example.internal`, ip_address: '10.77.0.10', serial_number: `SN-SMOKE-${RUN}`,
+      notes: 'Primary smoke-test host in the blue zone',
+      cpu_cores: 16, memory_gb: 64, os_family: 'linux', os_version: 'Debian 13', management_ip: '10.77.1.10', purchase_date: '2025-03-01',
+    },
   })).json;
+  check(/^CI-[0-9A-HJKMNP-TV-Z]{8}$/.test(server.ident) && server.label === `smoke-srv-${RUN}` && server.active === true && server.validUntil === null,
+    'a new CI gets a generated ident, its name as label and an open validity period');
   const database = (await post('/api/v1/configuration-items', {
-    classId: dbClass, name: `smoke-db-${RUN}`, statusId: inService, attributes: { engine: 'postgresql', port: 5432, backup_enabled: true },
+    classId: dbClass, attributes: { name: `smoke-db-${RUN}`, status: inService, engine: 'postgresql', port: 5432, backup_enabled: true },
   })).json;
   const app = (await post('/api/v1/configuration-items', {
-    classId: appClass, name: `smoke-app-${RUN}`, statusId: inService,
-    attributes: { url: 'https://smoke.example.com', criticality: 'high', primary_database: database.id },
+    classId: appClass,
+    attributes: { name: `smoke-app-${RUN}`, status: inService, url: 'https://smoke.example.com', criticality: 'high', primary_database: database.id },
   })).json;
-  check(app.attributeReferences?.primary_database?.name === database.name, 'reference attribute resolves to the database name');
+  check(app.attributeReferences?.primary_database?.name === database.label, 'reference attribute resolves to the database label');
   const listed = (await get(`/api/v1/configuration-items?classId=${appClass}&q=smoke-app-${RUN}`)).json;
   const listedApp = listed.data.find((c: Json) => c.id === app.id);
   check(listedApp?.attributes?.criticality === 'high' && listedApp?.attributes?.primary_database === database.id
-    && listedApp?.attributeReferences?.primary_database?.name === database.name && !('memory_gb' in listedApp.attributes),
+    && listedApp?.attributeReferences?.primary_database?.name === database.label && !('memory_gb' in listedApp.attributes),
     'list items carry attribute values and reference names');
-  await post('/api/v1/configuration-items', { classId: hardware, name: 'abstract', statusId: inService }, 400);
+  await post('/api/v1/configuration-items', { classId: hardware, attributes: { name: 'abstract', status: inService } }, 400);
+  await post('/api/v1/configuration-items', { classId: serverClass, attributes: { name: 'bad', status: inService, hostname: '-bad-', ip_address: '10.1.1.300' } }, 400);
+  await post('/api/v1/configuration-items', { classId: serverClass, attributes: { status: inService } }, 400); // name is required
   await post('/api/v1/configuration-items', {
-    classId: serverClass, name: 'bad', statusId: inService, hostname: '-bad-', ipAddress: '10.1.1.300',
-  }, 400);
-  await post('/api/v1/configuration-items', {
-    classId: appClass, name: 'bad-attrs', statusId: inService, attributes: { url: 'ftp://x', criticality: 'extreme', primary_database: server.id, nope: 1 },
+    classId: appClass, attributes: { name: 'bad-attrs', status: inService, url: 'ftp://x', criticality: 'extreme', primary_database: server.id, nope: 1 },
   }, 400);
   const bothStages = await post('/api/v1/configuration-items', {
-    classId: serverClass, name: 'bad-both', statusId: inService, ipAddress: '999.1.1.1', attributes: { management_ip: 'abc', cpu_cores: 'x' },
+    classId: serverClass, validFrom: 'yesterday', attributes: { name: 'bad-both', status: inService, management_ip: 'abc', cpu_cores: 'x' },
   }, 400);
   const bothFields = (bothStages.json?.error?.details ?? []).map((d: Json) => d.field);
-  check(['ipAddress', 'attributes.management_ip', 'attributes.cpu_cores'].every((f) => bothFields.includes(f)),
+  check(['validFrom', 'attributes.management_ip', 'attributes.cpu_cores'].every((f) => bothFields.includes(f)),
     'core-field and attribute errors are reported together');
-  await post('/api/v1/configuration-items', { classId: lb.id, name: 'lb-missing-required', statusId: inService, attributes: { vip: '10.0.0.1' } }, 400);
+  await post('/api/v1/configuration-items', { classId: serverClass, name: 'old-shape', statusId: inService }, 400); // fixed fields are gone
+  await post('/api/v1/configuration-items', { classId: lb.id, attributes: { name: 'lb-missing-required', status: inService, vip: '10.0.0.1' } }, 400);
   const lbItem = (await post('/api/v1/configuration-items', {
-    classId: lb.id, name: `smoke-lb-${RUN}`, statusId: inService, attributes: { device_role: 'load_balancer', algorithm: 'round_robin', vip: '10.77.5.5', management_subnet: '10.77.5.0/24' },
+    classId: lb.id, attributes: { name: `smoke-lb-${RUN}`, status: inService, device_role: 'load_balancer', algorithm: 'round_robin', vip: '10.77.5.5', management_subnet: '10.77.5.0/24' },
   })).json;
-  await post('/api/v1/configuration-items', { classId: lb.id, name: 'bad-cidr', statusId: inService, attributes: { device_role: 'load_balancer', algorithm: 'least_conn', management_subnet: '10.77.5.1/24' } }, 400); // host bits set
+  await post('/api/v1/configuration-items', { classId: lb.id, attributes: { name: 'bad-cidr', status: inService, device_role: 'load_balancer', algorithm: 'least_conn', management_subnet: '10.77.5.1/24' } }, 400); // host bits set
   const inUse = await patch(`/api/v1/attribute-definitions/${algo.id}`, { enumValues: ['least_conn'] }, 422); // round_robin in use
   check(inUse.json.error?.code === 'SCHEMA_CHANGE_REFUSED' && inUse.json.error.details?.[0]?.code === 'enum_value_in_use', 'an enum value still stored cannot be removed');
   check(lbItem.attributes.support === silver.id, 'a CI created without a value gets the attribute default');
@@ -450,10 +478,29 @@ async function main() {
   const required = await patch(`/api/v1/attribute-definitions/${slaRef.id}`, { isRequired: true }, 422);
   check(required.json.error?.code === 'SCHEMA_CHANGE_REFUSED' && required.json.error.details?.[0]?.code === 'values_missing', 'an attribute cannot become required (NOT NULL) while CIs lack a value');
 
+  // Core fields: ident (administrators only), validity and the derived active flag.
+  const byIdent = (await get(`/api/v1/search?q=${server.ident}`)).json;
+  check(byIdent.data[0]?.item.id === server.id && byIdent.data[0].matches.some((m: Json) => m.field === 'ident'), 'search by ident');
+  await post('/api/v1/configuration-items', { classId: serverClass, ident: server.ident.toLowerCase(), attributes: { name: 'dup-ident', status: inService } }, 409);
+  await post('/api/v1/configuration-items', { classId: serverClass, ident: 'has space', attributes: { name: 'bad-ident', status: inService } }, 400);
+  const old = (await post('/api/v1/configuration-items', {
+    classId: serverClass, ident: `SMOKE-OLD-${RUN}`, validFrom: '2020-01-01T00:00:00Z', validUntil: '2021-01-01T00:00:00Z',
+    attributes: { name: `smoke-old-${RUN}`, status: retired },
+  })).json;
+  check(old.ident === `SMOKE-OLD-${RUN}` && old.active === false, 'an administrator sets an ident; a CI past validUntil is inactive');
+  const activeOnly = (await get(`/api/v1/configuration-items?q=smoke-old-${RUN}`)).json;
+  const withInactive = (await get(`/api/v1/configuration-items?q=smoke-old-${RUN}&active=all`)).json;
+  const inactiveOnly = (await get(`/api/v1/configuration-items?q=smoke-&active=false&lookupValueId=${retired}`)).json;
+  check(activeOnly.page.total === 0 && withInactive.page.total === 1 && inactiveOnly.data.some((c: Json) => c.id === old.id),
+    'lists show active CIs unless active=false|all; lookupValueId filters by status');
+  await patch(`/api/v1/configuration-items/${old.id}`, { validUntil: '2019-01-01T00:00:00Z' }, 400); // before validFrom
+  await patch(`/api/v1/configuration-items/${old.id}`, { validUntil: null });
+  await get('/api/v1/configuration-items?active=maybe', 400);
+
   await get(`/api/v1/configuration-items/${server.id}`);
-  const upd = (await patch(`/api/v1/configuration-items/${server.id}`, { version: server.version, notes: 'Updated by smoke test', attributes: { memory_gb: 128, os_version: null } })).json;
+  const upd = (await patch(`/api/v1/configuration-items/${server.id}`, { version: server.version, attributes: { notes: 'Updated by smoke test', memory_gb: 128, os_version: null } })).json;
   check(upd.version === server.version + 1 && upd.attributes.memory_gb === 128 && !('os_version' in upd.attributes), 'patch merges attributes, clears nulls, bumps version');
-  await patch(`/api/v1/configuration-items/${server.id}`, { version: server.version, notes: 'stale' }, 409);
+  await patch(`/api/v1/configuration-items/${server.id}`, { version: server.version, attributes: { notes: 'stale' } }, 409);
   await patch(`/api/v1/configuration-items/${server.id}`, { classId: dbClass }, 400); // server attributes not on database
   await patch(`/api/v1/configuration-items/${server.id}`, { attributes: { cpu_cores: 1.5 } }, 400);
   await patch(`/api/v1/configuration-items/${server.id}`, { version: 5 }, 400); // nothing to update
@@ -476,11 +523,11 @@ async function main() {
   // --- Graph --------------------------------------------------------------------
   console.log('\n# Graph');
   const g1 = (await get(`/api/v1/configuration-items/${app.id}/graph?direction=outgoing&depth=1`)).json;
-  const names = (g: Json) => g.nodes.map((n: Json) => n.name);
-  check(names(g1).includes(server.name) && names(g1).includes(database.name), 'app graph has server and database');
+  const names = (g: Json) => g.nodes.map((n: Json) => n.label);
+  check(names(g1).includes(server.label) && names(g1).includes(database.label), 'app graph has server and database');
   const g2 = (await get(`/api/v1/configuration-items/${server.id}/graph?depth=2`)).json;
   check(
-    [server.name, app.name, database.name].every((n) => names(g2).includes(n)) &&
+    [server.label, app.label, database.label].every((n) => names(g2).includes(n)) &&
       g2.edges.some((e: Json) => e.type.key === 'runs_on' && e.sourceCiId === app.id && e.targetCiId === server.id) &&
       g2.edges.some((e: Json) => e.type.key === 'depends_on' && e.sourceCiId === app.id && e.targetCiId === database.id),
     'Server -> Application -> Database in one graph call',
@@ -490,17 +537,18 @@ async function main() {
   // --- Search -------------------------------------------------------------------
   console.log('\n# Search');
   const s1 = (await get(`/api/v1/search?q=smoke-srv-${RUN}.example`)).json;
-  check(s1.data[0]?.item.id === server.id && s1.data[0].matches.some((m: Json) => m.field === 'hostname'), 'search by hostname');
+  check(s1.data[0]?.item.id === server.id && s1.data[0].matches.some((m: Json) => m.field === 'attributes.hostname'), 'search by hostname');
   const s2 = (await get('/api/v1/search?q=10.77.0.10')).json;
   check(s2.data.some((r: Json) => r.item.id === server.id), 'search by exact IP');
   const s3 = (await get('/api/v1/search?q=10.77.0.0/16')).json;
   check(s3.data.some((r: Json) => r.item.id === server.id), 'search by CIDR containment');
   const s4 = (await get('/api/v1/search?q=smoke.example.com')).json;
   check(s4.data.some((r: Json) => r.item.id === app.id && r.matches.some((m: Json) => m.field === 'attributes.url')), 'search by attribute value');
-  const s5 = (await get('/api/v1/search?q=test%20updated')).json; // words of the patched notes, any order
-  check(s5.data.some((r: Json) => r.item.id === server.id && r.matches.some((m: Json) => m.field === 'notes')), 'search by notes words');
+  const s5 = (await get('/api/v1/search?q=updated%20by%20smoke')).json; // part of the patched notes
+  check(s5.data.some((r: Json) => r.item.id === server.id && r.matches.some((m: Json) => m.field === 'attributes.notes')), 'search by notes');
   await get(`/api/v1/search?q=SN-SMOKE-${RUN}&classId=${serverClass}`);
-  await get(`/api/v1/configuration-items?q=smoke-&ownerId=${owner.id}`);
+  const byOwner = (await get(`/api/v1/configuration-items?q=smoke-&lookupValueId=${ownerValue.id},${production}`)).json;
+  check(byOwner.page.total === 1 && byOwner.data[0].id === server.id, 'lookup values of different lists must all match');
   await get('/api/v1/search', 400);
 
   await permissions({ serverClass, appClass, dbClass, server, app, database, r1, inService, adminMe });
@@ -521,10 +569,9 @@ async function main() {
   const allEdges = (await get(`/api/v1/relationships?ciId=${server.id}&deleted=include`)).json;
   check(liveEdges.page.total === 0 && allEdges.page.total >= 2, 'deleting a CI soft-deletes its relationships');
   await get(`/api/v1/configuration-items?deleted=only&q=smoke-srv-${RUN}`);
-  await patch(`/api/v1/configuration-items/${server.id}`, { notes: 'x' }, 409);
+  await patch(`/api/v1/configuration-items/${server.id}`, { attributes: { notes: 'x' } }, 409);
   await del(`/api/v1/configuration-items/${server.id}`, 404);
   await post('/api/v1/relationships', { relationshipTypeId: runsOn, sourceCiId: app.id, targetCiId: server.id }, 400); // deleted endpoint
-  await del(`/api/v1/owners/${owner.id}`, 409); // still owns the (deleted) server
   await patch(`/api/v1/owners/${owner.id}`, { isActive: false });
   await get(`/api/v1/relationship-rules/${rule.id}/usage`);
   await del(`/api/v1/relationship-rules/${rule.id}`);
@@ -543,12 +590,15 @@ async function main() {
   check(lbUsage.inUse && lbUsage.data.some((u: Json) => u.kind === 'deletedConfigurationItems' && u.count === 1), 'class usage counts deleted CIs');
   await del(`/api/v1/ci-classes/${lb.id}`); // archives the type; its table and CIs stay
   check((await get(`/api/v1/ci-classes/${lb.id}`)).json.isActive === false, 'deleting a type archives it');
-  await post('/api/v1/configuration-items', { classId: lb.id, name: 'archived-class', statusId: inService, attributes: { device_role: 'other', algorithm: 'least_conn' } }, 400);
+  await post('/api/v1/configuration-items', { classId: lb.id, attributes: { name: 'archived-class', status: inService, device_role: 'other', algorithm: 'least_conn' } }, 400);
   await get(`/api/v1/locations/${room.id}/usage`);
-  await del(`/api/v1/locations/${room.id}`, 409);
-  await get(`/api/v1/statuses/${inService}/usage`);
-  await get(`/api/v1/environments/${production}/usage`);
   await get(`/api/v1/owners/${owner.id}/usage`);
+  await del(`/api/v1/locations/${fra1}`, 409); // still has the room
+  await del(`/api/v1/locations/${room.id}`); // CIs do not refer to the old tables any more
+  await del(`/api/v1/locations/${fra1}`);
+  await del(`/api/v1/owners/${owner.id}`);
+  const ownerUsage = (await get(`/api/v1/lookup-list-values/${ownerValue.id}/usage`)).json;
+  check(ownerUsage.inUse && ownerUsage.data.some((u: Json) => u.kind === 'attributeValues' && u.count === 1), 'a lookup value stored on a (deleted) CI is in use');
   const silverUsage = (await get(`/api/v1/lookup-list-values/${silver.id}/usage`)).json;
   check(silverUsage.inUse && silverUsage.data.some((u: Json) => u.kind === 'attributeDefaults' && u.count === 1), 'a list value used as default is in use');
   await del(`/api/v1/lookup-list-values/${gold.id}`, 409); // stored on the (deleted) LB item
@@ -600,6 +650,7 @@ async function main() {
 /** Profiles, users, class-scoped and global permissions, CSRF, backoff, lockout protection. */
 async function permissions(x: Json) {
   const { serverClass, appClass, dbClass, server, app, database, r1, inService, adminMe } = x;
+  const newServer = (name: string) => ({ classId: serverClass, attributes: { name, status: inService } });
   const put = (url: string, body: unknown, expect = 200) => call('PUT', url, body, expect);
   const builtin = adminMe.user.profiles.find((p: Json) => p.isBuiltin);
 
@@ -651,8 +702,8 @@ async function permissions(x: Json) {
     check(list.data.length > 0 && list.data.every((c: Json) => c.classId === serverClass), 'inventory only lists classes the user may view');
     await get(`/api/v1/configuration-items/${server.id}`);
     await get(`/api/v1/configuration-items/${app.id}`, 403);
-    await post('/api/v1/configuration-items', { classId: serverClass, name: 'nope', statusId: inService }, 403);
-    await patch(`/api/v1/configuration-items/${server.id}`, { notes: 'nope' }, 403);
+    await post('/api/v1/configuration-items', newServer('nope'), 403);
+    await patch(`/api/v1/configuration-items/${server.id}`, { attributes: { notes: 'nope' } }, 403);
     await del(`/api/v1/configuration-items/${server.id}`, 403);
     const g = (await get(`/api/v1/configuration-items/${server.id}/graph?depth=2`)).json;
     check(g.nodes.every((n: Json) => n.classId === serverClass) && g.edges.length === 0, 'graph leaves out classes the user may not view');
@@ -683,44 +734,44 @@ async function permissions(x: Json) {
     classPermissions: [{ classId: appClass, view: true, create: true, edit: true, delete: false }],
   })).json;
   const appEditor = (await post('/api/v1/admin/users', { username: `smoke-app-editor-${RUN}`, displayName: 'App editor', password, profileIds: [appEditors.id] })).json;
-  const otherDb = (await post('/api/v1/configuration-items', { classId: dbClass, name: `smoke-db-hidden-${RUN}`, statusId: inService, attributes: { engine: 'postgresql' } })).json;
+  const otherDb = (await post('/api/v1/configuration-items', { classId: dbClass, attributes: { name: `smoke-db-hidden-${RUN}`, status: inService, engine: 'postgresql' } })).json;
   const hiddenRef = (ci: Json) => {
     const r = ci.attributeReferences?.primary_database;
     return ci.attributes?.primary_database === database.id && r?.id === database.id && r.hidden === true && r.name === null && r.deleted === false;
   };
   await as(await login(appEditor.username, password), async () => {
     const shown = (await get(`/api/v1/configuration-items/${app.id}`)).json;
-    check(hiddenRef(shown) && !JSON.stringify(shown).includes(database.name), 'detail: a reference into a hidden class has no name (hidden: true)');
+    check(hiddenRef(shown) && !JSON.stringify(shown).includes(database.label), 'detail: a reference into a hidden class has no name (hidden: true)');
     const listed = (await get(`/api/v1/configuration-items?classId=${appClass}&q=smoke-app-${RUN}`)).json.data.find((c: Json) => c.id === app.id);
-    check(hiddenRef(listed) && !JSON.stringify(listed).includes(database.name), 'list: a reference into a hidden class has no name');
+    check(hiddenRef(listed) && !JSON.stringify(listed).includes(database.label), 'list: a reference into a hidden class has no name');
     const kept = (await patch(`/api/v1/configuration-items/${app.id}`, { attributes: { primary_database: database.id } })).json;
     check(hiddenRef(kept), 'resending the unchanged hidden reference is accepted and stays hidden');
     const code = (r: { json: Json }) => JSON.stringify([r.json.error?.code, r.json.error?.details]);
     const existing = await patch(`/api/v1/configuration-items/${app.id}`, { attributes: { primary_database: otherDb.id } }, 400);
     const missing = await patch(`/api/v1/configuration-items/${app.id}`, { attributes: { primary_database: '00000000-0000-4000-8000-000000000000' } }, 400);
-    check(code(existing) === code(missing) && existing.json.error?.details?.[0]?.code === 'not_found' && !JSON.stringify(existing.json).includes(otherDb.name),
+    check(code(existing) === code(missing) && existing.json.error?.details?.[0]?.code === 'not_found' && !JSON.stringify(existing.json).includes(otherDb.label),
       'setting a reference to a CI in a hidden class fails exactly like a missing one (no existence oracle)');
     // GH#45: a body that fails its schema still gets its attributes checked, with the same reference access.
     const refFailed = (r: { json: Json }) => r.json.error?.details?.some((d: Json) => d.field === 'attributes.primary_database' && d.code === 'not_found');
     const create = (ref: string) => post('/api/v1/configuration-items', {
-      classId: appClass, name: `smoke-app-bad-${RUN}`, statusId: inService, ipAddress: '999.1.1.1', attributes: { primary_database: ref },
+      classId: appClass, validFrom: 'not-a-date', attributes: { name: `smoke-app-bad-${RUN}`, status: inService, primary_database: ref },
     }, 400);
     const createExisting = await create(otherDb.id);
     const createMissing = await create('00000000-0000-4000-8000-000000000000');
-    check(code(createExisting) === code(createMissing) && fields(createExisting).includes('ipAddress') && refFailed(createExisting) &&
-      !JSON.stringify(createExisting.json).includes(otherDb.name),
+    check(code(createExisting) === code(createMissing) && fields(createExisting).includes('validFrom') && refFailed(createExisting) &&
+      !JSON.stringify(createExisting.json).includes(otherDb.label),
       'create with an invalid body: a reference into a hidden class fails exactly like a missing one');
-    const update = (ref: string) => patch(`/api/v1/configuration-items/${app.id}`, { ipAddress: '999.1.1.1', attributes: { primary_database: ref } }, 400);
+    const update = (ref: string) => patch(`/api/v1/configuration-items/${app.id}`, { validFrom: 'not-a-date', attributes: { primary_database: ref } }, 400);
     const updateExisting = await update(otherDb.id);
     const updateMissing = await update('00000000-0000-4000-8000-000000000000');
-    check(code(updateExisting) === code(updateMissing) && fields(updateExisting).includes('ipAddress') && refFailed(updateExisting) &&
-      !JSON.stringify(updateExisting.json).includes(otherDb.name),
+    check(code(updateExisting) === code(updateMissing) && fields(updateExisting).includes('validFrom') && refFailed(updateExisting) &&
+      !JSON.stringify(updateExisting.json).includes(otherDb.label),
       'update with an invalid body: a reference into a hidden class fails exactly like a missing one');
     const unchanged = await update(database.id);
-    check(JSON.stringify(fields(unchanged)) === '["ipAddress"]', 'update with an invalid body: the unchanged hidden reference is not flagged');
+    check(JSON.stringify(fields(unchanged)) === '["validFrom"]', 'update with an invalid body: the unchanged hidden reference is not flagged');
   });
   const asAdmin = (await get(`/api/v1/configuration-items/${app.id}`)).json.attributeReferences?.primary_database;
-  check(asAdmin?.name === database.name && asAdmin.hidden === false, 'an administrator still sees the referenced name');
+  check(asAdmin?.name === database.label && asAdmin.hidden === false, 'an administrator still sees the referenced name');
   await del(`/api/v1/configuration-items/${otherDb.id}`, 204);
   await del(`/api/v1/admin/users/${appEditor.id}`);
   await del(`/api/v1/admin/profiles/${appEditors.id}`);
@@ -878,8 +929,11 @@ async function permissions(x: Json) {
   // The administrator's token scoped to editors (create/edit servers): writes without a CSRF token, audited as api_client.
   const editorToken = (await post(tokens, { name: `smoke-editor-token-${RUN}`, profileId: editors.id, expiresAt: inDays(1) })).json;
   const editorBearer = { authorization: `Bearer ${editorToken.secret}` };
-  const made = await as(null, () => call('POST', '/api/v1/configuration-items', { classId: serverClass, name: `smoke-token-srv-${RUN}`, statusId: inService }, 201, editorBearer));
-  await as(null, () => call('PATCH', `/api/v1/configuration-items/${made.json.id}`, { notes: 'edited by token' }, 200, editorBearer));
+  const made = await as(null, () => call('POST', '/api/v1/configuration-items', newServer(`smoke-token-srv-${RUN}`), 201, editorBearer));
+  await as(null, () => call('PATCH', `/api/v1/configuration-items/${made.json.id}`, { attributes: { notes: 'edited by token' } }, 200, editorBearer));
+  // Only administrators change an ident: an editor's token (and session) gets 403, even with create and edit rights.
+  await as(null, () => call('PATCH', `/api/v1/configuration-items/${made.json.id}`, { ident: `SMOKE-TOKEN-${RUN}` }, 403, editorBearer));
+  await as(null, () => call('PATCH', `/api/v1/configuration-items/${made.json.id}`, { ident: made.json.ident, attributes: { notes: 'same ident' } }, 200, editorBearer));
   await as(null, () => call('DELETE', `/api/v1/configuration-items/${made.json.id}`, undefined, 403, editorBearer));
   await del(`/api/v1/configuration-items/${made.json.id}`);
   const requestId = made.headers.get('x-request-id');
@@ -1085,7 +1139,7 @@ async function mfa(builtin: Json, createHash: typeof import('node:crypto').creat
 
 /** Areas are PostgreSQL schemas, types are tables, fields are typed columns: names, DDL, guards, concurrency, purge. */
 async function realTables(x: Json) {
-  const { inService, infra, adminMe } = x;
+  const { infra, adminMe } = x;
   const ddl = async (q: string) => (await get(`/api/v1/schema-changes?q=${encodeURIComponent(q)}&limit=200`)).json.data.flatMap((c: Json) => c.statements as string[]);
   const detail = async (id: string) => (await get(`/api/v1/configuration-items/${id}`)).json;
   const code = (r: { json: Json }) => `${r.json?.error?.code}/${r.json?.error?.details?.[0]?.code}`;
@@ -1176,22 +1230,23 @@ async function realTables(x: Json) {
   const netDdl2 = await ddl('"bestand"."netzwerk"');
   check(netDdl2.some((st: string) => st.startsWith(`ALTER TABLE "bestand"."netzwerk" ADD CONSTRAINT "ck_${hex(rolle.id)}_`) && st.endsWith(`CHECK ("rolle" = ANY ('{core,access}'::text[]))`)), 'an enum field is text with a CHECK on its values');
   check(netDdl2.includes(`ALTER TABLE "bestand"."netzwerk" ADD CONSTRAINT "fk_${hex(uplink.id)}" FOREIGN KEY ("uplink") REFERENCES cmdb.configuration_items (id) ON DELETE NO ACTION`), 'a reference field is a foreign key to the registry');
-  for (const [key, why] of [['id', 'reserved_name'], ['name', 'reserved_name'], ['a"b', 'invalid_format'], ['x; DROP TABLE y', 'invalid_format'], ['pg_x', 'reserved_prefix'], ['b'.repeat(64), 'too_long'], ['groesse', 'name_taken']]) {
+  for (const [key, why] of [['id', 'reserved_name'], ['ident', 'reserved_name'], ['a"b', 'invalid_format'], ['x; DROP TABLE y', 'invalid_format'], ['pg_x', 'reserved_prefix'], ['b'.repeat(64), 'too_long'], ['groesse', 'name_taken']]) {
     check(code(await field({ key, label: 'Hostile', dataType: 'text' }, 422)) === `INVALID_NAME/${why}`, `field key ${JSON.stringify(key).slice(0, 30)} is refused (${why})`);
   }
-  check(code(await field({ label: 'Name', dataType: 'text' }, 422)) === 'INVALID_NAME/reserved_name', 'a label deriving a registry column name is refused');
+  check(code(await field({ label: 'Label', dataType: 'text' }, 422)) === 'INVALID_NAME/reserved_name', 'a label deriving a registry column name is refused');
 
   console.log('\n# CIs in type tables');
   const n1 = (await post('/api/v1/configuration-items', {
-    classId: net.id, name: `sw-core-${RUN}`, statusId: inService,
+    classId: net.id,
     attributes: { groesse: 48, f_text: '42', f_number: 1.5, f_boolean: true, f_date: '2025-01-02', f_datetime: '2025-01-02T03:04:05Z', f_ip: '10.9.0.1', f_cidr: '10.9.0.0/24', rolle: 'core' },
   })).json;
   check(n1.attributes.groesse === 48 && n1.attributes.f_number === 1.5 && n1.attributes.f_boolean === true && n1.attributes.f_date === '2025-01-02' &&
     Date.parse(n1.attributes.f_datetime) === Date.parse('2025-01-02T03:04:05Z') && n1.attributes.f_ip === '10.9.0.1' && n1.attributes.f_cidr === '10.9.0.0/24',
     'a CI of the new type stores and reads back typed values');
-  let n2 = (await post('/api/v1/configuration-items', { classId: net.id, name: `sw-access-${RUN}`, statusId: inService, attributes: { f_text: 'not a number', rolle: 'access', uplink: n1.id } })).json;
-  check(n2.attributeReferences?.uplink?.name === n1.name, 'a reference field resolves across the type table');
-  await post('/api/v1/configuration-items', { classId: net.id, name: 'bad', statusId: inService, attributes: { rolle: 'edge' } }, 400);
+  check(n1.label === n1.ident, 'a type without a title attribute labels its CIs by their ident');
+  let n2 = (await post('/api/v1/configuration-items', { classId: net.id, attributes: { f_text: 'not a number', rolle: 'access', uplink: n1.id } })).json;
+  check(n2.attributeReferences?.uplink?.name === n1.label, 'a reference field resolves across the type table');
+  await post('/api/v1/configuration-items', { classId: net.id, attributes: { rolle: 'edge' } }, 400);
   const found = (await get(`/api/v1/search?q=${encodeURIComponent('not a number')}`)).json;
   check(found.data.some((r: Json) => r.item.id === n2.id && r.matches.some((m: Json) => m.field === 'attributes.f_text')), 'search finds values in type tables');
   check((await get(`/api/v1/configuration-items?classId=${net.id}&q=10.9.0.1`)).json.data.some((c: Json) => c.id === n1.id), 'the inventory filter searches type columns');
@@ -1213,7 +1268,7 @@ async function realTables(x: Json) {
   n2 = (await patch(`/api/v1/configuration-items/${n2.id}`, { version: n2.version, attributes: { f_ip: '10.9.0.2' } })).json;
   await patch(`/api/v1/attribute-definitions/${f.ip.id}`, { isRequired: true });
   check((await ddl('f_ip')).includes('ALTER TABLE "bestand"."netzwerk" ALTER COLUMN "f_ip" SET NOT NULL'), 'once every asset has a value the column becomes NOT NULL');
-  await post('/api/v1/configuration-items', { classId: net.id, name: 'no-ip', statusId: inService }, 400);
+  await post('/api/v1/configuration-items', { classId: net.id }, 400);
 
   console.log('\n# Concurrent schema changes');
   const burst = await Promise.all([0, 1, 2, 3].map((i) => call('POST', '/api/v1/attribute-definitions', { classId: vm.id, key: `port_${i}`, label: `Port ${i}`, dataType: 'integer' }, 201)));
@@ -1280,21 +1335,23 @@ async function customization(x: Json) {
       widgets: [
         { id: 'by_class', type: 'count_by_class', classKeys: [serverKey] },
         { id: 'recent', type: 'recent_changes', limit: 5, size: 'large' },
-        { id: 'prod', type: 'saved_search', title: 'Production servers', search: { classKeys: [serverKey], filters: { environmentKeys: ['production'], statusKeys: [gone] } } },
+        { id: 'by_status', type: 'count_by_lookup', lookupListKey: 'status' },
+        { id: 'prod', type: 'saved_search', title: 'Production servers', search: { classKeys: [serverKey], filters: { lookups: { environment: ['production'], status: [gone] } } } },
       ],
     },
-    listViews: [{ classKey: serverKey, columns: ['name', 'status', 'attributes.cpu_cores', `attributes.${gone}`], defaultSort: { field: 'name', direction: 'desc' }, pageSize: 25 }],
-    layouts: [{ classKey: serverKey, panels: [{ key: 'main', label: 'Main', fields: ['name', 'hostname'] }], hiddenFields: ['notes'], readOnlyFields: ['serialNumber'] }],
+    listViews: [{ classKey: serverKey, columns: ['label', 'ident', 'attributes.status', 'attributes.cpu_cores', `attributes.${gone}`], defaultSort: { field: 'label', direction: 'desc' }, pageSize: 25 }],
+    layouts: [{ classKey: serverKey, panels: [{ key: 'main', label: 'Main', fields: ['attributes.name', 'attributes.hostname'] }], hiddenFields: ['attributes.notes'], readOnlyFields: ['ident', 'attributes.serial_number'] }],
   };
   const stale = await put('/api/v1/ui-settings', { version: firstVersion + 1000, settings: doc }, 409);
   check(stale.json.error?.code === 'VERSION_CONFLICT', 'saving over a newer version is a VERSION_CONFLICT');
-  const invalid = await put('/api/v1/ui-settings', { version: firstVersion, settings: { navigation: { entries: [{ type: 'page' }] }, layouts: [{ classKey: serverKey, hiddenFields: ['name'] }] } }, 400);
-  check(fields(invalid).includes('settings.navigation.entries.0.page') && fields(invalid).includes('settings.layouts.0.hiddenFields.0'), 'cross-field rules report paths into the document');
+  const invalid = await put('/api/v1/ui-settings', { version: firstVersion, settings: { navigation: { entries: [{ type: 'page' }] }, dashboard: { widgets: [{ id: 'w', type: 'count_by_lookup' }] } } }, 400);
+  check(fields(invalid).includes('settings.navigation.entries.0.page') && fields(invalid).includes('settings.dashboard.widgets.0.lookupListKey'), 'cross-field rules report paths into the document');
+  await put('/api/v1/ui-settings', { version: firstVersion, settings: { listViews: [{ classKey: serverKey, columns: ['hostname'] }] } }, 400); // a class field since 0016
   await put('/api/v1/ui-settings', { version: firstVersion, settings: { branding: { primaryColor: 'blue' } } }, 400);
   await put('/api/v1/ui-settings', { version: firstVersion, settings: { menu: [] } }, 400);
   const saved = (await put('/api/v1/ui-settings', { version: firstVersion, settings: doc, comment: 'smoke' })).json;
   const codes = saved.issues.map((i: Json) => i.code);
-  check(saved.version === firstVersion + 1 && codes.includes('unknown_class') && codes.includes('unknown_attribute') && codes.includes('unknown_status'), 'dangling references are accepted and reported as issues');
+  check(saved.version === firstVersion + 1 && codes.includes('unknown_class') && codes.includes('unknown_attribute') && codes.includes('unknown_lookup_value'), 'dangling references are accepted and reported as issues');
   check(saved.settings.navigation.entries[1].items.length === 1 && !saved.settings.listViews[0].columns.includes(`attributes.${gone}`), 'the effective settings leave dangling references out');
   const same = (await put('/api/v1/ui-settings', { version: saved.version, settings: doc })).json;
   check(same.version === saved.version, 'saving an unchanged document creates no version');

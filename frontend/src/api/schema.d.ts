@@ -332,13 +332,13 @@ export interface paths {
         };
         /**
          * Inventory list: paginated, searchable, filterable, sortable
-         * @description Returns CIs in classes the caller may view, each with its attribute values (`attributes`, `attributeReferences`) as on `getConfigurationItem`. Soft-deleted CIs are hidden unless `deleted=include|only`.
+         * @description Returns CIs in classes the caller may view, each with its attribute values (`attributes`, `attributeReferences`) as on `getConfigurationItem`. Only active CIs (inside their validity period) unless `active=false|all`; soft-deleted CIs are hidden unless `deleted=include|only`.
          */
         get: operations["listConfigurationItems"];
         put?: never;
         /**
          * Create a CI, including its attribute values
-         * @description Needs create on the class.
+         * @description Needs create on the class. The ident is generated unless an administrator sends one (403 for anyone else, 409 when another CI has it). The label follows from the class's title attribute.
          */
         post: operations["createConfigurationItem"];
         delete?: never;
@@ -370,7 +370,7 @@ export interface paths {
         head?: never;
         /**
          * Update a CI (partial); attributes are merged, null clears one
-         * @description Needs edit on the CI's class (and create on the new class when `classId` changes).
+         * @description Needs edit on the CI's class (and create on the new class when `classId` changes). Changing `ident` is for administrators only (403 for anyone else; resending the current value is allowed) and is recorded in the audit log like every change.
          */
         patch: operations["updateConfigurationItem"];
         trace?: never;
@@ -404,7 +404,7 @@ export interface paths {
         };
         /**
          * Global search across CIs, ranked, with the fields that matched
-         * @description Matches name, hostname and serial number (substring), IP address (prefix, or containment when `q` is an IP or CIDR), notes (word prefix) and attribute values (text/enum substring, IP/CIDR prefix). Exact matches rank first, then name prefix, then trigram similarity. Only CIs in classes the caller may view.
+         * @description Matches label and ident (substring and word prefix) and attribute values (text/enum substring, IP/CIDR prefix, IP containment when `q` is an IP or CIDR). Exact label or ident matches rank first, then label prefix, then trigram similarity. Only CIs in classes the caller may view; only active CIs unless `active=false|all`.
          */
         get: operations["searchConfigurationItems"];
         put?: never;
@@ -580,7 +580,7 @@ export interface paths {
         head?: never;
         /**
          * Update a ci class (partial)
-         * @description Requires `datamodel.manage`.
+         * @description Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled.
          */
         patch: operations["updateCiClass"];
         trace?: never;
@@ -978,13 +978,15 @@ export interface paths {
         };
         /**
          * List status records (paginated, searchable, sortable)
-         * @description `q` matches key, name, description (case-insensitive substring).
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
          */
         get: operations["listStatuses"];
         put?: never;
         /**
          * Create a status
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createStatus"];
         delete?: never;
@@ -1000,20 +1002,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get one status */
+        /**
+         * Get one status
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         */
         get: operations["getStatus"];
         put?: never;
         post?: never;
         /**
          * Delete a status
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteStatus"];
         options?: never;
         head?: never;
         /**
          * Update a status (partial)
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateStatus"];
         trace?: never;
@@ -1027,7 +1035,8 @@ export interface paths {
         };
         /**
          * What still refers to a status
-         * @description Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getStatusUsage"];
         put?: never;
@@ -1047,13 +1056,15 @@ export interface paths {
         };
         /**
          * List environment records (paginated, searchable, sortable)
-         * @description `q` matches key, name, description (case-insensitive substring).
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
          */
         get: operations["listEnvironments"];
         put?: never;
         /**
          * Create a environment
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createEnvironment"];
         delete?: never;
@@ -1069,20 +1080,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get one environment */
+        /**
+         * Get one environment
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         */
         get: operations["getEnvironment"];
         put?: never;
         post?: never;
         /**
          * Delete a environment
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteEnvironment"];
         options?: never;
         head?: never;
         /**
          * Update a environment (partial)
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateEnvironment"];
         trace?: never;
@@ -1096,7 +1113,8 @@ export interface paths {
         };
         /**
          * What still refers to a environment
-         * @description Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getEnvironmentUsage"];
         put?: never;
@@ -1116,13 +1134,15 @@ export interface paths {
         };
         /**
          * List location records (paginated, searchable, sortable)
-         * @description `q` matches key, name, description, address (case-insensitive substring).
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description, address (case-insensitive substring).
          */
         get: operations["listLocations"];
         put?: never;
         /**
          * Create a location
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createLocation"];
         delete?: never;
@@ -1138,20 +1158,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get one location */
+        /**
+         * Get one location
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         */
         get: operations["getLocation"];
         put?: never;
         post?: never;
         /**
          * Delete a location
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteLocation"];
         options?: never;
         head?: never;
         /**
          * Update a location (partial)
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateLocation"];
         trace?: never;
@@ -1165,7 +1191,8 @@ export interface paths {
         };
         /**
          * What still refers to a location
-         * @description Counts of configurationItems, deletedConfigurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getLocationUsage"];
         put?: never;
@@ -1185,13 +1212,15 @@ export interface paths {
         };
         /**
          * List owner records (paginated, searchable, sortable)
-         * @description `q` matches name, email, external_ref (case-insensitive substring).
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches name, email, external_ref (case-insensitive substring).
          */
         get: operations["listOwners"];
         put?: never;
         /**
          * Create a owner
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createOwner"];
         delete?: never;
@@ -1207,20 +1236,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get one owner */
+        /**
+         * Get one owner
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         */
         get: operations["getOwner"];
         put?: never;
         post?: never;
         /**
          * Delete a owner
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteOwner"];
         options?: never;
         head?: never;
         /**
          * Update a owner (partial)
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateOwner"];
         trace?: never;
@@ -1234,7 +1269,8 @@ export interface paths {
         };
         /**
          * What still refers to a owner
-         * @description Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getOwnerUsage"];
         put?: never;
@@ -1518,7 +1554,7 @@ export interface paths {
         put?: never;
         /**
          * Make an earlier version current again (saved as a new version)
-         * @description Requires `customization.manage`.
+         * @description Requires `customization.manage`. 409 CONFLICT for a version saved before an upgrade changed the settings format (e.g. migration 0016); the upgrade saved a converted copy as a newer version.
          */
         post: operations["restoreUiSettingsVersion"];
         delete?: never;
@@ -2069,6 +2105,12 @@ export interface components {
             sortOrder: number;
             /** @description Archived classes keep their CIs but accept no new ones */
             isActive: boolean;
+            /**
+             * Format: uuid
+             * @description The attribute (of this class or an ancestor) whose value labels its CIs in lists, references, the graph
+             *     and search; null labels them by their ident
+             */
+            titleAttributeId: string | null;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -2131,26 +2173,25 @@ export interface components {
         ConfigurationItem: {
             /** Format: uuid */
             id: string;
-            name: string;
+            /** @description Short unique identifier, e.g. "CI-7K3M9Q2X" (generated; only an administrator can change it) */
+            ident: string;
+            /** @description Display name: the value of the class's title attribute, or the ident when there is none */
+            label: string;
             /** Format: uuid */
             classId: string;
             class: components["schemas"]["LookupRef"];
-            /** Format: uuid */
-            statusId: string;
-            status: components["schemas"]["LookupRef"];
-            /** Format: uuid */
-            environmentId: string | null;
-            environment: components["schemas"]["LookupRef"] | null;
-            /** Format: uuid */
-            ownerId: string | null;
-            owner: components["schemas"]["OwnerRef"] | null;
-            /** Format: uuid */
-            locationId: string | null;
-            location: components["schemas"]["LookupRef"] | null;
-            hostname: string | null;
-            ipAddress: string | null;
-            serialNumber: string | null;
-            notes: string | null;
+            /**
+             * Format: date-time
+             * @description Start of the validity period
+             */
+            validFrom: string;
+            /**
+             * Format: date-time
+             * @description End of the validity period (exclusive); null means open-ended
+             */
+            validUntil: string | null;
+            /** @description True while validFrom <= now < validUntil (derived, not stored) */
+            active: boolean;
             /**
              * Format: int32
              * @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits
@@ -2174,7 +2215,7 @@ export interface components {
                 [key: string]: {
                     /** Format: uuid */
                     id: string;
-                    /** @description Null when `hidden` */
+                    /** @description The referenced CI's label; null when `hidden` */
                     name: string | null;
                     /** @description Always false when `hidden` */
                     deleted: boolean;
@@ -2190,26 +2231,25 @@ export interface components {
         ConfigurationItemSummary: {
             /** Format: uuid */
             id: string;
-            name: string;
+            /** @description Short unique identifier, e.g. "CI-7K3M9Q2X" (generated; only an administrator can change it) */
+            ident: string;
+            /** @description Display name: the value of the class's title attribute, or the ident when there is none */
+            label: string;
             /** Format: uuid */
             classId: string;
             class: components["schemas"]["LookupRef"];
-            /** Format: uuid */
-            statusId: string;
-            status: components["schemas"]["LookupRef"];
-            /** Format: uuid */
-            environmentId: string | null;
-            environment: components["schemas"]["LookupRef"] | null;
-            /** Format: uuid */
-            ownerId: string | null;
-            owner: components["schemas"]["OwnerRef"] | null;
-            /** Format: uuid */
-            locationId: string | null;
-            location: components["schemas"]["LookupRef"] | null;
-            hostname: string | null;
-            ipAddress: string | null;
-            serialNumber: string | null;
-            notes: string | null;
+            /**
+             * Format: date-time
+             * @description Start of the validity period
+             */
+            validFrom: string;
+            /**
+             * Format: date-time
+             * @description End of the validity period (exclusive); null means open-ended
+             */
+            validUntil: string | null;
+            /** @description True while validFrom <= now < validUntil (derived, not stored) */
+            active: boolean;
             /**
              * Format: int32
              * @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits
@@ -2264,6 +2304,7 @@ export interface components {
                 color?: string | null;
                 sortOrder?: number;
                 isActive?: boolean;
+                titleAttribute?: string | null;
             }[];
             attributes?: {
                 /** @description Stable machine key, lower_snake_case */
@@ -2557,7 +2598,7 @@ export interface components {
             /** @description Path in the stored document, e.g. "listViews.2.columns.3" */
             path: string;
             /** @enum {string} */
-            code: "unknown_class" | "unknown_attribute" | "unknown_status" | "unknown_environment" | "unknown_location" | "required_field_not_editable";
+            code: "unknown_class" | "unknown_attribute" | "unknown_lookup_list" | "unknown_lookup_value" | "required_field_not_editable";
             message: string;
         };
         LdapConfig: {
@@ -2774,13 +2815,6 @@ export interface components {
             data: components["schemas"]["Owner"][];
             page: components["schemas"]["PageMeta"];
         };
-        OwnerRef: {
-            /** Format: uuid */
-            id: string;
-            name: string;
-            /** @enum {string} */
-            kind: "person" | "team";
-        };
         PageMeta: {
             /** Format: int64 */
             limit: number;
@@ -2890,6 +2924,7 @@ export interface components {
             source: {
                 /** Format: uuid */
                 id: string;
+                /** @description The CI's label */
                 name: string;
                 classKey: string;
                 className: string;
@@ -2900,6 +2935,7 @@ export interface components {
             target: {
                 /** Format: uuid */
                 id: string;
+                /** @description The CI's label */
                 name: string;
                 classKey: string;
                 className: string;
@@ -2926,26 +2962,25 @@ export interface components {
             nodes: {
                 /** Format: uuid */
                 id: string;
-                name: string;
+                /** @description Short unique identifier, e.g. "CI-7K3M9Q2X" (generated; only an administrator can change it) */
+                ident: string;
+                /** @description Display name: the value of the class's title attribute, or the ident when there is none */
+                label: string;
                 /** Format: uuid */
                 classId: string;
                 class: components["schemas"]["LookupRef"];
-                /** Format: uuid */
-                statusId: string;
-                status: components["schemas"]["LookupRef"];
-                /** Format: uuid */
-                environmentId: string | null;
-                environment: components["schemas"]["LookupRef"] | null;
-                /** Format: uuid */
-                ownerId: string | null;
-                owner: components["schemas"]["OwnerRef"] | null;
-                /** Format: uuid */
-                locationId: string | null;
-                location: components["schemas"]["LookupRef"] | null;
-                hostname: string | null;
-                ipAddress: string | null;
-                serialNumber: string | null;
-                notes: string | null;
+                /**
+                 * Format: date-time
+                 * @description Start of the validity period
+                 */
+                validFrom: string;
+                /**
+                 * Format: date-time
+                 * @description End of the validity period (exclusive); null means open-ended
+                 */
+                validUntil: string | null;
+                /** @description True while validFrom <= now < validUntil (derived, not stored) */
+                active: boolean;
                 /**
                  * Format: int32
                  * @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits
@@ -3052,7 +3087,7 @@ export interface components {
             data: {
                 item: components["schemas"]["ConfigurationItemSummary"];
                 matches: {
-                    /** @description "name", "hostname", "serialNumber", "ipAddress", "notes" or "attributes.<key>" */
+                    /** @description "label", "ident" or "attributes.<key>" */
                     field: string;
                     label: string;
                     value: string;
@@ -3124,11 +3159,9 @@ export interface components {
                 /** Format: int64 */
                 relationshipRules: number;
                 /** Format: int64 */
-                statuses: number;
+                lookupLists: number;
                 /** Format: int64 */
-                environments: number;
-                /** Format: int64 */
-                locations: number;
+                lookupListValues: number;
             } & Record<string, never>;
             present: {
                 /** Format: int64 */
@@ -3142,11 +3175,9 @@ export interface components {
                 /** Format: int64 */
                 relationshipRules: number;
                 /** Format: int64 */
-                statuses: number;
+                lookupLists: number;
                 /** Format: int64 */
-                environments: number;
-                /** Format: int64 */
-                locations: number;
+                lookupListValues: number;
             } & Record<string, never>;
             /** @enum {string} */
             status: "not_installed" | "partial" | "installed";
@@ -3212,11 +3243,9 @@ export interface components {
                 /** Format: int64 */
                 relationshipRules: number;
                 /** Format: int64 */
-                statuses: number;
+                lookupLists: number;
                 /** Format: int64 */
-                environments: number;
-                /** Format: int64 */
-                locations: number;
+                lookupListValues: number;
             } & Record<string, never>;
             existing: {
                 /** Format: int64 */
@@ -3230,11 +3259,9 @@ export interface components {
                 /** Format: int64 */
                 relationshipRules: number;
                 /** Format: int64 */
-                statuses: number;
+                lookupLists: number;
                 /** Format: int64 */
-                environments: number;
-                /** Format: int64 */
-                locations: number;
+                lookupListValues: number;
             } & Record<string, never>;
             /** @description Rows not installed because they would clash with the current data model */
             skipped: string[];
@@ -3301,9 +3328,9 @@ export interface components {
             /** @description Stable machine key, lower_snake_case */
             classKey: string;
             panels?: components["schemas"]["UiLayoutPanel"][];
-            /** @description Fields not shown on the detail page or the form (name cannot be hidden) */
+            /** @description Fields not shown on the detail page or the form */
             hiddenFields?: string[];
-            /** @description Fields shown but not editable on the form (name cannot be read-only) */
+            /** @description Fields shown but not editable on the form */
             readOnlyFields?: string[];
         };
         /** @description Dashboard widgets in display order; null keeps the built-in dashboard */
@@ -3328,12 +3355,10 @@ export interface components {
              * @default null
              */
             q: string | null;
-            /** @description Status keys */
-            statusKeys?: string[];
-            /** @description Environment keys */
-            environmentKeys?: string[];
-            /** @description Location keys */
-            locationKeys?: string[];
+            /** @description Lookup list key -> value keys: CIs holding one of the values in a lookup attribute of that list, for every list given (e.g. {"status": ["in_service"], "environment": ["production"]}) */
+            lookups?: {
+                [key: string]: string[];
+            };
         };
         /** @description Sort for an inventory list; `field` is one of the inventory sort fields */
         UiListSort: {
@@ -3345,7 +3370,7 @@ export interface components {
         UiListView: {
             /** @description Stable machine key, lower_snake_case */
             classKey: string;
-            /** @description Columns in display order: built-in fields (name, class, status, environment, owner, location, hostname, ipAddress, serialNumber, notes, createdAt, updatedAt) or attributes.<key> */
+            /** @description Columns in display order: built-in fields (label, ident, class, validFrom, validUntil, active, createdAt, updatedAt) or attributes.<key> */
             columns?: string[];
             defaultSort?: components["schemas"]["UiListSort"] | null;
             defaultFilters?: components["schemas"]["UiListFilters"];
@@ -3407,12 +3432,10 @@ export interface components {
                  * @default null
                  */
                 q: string | null;
-                /** @description Status keys */
-                statusKeys?: string[];
-                /** @description Environment keys */
-                environmentKeys?: string[];
-                /** @description Location keys */
-                locationKeys?: string[];
+                /** @description Lookup list key -> value keys: CIs holding one of the values in a lookup attribute of that list, for every list given (e.g. {"status": ["in_service"], "environment": ["production"]}) */
+                lookups?: {
+                    [key: string]: string[];
+                };
             } & Record<string, never>;
             /** @default null */
             sort: {
@@ -3516,7 +3539,7 @@ export interface components {
             /** @description Stable machine key, lower_snake_case */
             id: string;
             /** @enum {string} */
-            type: "count_by_class" | "count_by_status" | "count_by_environment" | "recent_changes" | "saved_search";
+            type: "count_by_class" | "count_by_lookup" | "recent_changes" | "saved_search";
             /** @description Display label; null keeps the default */
             title?: string | null;
             /** @enum {string} */
@@ -3528,6 +3551,8 @@ export interface components {
             limit?: number;
             /** @description CI class keys */
             classKeys?: string[];
+            /** @description count_by_lookup: the lookup list whose values are counted (required for that type) */
+            lookupListKey?: string;
             /** @description saved_search: the search (required for that type) */
             search?: components["schemas"]["UiSavedSearch"];
         };
@@ -4828,22 +4853,18 @@ export interface operations {
                 limit?: number;
                 /** @description Rows to skip */
                 offset?: number;
-                /** @description Search name, hostname, serial number, IP address, notes and attribute values */
+                /** @description Search label, ident and attribute values */
                 q?: string;
-                /** @description Sort field; prefix with "-" for descending. One of: name, hostname, ipAddress, serialNumber, className, statusName, createdAt, updatedAt */
-                sort?: "name" | "-name" | "hostname" | "-hostname" | "ipAddress" | "-ipAddress" | "serialNumber" | "-serialNumber" | "className" | "-className" | "statusName" | "-statusName" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
+                /** @description Sort field; prefix with "-" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt */
+                sort?: "label" | "-label" | "ident" | "-ident" | "className" | "-className" | "validFrom" | "-validFrom" | "validUntil" | "-validUntil" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
                 /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
                 classId?: string;
                 includeSubclasses?: "true" | "false";
-                /** @description One or more ids, comma-separated */
-                statusId?: string;
-                /** @description One or more ids, comma-separated */
-                environmentId?: string;
-                /** @description One or more ids, comma-separated */
-                ownerId?: string;
-                /** @description One or more ids, comma-separated */
-                locationId?: string;
-                /** @description Only CIs whose ipAddress is inside this CIDR, e.g. 10.20.0.0/16 */
+                /** @description true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both */
+                active?: "true" | "false" | "all";
+                /** @description Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C). */
+                lookupValueId?: string;
+                /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
                 ipWithin?: string;
                 /** @description Soft-deleted CIs: exclude (default), include, or only */
                 deleted?: "exclude" | "include" | "only";
@@ -4925,17 +4946,15 @@ export interface operations {
                      * @description A concrete (non-abstract), active class
                      */
                     classId: string;
-                    name: string;
-                    /** Format: uuid */
-                    statusId: string;
-                    environmentId?: string | null;
-                    ownerId?: string | null;
-                    locationId?: string | null;
-                    hostname?: string | null;
-                    /** @description IPv4 or IPv6 address */
-                    ipAddress?: (string) | null;
-                    serialNumber?: string | null;
-                    notes?: string | null;
+                    /** @description Administrators only (403 for anyone else). Unique regardless of case; leave out to have one generated */
+                    ident?: string;
+                    /**
+                     * Format: date-time
+                     * @description Start of the validity period; defaults to now
+                     */
+                    validFrom?: string;
+                    /** @description End of the validity period (exclusive, after validFrom); null: open-ended */
+                    validUntil?: string | null;
                     /** @description Values by attribute key (see GET /api/v1/ci-classes/{id}/attributes). Required attributes must be present; attributes left out get their defaultValue. */
                     attributes?: {
                         [key: string]: (string | number | boolean) | null;
@@ -4973,6 +4992,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5176,17 +5204,15 @@ export interface operations {
                      * @description Changing class requires clearing attributes the new class does not have
                      */
                     classId?: string;
-                    name?: string;
-                    /** Format: uuid */
-                    statusId?: string;
-                    environmentId?: string | null;
-                    ownerId?: string | null;
-                    locationId?: string | null;
-                    hostname?: string | null;
-                    /** @description IPv4 or IPv6 address */
-                    ipAddress?: (string) | null;
-                    serialNumber?: string | null;
-                    notes?: string | null;
+                    /** @description Administrators only (403 for anyone else). Unique regardless of case; leave out to have one generated */
+                    ident?: string;
+                    /**
+                     * Format: date-time
+                     * @description Start of the validity period; defaults to now
+                     */
+                    validFrom?: string;
+                    /** @description End of the validity period (exclusive, after validFrom); null: open-ended */
+                    validUntil?: string | null;
                     /** @description Merged into the current values; null clears an attribute */
                     attributes?: {
                         [key: string]: (string | number | boolean) | null;
@@ -5377,15 +5403,11 @@ export interface operations {
                 /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
                 classId?: string;
                 includeSubclasses?: "true" | "false";
-                /** @description One or more ids, comma-separated */
-                statusId?: string;
-                /** @description One or more ids, comma-separated */
-                environmentId?: string;
-                /** @description One or more ids, comma-separated */
-                ownerId?: string;
-                /** @description One or more ids, comma-separated */
-                locationId?: string;
-                /** @description Only CIs whose ipAddress is inside this CIDR, e.g. 10.20.0.0/16 */
+                /** @description true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both */
+                active?: "true" | "false" | "all";
+                /** @description Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C). */
+                lookupValueId?: string;
+                /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
                 ipWithin?: string;
                 /** @description Soft-deleted CIs: exclude (default), include, or only */
                 deleted?: "exclude" | "include" | "only";
@@ -6549,6 +6571,8 @@ export interface operations {
                     color?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    /** @description Attribute of this class or an ancestor whose value labels the CIs (text, enum, number, integer, date, datetime, ip or cidr); null labels them by their ident. A new class takes its parent's. */
+                    titleAttributeId?: string | null;
                 };
             };
         };
@@ -6815,6 +6839,8 @@ export interface operations {
                     color?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    /** @description Attribute of this class or an ancestor whose value labels the CIs (text, enum, number, integer, date, datetime, ip or cidr); null labels them by their ident. A new class takes its parent's. */
+                    titleAttributeId?: string | null;
                 };
             };
         };

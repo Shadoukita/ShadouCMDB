@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import type { RelationshipGraph } from "../../api/queries";
 import CiLink from "../../components/CiLink.vue";
-import StatusBadge from "../../components/StatusBadge.vue";
+import CiStateBadge from "../../components/CiStateBadge.vue";
 import type { TrailStep } from "../../lib/trail";
 
 type Node = RelationshipGraph["nodes"][number];
@@ -55,14 +55,13 @@ const rows = computed<Row[]>(() => {
 <template>
   <div>
     <div v-if="root" style="font-weight: 600; margin-bottom: 4px">
-      {{ root.name }} <span class="muted">({{ root.class.name }})</span>
+      {{ root.label }} <span class="muted">({{ root.class.name }})</span>
     </div>
     <ul style="list-style: none; margin: 0; padding: 0">
       <li v-for="r in rows" :key="r.key" :style="{ padding: '3px 0', paddingLeft: `${r.level * 22}px` }">
         <span class="muted">{{ r.label }} → </span>
-        <CiLink :id="r.node.id" :from="self" :trail="trail">{{ r.node.name }}</CiLink>
-        {{ " " }}<span class="muted">{{ r.node.class.name }}</span> <StatusBadge :status="r.node.status" />
-        <span v-if="r.node.hostname" class="muted mono"> {{ r.node.hostname }}</span>
+        <CiLink :id="r.node.id" :from="self" :trail="trail">{{ r.node.label }}</CiLink>
+        {{ " " }}<span class="muted">{{ r.node.class.name }}</span> <CiStateBadge :ci="r.node" />
         <span v-if="r.repeat" class="muted"> (shown above)</span>
       </li>
     </ul>

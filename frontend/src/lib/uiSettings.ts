@@ -17,7 +17,7 @@ import { groupAttributes } from "./attributes";
  * by key, never by id.
  */
 
-export const EMPTY_FILTERS: UiListFilters = { q: null, statusKeys: [], environmentKeys: [], locationKeys: [] };
+export const EMPTY_FILTERS: UiListFilters = { q: null, lookups: {} };
 
 export function emptyDocument(): UiSettingsDocument {
   return {
@@ -40,11 +40,11 @@ export function normalizeDocument(doc: Partial<UiSettingsDocument> | undefined):
       widgets:
         d.dashboard?.widgets?.map((w) =>
           w.type === "saved_search"
-            ? { ...w, search: { classKeys: [], includeSubclasses: false, sort: null, ...w.search, filters: { ...EMPTY_FILTERS, ...w.search?.filters } } }
+            ? { ...w, search: { classKeys: [], includeSubclasses: false, sort: null, ...w.search, filters: { ...EMPTY_FILTERS, lookups: {}, ...w.search?.filters } } }
             : w,
         ) ?? null,
     },
-    listViews: (d.listViews ?? []).map((v) => ({ columns: [], defaultSort: null, pageSize: null, ...v, defaultFilters: { ...EMPTY_FILTERS, ...v.defaultFilters } })),
+    listViews: (d.listViews ?? []).map((v) => ({ columns: [], defaultSort: null, pageSize: null, ...v, defaultFilters: { ...EMPTY_FILTERS, lookups: {}, ...v.defaultFilters } })),
     layouts: (d.layouts ?? []).map((l) => ({ ...l, panels: l.panels ?? [], hiddenFields: l.hiddenFields ?? [], readOnlyFields: l.readOnlyFields ?? [] })),
   };
 }
@@ -56,22 +56,21 @@ export interface BuiltinField {
   label: string;
   /** API sort field for list columns. */
   sort?: UiListSort["field"];
-  /** The CI form's field for it; absent for fields the form does not edit (class, timestamps). */
+  /** The CI form's field for it; absent for fields the form does not edit (label, class, timestamps). */
   form?: string;
 }
 
-/** CI fields every class has, in their built-in order. Attributes are `attributes.<key>`. */
+/**
+ * CI fields every class has, in their built-in order. Attributes are `attributes.<key>`;
+ * name, status, hostname and the like are attributes of the classes that define them.
+ */
 export const BUILTIN_FIELDS: BuiltinField[] = [
-  { key: "name", label: "Name", sort: "name", form: "name" },
+  { key: "label", label: "Label", sort: "label" },
+  { key: "ident", label: "Ident", sort: "ident", form: "ident" },
   { key: "class", label: "Class", sort: "className" },
-  { key: "status", label: "Status", sort: "statusName", form: "statusId" },
-  { key: "environment", label: "Environment", form: "environmentId" },
-  { key: "owner", label: "Owner", form: "ownerId" },
-  { key: "location", label: "Location", form: "locationId" },
-  { key: "hostname", label: "Hostname", sort: "hostname", form: "hostname" },
-  { key: "ipAddress", label: "IP address", sort: "ipAddress", form: "ipAddress" },
-  { key: "serialNumber", label: "Serial number", sort: "serialNumber", form: "serialNumber" },
-  { key: "notes", label: "Notes", form: "notes" },
+  { key: "validFrom", label: "Valid from", sort: "validFrom", form: "validFrom" },
+  { key: "validUntil", label: "Valid until", sort: "validUntil", form: "validUntil" },
+  { key: "active", label: "Active" },
   { key: "createdAt", label: "Created", sort: "createdAt" },
   { key: "updatedAt", label: "Updated", sort: "updatedAt" },
 ];
@@ -84,7 +83,7 @@ export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUIL
 }));
 
 /** The inventory's columns when no list view says otherwise. */
-export const DEFAULT_COLUMNS = ["name", "class", "status", "environment", "owner", "location", "hostname", "ipAddress", "serialNumber", "updatedAt"];
+export const DEFAULT_COLUMNS = ["label", "ident", "class", "active", "updatedAt"];
 
 export const ATTRIBUTE_PREFIX = "attributes.";
 export const attributeKey = (field: string) => (field.startsWith(ATTRIBUTE_PREFIX) ? field.slice(ATTRIBUTE_PREFIX.length) : null);
@@ -113,7 +112,25 @@ export function sortParam(s: UiListSort | null | undefined): string | undefined 
 }
 
 export function hasFilters(f: UiListFilters | undefined): boolean {
-  return !!f && (!!f.q || !!f.statusKeys?.length || !!f.environmentKeys?.length || !!f.locationKeys?.length);
+  return !!f && (!!f.q || Object.values(f.lookups ?? {}).some((keys) => keys.length > 0));
+}
+
+/**
+ * A filter's lookups (list key -> value keys) as the API's `lookupValueId`: the
+ * value ids, comma-separated. Undefined without any; unknown keys are skipped
+ * (the settings API reports them as issues).
+ */
+export function lookupValueIds(
+  lookups: UiListFilters["lookups"],
+  lists: readonly { id: string; key: string }[],
+  values: readonly { id: string; listId: string; key: string }[],
+): string | undefined {
+  const ids: string[] = [];
+  for (const [listKey, keys] of Object.entries(lookups ?? {})) {
+    const list = lists.find((l) => l.key === listKey);
+    if (list) for (const v of values) if (v.listId === list.id && keys.includes(v.key)) ids.push(v.id);
+  }
+  return ids.join(",") || undefined;
 }
 
 // ---------- Navigation ----------
@@ -279,8 +296,7 @@ export function pageLabel(page: UiPage): string {
 
 export const WIDGET_TYPES: { type: UiWidgetType; label: string; hint: string }[] = [
   { type: "count_by_class", label: "CIs by class", hint: "Counts per class, optionally only some classes" },
-  { type: "count_by_status", label: "CIs by status", hint: "Counts per status" },
-  { type: "count_by_environment", label: "CIs by environment", hint: "Counts per environment" },
+  { type: "count_by_lookup", label: "CIs by lookup value", hint: "Counts per value of one lookup list, e.g. status" },
   { type: "recent_changes", label: "Recently changed", hint: "The latest changed CIs" },
   { type: "saved_search", label: "Saved search", hint: "CIs matching classes, filters and a sort" },
 ];
@@ -315,7 +331,7 @@ export function resolveLayout(
   const hidden = new Set(layout.hiddenFields ?? []);
   const attrKeys = new Set(attrs.map((a) => a.key));
   const usable = (f: string) => {
-    if (hidden.has(f) && f !== "name") return false;
+    if (hidden.has(f)) return false;
     const a = attributeKey(f);
     return a === null ? builtins.includes(f) : attrKeys.has(a);
   };
@@ -335,7 +351,7 @@ export function resolveLayout(
   return panels.filter((p) => p.fields.length > 0);
 }
 
-/** Built-in fields the detail page shows (the name is the page title). */
-export const DETAIL_BUILTINS = BUILTIN_FIELDS.filter((f) => f.key !== "name").map((f) => f.key);
+/** Built-in fields the detail page shows (the label is the page title). */
+export const DETAIL_BUILTINS = BUILTIN_FIELDS.filter((f) => f.key !== "label").map((f) => f.key);
 /** Built-in fields the CI form edits. */
 export const FORM_BUILTINS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key);

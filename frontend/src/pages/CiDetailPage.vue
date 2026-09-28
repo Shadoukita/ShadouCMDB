@@ -8,7 +8,7 @@ import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
-import StatusBadge from "../components/StatusBadge.vue";
+import CiStateBadge from "../components/CiStateBadge.vue";
 import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { formatDateTime } from "../lib/format";
@@ -41,7 +41,7 @@ const session = useSessionStore();
 // The history is the audit log, which needs audit.view.
 const TABS = computed(() => ALL_TABS.filter(([key]) => key !== "history" || session.can("audit.view")));
 const flashText = computed(() => flash.forCi(id.value));
-useDocumentTitle(() => ci.data.value?.name);
+useDocumentTitle(() => ci.data.value?.label);
 // Walking to another CI reuses this component; start each record on its overview.
 watch(id, () => (tab.value = "overview"));
 
@@ -63,7 +63,7 @@ const layout = computed(() => layoutFor(settings.doc.value, classKey.value));
 const attrs = useClassAttributes(() => (layout.value ? c.value?.classId : undefined));
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || c.value?.attributes[d.key] != null));
 const panels = computed(() => (attrs.data.value ? resolveLayout(layout.value, defs.value, DETAIL_BUILTINS) : null));
-const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.name } : undefined));
+const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.label } : undefined));
 const crumbs = computed<Crumb[]>(() => {
   if (!c.value) return [];
   const out: Crumb[] = [{ label: "Inventory", to: "/cis" }];
@@ -74,7 +74,7 @@ const crumbs = computed<Crumb[]>(() => {
     if (area) out.push({ label: area.name });
     out.push({ label: c.value.class.name, to: `/cis?classId=${c.value.classId}` });
   }
-  out.push({ label: c.value.name });
+  out.push({ label: c.value.label });
   return out;
 });
 </script>
@@ -97,11 +97,11 @@ const crumbs = computed<Crumb[]>(() => {
     <Breadcrumbs :items="crumbs" />
     <div class="page-header">
       <div class="title">
-        <h1>{{ c.name }}</h1>
+        <h1>{{ c.label }}</h1>
+        <span class="mono muted" title="Ident">{{ c.ident }}</span>
         <RouterLink :to="`/cis?classId=${c.classId}`" class="badge">{{ c.class.name }}</RouterLink>
         <span v-if="c.deletedAt" class="badge danger">Deleted {{ formatDateTime(c.deletedAt) }}</span>
-        <StatusBadge v-else :status="c.status" />
-        <span v-if="c.environment" class="badge">{{ c.environment.name }}</span>
+        <CiStateBadge v-else :ci="c" />
       </div>
       <div v-if="!c.deletedAt" class="actions">
         <RouterLink v-if="session.canOnClass(c.classId, 'edit')" class="btn" :to="`/cis/${c.id}/edit`">Edit</RouterLink>

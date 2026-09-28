@@ -1619,7 +1619,7 @@
           "Configuration items"
         ],
         "summary": "Inventory list: paginated, searchable, filterable, sortable",
-        "description": "Returns CIs in classes the caller may view, each with its attribute values (`attributes`, `attributeReferences`) as on `getConfigurationItem`. Soft-deleted CIs are hidden unless `deleted=include|only`.",
+        "description": "Returns CIs in classes the caller may view, each with its attribute values (`attributes`, `attributeReferences`) as on `getConfigurationItem`. Only active CIs (inside their validity period) unless `active=false|all`; soft-deleted CIs are hidden unless `deleted=include|only`.",
         "operationId": "listConfigurationItems",
         "parameters": [
           {
@@ -1651,7 +1651,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "Search name, hostname, serial number, IP address, notes and attribute values",
+            "description": "Search label, ident and attribute values",
             "required": false,
             "schema": {
               "type": "string",
@@ -1662,24 +1662,22 @@
           {
             "name": "sort",
             "in": "query",
-            "description": "Sort field; prefix with \"-\" for descending. One of: name, hostname, ipAddress, serialNumber, className, statusName, createdAt, updatedAt",
+            "description": "Sort field; prefix with \"-\" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt",
             "required": false,
             "schema": {
               "type": "string",
-              "default": "name",
+              "default": "label",
               "enum": [
-                "name",
-                "-name",
-                "hostname",
-                "-hostname",
-                "ipAddress",
-                "-ipAddress",
-                "serialNumber",
-                "-serialNumber",
+                "label",
+                "-label",
+                "ident",
+                "-ident",
                 "className",
                 "-className",
-                "statusName",
-                "-statusName",
+                "validFrom",
+                "-validFrom",
+                "validUntil",
+                "-validUntil",
                 "createdAt",
                 "-createdAt",
                 "updatedAt",
@@ -1710,36 +1708,24 @@
             }
           },
           {
-            "name": "statusId",
+            "name": "active",
             "in": "query",
-            "description": "One or more ids, comma-separated",
+            "description": "true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false",
+                "all"
+              ]
             }
           },
           {
-            "name": "environmentId",
+            "name": "lookupValueId",
             "in": "query",
-            "description": "One or more ids, comma-separated",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "ownerId",
-            "in": "query",
-            "description": "One or more ids, comma-separated",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "locationId",
-            "in": "query",
-            "description": "One or more ids, comma-separated",
+            "description": "Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C).",
             "required": false,
             "schema": {
               "type": "string"
@@ -1748,7 +1734,7 @@
           {
             "name": "ipWithin",
             "in": "query",
-            "description": "Only CIs whose ipAddress is inside this CIDR, e.g. 10.20.0.0/16",
+            "description": "Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16",
             "required": false,
             "schema": {
               "anyOf": [
@@ -1855,7 +1841,7 @@
           "Configuration items"
         ],
         "summary": "Create a CI, including its attribute values",
-        "description": "Needs create on the class.",
+        "description": "Needs create on the class. The ident is generated unless an administrator sends one (403 for anyone else, 409 when another CI has it). The label follows from the class's title attribute.",
         "operationId": "createConfigurationItem",
         "parameters": [],
         "requestBody": {
@@ -1864,9 +1850,7 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "classId",
-                  "name",
-                  "statusId"
+                  "classId"
                 ],
                 "properties": {
                   "classId": {
@@ -1874,103 +1858,28 @@
                     "format": "uuid",
                     "description": "A concrete (non-abstract), active class"
                   },
-                  "name": {
+                  "ident": {
                     "type": "string",
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "pattern": "\\S"
+                    "description": "Administrators only (403 for anyone else). Unique regardless of case; leave out to have one generated",
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
                   },
-                  "statusId": {
+                  "validFrom": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "date-time",
+                    "description": "Start of the validity period; defaults to now"
                   },
-                  "environmentId": {
+                  "validUntil": {
                     "anyOf": [
                       {
                         "type": "string",
-                        "format": "uuid"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "ownerId": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "uuid"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "locationId": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "uuid"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "hostname": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9]([A-Za-z0-9._-]{0,252})$"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "ipAddress": {
-                    "anyOf": [
-                      {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "format": "ipv4"
-                          },
-                          {
-                            "type": "string",
-                            "format": "ipv6"
-                          }
-                        ]
+                        "format": "date-time"
                       },
                       {
                         "type": "null"
                       }
                     ],
-                    "description": "IPv4 or IPv6 address"
-                  },
-                  "serialNumber": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "notes": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4000
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "description": "End of the validity period (exclusive, after validFrom); null: open-ended"
                   },
                   "attributes": {
                     "type": "object",
@@ -2031,6 +1940,16 @@
           },
           "403": {
             "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -2279,7 +2198,7 @@
           "Configuration items"
         ],
         "summary": "Update a CI (partial); attributes are merged, null clears one",
-        "description": "Needs edit on the CI's class (and create on the new class when `classId` changes).",
+        "description": "Needs edit on the CI's class (and create on the new class when `classId` changes). Changing `ident` is for administrators only (403 for anyone else; resending the current value is allowed) and is recorded in the audit log like every change.",
         "operationId": "updateConfigurationItem",
         "parameters": [
           {
@@ -2303,103 +2222,28 @@
                     "format": "uuid",
                     "description": "Changing class requires clearing attributes the new class does not have"
                   },
-                  "name": {
+                  "ident": {
                     "type": "string",
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "pattern": "\\S"
+                    "description": "Administrators only (403 for anyone else). Unique regardless of case; leave out to have one generated",
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
                   },
-                  "statusId": {
+                  "validFrom": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "date-time",
+                    "description": "Start of the validity period; defaults to now"
                   },
-                  "environmentId": {
+                  "validUntil": {
                     "anyOf": [
                       {
                         "type": "string",
-                        "format": "uuid"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "ownerId": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "uuid"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "locationId": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "uuid"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "hostname": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9]([A-Za-z0-9._-]{0,252})$"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "ipAddress": {
-                    "anyOf": [
-                      {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "format": "ipv4"
-                          },
-                          {
-                            "type": "string",
-                            "format": "ipv6"
-                          }
-                        ]
+                        "format": "date-time"
                       },
                       {
                         "type": "null"
                       }
                     ],
-                    "description": "IPv4 or IPv6 address"
-                  },
-                  "serialNumber": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "pattern": "\\S"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "notes": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4000
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "description": "End of the validity period (exclusive, after validFrom); null: open-ended"
                   },
                   "attributes": {
                     "type": "object",
@@ -2692,7 +2536,7 @@
           "Search"
         ],
         "summary": "Global search across CIs, ranked, with the fields that matched",
-        "description": "Matches name, hostname and serial number (substring), IP address (prefix, or containment when `q` is an IP or CIDR), notes (word prefix) and attribute values (text/enum substring, IP/CIDR prefix). Exact matches rank first, then name prefix, then trigram similarity. Only CIs in classes the caller may view.",
+        "description": "Matches label and ident (substring and word prefix) and attribute values (text/enum substring, IP/CIDR prefix, IP containment when `q` is an IP or CIDR). Exact label or ident matches rank first, then label prefix, then trigram similarity. Only CIs in classes the caller may view; only active CIs unless `active=false|all`.",
         "operationId": "searchConfigurationItems",
         "parameters": [
           {
@@ -2755,36 +2599,24 @@
             }
           },
           {
-            "name": "statusId",
+            "name": "active",
             "in": "query",
-            "description": "One or more ids, comma-separated",
+            "description": "true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false",
+                "all"
+              ]
             }
           },
           {
-            "name": "environmentId",
+            "name": "lookupValueId",
             "in": "query",
-            "description": "One or more ids, comma-separated",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "ownerId",
-            "in": "query",
-            "description": "One or more ids, comma-separated",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "locationId",
-            "in": "query",
-            "description": "One or more ids, comma-separated",
+            "description": "Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C).",
             "required": false,
             "schema": {
               "type": "string"
@@ -2793,7 +2625,7 @@
           {
             "name": "ipWithin",
             "in": "query",
-            "description": "Only CIs whose ipAddress is inside this CIDR, e.g. 10.20.0.0/16",
+            "description": "Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16",
             "required": false,
             "schema": {
               "anyOf": [
@@ -4737,6 +4569,18 @@
                   },
                   "isActive": {
                     "type": "boolean"
+                  },
+                  "titleAttributeId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Attribute of this class or an ancestor whose value labels the CIs (text, enum, number, integer, date, datetime, ip or cidr); null labels them by their ident. A new class takes its parent's."
                   }
                 },
                 "additionalProperties": false
@@ -5055,7 +4899,7 @@
           "CI classes"
         ],
         "summary": "Update a ci class (partial)",
-        "description": "Requires `datamodel.manage`.",
+        "description": "Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled.",
         "operationId": "updateCiClass",
         "parameters": [
           {
@@ -5135,6 +4979,18 @@
                   },
                   "isActive": {
                     "type": "boolean"
+                  },
+                  "titleAttributeId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Attribute of this class or an ancestor whose value labels the CIs (text, enum, number, integer, date, datetime, ip or cidr); null labels them by their ident. A new class takes its parent's."
                   }
                 },
                 "additionalProperties": false
@@ -9054,7 +8910,7 @@
           "Statuses"
         ],
         "summary": "List status records (paginated, searchable, sortable)",
-        "description": "`q` matches key, name, description (case-insensitive substring).",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).",
         "operationId": "listStatuses",
         "parameters": [
           {
@@ -9203,6 +9059,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -9217,7 +9074,7 @@
           "Statuses"
         ],
         "summary": "Create a status",
-        "description": "Requires `datamodel.manage`.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "createStatus",
         "parameters": [],
         "requestBody": {
@@ -9352,6 +9209,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -9369,6 +9227,7 @@
           "Statuses"
         ],
         "summary": "Get one status",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "getStatus",
         "parameters": [
           {
@@ -9453,6 +9312,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -9467,7 +9327,7 @@
           "Statuses"
         ],
         "summary": "Delete a status",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteStatus",
         "parameters": [
           {
@@ -9555,6 +9415,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -9570,7 +9431,7 @@
           "Statuses"
         ],
         "summary": "Update a status (partial)",
-        "description": "Requires `datamodel.manage`.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "updateStatus",
         "parameters": [
           {
@@ -9721,6 +9582,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -9738,7 +9600,7 @@
           "Statuses"
         ],
         "summary": "What still refers to a status",
-        "description": "Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
         "operationId": "getStatusUsage",
         "parameters": [
           {
@@ -9823,6 +9685,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -9839,7 +9702,7 @@
           "Environments"
         ],
         "summary": "List environment records (paginated, searchable, sortable)",
-        "description": "`q` matches key, name, description (case-insensitive substring).",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).",
         "operationId": "listEnvironments",
         "parameters": [
           {
@@ -9976,6 +9839,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -9990,7 +9854,7 @@
           "Environments"
         ],
         "summary": "Create a environment",
-        "description": "Requires `datamodel.manage`.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "createEnvironment",
         "parameters": [],
         "requestBody": {
@@ -10122,6 +9986,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -10139,6 +10004,7 @@
           "Environments"
         ],
         "summary": "Get one environment",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "getEnvironment",
         "parameters": [
           {
@@ -10223,6 +10089,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -10237,7 +10104,7 @@
           "Environments"
         ],
         "summary": "Delete a environment",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteEnvironment",
         "parameters": [
           {
@@ -10325,6 +10192,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -10340,7 +10208,7 @@
           "Environments"
         ],
         "summary": "Update a environment (partial)",
-        "description": "Requires `datamodel.manage`.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "updateEnvironment",
         "parameters": [
           {
@@ -10488,6 +10356,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -10505,7 +10374,7 @@
           "Environments"
         ],
         "summary": "What still refers to a environment",
-        "description": "Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
         "operationId": "getEnvironmentUsage",
         "parameters": [
           {
@@ -10590,6 +10459,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -10606,7 +10476,7 @@
           "Locations"
         ],
         "summary": "List location records (paginated, searchable, sortable)",
-        "description": "`q` matches key, name, description, address (case-insensitive substring).",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description, address (case-insensitive substring).",
         "operationId": "listLocations",
         "parameters": [
           {
@@ -10781,6 +10651,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -10795,7 +10666,7 @@
           "Locations"
         ],
         "summary": "Create a location",
-        "description": "Requires `datamodel.manage`.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "createLocation",
         "parameters": [],
         "requestBody": {
@@ -10963,6 +10834,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -10980,6 +10852,7 @@
           "Locations"
         ],
         "summary": "Get one location",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "getLocation",
         "parameters": [
           {
@@ -11064,6 +10937,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -11078,7 +10952,7 @@
           "Locations"
         ],
         "summary": "Delete a location",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteLocation",
         "parameters": [
           {
@@ -11166,6 +11040,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -11181,7 +11056,7 @@
           "Locations"
         ],
         "summary": "Update a location (partial)",
-        "description": "Requires `datamodel.manage`.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "updateLocation",
         "parameters": [
           {
@@ -11364,6 +11239,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -11381,7 +11257,7 @@
           "Locations"
         ],
         "summary": "What still refers to a location",
-        "description": "Counts of configurationItems, deletedConfigurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
         "operationId": "getLocationUsage",
         "parameters": [
           {
@@ -11466,6 +11342,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -11482,7 +11359,7 @@
           "Owners"
         ],
         "summary": "List owner records (paginated, searchable, sortable)",
-        "description": "`q` matches name, email, external_ref (case-insensitive substring).",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches name, email, external_ref (case-insensitive substring).",
         "operationId": "listOwners",
         "parameters": [
           {
@@ -11640,6 +11517,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -11654,7 +11532,7 @@
           "Owners"
         ],
         "summary": "Create a owner",
-        "description": "Requires `datamodel.manage`.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "createOwner",
         "parameters": [],
         "requestBody": {
@@ -11797,6 +11675,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -11814,6 +11693,7 @@
           "Owners"
         ],
         "summary": "Get one owner",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "getOwner",
         "parameters": [
           {
@@ -11898,6 +11778,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -11912,7 +11793,7 @@
           "Owners"
         ],
         "summary": "Delete a owner",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {\"isActive\": false}` instead so history keeps resolving.",
         "operationId": "deleteOwner",
         "parameters": [
           {
@@ -12000,6 +11881,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -12015,7 +11897,7 @@
           "Owners"
         ],
         "summary": "Update a owner (partial)",
-        "description": "Requires `datamodel.manage`.",
+        "description": "Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
         "operationId": "updateOwner",
         "parameters": [
           {
@@ -12174,6 +12056,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "csrfHeader": [],
@@ -12191,7 +12074,7 @@
           "Owners"
         ],
         "summary": "What still refers to a owner",
-        "description": "Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+        "description": "Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
         "operationId": "getOwnerUsage",
         "parameters": [
           {
@@ -12276,6 +12159,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "sessionCookie": []
@@ -14586,7 +14470,7 @@
           "UI settings"
         ],
         "summary": "Make an earlier version current again (saved as a new version)",
-        "description": "Requires `customization.manage`.",
+        "description": "Requires `customization.manage`. 409 CONFLICT for a version saved before an upgrade changed the settings format (e.g. migration 0016); the upgrade saved a converted copy as a newer version.",
         "operationId": "restoreUiSettingsVersion",
         "parameters": [
           {
@@ -19421,6 +19305,7 @@
           "color",
           "sortOrder",
           "isActive",
+          "titleAttributeId",
           "createdAt",
           "updatedAt"
         ],
@@ -19488,6 +19373,14 @@
           "isActive": {
             "type": "boolean",
             "description": "Archived classes keep their CIs but accept no new ones"
+          },
+          "titleAttributeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The attribute (of this class or an ancestor) whose value labels its CIs in lists, references, the graph\nand search; null labels them by their ident"
           },
           "createdAt": {
             "type": "string",
@@ -19742,21 +19635,13 @@
         "type": "object",
         "required": [
           "id",
-          "name",
+          "ident",
+          "label",
           "classId",
           "class",
-          "statusId",
-          "status",
-          "environmentId",
-          "environment",
-          "ownerId",
-          "owner",
-          "locationId",
-          "location",
-          "hostname",
-          "ipAddress",
-          "serialNumber",
-          "notes",
+          "validFrom",
+          "validUntil",
+          "active",
           "version",
           "createdAt",
           "updatedAt",
@@ -19769,8 +19654,13 @@
             "type": "string",
             "format": "uuid"
           },
-          "name": {
-            "type": "string"
+          "ident": {
+            "type": "string",
+            "description": "Short unique identifier, e.g. \"CI-7K3M9Q2X\" (generated; only an administrator can change it)"
+          },
+          "label": {
+            "type": "string",
+            "description": "Display name: the value of the class's title attribute, or the ident when there is none"
           },
           "classId": {
             "type": "string",
@@ -19779,87 +19669,22 @@
           "class": {
             "$ref": "#/components/schemas/LookupRef"
           },
-          "statusId": {
+          "validFrom": {
             "type": "string",
-            "format": "uuid"
+            "format": "date-time",
+            "description": "Start of the validity period"
           },
-          "status": {
-            "$ref": "#/components/schemas/LookupRef"
-          },
-          "environmentId": {
+          "validUntil": {
             "type": [
               "string",
               "null"
             ],
-            "format": "uuid"
+            "format": "date-time",
+            "description": "End of the validity period (exclusive); null means open-ended"
           },
-          "environment": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/LookupRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "ownerId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "owner": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OwnerRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "locationId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "location": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/LookupRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "hostname": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "ipAddress": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "serialNumber": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "notes": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "active": {
+            "type": "boolean",
+            "description": "True while validFrom <= now < validUntil (derived, not stored)"
           },
           "version": {
             "type": "integer",
@@ -19915,7 +19740,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "Null when `hidden`"
+                  "description": "The referenced CI's label; null when `hidden`"
                 },
                 "deleted": {
                   "type": "boolean",
@@ -19955,21 +19780,13 @@
         "type": "object",
         "required": [
           "id",
-          "name",
+          "ident",
+          "label",
           "classId",
           "class",
-          "statusId",
-          "status",
-          "environmentId",
-          "environment",
-          "ownerId",
-          "owner",
-          "locationId",
-          "location",
-          "hostname",
-          "ipAddress",
-          "serialNumber",
-          "notes",
+          "validFrom",
+          "validUntil",
+          "active",
           "version",
           "createdAt",
           "updatedAt",
@@ -19980,8 +19797,13 @@
             "type": "string",
             "format": "uuid"
           },
-          "name": {
-            "type": "string"
+          "ident": {
+            "type": "string",
+            "description": "Short unique identifier, e.g. \"CI-7K3M9Q2X\" (generated; only an administrator can change it)"
+          },
+          "label": {
+            "type": "string",
+            "description": "Display name: the value of the class's title attribute, or the ident when there is none"
           },
           "classId": {
             "type": "string",
@@ -19990,87 +19812,22 @@
           "class": {
             "$ref": "#/components/schemas/LookupRef"
           },
-          "statusId": {
+          "validFrom": {
             "type": "string",
-            "format": "uuid"
+            "format": "date-time",
+            "description": "Start of the validity period"
           },
-          "status": {
-            "$ref": "#/components/schemas/LookupRef"
-          },
-          "environmentId": {
+          "validUntil": {
             "type": [
               "string",
               "null"
             ],
-            "format": "uuid"
+            "format": "date-time",
+            "description": "End of the validity period (exclusive); null means open-ended"
           },
-          "environment": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/LookupRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "ownerId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "owner": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OwnerRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "locationId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "location": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/LookupRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "hostname": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "ipAddress": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "serialNumber": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "notes": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "active": {
+            "type": "boolean",
+            "description": "True while validFrom <= now < validUntil (derived, not stored)"
           },
           "version": {
             "type": "integer",
@@ -20312,6 +20069,18 @@
                 },
                 "isActive": {
                   "type": "boolean"
+                },
+                "titleAttribute": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "Stable machine key, lower_snake_case",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "additionalProperties": false
@@ -21429,9 +21198,8 @@
             "enum": [
               "unknown_class",
               "unknown_attribute",
-              "unknown_status",
-              "unknown_environment",
-              "unknown_location",
+              "unknown_lookup_list",
+              "unknown_lookup_value",
               "required_field_not_editable"
             ]
           },
@@ -22300,31 +22068,6 @@
         },
         "additionalProperties": false
       },
-      "OwnerRef": {
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "kind"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "name": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "person",
-              "team"
-            ]
-          }
-        },
-        "additionalProperties": false
-      },
       "PageMeta": {
         "type": "object",
         "required": [
@@ -22715,7 +22458,8 @@
                 "format": "uuid"
               },
               "name": {
-                "type": "string"
+                "type": "string",
+                "description": "The CI's label"
               },
               "classKey": {
                 "type": "string"
@@ -22748,7 +22492,8 @@
                 "format": "uuid"
               },
               "name": {
-                "type": "string"
+                "type": "string",
+                "description": "The CI's label"
               },
               "classKey": {
                 "type": "string"
@@ -22820,21 +22565,13 @@
               "type": "object",
               "required": [
                 "id",
-                "name",
+                "ident",
+                "label",
                 "classId",
                 "class",
-                "statusId",
-                "status",
-                "environmentId",
-                "environment",
-                "ownerId",
-                "owner",
-                "locationId",
-                "location",
-                "hostname",
-                "ipAddress",
-                "serialNumber",
-                "notes",
+                "validFrom",
+                "validUntil",
+                "active",
                 "version",
                 "createdAt",
                 "updatedAt",
@@ -22846,8 +22583,13 @@
                   "type": "string",
                   "format": "uuid"
                 },
-                "name": {
-                  "type": "string"
+                "ident": {
+                  "type": "string",
+                  "description": "Short unique identifier, e.g. \"CI-7K3M9Q2X\" (generated; only an administrator can change it)"
+                },
+                "label": {
+                  "type": "string",
+                  "description": "Display name: the value of the class's title attribute, or the ident when there is none"
                 },
                 "classId": {
                   "type": "string",
@@ -22856,87 +22598,22 @@
                 "class": {
                   "$ref": "#/components/schemas/LookupRef"
                 },
-                "statusId": {
+                "validFrom": {
                   "type": "string",
-                  "format": "uuid"
+                  "format": "date-time",
+                  "description": "Start of the validity period"
                 },
-                "status": {
-                  "$ref": "#/components/schemas/LookupRef"
-                },
-                "environmentId": {
+                "validUntil": {
                   "type": [
                     "string",
                     "null"
                   ],
-                  "format": "uuid"
+                  "format": "date-time",
+                  "description": "End of the validity period (exclusive); null means open-ended"
                 },
-                "environment": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/LookupRef"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "ownerId": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "uuid"
-                },
-                "owner": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/OwnerRef"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "locationId": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "uuid"
-                },
-                "location": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/LookupRef"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "hostname": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "ipAddress": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "serialNumber": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "notes": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                "active": {
+                  "type": "boolean",
+                  "description": "True while validFrom <= now < validUntil (derived, not stored)"
                 },
                 "version": {
                   "type": "integer",
@@ -23292,7 +22969,7 @@
                     "properties": {
                       "field": {
                         "type": "string",
-                        "description": "\"name\", \"hostname\", \"serialNumber\", \"ipAddress\", \"notes\" or \"attributes.<key>\""
+                        "description": "\"label\", \"ident\" or \"attributes.<key>\""
                       },
                       "label": {
                         "type": "string"
@@ -23470,9 +23147,8 @@
                   "attributeDefinitions",
                   "relationshipTypes",
                   "relationshipRules",
-                  "statuses",
-                  "environments",
-                  "locations"
+                  "lookupLists",
+                  "lookupListValues"
                 ],
                 "properties": {
                   "areas": {
@@ -23495,15 +23171,11 @@
                     "type": "integer",
                     "format": "int64"
                   },
-                  "statuses": {
+                  "lookupLists": {
                     "type": "integer",
                     "format": "int64"
                   },
-                  "environments": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "locations": {
+                  "lookupListValues": {
                     "type": "integer",
                     "format": "int64"
                   }
@@ -23527,9 +23199,8 @@
                   "attributeDefinitions",
                   "relationshipTypes",
                   "relationshipRules",
-                  "statuses",
-                  "environments",
-                  "locations"
+                  "lookupLists",
+                  "lookupListValues"
                 ],
                 "properties": {
                   "areas": {
@@ -23552,15 +23223,11 @@
                     "type": "integer",
                     "format": "int64"
                   },
-                  "statuses": {
+                  "lookupLists": {
                     "type": "integer",
                     "format": "int64"
                   },
-                  "environments": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "locations": {
+                  "lookupListValues": {
                     "type": "integer",
                     "format": "int64"
                   }
@@ -23770,9 +23437,8 @@
                   "attributeDefinitions",
                   "relationshipTypes",
                   "relationshipRules",
-                  "statuses",
-                  "environments",
-                  "locations"
+                  "lookupLists",
+                  "lookupListValues"
                 ],
                 "properties": {
                   "areas": {
@@ -23795,15 +23461,11 @@
                     "type": "integer",
                     "format": "int64"
                   },
-                  "statuses": {
+                  "lookupLists": {
                     "type": "integer",
                     "format": "int64"
                   },
-                  "environments": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "locations": {
+                  "lookupListValues": {
                     "type": "integer",
                     "format": "int64"
                   }
@@ -23827,9 +23489,8 @@
                   "attributeDefinitions",
                   "relationshipTypes",
                   "relationshipRules",
-                  "statuses",
-                  "environments",
-                  "locations"
+                  "lookupLists",
+                  "lookupListValues"
                 ],
                 "properties": {
                   "areas": {
@@ -23852,15 +23513,11 @@
                     "type": "integer",
                     "format": "int64"
                   },
-                  "statuses": {
+                  "lookupLists": {
                     "type": "integer",
                     "format": "int64"
                   },
-                  "environments": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "locations": {
+                  "lookupListValues": {
                     "type": "integer",
                     "format": "int64"
                   }
@@ -24082,9 +23739,9 @@
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^(name|class|status|environment|owner|location|hostname|ipAddress|serialNumber|notes|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+              "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             },
-            "description": "Fields not shown on the detail page or the form (name cannot be hidden)",
+            "description": "Fields not shown on the detail page or the form",
             "maxItems": 200,
             "uniqueItems": true
           },
@@ -24092,9 +23749,9 @@
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^(name|class|status|environment|owner|location|hostname|ipAddress|serialNumber|notes|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+              "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             },
-            "description": "Fields shown but not editable on the form (name cannot be read-only)",
+            "description": "Fields shown but not editable on the form",
             "maxItems": 200,
             "uniqueItems": true
           }
@@ -24142,7 +23799,7 @@
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^(name|class|status|environment|owner|location|hostname|ipAddress|serialNumber|notes|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+              "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             },
             "description": "Fields in display order (built-in fields or attributes.<key>)",
             "maxItems": 200,
@@ -24168,35 +23825,24 @@
             "default": null,
             "maxLength": 200
           },
-          "statusKeys": {
-            "type": "array",
-            "items": {
+          "lookups": {
+            "type": "object",
+            "description": "Lookup list key -> value keys: CIs holding one of the values in a lookup attribute of that list, for every list given (e.g. {\"status\": [\"in_service\"], \"environment\": [\"production\"]})",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,62}$"
+              },
+              "description": "Value keys of the list",
+              "maxItems": 500,
+              "uniqueItems": true
+            },
+            "propertyNames": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9_]{0,62}$"
             },
-            "description": "Status keys",
-            "maxItems": 100,
-            "uniqueItems": true
-          },
-          "environmentKeys": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9_]{0,62}$"
-            },
-            "description": "Environment keys",
-            "maxItems": 100,
-            "uniqueItems": true
-          },
-          "locationKeys": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9_]{0,62}$"
-            },
-            "description": "Location keys",
-            "maxItems": 500,
-            "uniqueItems": true
+            "maxProperties": 50
           }
         },
         "additionalProperties": false
@@ -24210,7 +23856,7 @@
         "properties": {
           "field": {
             "type": "string",
-            "pattern": "^(name|hostname|ipAddress|serialNumber|className|statusName|createdAt|updatedAt)$"
+            "pattern": "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt)$"
           },
           "direction": {
             "type": "string",
@@ -24238,9 +23884,9 @@
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^(name|class|status|environment|owner|location|hostname|ipAddress|serialNumber|notes|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+              "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             },
-            "description": "Columns in display order: built-in fields (name, class, status, environment, owner, location, hostname, ipAddress, serialNumber, notes, createdAt, updatedAt) or attributes.<key>",
+            "description": "Columns in display order: built-in fields (label, ident, class, validFrom, validUntil, active, createdAt, updatedAt) or attributes.<key>",
             "maxItems": 200,
             "uniqueItems": true
           },
@@ -24414,35 +24060,24 @@
                     "default": null,
                     "maxLength": 200
                   },
-                  "statusKeys": {
-                    "type": "array",
-                    "items": {
+                  "lookups": {
+                    "type": "object",
+                    "description": "Lookup list key -> value keys: CIs holding one of the values in a lookup attribute of that list, for every list given (e.g. {\"status\": [\"in_service\"], \"environment\": [\"production\"]})",
+                    "additionalProperties": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                      },
+                      "description": "Value keys of the list",
+                      "maxItems": 500,
+                      "uniqueItems": true
+                    },
+                    "propertyNames": {
                       "type": "string",
                       "pattern": "^[a-z][a-z0-9_]{0,62}$"
                     },
-                    "description": "Status keys",
-                    "maxItems": 100,
-                    "uniqueItems": true
-                  },
-                  "environmentKeys": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
-                    },
-                    "description": "Environment keys",
-                    "maxItems": 100,
-                    "uniqueItems": true
-                  },
-                  "locationKeys": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
-                    },
-                    "description": "Location keys",
-                    "maxItems": 500,
-                    "uniqueItems": true
+                    "maxProperties": 50
                   }
                 },
                 "additionalProperties": false
@@ -24450,10 +24085,7 @@
               {
                 "type": "object",
                 "default": {
-                  "q": null,
-                  "statusKeys": [],
-                  "environmentKeys": [],
-                  "locationKeys": []
+                  "q": null
                 }
               }
             ]
@@ -24469,7 +24101,7 @@
                 "properties": {
                   "field": {
                     "type": "string",
-                    "pattern": "^(name|hostname|ipAddress|serialNumber|className|statusName|createdAt|updatedAt)$"
+                    "pattern": "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt)$"
                   },
                   "direction": {
                     "type": "string",
@@ -24748,8 +24380,7 @@
             "type": "string",
             "enum": [
               "count_by_class",
-              "count_by_status",
-              "count_by_environment",
+              "count_by_lookup",
               "recent_changes",
               "saved_search"
             ]
@@ -24792,6 +24423,11 @@
             "description": "CI class keys",
             "maxItems": 500,
             "uniqueItems": true
+          },
+          "lookupListKey": {
+            "type": "string",
+            "description": "count_by_lookup: the lookup list whose values are counted (required for that type)",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
           },
           "search": {
             "$ref": "#/components/schemas/UiSavedSearch",

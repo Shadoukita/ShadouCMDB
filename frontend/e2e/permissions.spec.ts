@@ -1,5 +1,5 @@
 import type { APIRequestContext, APIResponse, Browser, Page } from "@playwright/test";
-import { apiGet, apiSend, at, ciIdByName, classIdByName, expect, snap, test } from "./support";
+import { apiGet, apiSend, at, ciIdByName, classIdByName, expect, lookupValueId, snap, test } from "./support";
 
 // What a restricted user can reach, checked at the API as well as in the UI: the UI hiding a button is
 // not the claim under test, the server refusing the call is. Every refused write is re-read as the
@@ -61,7 +61,7 @@ test.beforeAll(async ({ request, playwright, baseURL }) => {
   applicationId = await classIdByName(request, "Application");
   serverId = await classIdByName(request, "Server");
   databaseId = await classIdByName(request, "Database");
-  statusId = (await apiGet<{ data: { id: string; key: string }[] }>(request, "/statuses?limit=50")).data.find((s) => s.key === "in_service")!.id;
+  statusId = await lookupValueId(request, "status", "in_service");
   // No global permission at all. Applications: view, create, edit (no delete). Servers: view only. Databases: nothing.
   profileId = (
     await apiSend<{ id: string }>(request, "POST", "/admin/profiles", {
@@ -162,35 +162,35 @@ test("class permissions are enforced per class and per operation", async ({ requ
   expect((await restricted.get(`/configuration-items/${esx}`)).status()).toBe(200);
 
   // Create: allowed for Application only.
-  const created = await restricted.send("POST", "/configuration-items", { classId: applicationId, name: `e2e-app-${stamp}`, statusId });
+  const created = await restricted.send("POST", "/configuration-items", { classId: applicationId, attributes: { name: `e2e-app-${stamp}`, status: statusId } });
   expect(created.status(), await created.text()).toBe(201);
   const app = (await created.json()) as { id: string; version: number };
-  await expectError(await restricted.send("POST", "/configuration-items", { classId: serverId, name: `e2e-srv-${stamp}`, statusId }), 403, "FORBIDDEN");
-  await expectError(await restricted.send("POST", "/configuration-items", { classId: databaseId, name: `e2e-db-${stamp}`, statusId }), 403, "FORBIDDEN");
+  await expectError(await restricted.send("POST", "/configuration-items", { classId: serverId, attributes: { name: `e2e-srv-${stamp}`, status: statusId } }), 403, "FORBIDDEN");
+  await expectError(await restricted.send("POST", "/configuration-items", { classId: databaseId, attributes: { name: `e2e-db-${stamp}`, status: statusId, engine: "postgresql" } }), 403, "FORBIDDEN");
 
   // Edit: allowed for Application, refused for Server (view only) and Database (nothing).
-  const edited = await restricted.send("PATCH", `/configuration-items/${app.id}`, { notes: "edited by the restricted user", version: app.version });
+  const edited = await restricted.send("PATCH", `/configuration-items/${app.id}`, { attributes: { notes: "edited by the restricted user" }, version: app.version });
   expect(edited.status(), await edited.text()).toBe(200);
-  const esxBefore = await apiGet<{ notes: string | null; version: number }>(request, `/configuration-items/${esx}`);
-  await expectError(await restricted.send("PATCH", `/configuration-items/${esx}`, { notes: "should not stick", version: esxBefore.version }), 403, "FORBIDDEN");
+  const esxBefore = await apiGet<{ attributes: Record<string, unknown>; version: number }>(request, `/configuration-items/${esx}`);
+  await expectError(await restricted.send("PATCH", `/configuration-items/${esx}`, { attributes: { notes: "should not stick" }, version: esxBefore.version }), 403, "FORBIDDEN");
   const dbBefore = await apiGet<{ version: number }>(request, `/configuration-items/${crmDb}`);
-  await expectError(await restricted.send("PATCH", `/configuration-items/${crmDb}`, { notes: "should not stick", version: dbBefore.version }), 403, "FORBIDDEN");
+  await expectError(await restricted.send("PATCH", `/configuration-items/${crmDb}`, { attributes: { notes: "should not stick" }, version: dbBefore.version }), 403, "FORBIDDEN");
 
   // Delete: refused everywhere (the profile grants no delete).
   await expectError(await restricted.send("DELETE", `/configuration-items/${app.id}`), 403, "FORBIDDEN");
   await expectError(await restricted.send("DELETE", `/configuration-items/${esx}`), 403, "FORBIDDEN");
 
   // Read back as the administrator: only the permitted writes landed.
-  expect((await apiGet<{ notes: string | null }>(request, `/configuration-items/${app.id}`)).notes).toBe("edited by the restricted user");
-  const esxAfter = await apiGet<{ notes: string | null; version: number }>(request, `/configuration-items/${esx}`);
-  expect(esxAfter).toMatchObject({ notes: esxBefore.notes, version: esxBefore.version });
+  expect((await apiGet<{ attributes: Record<string, unknown> }>(request, `/configuration-items/${app.id}`)).attributes.notes).toBe("edited by the restricted user");
+  const esxAfter = await apiGet<{ attributes: Record<string, unknown>; version: number }>(request, `/configuration-items/${esx}`);
+  expect({ attributes: esxAfter.attributes, version: esxAfter.version }).toEqual({ attributes: esxBefore.attributes, version: esxBefore.version });
   expect((await apiGet<{ version: number }>(request, `/configuration-items/${crmDb}`)).version).toBe(dbBefore.version);
   const servers = await apiGet<{ data: unknown[] }>(request, `/configuration-items?q=e2e-srv-${stamp}`);
   expect(servers.data).toEqual([]);
 });
 
 test("writes without the session's CSRF token are refused", async () => {
-  const body = { classId: applicationId, name: `e2e-csrf-${stamp}`, statusId };
+  const body = { classId: applicationId, attributes: { name: `e2e-csrf-${stamp}`, status: statusId } };
   await expectError(await restricted.send("POST", "/configuration-items", body, null), 403, "CSRF_TOKEN_INVALID");
   await expectError(await restricted.send("POST", "/configuration-items", body, "not-the-token"), 403, "CSRF_TOKEN_INVALID");
 });
@@ -263,12 +263,12 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   await page.goto(`/cis/${app}`);
   await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
   await page.getByRole("link", { name: "Edit", exact: true }).click();
-  await page.locator("#f-hostname").fill(`e2e-app-${stamp}.example.internal`);
+  // The ident is generated and only administrators may change it.
+  await expect(page.locator("#f-ident")).toBeDisabled();
+  await page.locator("#attr-version").fill(`e2e-${stamp}`);
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(at(`/cis/${app}`));
-  expect((await apiGet<{ hostname: string | null }>(request, `/configuration-items/${app}`)).hostname).toBe(
-    `e2e-app-${stamp}.example.internal`,
-  );
+  expect((await apiGet<{ attributes: Record<string, unknown> }>(request, `/configuration-items/${app}`)).attributes.version).toBe(`e2e-${stamp}`);
   await page.context().close();
 });
 
@@ -277,7 +277,7 @@ test("a reference into a class the user may not view shows a placeholder, not a 
   const crm = await ciIdByName(request, "CRM");
   // Show the attribute as an inventory column for Application; the settings are restored at the end.
   const before = await apiGet<{ version: number; settings: { listViews: { classKey: string }[] } }>(request, "/ui-settings");
-  const listViews = [...before.settings.listViews.filter((v) => v.classKey !== "application"), { classKey: "application", columns: ["name", "attributes.primary_database"] }];
+  const listViews = [...before.settings.listViews.filter((v) => v.classKey !== "application"), { classKey: "application", columns: ["label", "attributes.primary_database"] }];
   const saved = await apiSend<{ version: number }>(request, "PUT", "/ui-settings", { version: before.version, settings: { ...before.settings, listViews } });
 
   try {
@@ -301,7 +301,7 @@ test("a reference into a class the user may not view shows a placeholder, not a 
     await expect(restrictedPage.getByRole("button", { name: "Clear Hidden CI" })).toBeVisible();
     await hiddenIn("edit");
     // Saving other fields keeps the hidden reference as it was.
-    await restrictedPage.locator("#f-notes").fill(`edited around a hidden reference ${stamp}`);
+    await restrictedPage.locator("#attr-notes").fill(`edited around a hidden reference ${stamp}`);
     await restrictedPage.getByRole("button", { name: "Save changes" }).click();
     await expect(restrictedPage).toHaveURL(at(`/cis/${crm}`));
     await restrictedPage.context().close();

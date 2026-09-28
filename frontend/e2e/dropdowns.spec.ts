@@ -156,8 +156,8 @@ test("the CI form: the child dropdown follows its parent", async ({ page, reques
 
   await maker.selectOption({ label: "Cisco" });
   await model.selectOption({ label: "Nexus 9000" });
-  await page.locator("#f-name").fill(CI);
-  await page.locator("#f-status").selectOption({ label: "In service" });
+  await page.locator("#attr-name").fill(CI);
+  await page.locator("#attr-status").selectOption({ label: "In service" });
   await snap(page, "36-ci-form-cascading-dropdown");
   await page.getByRole("button", { name: `Create ${CLASS}` }).click();
   await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);

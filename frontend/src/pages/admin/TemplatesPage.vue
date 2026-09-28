@@ -20,7 +20,7 @@ const install = useInstallTemplate();
 const results = ref<Record<string, InstallResult>>({});
 const installing = ref<string | null>(null);
 
-type Part = "areas" | "classes" | "attributeDefinitions" | "relationshipTypes" | "relationshipRules" | "statuses" | "environments" | "locations";
+type Part = "areas" | "classes" | "attributeDefinitions" | "relationshipTypes" | "relationshipRules" | "lookupLists" | "lookupListValues";
 type Counts = Record<Part, number>;
 type Status = "not_installed" | "partial" | "installed";
 /** The fields of a template (and an install result) this page reads. */
@@ -41,9 +41,8 @@ const PARTS: { key: Part; label: string }[] = [
   { key: "attributeDefinitions", label: "Attributes" },
   { key: "relationshipTypes", label: "Relationship types" },
   { key: "relationshipRules", label: "Relationship rules" },
-  { key: "statuses", label: "Statuses" },
-  { key: "environments", label: "Environments" },
-  { key: "locations", label: "Locations" },
+  { key: "lookupLists", label: "Lookup lists" },
+  { key: "lookupListValues", label: "Lookup values" },
 ];
 const STATUS: Record<Status, { label: string; tone: string }> = {
   not_installed: { label: "Not installed", tone: "" },

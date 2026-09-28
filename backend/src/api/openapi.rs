@@ -322,6 +322,7 @@ pub fn document(routes: &[Route]) -> OpenApi {
             .tag(r.tag.clone())
             .summary(Some(r.summary.clone()))
             .description(description)
+            .deprecated(r.deprecated.then_some(utoipa::openapi::Deprecated::True))
             .securities(Some(security(r)))
             .parameters(Some(parameters))
             .responses(

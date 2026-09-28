@@ -7,7 +7,7 @@ import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import PaginationBar from "../components/PaginationBar.vue";
-import StatusBadge from "../components/StatusBadge.vue";
+import CiStateBadge from "../components/CiStateBadge.vue";
 import { useDocumentTitle } from "../lib/composables";
 import { plural } from "../lib/format";
 
@@ -40,7 +40,7 @@ function onPage(p: { limit: number; offset: number }) {
   </div>
   <section class="panel">
     <EmptyState v-if="!q" title="Type in the search box above">
-      Search covers names, hostnames, IPs and networks, serial numbers, notes and attribute values.
+      Search covers labels, idents and attribute values, including IP addresses and networks.
     </EmptyState>
     <LoadingState v-if="search.isLoading.value" label="Searching…" />
     <div v-if="search.isError.value" class="panel-body">
@@ -54,27 +54,23 @@ function onPage(p: { limit: number; offset: number }) {
         <table :class="['data', { loading: search.isPlaceholderData.value }]">
           <thead>
             <tr>
-              <th scope="col">Name</th>
+              <th scope="col">Label</th>
+              <th scope="col">Ident</th>
               <th scope="col">Class</th>
-              <th scope="col">Status</th>
               <th scope="col">Matched on</th>
-              <th scope="col">Hostname</th>
-              <th scope="col">IP address</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="{ item, matches } in rows" :key="item.id">
-              <td><RouterLink :to="`/cis/${item.id}`">{{ item.name }}</RouterLink></td>
+              <td><RouterLink :to="`/cis/${item.id}`">{{ item.label }}</RouterLink> <CiStateBadge :ci="item" /></td>
+              <td class="mono">{{ item.ident }}</td>
               <td>{{ item.class.name }}</td>
-              <td><StatusBadge :status="item.status" /></td>
               <td :title="matches.map((m) => `${m.label}: ${m.value}`).join('\n')">
                 <span v-for="(m, i) in matches.slice(0, 2)" :key="i">
                   <template v-if="i > 0">, </template>
                   <span class="muted">{{ m.label }}:</span> <span class="mono">{{ m.value }}</span>
                 </span>
               </td>
-              <td class="mono">{{ item.hostname ?? "" }}</td>
-              <td class="mono">{{ item.ipAddress ?? "" }}</td>
             </tr>
           </tbody>
         </table>

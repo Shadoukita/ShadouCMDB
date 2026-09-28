@@ -4,7 +4,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../../api/client";
 import { useAreas, useCiClass, useCreateClass, usePatch, useRemove, type ClassCreateBody, type ClassUpdateBody } from "../../../api/datamodel";
 import { usePurge } from "../../../api/schemaChanges";
-import { useCiClasses, type CiClass } from "../../../api/queries";
+import { useCiClasses, useClassAttributes, type CiClass } from "../../../api/queries";
 import Breadcrumbs from "../../../components/Breadcrumbs.vue";
 import ClassBadge from "../../../components/ClassBadge.vue";
 import EmptyState from "../../../components/EmptyState.vue";
@@ -27,7 +27,7 @@ import AttributesEditor from "./AttributesEditor.vue";
 /**
  * Create or edit a CI class (a type): name, area and technical name (both fixed
  * after creation: they place the class's table, e.g. bestand.netzwerk), parent,
- * abstract, icon and colour; archive, restore or purge it. Every change is
+ * abstract, icon, colour and title attribute; archive, restore or purge it. Every change is
  * previewed as DDL first. Below the form, the class's attribute editor
  * (existing classes only).
  */
@@ -58,6 +58,8 @@ const parentId = ref("");
 const isAbstract = ref(false);
 const icon = ref("");
 const color = ref("");
+/** The attribute whose value labels the class's CIs; "" labels them by their ident. */
+const titleAttributeId = ref("");
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
 const saved = ref<string | null>(null);
@@ -72,6 +74,7 @@ function seed(c: CiClass | undefined) {
   isAbstract.value = c?.isAbstract ?? false;
   icon.value = c?.icon ?? "";
   color.value = c?.color ?? "";
+  titleAttributeId.value = c?.titleAttributeId ?? "";
 }
 watch(() => cls.data.value, seed, { immediate: true });
 watch(id, () => {
@@ -100,9 +103,13 @@ const parentOptions = computed(() => {
   return flattenTree(list).filter((n) => !excluded.has(n.item.id));
 });
 const unknownIcon = computed(() => !!icon.value && !classIcon(icon.value));
+/** Attributes that can label a CI: the class's own and inherited ones with a single readable value. */
+const TITLE_TYPES = new Set(["text", "enum", "number", "integer", "date", "datetime", "ip", "cidr"]);
+const attrs = useClassAttributes(id);
+const titleOptions = computed(() => (attrs.data.value ?? []).filter((a) => TITLE_TYPES.has(a.dataType) && (a.isActive || a.id === titleAttributeId.value)));
 
 const fieldErrors = computed(() => ({ ...(error.value instanceof ApiError ? error.value.fieldErrors() : {}), ...local.value }));
-const FIELDS = ["name", "key", "areaId", "description", "parentId", "isAbstract", "icon", "color"];
+const FIELDS = ["name", "key", "areaId", "description", "parentId", "isAbstract", "icon", "color", "titleAttributeId"];
 const unplaced = computed(() => (error.value instanceof ApiError ? error.value.details.filter((d) => !FIELDS.includes(d.field)) : []));
 
 async function submit() {
@@ -129,6 +136,8 @@ async function submit() {
     icon: icon.value || null,
     color: color.value || null,
   };
+  // Sent only when changed: it relabels every CI of the class.
+  if (!isNew.value && titleAttributeId.value !== (cls.data.value?.titleAttributeId ?? "")) body.titleAttributeId = titleAttributeId.value || null;
   if (isNew.value) {
     // New classes go to the end of the menu.
     const last = Math.max(0, ...(classes.data.value ?? []).map((c) => c.sortOrder));
@@ -320,6 +329,24 @@ const notFound = computed(() => {
           </label>
           <span v-if="fieldErrors.isAbstract" class="error">{{ fieldErrors.isAbstract }}</span>
         </div>
+        <FormField
+          v-if="!isNew"
+          id="class-title"
+          v-slot="p"
+          label="Title attribute"
+          :error="fieldErrors.titleAttributeId"
+          hint="Its value is the label of the class's CIs in lists, references, the graph and search"
+        >
+          <select :id="p.id" v-model="titleAttributeId" :disabled="attrs.isLoading.value" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
+            <option value="">None – label by ident</option>
+            <option v-for="a in titleOptions" :key="a.id" :value="a.id">
+              {{ a.label }} ({{ a.key }}){{ a.inherited ? ` · from ${a.definedOn.name}` : "" }}{{ a.isActive ? "" : " (retired)" }}
+            </option>
+            <option v-if="titleAttributeId && attrs.data.value && !titleOptions.some((a) => a.id === titleAttributeId)" :value="titleAttributeId">
+              Current attribute (not listed)
+            </option>
+          </select>
+        </FormField>
         <FormField id="class-description" v-slot="p" label="Description" wide :error="fieldErrors.description">
           <textarea :id="p.id" v-model="description" rows="2" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         </FormField>

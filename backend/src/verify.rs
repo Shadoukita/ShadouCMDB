@@ -24,7 +24,7 @@ const CHECKS: &[&str] = &[
     "Guard: enum value not in the allowed list",
     "Guard: reference field pointing at a CI that does not exist",
     "Guard: class hierarchy cycle",
-    "Guard: unknown status (foreign key)",
+    "Guard: unknown lookup value, e.g. a status (foreign key)",
     "Guard: audit_log is append-only",
     "Soft delete: removed edge can be re-created; deleted CI cannot be linked",
     "Indexes used by the UI queries",
@@ -117,11 +117,11 @@ async fn set_value_sql<'q>(
         .bind(value))
 }
 
-/// A CI in the registry plus its (empty) rows in the tables of its type and every ancestor type.
+/// A CI in the registry plus its rows in the tables of its type and every ancestor type,
+/// labelled `name` (the value of its "name" field).
 async fn new_ci(c: &mut PgConnection, class: &str, name: &str) -> sqlx::Result<Uuid> {
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO configuration_items (class_id, name, status_id)
-         VALUES ((SELECT id FROM ci_classes WHERE key = $1), $2, (SELECT id FROM statuses WHERE key = 'in_service'))
+        "INSERT INTO configuration_items (class_id, label) VALUES ((SELECT id FROM ci_classes WHERE key = $1), $2)
          RETURNING id",
     )
     .bind(class)
@@ -136,30 +136,53 @@ async fn new_ci(c: &mut PgConnection, class: &str, name: &str) -> sqlx::Result<U
     .fetch_all(&mut *c)
     .await?;
     for (class_id, t) in tables {
-        // Required fields (NOT NULL columns) get their default or first allowed value.
-        let required: Vec<(String, String, Option<String>)> = sqlx::query_as(
-            "SELECT d.key, format_type(a.atttypid, a.atttypmod), coalesce(d.default_value #>> '{}', d.enum_values ->> 0)
-             FROM ci_attribute_definitions d
-             JOIN pg_attribute a ON a.attrelid = cmdb.type_table(d.class_id)::regclass AND a.attname = d.key
-             WHERE d.class_id = $1 AND a.attnotnull",
-        )
-        .bind(class_id)
-        .fetch_all(&mut *c)
-        .await?;
-        let mut columns = String::from("id");
-        let mut params = String::from("$1");
-        for (i, (key, pg_type, _)) in required.iter().enumerate() {
-            columns.push_str(&format!(", {}", crate::schema::naming::Ident::trusted(key)));
-            params.push_str(&format!(", ${}::text::{pg_type}", i + 2));
-        }
-        let sql = format!("INSERT INTO {t} ({columns}) VALUES ({params})");
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id);
-        for (_, _, value) in required {
-            q = q.bind(value);
-        }
-        q.execute(&mut *c).await?;
+        type_row(c, class_id, &t, id, name).await?;
     }
     Ok(id)
+}
+
+/// A CI's row in the table of one type: the name, and required fields (NOT NULL
+/// columns) get their default or first allowed value.
+async fn type_row(c: &mut PgConnection, class_id: Uuid, table: &str, id: Uuid, name: &str) -> sqlx::Result<()> {
+    let required: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT d.key, format_type(a.atttypid, a.atttypmod),
+                coalesce(CASE WHEN d.key = 'name' THEN $2 END, d.default_value #>> '{}', d.enum_values ->> 0,
+                         (SELECT v.id::text FROM lookup_list_values v WHERE v.list_id = d.lookup_list_id
+                          ORDER BY v.sort_order, v.key LIMIT 1))
+         FROM ci_attribute_definitions d
+         JOIN pg_attribute a ON a.attrelid = cmdb.type_table(d.class_id)::regclass AND a.attname = d.key
+         WHERE d.class_id = $1 AND (a.attnotnull OR d.key = 'name')",
+    )
+    .bind(class_id)
+    .bind(name)
+    .fetch_all(&mut *c)
+    .await?;
+    let mut columns = String::from("id");
+    let mut params = String::from("$1");
+    for (i, (key, pg_type, _)) in required.iter().enumerate() {
+        columns.push_str(&format!(", {}", crate::schema::naming::Ident::trusted(key)));
+        params.push_str(&format!(", ${}::text::{pg_type}", i + 2));
+    }
+    let sql = format!("INSERT INTO {table} ({columns}) VALUES ({params})");
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id);
+    for (_, _, value) in required {
+        q = q.bind(value);
+    }
+    q.execute(&mut *c).await.map(|_| ())
+}
+
+/// The class in `class`'s lineage that defines field `key`, with the field's id.
+async fn field_in_lineage(c: &mut PgConnection, class: &str, key: &str) -> anyhow::Result<(String, Uuid)> {
+    sqlx::query_as(
+        "SELECT k.key, d.id FROM ci_class_lineage((SELECT id FROM ci_classes WHERE key = $1)) l
+         JOIN ci_attribute_definitions d ON d.class_id = l.class_id JOIN ci_classes k ON k.id = d.class_id
+         WHERE d.key = $2",
+    )
+    .bind(class)
+    .bind(key)
+    .fetch_optional(c)
+    .await?
+    .ok_or_else(|| anyhow!("no field {key} in the lineage of {class}"))
 }
 
 async fn link(c: &mut PgConnection, ty: &str, src: Uuid, tgt: Uuid) -> sqlx::Result<()> {
@@ -261,7 +284,7 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             link(c, "runs_on", db, srv).await?;
             link(c, "located_in", dev, loc).await?;
             let paths: Vec<String> = sqlx::query_scalar(
-                "SELECT s.name || ' <-runs_on- ' || a.name || ' -depends_on-> ' || d.name
+                "SELECT s.label || ' <-runs_on- ' || a.label || ' -depends_on-> ' || d.label
                  FROM ci_relationships r1
                  JOIN relationship_types t1 ON t1.id = r1.relationship_type_id AND t1.key = 'runs_on'
                  JOIN ci_relationships r2 ON r2.source_ci_id = r1.source_ci_id
@@ -281,13 +304,13 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
                 "WITH RECURSIVE g AS (
                    SELECT r.source_ci_id, r.target_ci_id, r.relationship_type_id, 1 AS depth
                    FROM ci_relationships r JOIN configuration_items ci ON ci.id = r.source_ci_id
-                   WHERE ci.name = 'Customer Relationship Management' AND r.deleted_at IS NULL
+                   WHERE ci.label = 'Customer Relationship Management' AND r.deleted_at IS NULL
                    UNION
                    SELECT r.source_ci_id, r.target_ci_id, r.relationship_type_id, g.depth + 1
                    FROM ci_relationships r JOIN g ON r.source_ci_id = g.target_ci_id
                    WHERE r.deleted_at IS NULL AND g.depth < 6
                  )
-                 SELECT s.name || ' ' || t.forward_label || ' ' || d.name AS line
+                 SELECT s.label || ' ' || t.forward_label || ' ' || d.label AS line
                  FROM g JOIN configuration_items s ON s.id = g.source_ci_id
                  JOIN configuration_items d ON d.id = g.target_ci_id
                  JOIN relationship_types t ON t.id = g.relationship_type_id
@@ -321,12 +344,8 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
         7 => reject!(c, "configuration_items_class_concrete", new_ci(c, "hardware", "abstract-ci")),
         8 => {
             let table = type_table(c, "server").await?;
-            reject!(
-                c,
-                "_id_fkey",
-                sqlx::query(sqlx::AssertSqlSafe(format!("INSERT INTO {table} (id) VALUES (gen_random_uuid())")))
-                    .execute(&mut *c)
-            )
+            let server = id_by_key(c, "ci_classes", "server").await?;
+            reject!(c, "_id_fkey", type_row(c, server, &table, Uuid::new_v4(), "orphan"))
         }
         9 => {
             let s = new_ci(c, "server", "type-srv").await?;
@@ -366,15 +385,15 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
                 sqlx::query("UPDATE ci_classes SET parent_id = $1 WHERE id = $2").bind(srv).bind(hw).execute(&mut *c)
             )
         }
-        13 => reject!(
-            c,
-            "configuration_items_status_id_statuses_id_fk",
-            sqlx::query(
-                "INSERT INTO configuration_items (class_id, name, status_id)
-                 VALUES ((SELECT id FROM ci_classes WHERE key = 'server'), 'fk-srv', gen_random_uuid())",
-            )
-            .execute(&mut *c)
-        ),
+        13 => {
+            let s = new_ci(c, "server", "fk-srv").await?;
+            // On hardware after a fresh install, on server after the 0016 upgrade.
+            let (class, def) = field_in_lineage(c, "server", "status").await?;
+            let fk = format!("fk_{}", def.simple());
+            let unknown = Uuid::new_v4().to_string();
+            let update = set_value_sql(c, &class, s, "status", &unknown).await?;
+            reject!(c, &fk, update.execute(&mut *c))
+        }
         14 => {
             // The trigger is row-level, so an UPDATE of an empty audit_log would succeed vacuously:
             // write one row first so the check does not depend on `seed --demo`.
@@ -423,22 +442,25 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             c.execute("SET LOCAL enable_seqscan = off").await?;
             // Any of the listed indexes is acceptable (on tiny tables PG18 may prefer a skip scan of a wider index).
             let probes: [(&'static str, &[&str]); 5] = [
-                ("SELECT id FROM configuration_items WHERE name ILIKE '%crm%'", &["configuration_items_name_trgm_idx"]),
+                (
+                    "SELECT id FROM configuration_items WHERE label ILIKE '%crm%'",
+                    &["configuration_items_label_trgm_idx"],
+                ),
                 (
                     "SELECT id FROM configuration_items WHERE search_vector @@ plainto_tsquery('simple', 'crm')",
                     &["configuration_items_search_idx"],
                 ),
                 (
-                    "SELECT id FROM configuration_items WHERE deleted_at IS NULL ORDER BY lower(name), id LIMIT 50",
-                    &["configuration_items_live_name_idx"],
+                    "SELECT id FROM configuration_items WHERE deleted_at IS NULL ORDER BY lower(label), id LIMIT 50",
+                    &["configuration_items_live_label_idx", "configuration_items_class_label_idx"],
                 ),
                 (
                     "SELECT target_ci_id FROM ci_relationships WHERE source_ci_id = '00000000-0000-0000-0000-000000000000' AND deleted_at IS NULL",
                     &["ci_relationships_source_idx", "ci_relationships_live_edge_uq"],
                 ),
                 (
-                    "SELECT id FROM configuration_items WHERE ip_address << '10.0.0.0/8'",
-                    &["configuration_items_ip_idx"],
+                    "SELECT id FROM configuration_items WHERE lower(ident) = 'ci-0000000'",
+                    &["configuration_items_ident_uq"],
                 ),
             ];
             let mut hits = Vec::new();

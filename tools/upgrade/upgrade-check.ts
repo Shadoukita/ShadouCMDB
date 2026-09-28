@@ -112,7 +112,10 @@ async function viewerView(ids: Json): Promise<ViewerView> {
   const visibleCiIds = (await all('/api/v1/configuration-items')).map((c) => c.id).sort();
   const getStatus: Record<string, number> = {};
   for (const id of Object.values(ids.cis) as string[]) getStatus[id] = (await call('GET', `/api/v1/configuration-items/${id}`)).status;
-  const createStatus = (await call('POST', '/api/v1/configuration-items', { classId: ids.classes.server, name: 'upg-viewer-denied', statusId: ids.status })).status;
+  // The body must be valid for the release being asked, or its 400 would hide the 403:
+  // the fixed fields (name, statusId) became class attributes in migration 0016.
+  const body = MODE === 'seed' ? { classId: ids.classes.server, name: 'upg-viewer-denied', statusId: ids.status } : { classId: ids.classes.server };
+  const createStatus = (await call('POST', '/api/v1/configuration-items', body)).status;
   const auditStatus = (await call('GET', '/api/v1/audit-log?limit=1')).status;
   me = null;
   return { visibleCiIds, getStatus, createStatus, auditStatus };
@@ -261,7 +264,48 @@ const CHANGED_ON_PURPOSE: Array<{ url: RegExp; diff: RegExp; before: number; why
     url: /^\/api\/v1\/ci-classes\/[^/]+$/, diff: /^\$\.updatedAt: /, before: 9,
     why: '0008 puts every existing class in the area "infrastruktur" with an UPDATE, which stamps updated_at',
   },
+  {
+    url: /^\/api\/v1\/ci-classes\/[^/]+\/attributes$/, diff: /^\$\.data: \d+ entries -> \d+$/, before: 17,
+    why: '0016 adds the former fixed CI columns (name, status, ...) as attributes of the classes whose CIs held values',
+  },
 ];
+
+/** Migration 0016 (number 17) moved the fixed CI fields into class attributes. */
+const CORE_CI_MODEL = 17;
+
+/**
+ * A CI as a release before 0016 returned it, in the shape 0016 gives it: the
+ * name is the label and, like every other former fixed field, an attribute
+ * (status, environment, owner and location by the same id, now a lookup list
+ * value). The embedded status/environment/owner/location objects are gone;
+ * their ids are compared through the attributes. A graph node or search item
+ * (a summary, without attributes) keeps only the label.
+ */
+function asCoreModel(ci: Json, withAttributes: boolean): Json {
+  const moved: Array<[string, string]> = [
+    ['name', 'name'], ['statusId', 'status'], ['environmentId', 'environment'], ['ownerId', 'owner'], ['locationId', 'location'],
+    ['hostname', 'hostname'], ['ipAddress', 'ip_address'], ['serialNumber', 'serial_number'], ['notes', 'notes'],
+  ];
+  const out: Json = { ...ci, label: ci.name };
+  const attributes: Json = { ...(ci.attributes ?? {}) };
+  for (const [field, key] of moved) {
+    if (ci[field] !== null && ci[field] !== undefined) attributes[key] = ci[field];
+    delete out[field];
+  }
+  for (const embedded of ['status', 'environment', 'owner', 'location']) delete out[embedded];
+  if (withAttributes) out.attributes = attributes;
+  return out;
+}
+
+/** The snapshot of a URL as the current release answers it, for data from before `CORE_CI_MODEL`. */
+function translate(url: string, before: Json): Json {
+  if (sourceMigrations >= CORE_CI_MODEL) return before;
+  if (/^\/api\/v1\/configuration-items\/[^/]+$/.test(url)) return asCoreModel(before, true);
+  if (/^\/api\/v1\/configuration-items\/[^/]+\/graph$/.test(url)) {
+    return { ...before, nodes: before.nodes.map((n: Json) => asCoreModel(n, false)) };
+  }
+  return before;
+}
 
 /** Every value in `before` must be in `after` unchanged (after may have more). */
 function diff(before: Json, after: Json, path: string, out: string[]): void {
@@ -312,7 +356,7 @@ async function check() {
   for (const [url, before] of Object.entries(snap.objects)) {
     const r = await call('GET', url);
     if (r.status !== 200) failures.push(`GET ${url}: ${r.status}, expected 200`);
-    else compare('object', url, before, r.json);
+    else compare('object', url, translate(url, before), r.json);
   }
   // The same CIs and relationships in the lists: nothing lost, nothing deleted or restored.
   compare('lists', 'GET /api/v1/configuration-items, /api/v1/relationships', snap.inventory, await readInventory());

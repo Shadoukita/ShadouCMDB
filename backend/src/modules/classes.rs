@@ -69,10 +69,26 @@ pub struct CiClass {
     pub sort_order: i32,
     /// Archived classes keep their CIs but accept no new ones
     pub is_active: bool,
+    /// The attribute (of this class or an ancestor) whose value labels its CIs in lists, references, the graph
+    /// and search; null labels them by their ident
+    #[schema(required = true)]
+    pub title_attribute_id: Option<Uuid>,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
     #[serde(serialize_with = "ts::serialize")]
     pub updated_at: DateTime<Utc>,
+}
+
+fn title_attribute_schema() -> Schema {
+    let mut s = nullable_uuid_schema();
+    if let Schema::AnyOf(a) = &mut s {
+        a.description = Some(
+            "Attribute of this class or an ancestor whose value labels the CIs (text, enum, number, integer, date, \
+             datetime, ip or cidr); null labels them by their ident. A new class takes its parent's."
+                .into(),
+        );
+    }
+    s
 }
 
 pub(crate) fn icon_schema() -> Schema {
@@ -112,6 +128,9 @@ pub struct CiClassCreate {
     sort_order: Option<i32>,
     #[schema(nullable = false)]
     is_active: Option<bool>,
+    #[schema(schema_with = title_attribute_schema)]
+    #[serde(default)]
+    title_attribute_id: Option<Uuid>,
 }
 
 impl CiClassCreate {
@@ -145,6 +164,9 @@ pub struct CiClassUpdate {
     sort_order: Option<i32>,
     #[schema(nullable = false)]
     is_active: Option<bool>,
+    #[schema(schema_with = title_attribute_schema)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    title_attribute_id: Option<Option<Uuid>>,
 }
 
 impl Writable for CiClassCreate {
@@ -159,7 +181,8 @@ impl Writable for CiClassCreate {
             .opt("icon", self.icon.clone().map(Some))
             .opt("color", self.color.clone().map(Some))
             .opt("sort_order", self.sort_order)
-            .opt("is_active", self.is_active);
+            .opt("is_active", self.is_active)
+            .opt("title_attribute_id", self.title_attribute_id.map(Some));
         c
     }
 }
@@ -175,7 +198,8 @@ impl Writable for CiClassUpdate {
             .opt("icon", self.icon.clone())
             .opt("color", self.color.clone())
             .opt("sort_order", self.sort_order)
-            .opt("is_active", self.is_active);
+            .opt("is_active", self.is_active)
+            .opt("title_attribute_id", self.title_attribute_id);
         c
     }
 }
@@ -262,10 +286,11 @@ impl Resource for CiClasses {
     const COLUMNS: &'static str = "id, key, name, area_id,
         (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.' || key AS table_name,
         (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.v_' || key AS view_name,
-        description, parent_id, is_abstract, icon, color, sort_order, is_active, created_at, updated_at";
+        description, parent_id, is_abstract, icon, color, sort_order, is_active, title_attribute_id, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
     const ARCHIVE_ON_DELETE: bool = true;
     const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
+    const UPDATE_DESCRIPTION: &'static str = "Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled.";
     const DELETE_DESCRIPTION: &'static str = "Archives the type (`isActive=false`): its table, CIs and values stay and stay readable, no new CIs can be created, and the UI hides it. `PATCH {\"isActive\": true}` restores it. To drop the table and delete its CIs, purge the type (`POST /api/v1/ci-classes/{id}/purge`).";
     const USAGE: &'static [Usage] = &[
         Usage {
@@ -333,13 +358,25 @@ impl Resource for CiClasses {
         columns: &'a mut ColumnSet,
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
-            if columns.0.iter().any(|(c, _)| *c == "area_id") {
-                return Ok(());
-            }
             let parent = columns.0.iter().find_map(|(c, v)| match (c, v) {
                 (&"parent_id", Val::Uuid(Some(id))) => Some(*id),
                 _ => None,
             });
+            // A subtype is labelled like its parent unless told otherwise.
+            if let Some(parent) = parent
+                && !columns.0.iter().any(|(c, _)| *c == "title_attribute_id")
+            {
+                let title: Option<Uuid> =
+                    sqlx::query_scalar("SELECT title_attribute_id FROM cmdb.ci_classes WHERE id = $1")
+                        .bind(parent)
+                        .fetch_optional(&mut *conn)
+                        .await?
+                        .flatten();
+                columns.opt("title_attribute_id", title.map(Some));
+            }
+            if columns.0.iter().any(|(c, _)| *c == "area_id") {
+                return Ok(());
+            }
             let area_id = match parent {
                 // An unknown parent is reported by the insert's foreign key.
                 Some(parent) => {
@@ -377,6 +414,11 @@ impl Resource for CiClasses {
                 if row.parent_id != previous.parent_id {
                     move_to_new_parent(conn, row, previous).await?;
                     check_parent_fields_in_lineage(conn, row.id).await?;
+                    repair_titles(conn, row, previous).await?;
+                }
+                if row.parent_id != previous.parent_id || row.title_attribute_id != previous.title_attribute_id {
+                    let model = Model::load(conn).await?;
+                    items_data::refresh_labels(conn, &model, &model.subtree(row.id), None).await?;
                 }
             }
             let verb = match previous {
@@ -466,6 +508,37 @@ async fn check_parent_fields_in_lineage(conn: &mut PgConnection, class_id: Uuid)
             broken.join(", ")
         ),
     ))
+}
+
+/// After a move: a type whose title attribute is no longer in its lineage (the
+/// trigger cleared the moved type's; its subtypes still point at the old one)
+/// takes its parent's, top down.
+async fn repair_titles(conn: &mut PgConnection, row: &CiClass, previous: &CiClass) -> Result<(), AppError> {
+    let model = Model::load(conn).await?;
+    let mut titles: std::collections::HashMap<Uuid, Option<Uuid>> =
+        model.classes.iter().map(|c| (c.id, c.title_attribute_id)).collect();
+    for class_id in model.subtree(row.id) {
+        let lineage: Vec<Uuid> = model.lineage(class_id).iter().map(|c| c.id).collect();
+        let current = titles.get(&class_id).copied().flatten();
+        let fits = current.and_then(|t| model.field(t)).is_some_and(|f| lineage.contains(&f.class_id));
+        let lost = if class_id == row.id {
+            previous.title_attribute_id.is_some() && current.is_none()
+        } else {
+            current.is_some()
+        };
+        if fits || !lost {
+            continue;
+        }
+        let parent_title =
+            model.class(class_id).and_then(|c| c.parent_id).and_then(|p| titles.get(&p).copied().flatten());
+        sqlx::query("UPDATE cmdb.ci_classes SET title_attribute_id = $2 WHERE id = $1")
+            .bind(class_id)
+            .bind(parent_title)
+            .execute(&mut *conn)
+            .await?;
+        titles.insert(class_id, parent_title);
+    }
+    Ok(())
 }
 
 /// Deletes an archived type: its CIs (with their relationships), fields,
@@ -610,6 +683,18 @@ pub enum AttributeDataType {
     /// A value from an admin-defined lookup list (stored by value id)
     Lookup,
 }
+
+/// Data types a title attribute can have (as `cmdb.title_data_type()`).
+pub const TITLE_DATA_TYPES: &[AttributeDataType] = &[
+    AttributeDataType::Text,
+    AttributeDataType::Enum,
+    AttributeDataType::Number,
+    AttributeDataType::Integer,
+    AttributeDataType::Date,
+    AttributeDataType::Datetime,
+    AttributeDataType::Ip,
+    AttributeDataType::Cidr,
+];
 
 impl AttributeDataType {
     pub fn as_str(self) -> &'static str {
@@ -1210,6 +1295,22 @@ impl Resource for AttributeDefinitions {
             if previous.is_some() {
                 check_changed_definition(row)?;
             }
+            let titled: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.ci_classes WHERE title_attribute_id = $1")
+                .bind(row.id)
+                .fetch_all(&mut *conn)
+                .await?;
+            if !titled.is_empty() && !TITLE_DATA_TYPES.contains(&row.data_type) {
+                return Err(engine::refused(
+                    "dataType",
+                    "title_attribute_type",
+                    format!(
+                        "This field labels the CIs of {} types; a {} field cannot. Choose another title attribute \
+                         on those types first.",
+                        titled.len(),
+                        row.data_type.as_str()
+                    ),
+                ));
+            }
             check_default_value(conn, row).await?;
             let table: String =
                 sqlx::query_scalar("SELECT cmdb.type_table($1)").bind(row.class_id).fetch_one(&mut *conn).await?;
@@ -1221,6 +1322,11 @@ impl Resource for AttributeDefinitions {
             };
             let summary = format!("{verb} {table}.{}", row.key);
             engine::apply(conn, ctx, &summary, Scope::Classes(vec![row.class_id]), Purge::default()).await?;
+            // A converted title field reads differently.
+            if previous.is_some_and(|p| p.data_type != row.data_type) && !titled.is_empty() {
+                let model = Model::load(conn).await?;
+                items_data::refresh_labels(conn, &model, &titled, None).await?;
+            }
             Ok(())
         })
     }
@@ -1257,10 +1363,16 @@ pub async fn purge_attribute_in(
     }
     let model = Model::load(conn).await?;
     let table = model.table(row.class_id).ok_or_else(AppError::internal)?;
+    let titled: Vec<Uuid> = model.classes.iter().filter(|c| c.title_attribute_id == Some(id)).map(|c| c.id).collect();
+    // The foreign key clears the title of the types it labelled; their CIs fall back to the ident.
     crud::delete_row(conn, AttributeDefinitions::TABLE, id).await?;
     let summary = format!("Purge field {}.{}", table.display(), row.key);
     let purge = Purge { columns: vec![(table, Ident::trusted(&row.key))], ..Purge::default() };
     let change = engine::apply(conn, ctx, &summary, Scope::Classes(vec![row.class_id]), purge).await?;
+    if !titled.is_empty() {
+        let model = Model::load(conn).await?;
+        items_data::refresh_labels(conn, &model, &titled, None).await?;
+    }
     let entry = AuditEntry {
         action: AuditAction::Delete,
         entity_type: AttributeDefinitions::TABLE,
@@ -1786,10 +1898,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let status: Uuid = sqlx::query_scalar("INSERT INTO statuses (key, name) VALUES ('live', 'Live') RETURNING id")
-            .fetch_one(pool)
-            .await
-            .unwrap();
+        let name: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "key": "name", "label": "Name", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        simple::update::<CiClasses>(pool, &ctx, class.id, &body(json!({"titleAttributeId": name.id}))).await.unwrap();
         let rel_type: Uuid = sqlx::query_scalar(
             "INSERT INTO relationship_types (key, name, forward_label, reverse_label)
              VALUES ('feeds', 'Feeds', 'feeds', 'fed by') RETURNING id",
@@ -1809,7 +1925,7 @@ mod tests {
         let mut cis = Vec::new();
         for (name, rack) in [("box-a", "R1"), ("box-b", "R2"), ("box-c", "R3")] {
             let item = body::<CreateItemBody>(json!({
-                "classId": class.id, "name": name, "statusId": status, "attributes": {field.key.clone(): rack}
+                "classId": class.id, "attributes": {field.key.clone(): rack, "name": name}
             }));
             cis.push(items_service::create(pool, &ctx, &item).await.unwrap().summary.id);
         }
@@ -1855,6 +1971,7 @@ mod tests {
             let old = entry("configuration_items", ci);
             assert_eq!(old["attributes"][&field.key], json!(rack), "{old}");
             assert_eq!(old["classId"], json!(class.id));
+            assert_eq!(old["label"], old["attributes"]["name"], "labelled by the title attribute: {old}");
             assert_eq!(!old["deletedAt"].is_null(), soft_deleted, "{old}");
         }
         let class_entries: i64 = sqlx::query_scalar(

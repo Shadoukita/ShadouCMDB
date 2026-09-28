@@ -2,13 +2,14 @@
 import { useQueries, useQuery } from "@tanstack/vue-query";
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
-import { ciCountQuery, useCiClasses, useCiList, useLookup } from "../api/queries";
+import { useLookupLists, useLookupListValues } from "../api/datamodel";
+import { ciCountQuery, useCiClasses, useCiList } from "../api/queries";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
-import StatusBadge from "../components/StatusBadge.vue";
+import CiStateBadge from "../components/CiStateBadge.vue";
 import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { formatRelative } from "../lib/format";
@@ -46,11 +47,14 @@ const classRows = computed<CountRow[]>(() =>
   })),
 );
 
-const statuses = useLookup("statuses");
-const statusList = computed(() => statuses.data.value ?? []);
-const statusCounts = useQueries({ queries: computed(() => statusList.value.map((s) => ciCountQuery({ statusId: s.id }))) });
+// "By status" counts the values of the lookup list with key "status" (the starter templates' status); without one it is left out.
+const lookupLists = useLookupLists();
+const statusListId = computed(() => lookupLists.data.value?.find((l) => l.key === "status")?.id);
+const statuses = useLookupListValues(statusListId);
+const statusList = computed(() => (statusListId.value ? (statuses.data.value ?? []) : []));
+const statusCounts = useQueries({ queries: computed(() => statusList.value.map((s) => ciCountQuery({ lookupValueId: s.id }))) });
 const statusRows = computed<CountRow[]>(() =>
-  statusList.value.map((s, i) => ({ id: s.id, label: s.name, count: statusCounts.value[i]?.data, to: `/cis?statusId=${s.id}` })),
+  statusList.value.map((s, i) => ({ id: s.id, label: s.name, count: statusCounts.value[i]?.data, to: `/cis?lookupValueId=${s.id}` })),
 );
 </script>
 
@@ -108,11 +112,12 @@ const statusRows = computed<CountRow[]>(() =>
           :error="classes.error.value ?? classCounts.find((c) => c.error)?.error"
         />
         <CountTable
+          v-if="statusListId"
           title="By status"
           :rows="statusRows"
           :total="total.data.value"
-          :loading="statuses.isLoading.value"
-          :error="statuses.error.value ?? statusCounts.find((c) => c.error)?.error"
+          :loading="lookupLists.isLoading.value || statuses.isLoading.value"
+          :error="lookupLists.error.value ?? statuses.error.value ?? statusCounts.find((c) => c.error)?.error"
         />
       </div>
       <div style="height: var(--sp-4)" />
@@ -129,21 +134,17 @@ const statusRows = computed<CountRow[]>(() =>
           <table v-if="recent.data.value" class="data">
             <thead>
               <tr>
-                <th scope="col">Name</th>
+                <th scope="col">Label</th>
+                <th scope="col">Ident</th>
                 <th scope="col">Class</th>
-                <th scope="col">Status</th>
-                <th scope="col">Environment</th>
-                <th scope="col">Owner</th>
                 <th scope="col">Changed</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="ci in recent.data.value.data" :key="ci.id">
-                <td><RouterLink :to="`/cis/${ci.id}`">{{ ci.name }}</RouterLink></td>
+                <td><RouterLink :to="`/cis/${ci.id}`">{{ ci.label }}</RouterLink> <CiStateBadge :ci="ci" /></td>
+                <td class="mono">{{ ci.ident }}</td>
                 <td>{{ ci.class.name }}</td>
-                <td><StatusBadge :status="ci.status" /></td>
-                <td>{{ ci.environment?.name ?? "" }}</td>
-                <td>{{ ci.owner?.name ?? "" }}</td>
                 <td :title="ci.updatedAt">{{ formatRelative(ci.updatedAt) }}</td>
               </tr>
             </tbody>

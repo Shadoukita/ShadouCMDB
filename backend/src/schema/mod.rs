@@ -552,22 +552,22 @@ impl Planner<'_> {
     }
 }
 
+/// A CI is active while `valid_from <= now() < valid_until` (open-ended without
+/// `valid_until`). Derived, never stored; `ci` is the registry row.
+pub const ACTIVE_SQL: &str = "(ci.valid_from <= now() AND (ci.valid_until IS NULL OR now() < ci.valid_until))";
+
 /// The reporting view of a type: registry columns, then the fields of every
 /// ancestor and its own. Lookup fields show the value's key.
 fn view_sql(model: &Model, class_id: Uuid, view: &TableName) -> Option<String> {
     let table = model.table(class_id)?;
     let mut columns = vec![
         "ci.id".to_owned(),
-        "ci.name".into(),
+        "ci.ident".into(),
+        "ci.label".into(),
         "cls.key AS type".into(),
-        "st.key AS status".into(),
-        "env.key AS environment".into(),
-        "own.name AS owner".into(),
-        "loc.key AS location".into(),
-        "ci.hostname".into(),
-        "ci.ip_address".into(),
-        "ci.serial_number".into(),
-        "ci.notes".into(),
+        "ci.valid_from".into(),
+        "ci.valid_until".into(),
+        format!("{ACTIVE_SQL} AS active"),
         "ci.version AS record_version".into(),
         "ci.created_at".into(),
         "ci.updated_at".into(),
@@ -600,11 +600,7 @@ fn view_sql(model: &Model, class_id: Uuid, view: &TableName) -> Option<String> {
     Some(format!(
         "CREATE VIEW {} AS SELECT {} FROM {} t \
          JOIN cmdb.configuration_items ci ON ci.id = t.id \
-         JOIN cmdb.ci_classes cls ON cls.id = ci.class_id \
-         JOIN cmdb.statuses st ON st.id = ci.status_id \
-         LEFT JOIN cmdb.environments env ON env.id = ci.environment_id \
-         LEFT JOIN cmdb.owners own ON own.id = ci.owner_id \
-         LEFT JOIN cmdb.locations loc ON loc.id = ci.location_id{}{}",
+         JOIN cmdb.ci_classes cls ON cls.id = ci.class_id{}{}",
         view.sql(),
         columns.join(", "),
         table.sql(),
@@ -701,6 +697,17 @@ async fn build(
     }
 
     // Reporting views: rebuilt when their definition changed or a table they read was altered.
+    // A restore at a migration level before 0016 has the old registry columns; the
+    // views follow once the newer migrations have run.
+    let core_registry: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'cmdb.configuration_items'::regclass
+                          AND attname = 'label' AND NOT attisdropped)",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if !core_registry {
+        return Ok(plan);
+    }
     let mut affected: BTreeSet<Uuid> = BTreeSet::new();
     match scope {
         Scope::All => affected.extend(model.classes.iter().map(|c| c.id)),
@@ -1039,6 +1046,7 @@ mod tests {
             is_required: false,
             is_active: true,
             sort_order: 0,
+            lookup_list_id: None,
         };
         let run = async |conn: &mut PgConnection, f: &Field, from: &str| {
             let mut plan = Plan::default();

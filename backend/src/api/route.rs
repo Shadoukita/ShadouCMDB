@@ -500,6 +500,8 @@ pub struct Route {
     pub tag: String,
     pub summary: String,
     pub description: Option<String>,
+    /// Marked deprecated in the OpenAPI document (still served).
+    pub deprecated: bool,
     pub status: StatusCode,
     pub access: Access,
     /// API tokens are refused (403): the route needs a browser session.
@@ -677,6 +679,7 @@ impl RouteBuilder {
             tag: self.tag,
             summary: self.summary,
             description: self.description,
+            deprecated: false,
             status,
             access,
             session_only,

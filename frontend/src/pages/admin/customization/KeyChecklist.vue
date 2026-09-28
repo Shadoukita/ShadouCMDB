@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** Picks any number of keys (classes, statuses, environments, locations) with checkboxes. */
+/** Picks any number of keys (classes, lookup values) with checkboxes. */
 defineProps<{ options: { key: string; label: string }[]; legend: string; hint?: string }>();
 const model = defineModel<string[]>({ required: true });
 

@@ -358,6 +358,22 @@ export function useLookupListValues(
   });
 }
 
+/** Every value of every list, page by page. UI settings name lookup values by list key and value key; filters need their ids. */
+export function useAllLookupListValues() {
+  return useQuery({
+    queryKey: ["lookup-list-values", "all"],
+    staleTime: 60_000,
+    queryFn: async ({ signal }) => {
+      const out: LookupListValue[] = [];
+      for (let offset = 0; ; offset += MAX_PAGE) {
+        const r = await unwrap(api.GET("/api/v1/lookup-list-values", { params: { query: { limit: MAX_PAGE, offset, sort: "sortOrder" } }, signal }));
+        out.push(...r.data);
+        if (r.data.length === 0 || out.length >= r.page.total) return out;
+      }
+    },
+  });
+}
+
 // ---------- Starter templates ----------
 
 export function useTemplates(enabled: MaybeRefOrGetter<boolean> = true) {

@@ -171,8 +171,9 @@ test("the CI form and detail page follow the new definitions", async ({ page }) 
   await expect(page.locator("#attr-rack_units-hint")).toContainText("Height in rack units");
   await expect(page.locator("#attr-tier option:checked")).toHaveText("Silver");
   await expect(page.locator("#attr-tier option")).toHaveText(["— not set —", "Gold", "Bronze", "Silver"]);
-  await page.locator("#f-name").fill(CI);
-  await page.locator("#f-status").selectOption({ label: "In service" });
+  // Name and status are attributes the class inherits from Hardware.
+  await page.locator("#attr-name").fill(CI);
+  await page.locator("#attr-status").selectOption({ label: "In service" });
   await page.locator("#attr-tier").selectOption({ label: "Gold" });
   await page.locator("#attr-mode").selectOption("passive");
   await snap(page, "33-ci-form-from-admin-model");
@@ -204,7 +205,7 @@ test("an archived class keeps its CIs but takes no new ones", async ({ page }) =
   await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: new RegExp(`^${CLASS}`) })).toHaveCount(0);
   await page.goto(`/cis/new?classId=${classId}`);
   await expect(page.getByRole("alert")).toContainText(`${CLASS} is archived`);
-  await expect(page.locator("#f-name")).toHaveCount(0);
+  await expect(page.locator("#attr-name")).toHaveCount(0);
 
   await page.goto("/admin/classes");
   const list = page.getByRole("region", { name: "CI classes" });
@@ -257,15 +258,17 @@ test("lookups: add, archive and delete; values in use cannot be deleted", async 
   await expect(page.getByRole("status").filter({ hasText: `Deleted environment ${ENV}.` })).toBeVisible();
   await expect(page.getByRole("row", { name: new RegExp(ENV) })).toHaveCount(0);
 
-  await page.getByRole("navigation", { name: "Lookups" }).getByRole("link", { name: "Statuses" }).click();
-  await page.getByRole("button", { name: "Delete status “In service”" }).click();
+  // CIs hold their status as a value of the "status" lookup list, under Dropdowns.
+  await page.goto("/admin/dropdowns");
+  await page.getByRole("region", { name: "Lookup lists" }).getByRole("link", { name: "Status", exact: true }).click();
+  await page.getByRole("button", { name: "Delete value “In service”" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("cannot be deleted while it is in use");
   await expect(dialog.getByRole("button", { name: "Archive instead" })).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
   const TEAM = `E2E team ${stamp}`;
-  await page.getByRole("navigation", { name: "Lookups" }).getByRole("link", { name: "Owners" }).click();
+  await page.goto("/admin/lookups/owners");
   await page.getByRole("button", { name: "+ Add owner" }).first().click();
   await page.locator("#own-name").fill(TEAM);
   await page.getByRole("button", { name: "Add owner", exact: true }).click();

@@ -173,20 +173,15 @@ impl Resource for Statuses {
     const COLUMNS: &'static str =
         "id, key, name, description, sort_order, is_active, created_at, updated_at, is_operational";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
-    const USAGE: &'static [Usage] = &[
-        Usage {
-            kind: "configurationItems",
-            label: "configuration items",
-            sql: "SELECT count(*) FROM configuration_items WHERE status_id = $1 AND deleted_at IS NULL",
-            blocking: true,
-        },
-        Usage {
-            kind: "deletedConfigurationItems",
-            label: "deleted configuration items (kept for history)",
-            sql: "SELECT count(*) FROM configuration_items WHERE status_id = $1 AND deleted_at IS NOT NULL",
-            blocking: true,
-        },
-    ];
+    const DEPRECATED: Option<&'static str> = Some(
+        "Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list \"status\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+    );
+    const USAGE: &'static [Usage] = &[Usage {
+        kind: "configurationItems",
+        label: "configuration items holding the lookup list value with the same id (not blocking)",
+        sql: "SELECT cmdb.lookup_value_count($1)",
+        blocking: false,
+    }];
     fn id(row: &Status) -> Uuid {
         row.id
     }
@@ -322,20 +317,15 @@ impl Resource for Environments {
     const PLURAL: &'static str = "environments";
     const COLUMNS: &'static str = "id, key, name, description, sort_order, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
-    const USAGE: &'static [Usage] = &[
-        Usage {
-            kind: "configurationItems",
-            label: "configuration items",
-            sql: "SELECT count(*) FROM configuration_items WHERE environment_id = $1 AND deleted_at IS NULL",
-            blocking: true,
-        },
-        Usage {
-            kind: "deletedConfigurationItems",
-            label: "deleted configuration items (kept for history)",
-            sql: "SELECT count(*) FROM configuration_items WHERE environment_id = $1 AND deleted_at IS NOT NULL",
-            blocking: true,
-        },
-    ];
+    const DEPRECATED: Option<&'static str> = Some(
+        "Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list \"environment\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+    );
+    const USAGE: &'static [Usage] = &[Usage {
+        kind: "configurationItems",
+        label: "configuration items holding the lookup list value with the same id (not blocking)",
+        sql: "SELECT cmdb.lookup_value_count($1)",
+        blocking: false,
+    }];
     fn id(row: &Environment) -> Uuid {
         row.id
     }
@@ -552,18 +542,15 @@ impl Resource for Locations {
     const COLUMNS: &'static str =
         "id, key, name, description, sort_order, is_active, created_at, updated_at, parent_id, location_type, address";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description", "address"];
+    const DEPRECATED: Option<&'static str> = Some(
+        "Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list \"location\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+    );
     const USAGE: &'static [Usage] = &[
         Usage {
             kind: "configurationItems",
-            label: "configuration items",
-            sql: "SELECT count(*) FROM configuration_items WHERE location_id = $1 AND deleted_at IS NULL",
-            blocking: true,
-        },
-        Usage {
-            kind: "deletedConfigurationItems",
-            label: "deleted configuration items (kept for history)",
-            sql: "SELECT count(*) FROM configuration_items WHERE location_id = $1 AND deleted_at IS NOT NULL",
-            blocking: true,
+            label: "configuration items holding the lookup list value with the same id (not blocking)",
+            sql: "SELECT cmdb.lookup_value_count($1)",
+            blocking: false,
         },
         Usage {
             kind: "childLocations",
@@ -755,20 +742,15 @@ impl Resource for Owners {
     const PLURAL: &'static str = "owners";
     const COLUMNS: &'static str = "id, kind, name, email, external_ref, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["name", "email", "external_ref"];
-    const USAGE: &'static [Usage] = &[
-        Usage {
-            kind: "configurationItems",
-            label: "configuration items",
-            sql: "SELECT count(*) FROM configuration_items WHERE owner_id = $1 AND deleted_at IS NULL",
-            blocking: true,
-        },
-        Usage {
-            kind: "deletedConfigurationItems",
-            label: "deleted configuration items (kept for history)",
-            sql: "SELECT count(*) FROM configuration_items WHERE owner_id = $1 AND deleted_at IS NOT NULL",
-            blocking: true,
-        },
-    ];
+    const DEPRECATED: Option<&'static str> = Some(
+        "Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list \"owner\" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.",
+    );
+    const USAGE: &'static [Usage] = &[Usage {
+        kind: "configurationItems",
+        label: "configuration items holding the lookup list value with the same id (not blocking)",
+        sql: "SELECT cmdb.lookup_value_count($1)",
+        blocking: false,
+    }];
     fn id(row: &Owner) -> Uuid {
         row.id
     }
@@ -1393,8 +1375,14 @@ mod tests {
         let pool = &db.pool;
         crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
         let ctx = RequestContext::system("test", "test");
-        let (server, in_service) =
-            (id_of(pool, "ci_classes", "server").await, id_of(pool, "statuses", "in_service").await);
+        let server = id_of(pool, "ci_classes", "server").await;
+        let in_service: Uuid = sqlx::query_scalar(
+            "SELECT v.id FROM lookup_list_values v JOIN lookup_lists l ON l.id = v.list_id
+             WHERE l.key = 'status' AND v.key = 'in_service'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
 
         // Lists: a parent list, no self-parent, no cycle.
         let maker = simple::create::<LookupLists>(pool, &ctx, &body(json!({ "key": "maker", "name": "Manufacturer" })))
@@ -1448,7 +1436,10 @@ mod tests {
         };
         let page = simple::list::<LookupListValues>(pool, &q(&cisco.id.to_string())).await.unwrap();
         assert_eq!(page.data.iter().map(|v| v.key.as_str()).collect::<Vec<_>>(), ["c9300"]);
-        let page = simple::list::<LookupListValues>(pool, &q("none")).await.unwrap();
+        let top = body::<LookupListValueList>(
+            json!({ "limit": 50, "offset": 0, "sort": "key", "parentValueId": "none", "listId": maker.id }),
+        );
+        let page = simple::list::<LookupListValues>(pool, &top).await.unwrap();
         assert_eq!(page.data.iter().map(|v| v.key.as_str()).collect::<Vec<_>>(), ["cisco", "hp"]);
 
         // Fields: the parent field is a lookup field on the parent list.
@@ -1471,8 +1462,9 @@ mod tests {
 
         // CIs: the model must belong to the CI's manufacturer.
         let new_ci = |attributes: Value| {
-            body::<CreateItemBody>(json!({ "name": "srv", "classId": server, "statusId": in_service,
-                "attributes": attributes }))
+            let mut all = json!({ "name": "srv", "status": in_service });
+            all.as_object_mut().unwrap().extend(attributes.as_object().cloned().unwrap_or_default());
+            body::<CreateItemBody>(json!({ "classId": server, "attributes": all }))
         };
         let err = items::create(pool, &ctx, &new_ci(json!({ "vendor_model": c9300.id }))).await.unwrap_err();
         assert_eq!(problems(&err), [("attributes.vendor_model", "lookup_parent_missing")]);
@@ -1499,7 +1491,7 @@ mod tests {
         )
         .await
         .unwrap();
-        items::update(pool, &ctx, ci, &edit(json!({ "name": "srv-renamed" }))).await.unwrap();
+        items::update(pool, &ctx, ci, &edit(json!({ "attributes": { "name": "srv-renamed" } }))).await.unwrap();
 
         // Retiring a parent value: refused while CIs hold a dependent value, otherwise cascades.
         let retire = |active: bool| body::<LookupListValueUpdate>(json!({ "isActive": active }));

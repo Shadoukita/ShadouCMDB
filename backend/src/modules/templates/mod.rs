@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use super::areas::Areas;
 use super::classes::{AttributeDefinitions, CiClasses, RelationshipRules, RelationshipTypes};
-use super::lookups::{Environments, Locations, Statuses};
+use super::lookups::{LookupListValues, LookupLists};
 use super::simple_resource::Resource;
 use crate::api::context::RequestContext;
 use crate::api::route::{In, Json, KeyPath, NoBody, NoPath, NoQuery, Route, route};
@@ -27,26 +27,19 @@ use crate::auth::permissions::GlobalPermission;
 use crate::data::classes as class_data;
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet};
 use crate::http::error::{AppError, ErrorCode};
+use crate::schema::model::Model;
 use crate::schema::{self as engine, Purge, SchemaChange, Scope};
 
 // ---------------------------------------------------------------------------
 // Template content
 // ---------------------------------------------------------------------------
 
-pub struct Status {
+/// An admin-editable lookup list and its values (key, name, description).
+pub struct LookupList {
     pub key: &'static str,
     pub name: &'static str,
-    pub is_operational: bool,
     pub description: &'static str,
-}
-
-pub struct Location {
-    pub key: &'static str,
-    pub name: &'static str,
-    pub location_type: &'static str,
-    /// Key of a location listed earlier.
-    pub parent: Option<&'static str>,
-    pub address: Option<&'static str>,
+    pub values: &'static [(&'static str, &'static str, Option<&'static str>)],
 }
 
 #[derive(Default)]
@@ -57,6 +50,8 @@ pub struct Attr {
     pub enum_values: Option<&'static [&'static str]>,
     /// Key of a class in the same template.
     pub reference_class: Option<&'static str>,
+    /// Key of a lookup list in the same template.
+    pub lookup_list: Option<&'static str>,
     pub is_required: bool,
     pub group_name: Option<&'static str>,
     pub help_text: Option<&'static str>,
@@ -87,6 +82,10 @@ impl Attr {
     }
     pub fn refers(mut self, class: &'static str) -> Self {
         self.reference_class = Some(class);
+        self
+    }
+    pub fn lookup(mut self, list: &'static str) -> Self {
+        self.lookup_list = Some(list);
         self
     }
     pub fn help(mut self, text: &'static str) -> Self {
@@ -130,12 +129,8 @@ pub struct AreaSpec {
 
 pub struct Content {
     pub area: AreaSpec,
-    pub statuses: &'static [Status],
-    /// key, name
-    pub environments: &'static [(&'static str, &'static str)],
-    /// Parents before children.
-    pub locations: &'static [Location],
-    /// Parents before children.
+    pub lookup_lists: &'static [LookupList],
+    /// Parents before children. A class whose lineage has a "name" field is labelled by it.
     pub classes: Vec<Class>,
     pub relationship_types: &'static [RelationshipType],
     pub relationship_rules: &'static [Rule],
@@ -167,9 +162,8 @@ pub struct TemplateCounts {
     pub attribute_definitions: i64,
     pub relationship_types: i64,
     pub relationship_rules: i64,
-    pub statuses: i64,
-    pub environments: i64,
-    pub locations: i64,
+    pub lookup_lists: i64,
+    pub lookup_list_values: i64,
 }
 
 impl TemplateCounts {
@@ -179,9 +173,8 @@ impl TemplateCounts {
             + self.attribute_definitions
             + self.relationship_types
             + self.relationship_rules
-            + self.statuses
-            + self.environments
-            + self.locations
+            + self.lookup_lists
+            + self.lookup_list_values
     }
 }
 
@@ -263,21 +256,29 @@ async fn key_map(c: &mut PgConnection, table: &'static str) -> sqlx::Result<KeyM
 
 struct State {
     areas: KeyMap,
-    statuses: KeyMap,
-    environments: KeyMap,
-    locations: KeyMap,
+    lists: KeyMap,
+    /// (list id, value key)
+    list_values: HashSet<(Uuid, String)>,
     classes: KeyMap,
     types: KeyMap,
     /// (class id, attribute key)
     attributes: HashSet<(Uuid, String)>,
+    /// class id -> parent id
+    parents: HashMap<Uuid, Option<Uuid>>,
     /// (type id, source class id, target class id)
     rules: HashSet<(Uuid, Uuid, Uuid)>,
+    /// Classes this install gave a title attribute
+    titled: Vec<Uuid>,
 }
 
 impl State {
     async fn load(c: &mut PgConnection) -> sqlx::Result<Self> {
         let attributes: Vec<(Uuid, String)> =
             sqlx::query_as("SELECT class_id, key FROM ci_attribute_definitions").fetch_all(&mut *c).await?;
+        let parents: Vec<(Uuid, Option<Uuid>)> =
+            sqlx::query_as("SELECT id, parent_id FROM ci_classes").fetch_all(&mut *c).await?;
+        let list_values: Vec<(Uuid, String)> =
+            sqlx::query_as("SELECT list_id, key FROM lookup_list_values").fetch_all(&mut *c).await?;
         let rules: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
             "SELECT relationship_type_id, source_class_id, target_class_id FROM relationship_type_rules",
         )
@@ -285,18 +286,39 @@ impl State {
         .await?;
         Ok(State {
             areas: key_map(c, "areas").await?,
-            statuses: key_map(c, "statuses").await?,
-            environments: key_map(c, "environments").await?,
-            locations: key_map(c, "locations").await?,
+            lists: key_map(c, "lookup_lists").await?,
+            list_values: list_values.into_iter().collect(),
             classes: key_map(c, "ci_classes").await?,
             types: key_map(c, "relationship_types").await?,
             attributes: attributes.into_iter().collect(),
+            parents: parents.into_iter().collect(),
             rules: rules.into_iter().collect(),
+            titled: Vec::new(),
         })
     }
 
+    /// The class, or a class in its lineage (above or below), defines the key: a
+    /// CI of the class carries it. After migration 0016 a former fixed field can
+    /// sit on the subclasses whose CIs held values rather than on the template's class.
     fn has_attribute(&self, class: &str, key: &str) -> bool {
-        self.classes.get(class).is_some_and(|id| self.attributes.contains(&(*id, key.to_owned())))
+        let Some(id) = self.classes.get(class) else { return false };
+        self.attributes.iter().any(|(c, k)| k == key && (self.is_a(*id, *c) || self.is_a(*c, *id)))
+    }
+
+    fn is_a(&self, class: Uuid, ancestor: Uuid) -> bool {
+        let mut next = Some(class);
+        for _ in 0..64 {
+            match next {
+                Some(c) if c == ancestor => return true,
+                Some(c) => next = self.parents.get(&c).copied().flatten(),
+                None => return false,
+            }
+        }
+        false
+    }
+
+    fn has_value(&self, list: &str, key: &str) -> bool {
+        self.lists.get(list).is_some_and(|id| self.list_values.contains(&(*id, key.to_owned())))
     }
 
     fn has_rule(&self, r: &Rule) -> bool {
@@ -314,9 +336,8 @@ fn contents(c: &Content) -> TemplateCounts {
         attribute_definitions: c.classes.iter().map(|k| k.attributes.len() as i64).sum(),
         relationship_types: c.relationship_types.len() as i64,
         relationship_rules: c.relationship_rules.len() as i64,
-        statuses: c.statuses.len() as i64,
-        environments: c.environments.len() as i64,
-        locations: c.locations.len() as i64,
+        lookup_lists: c.lookup_lists.len() as i64,
+        lookup_list_values: c.lookup_lists.iter().map(|l| l.values.len() as i64).sum(),
     }
 }
 
@@ -332,9 +353,12 @@ fn present(c: &Content, s: &State) -> TemplateCounts {
             .map(|(k, a)| s.has_attribute(k, a))),
         relationship_types: n(&mut c.relationship_types.iter().map(|t| s.types.contains_key(t.key))),
         relationship_rules: n(&mut c.relationship_rules.iter().map(|r| s.has_rule(r))),
-        statuses: n(&mut c.statuses.iter().map(|x| s.statuses.contains_key(x.key))),
-        environments: n(&mut c.environments.iter().map(|(k, _)| s.environments.contains_key(*k))),
-        locations: n(&mut c.locations.iter().map(|l| s.locations.contains_key(l.key))),
+        lookup_lists: n(&mut c.lookup_lists.iter().map(|l| s.lists.contains_key(l.key))),
+        lookup_list_values: n(&mut c
+            .lookup_lists
+            .iter()
+            .flat_map(|l| l.values.iter().map(move |v| (l.key, v.0)))
+            .map(|(l, v)| s.has_value(l, v))),
     }
 }
 
@@ -419,46 +443,35 @@ pub async fn install(
     let mut skipped = Vec::new();
     let mut ins = Installer { conn, audit: Vec::new() };
 
-    for (i, s) in content.statuses.iter().enumerate() {
-        if state.statuses.contains_key(s.key) {
-            continue;
+    for (i, list) in content.lookup_lists.iter().enumerate() {
+        let list_id = match state.lists.get(list.key) {
+            Some(id) => *id,
+            None => {
+                let mut c = ColumnSet::default();
+                c.opt("key", Some(text(list.key)))
+                    .opt("name", Some(text(list.name)))
+                    .opt("description", Some(Some(text(list.description))))
+                    .opt("sort_order", Some(i as i32 * 10));
+                let id = ins.insert::<LookupLists>(c).await?;
+                state.lists.insert(list.key.into(), id);
+                created.lookup_lists += 1;
+                id
+            }
+        };
+        for (j, (key, name, description)) in list.values.iter().enumerate() {
+            if state.list_values.contains(&(list_id, (*key).to_owned())) {
+                continue;
+            }
+            let mut c = ColumnSet::default();
+            c.opt("list_id", Some(list_id))
+                .opt("key", Some(text(key)))
+                .opt("name", Some(text(name)))
+                .opt("description", description.map(|d| Some(text(d))))
+                .opt("sort_order", Some(j as i32 * 10));
+            ins.insert::<LookupListValues>(c).await?;
+            state.list_values.insert((list_id, (*key).to_owned()));
+            created.lookup_list_values += 1;
         }
-        let mut c = ColumnSet::default();
-        c.opt("key", Some(text(s.key)))
-            .opt("name", Some(text(s.name)))
-            .opt("description", Some(text(s.description)))
-            .opt("is_operational", Some(s.is_operational))
-            .opt("sort_order", Some(i as i32 * 10));
-        let id = ins.insert::<Statuses>(c).await?;
-        state.statuses.insert(s.key.into(), id);
-        created.statuses += 1;
-    }
-
-    for (i, (key, name)) in content.environments.iter().enumerate() {
-        if state.environments.contains_key(*key) {
-            continue;
-        }
-        let mut c = ColumnSet::default();
-        c.opt("key", Some(text(key))).opt("name", Some(text(name))).opt("sort_order", Some(i as i32 * 10));
-        let id = ins.insert::<Environments>(c).await?;
-        state.environments.insert((*key).into(), id);
-        created.environments += 1;
-    }
-
-    for loc in content.locations {
-        if state.locations.contains_key(loc.key) {
-            continue;
-        }
-        let parent_id = loc.parent.and_then(|p| state.locations.get(p).copied());
-        let mut c = ColumnSet::default();
-        c.opt("key", Some(text(loc.key)))
-            .opt("name", Some(text(loc.name)))
-            .opt("location_type", Some(text(loc.location_type)))
-            .opt("address", loc.address.map(|a| Some(text(a))))
-            .opt("parent_id", parent_id.map(Some));
-        let id = ins.insert::<Locations>(c).await?;
-        state.locations.insert(loc.key.into(), id);
-        created.locations += 1;
     }
 
     let area_id = match state.areas.get(content.area.key) {
@@ -491,13 +504,14 @@ pub async fn install(
             .opt("sort_order", Some(i as i32 * 10));
         let id = ins.insert::<CiClasses>(c).await?;
         state.classes.insert(cls.key.into(), id);
+        state.parents.insert(id, parent_id);
         created.classes += 1;
     }
 
     for cls in &content.classes {
         let class_id = state.classes[cls.key];
         for (i, a) in cls.attributes.iter().enumerate() {
-            if state.attributes.contains(&(class_id, a.key.to_owned())) {
+            if state.has_attribute(cls.key, a.key) {
                 continue;
             }
             if let Some(on) = class_data::attribute_key_clash(ins.conn, class_id, a.key, Uuid::nil()).await? {
@@ -517,6 +531,16 @@ pub async fn install(
                 },
                 None => None,
             };
+            let lookup_list_id = match a.lookup_list {
+                Some(k) => match state.lists.get(k) {
+                    Some(id) => Some(*id),
+                    None => {
+                        skipped.push(format!("attribute {}.{}: lookup list \"{k}\" does not exist", cls.key, a.key));
+                        continue;
+                    }
+                },
+                None => None,
+            };
             let validation: Option<Value> =
                 a.validation.map(serde_json::from_str).transpose().map_err(|_| AppError::internal())?;
             let mut c = ColumnSet::default();
@@ -527,6 +551,7 @@ pub async fn install(
                 .opt("is_required", Some(a.is_required))
                 .opt("enum_values", a.enum_values.map(|v| Some(json!(v))))
                 .opt("reference_class_id", reference_class_id.map(Some))
+                .opt("lookup_list_id", lookup_list_id.map(Some))
                 .opt("validation", validation.map(Some))
                 .opt("group_name", a.group_name.map(|g| Some(text(g))))
                 .opt("help_text", a.help_text.map(|h| Some(text(h))))
@@ -570,12 +595,32 @@ pub async fn install(
         created.relationship_rules += 1;
     }
 
+    // Classes without a title attribute are labelled by the "name" field of their lineage.
+    for cls in &content.classes {
+        let class_id = state.classes[cls.key];
+        let titled = sqlx::query(
+            "UPDATE cmdb.ci_classes c SET title_attribute_id = d.id
+             FROM cmdb.ci_class_lineage($1) l JOIN cmdb.ci_attribute_definitions d ON d.class_id = l.class_id
+             WHERE c.id = $1 AND c.title_attribute_id IS NULL AND d.key = 'name' AND d.data_type = 'text'",
+        )
+        .bind(class_id)
+        .execute(&mut *ins.conn)
+        .await?;
+        if titled.rows_affected() > 0 {
+            state.titled.push(class_id);
+        }
+    }
+
     let Installer { conn, audit } = ins;
     crud::write_audit(conn, ctx, audit).await?;
     // The area's schema, a table per type and a column per field.
     let classes: Vec<Uuid> = content.classes.iter().filter_map(|c| state.classes.get(c.key).copied()).collect();
     let summary = format!("Install template {} into area {}", template.key, content.area.key);
     let change = engine::apply_with(conn, ctx, &summary, Scope::Classes(classes), Purge::default(), true).await?;
+    if !state.titled.is_empty() {
+        let model = Model::load(conn).await?;
+        crate::data::items::refresh_labels(conn, &model, &state.titled, None).await?;
+    }
     Ok(TemplateInstallResult { template: template.key.into(), created, existing, skipped, schema_change: change })
 }
 
@@ -630,12 +675,11 @@ mod tests {
         let c = contents(&(t.content)());
         assert_eq!(c.areas, 1);
         assert_eq!(c.classes, 8);
-        assert_eq!(c.attribute_definitions, 35);
+        assert_eq!(c.attribute_definitions, 69);
         assert_eq!(c.relationship_types, 4);
         assert_eq!(c.relationship_rules, 12);
-        assert_eq!(c.statuses, 5);
-        assert_eq!(c.environments, 5);
-        assert_eq!(c.locations, 7);
+        assert_eq!(c.lookup_lists, 4);
+        assert_eq!(c.lookup_list_values, 17);
     }
 
     #[test]
@@ -659,6 +703,13 @@ mod tests {
                     assert!(attrs.insert(a.key), "duplicate attribute {}.{}", cls.key, a.key);
                     assert_eq!(a.data_type == "enum", a.enum_values.is_some(), "{}.{}", cls.key, a.key);
                     assert_eq!(a.data_type == "reference", a.reference_class.is_some(), "{}.{}", cls.key, a.key);
+                    assert_eq!(a.data_type == "lookup", a.lookup_list.is_some(), "{}.{}", cls.key, a.key);
+                    assert!(
+                        a.lookup_list.is_none_or(|l| c.lookup_lists.iter().any(|x| x.key == l)),
+                        "{}.{}",
+                        cls.key,
+                        a.key
+                    );
                     if let Some(v) = a.validation {
                         assert!(serde_json::from_str::<serde_json::Map<String, Value>>(v).is_ok(), "{v}");
                     }
@@ -673,10 +724,12 @@ mod tests {
             for r in c.relationship_rules {
                 assert!(types.contains(r.kind) && classes.contains(r.source) && classes.contains(r.target));
             }
-            let mut locations = HashSet::new();
-            for l in c.locations {
-                assert!(l.parent.is_none_or(|p| locations.contains(p)), "{}: parent listed later", l.key);
-                locations.insert(l.key);
+            for l in c.lookup_lists {
+                assert!(key.is_match(l.key), "list {}", l.key);
+                let mut values = HashSet::new();
+                for v in l.values {
+                    assert!(key.is_match(v.0) && values.insert(v.0), "value {}.{}", l.key, v.0);
+                }
             }
         }
     }

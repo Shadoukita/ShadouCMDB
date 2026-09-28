@@ -199,7 +199,7 @@ function defaultText(d: AttributeDefinition): string {
     <div v-else-if="defs.length === 0" class="panel-body">
       <p class="muted" style="margin: 0">
         {{ cls.name }} defines no attributes of its own yet{{ inherited.length ? "; its CIs carry the inherited ones listed below" : "" }}.
-        CIs always have the general fields (name, status, environment, owner, location, hostname, IP, serial, notes).
+        CIs always have an ident and a validity period; everything else, name and status included, is an attribute.
       </p>
     </div>
     <div v-else class="table-wrap">

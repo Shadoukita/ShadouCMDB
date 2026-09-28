@@ -114,6 +114,11 @@ pub struct ClassSpec {
     pub sort_order: i32,
     #[serde(default = "yes")]
     pub is_active: bool,
+    /// Key of the field (of the class or an ancestor) whose value labels its CIs; null: labelled by their ident.
+    /// Left out (files from before SHAA-267): unchanged, or the parent's for a new class.
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default, deserialize_with = "schemas::patch", skip_serializing_if = "Option::is_none")]
+    pub title_attribute: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

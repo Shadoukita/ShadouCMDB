@@ -10,9 +10,10 @@ import OrderedLookupTable, { type Row } from "./OrderedLookupTable.vue";
 import OwnersTable from "./OwnersTable.vue";
 
 /**
- * Administration › Data model › Lookups: the values CIs pick from. Statuses,
- * environments, locations and owners are fields of every CI. The administrator's own
- * lists ("Lookup list" attributes) are under Dropdowns. The tab is the path
+ * Administration › Data model › Lookups: the older status, environment, location and
+ * owner tables, which CIs no longer refer to. Status, environment, owner and location
+ * are lookup attributes of the CI classes; their values, like the administrator's
+ * own lists, are under Dropdowns. The tab is the path
  * (/admin/lookups/statuses…), so each keeps its own URL state.
  */
 const TABS = [
@@ -52,6 +53,11 @@ const ENVIRONMENT_FIELDS: FieldSpec[] = [
     <RouterLink v-for="t in TABS" :key="t.kind" :to="`/admin/lookups/${t.kind}`" :aria-current="t.kind === kind ? 'page' : undefined">{{ t.label }}</RouterLink>
   </nav>
 
+  <div v-if="tab" class="alert alert-warn" role="note">
+    Configuration items no longer use these {{ tab.label.toLowerCase() }}: status, environment, owner and location are lookup
+    attributes of the CI classes, and their values are kept under <RouterLink to="/admin/dropdowns">Dropdowns</RouterLink>.
+    This table is kept for older data.
+  </div>
   <OrderedLookupTable
     v-if="kind === 'statuses'"
     resource="statuses"
@@ -63,7 +69,7 @@ const ENVIRONMENT_FIELDS: FieldSpec[] = [
     :refetch="() => statuses.refetch()"
     :fields="STATUS_FIELDS"
     :columns="[{ key: 'isOperational', label: 'Operational' }]"
-    empty-hint="Every CI has a status (planned, in service, retired…), so a CI cannot be created until at least one exists."
+    empty-hint="Statuses of CIs are now values of the status lookup list."
   >
     <template #cell="{ row }"><span v-if="row.isOperational" class="badge ok">Operational</span></template>
     <template #empty><RouterLink class="btn" to="/admin/templates">Install the IT infrastructure starter</RouterLink></template>

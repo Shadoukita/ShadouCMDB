@@ -7,48 +7,35 @@ use serde_json::{Map, Value, json};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
+use ipnetwork::IpNetwork;
+
 use super::schemas::{
-    AttributeReference, ConfigurationItem, ConfigurationItemSummary, CreateItemBody, Graph, GraphDirection, GraphEdge,
-    GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, ListItemsQuery, SearchHit, SearchMatch, SearchQuery,
-    SearchResults, UpdateItemBody,
+    ActiveQuery, AttributeReference, ConfigurationItem, ConfigurationItemSummary, CreateItemBody, Graph,
+    GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, ListItemsQuery, SearchHit,
+    SearchMatch, SearchQuery, SearchResults, UpdateItemBody,
 };
 use crate::api::context::RequestContext;
 use crate::api::route::InvalidBody;
-use crate::api::schemas::{LookupRef, OwnerRef, Page, Paged};
+use crate::api::schemas::{LookupRef, Page, Paged};
 use crate::api::{pg_error, validate};
 use crate::auth::permissions::ClassOp;
 use crate::data::classes::{self as class_data, EffectiveAttributeRow};
 use crate::data::crud::{self, AuditAction, AuditEntry};
-use crate::data::items::{self as data, Direction, ItemFilters, StoredValue, SummaryRow, inet_text};
+use crate::data::items::{self as data, ActiveFilter, Direction, ItemFilters, StoredValue, SummaryRow};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
 use crate::schema::model::{Field, Model};
 
 pub fn summary_dto(r: SummaryRow) -> ConfigurationItemSummary {
-    let lookup = |id: Option<Uuid>, key: Option<String>, name: Option<String>| match (id, key, name) {
-        (Some(id), Some(key), Some(name)) => Some(LookupRef { id, key, name }),
-        _ => None,
-    };
     ConfigurationItemSummary {
         id: r.id,
-        name: r.name,
+        ident: r.ident,
+        label: r.label,
         class_id: r.class_id,
         class: LookupRef { id: r.class_id, key: r.class_key, name: r.class_name },
-        status_id: r.status_id,
-        status: LookupRef { id: r.status_id, key: r.status_key, name: r.status_name },
-        environment_id: r.environment_id,
-        environment: lookup(r.environment_id, r.environment_key, r.environment_name),
-        owner_id: r.owner_id,
-        owner: match (r.owner_id, r.owner_name, r.owner_kind) {
-            (Some(id), Some(name), Some(kind)) => Some(OwnerRef { id, name, kind }),
-            _ => None,
-        },
-        location_id: r.location_id,
-        location: lookup(r.location_id, r.location_key, r.location_name),
-        hostname: r.hostname,
-        ip_address: r.ip_address.as_ref().map(inet_text),
-        serial_number: r.serial_number,
-        notes: r.notes,
+        valid_from: r.valid_from,
+        valid_until: r.valid_until,
+        active: r.active,
         version: r.version,
         created_at: r.created_at,
         updated_at: r.updated_at,
@@ -191,7 +178,9 @@ async fn prepare_attributes<'d>(
             for mut p in problems {
                 p.field = field.clone();
                 if let (Some(pattern), "invalid_format") = (pattern, p.code.as_str()) {
-                    p.message = format!("Must match {pattern}");
+                    p.message = validate::pattern_message(pattern)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("Must match {pattern}"));
                 }
                 errors.push(p);
             }
@@ -477,6 +466,11 @@ fn field_write_error(err: sqlx::Error, model: &Model) -> AppError {
     }
 }
 
+/// A database error while writing the registry row (ident taken, validity order).
+fn registry_write_error(err: sqlx::Error) -> AppError {
+    pg_error::map(&err, None).unwrap_or_else(|| err.into())
+}
+
 /// Writes the CI's rows in its type tables: `insert` for tables it has no row
 /// in yet, `update` (only the columns that change) for the others.
 async fn write_type_rows(
@@ -534,32 +528,44 @@ async fn class_key(conn: &mut PgConnection, class_id: Uuid) -> Result<String, Ap
 // Reads
 // ---------------------------------------------------------------------------
 
-async fn filters(pool: &PgPool, q: &impl ItemFilterQuery) -> Result<ItemFilters, AppError> {
+async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuery) -> Result<ItemFilters, AppError> {
     let class_ids = match q.class_id() {
-        Some(ids) if q.include_subclasses() => {
-            Some(class_data::with_descendant_classes(&mut *pool.acquire().await?, &ids.0).await?)
-        }
+        Some(ids) if q.include_subclasses() => Some(class_data::with_descendant_classes(conn, &ids.0).await?),
         Some(ids) => Some(ids.0.clone()),
         None => None,
     };
+    // Values grouped by list: any value of a list, and every list.
+    let mut lookups: Vec<(Vec<Uuid>, data::LookupColumns)> = Vec::new();
+    if let Some(ids) = q.lookup_value_id() {
+        let known = data::lookup_value_lists(conn, &ids.0).await?;
+        let mut by_list: Vec<(Uuid, Vec<Uuid>)> = Vec::new();
+        for id in &ids.0 {
+            match known.iter().find(|(v, _)| v == id) {
+                Some((_, list)) => match by_list.iter_mut().find(|(l, _)| l == list) {
+                    Some((_, values)) => values.push(*id),
+                    None => by_list.push((*list, vec![*id])),
+                },
+                // An unknown value matches no CI.
+                None => lookups.push((vec![*id], Vec::new())),
+            }
+        }
+        lookups.extend(by_list.into_iter().map(|(list, values)| (values, model.lookup_columns(list))));
+    }
     Ok(ItemFilters {
         q: None,
         class_ids,
-        status_ids: q.status_id().map(|l| l.0.clone()),
-        environment_ids: q.environment_id().map(|l| l.0.clone()),
-        owner_ids: q.owner_id().map(|l| l.0.clone()),
-        location_ids: q.location_id().map(|l| l.0.clone()),
+        active: match q.active() {
+            ActiveQuery::True => ActiveFilter::Active,
+            ActiveQuery::False => ActiveFilter::Inactive,
+            ActiveQuery::All => ActiveFilter::Any,
+        },
+        lookups,
         ip_within: q.ip_within().map(str::to_owned),
         deleted: Some(q.deleted()),
         visible_class_ids: None,
-        search_tables: Vec::new(),
+        // Also where ipWithin looks.
+        search_tables: data::search_tables(model),
     })
-}
-
-/// Type tables searched by `q`.
-async fn search_tables(pool: &PgPool) -> Result<Vec<data::SearchTable>, AppError> {
-    let model = Model::load(&mut *pool.acquire().await?).await?;
-    Ok(data::search_tables(&model))
 }
 
 /// Only CIs of classes the caller may view.
@@ -568,16 +574,14 @@ pub async fn list(
     ctx: &RequestContext,
     q: &ListItemsQuery,
 ) -> Result<Page<ConfigurationItem>, AppError> {
-    let search_tables = if q.q.is_some() { search_tables(pool).await? } else { Vec::new() };
+    let mut conn = pool.acquire().await?;
+    let model = Model::load(&mut conn).await?;
     let f = ItemFilters {
         q: q.q.clone(),
         visible_class_ids: ctx.class_scope(ClassOp::View),
-        search_tables,
-        ..filters(pool, q).await?
+        ..filters(&mut conn, &model, q).await?
     };
     let (rows, total) = data::list(pool, &f, &q.sort.field, q.sort.desc, q.limit, q.offset).await?;
-    let mut conn = pool.acquire().await?;
-    let model = Model::load(&mut conn).await?;
     let data = with_attributes(&mut conn, &model, rows, f.visible_class_ids.as_deref()).await?;
     Ok(Page { data, page: q.page_meta(total) })
 }
@@ -585,19 +589,18 @@ pub async fn list(
 pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Result<SearchResults, AppError> {
     let mut conn = pool.acquire().await?;
     let model = Model::load(&mut conn).await?;
-    let f = ItemFilters {
-        visible_class_ids: ctx.class_scope(ClassOp::View),
-        search_tables: data::search_tables(&model),
-        ..filters(pool, q).await?
-    };
+    let f = ItemFilters { visible_class_ids: ctx.class_scope(ClassOp::View), ..filters(&mut conn, &model, q).await? };
     let (rows, total) = data::search(pool, &q.q, &f, q.limit, q.offset).await?;
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
     let values = data::values(&mut conn, &model, &ids).await?;
 
     let needle = q.q.to_lowercase();
     let hit = |s: &str| s.to_lowercase().contains(&needle);
-    let words = data::query_words(&q.q);
-    let q_is_net = validate::is_ip_or_cidr(&q.q);
+    let q_net: Option<IpNetwork> = validate::is_ip_or_cidr(&q.q).then(|| q.q.parse().ok()).flatten();
+    let in_q_net = |text: &str| {
+        let ip = text.parse::<IpNetwork>().ok().map(|n| n.ip());
+        q_net.zip(ip).is_some_and(|(net, ip)| net.contains(ip))
+    };
 
     let data = rows
         .into_iter()
@@ -607,35 +610,23 @@ pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Res
             let mut add = |field: &str, label: &str, value: &str| {
                 matches.push(SearchMatch { field: field.into(), label: label.into(), value: value.into() })
             };
-            if hit(&item.name) {
-                add("name", "Name", &item.name);
+            if hit(&item.label) {
+                add("label", "Label", &item.label);
             }
-            if let Some(h) = item.hostname.as_deref().filter(|h| hit(h)) {
-                add("hostname", "Hostname", h);
-            }
-            if let Some(s) = item.serial_number.as_deref().filter(|s| hit(s)) {
-                add("serialNumber", "Serial number", s);
-            }
-            if let Some(ip) = item.ip_address.as_deref().filter(|ip| ip.starts_with(&q.q) || q_is_net) {
-                add("ipAddress", "IP address", ip);
-            }
-            if let Some(notes) = item.notes.as_deref() {
-                let lower = notes.to_lowercase();
-                if hit(notes) || (!words.is_empty() && words.iter().all(|w| lower.contains(w.as_str()))) {
-                    let shown = if notes.chars().count() > 200 {
-                        format!("{}…", notes.chars().take(200).collect::<String>())
-                    } else {
-                        notes.to_owned()
-                    };
-                    add("notes", "Notes", &shown);
-                }
+            if hit(&item.ident) {
+                add("ident", "Ident", &item.ident);
             }
             for v in values.iter().filter(|v| v.ci_id == item.id) {
                 let is_net = matches!(v.data_type, AttributeDataType::Ip | AttributeDataType::Cidr);
                 if let Some(text) = v.search_text()
-                    && (hit(text) || (is_net && text.starts_with(&q.q)))
+                    && (hit(text) || (is_net && (text.starts_with(&q.q) || in_q_net(text))))
                 {
-                    add(&format!("attributes.{}", v.key), &v.label, text);
+                    let shown = if text.chars().count() > 200 {
+                        format!("{}…", text.chars().take(200).collect::<String>())
+                    } else {
+                        text.to_owned()
+                    };
+                    add(&format!("attributes.{}", v.key), &v.label, &shown);
                 }
             }
             SearchHit { item, matches }
@@ -672,7 +663,7 @@ async fn with_attributes(
         if let Some(ref_id) = v.reference() {
             let reference = match names.get(&ref_id) {
                 Some(r) if is_visible(visible, r.class_id) => {
-                    AttributeReference { id: ref_id, name: Some(r.name.clone()), deleted: r.deleted, hidden: false }
+                    AttributeReference { id: ref_id, name: Some(r.label.clone()), deleted: r.deleted, hidden: false }
                 }
                 _ => AttributeReference { id: ref_id, name: None, deleted: false, hidden: true },
             };
@@ -745,6 +736,9 @@ pub async fn create(
     input: &CreateItemBody,
 ) -> Result<ConfigurationItem, AppError> {
     ctx.require_class(input.class_id, ClassOp::Create)?;
+    if input.ident.is_some() {
+        ctx.require_administrator("set a CI's ident")?;
+    }
     let mut tx = pool.begin().await?;
     let key = class_key(&mut tx, input.class_id).await?;
     let model = Model::load(&mut tx).await?;
@@ -753,24 +747,16 @@ pub async fn create(
     let access = RefAccess { visible: visible.as_deref(), current: None };
     let prepared = prepare_new(&mut tx, &defs, input.attributes.as_ref(), &key, access).await?;
 
-    let id = data::insert(
-        &mut tx,
-        &data::NewItem {
-            class_id: input.class_id,
-            name: &input.name,
-            status_id: input.status_id,
-            environment_id: input.environment_id,
-            owner_id: input.owner_id,
-            location_id: input.location_id,
-            hostname: input.hostname.as_deref(),
-            ip_address: input.ip_address.as_deref(),
-            serial_number: input.serial_number.as_deref(),
-            notes: input.notes.as_deref(),
-        },
-    )
-    .await?;
+    let new = data::NewItem {
+        class_id: input.class_id,
+        ident: input.ident.as_deref(),
+        valid_from: input.valid_from,
+        valid_until: input.valid_until,
+    };
+    let id = data::insert(&mut tx, &new).await.map_err(registry_write_error)?;
     let lineage: Vec<Uuid> = model.lineage(input.class_id).iter().map(|c| c.id).collect();
     write_type_rows(&mut tx, &model, id, input.class_id, &prepared.set, &[], &lineage).await?;
+    data::refresh_labels(&mut tx, &model, &[input.class_id], Some(&[id])).await?;
 
     let dto = must_detail(&mut tx, &model, id, None).await?;
     let entry = AuditEntry {
@@ -801,6 +787,11 @@ pub async fn update(
     }
     if before.deleted_at.is_some() {
         return Err(AppError::conflict("This configuration item is deleted and cannot be modified"));
+    }
+    // Resending the current ident (a form saving every field) is no change.
+    let new_ident = input.ident.as_deref().filter(|i| *i != before.ident);
+    if new_ident.is_some() {
+        ctx.require_administrator("change a CI's ident")?;
     }
     if let Some(sent) = input.version
         && sent != before.version
@@ -865,20 +856,15 @@ pub async fn update(
 
     let patch = data::ItemPatch {
         class_id: input.class_id,
-        name: input.name.as_deref(),
-        status_id: input.status_id,
-        environment_id: input.environment_id,
-        owner_id: input.owner_id,
-        location_id: input.location_id,
-        hostname: input.hostname.as_ref().map(|h| h.as_deref()),
-        ip_address: input.ip_address.as_ref().map(|h| h.as_deref()),
-        serial_number: input.serial_number.as_ref().map(|h| h.as_deref()),
-        notes: input.notes.as_ref().map(|h| h.as_deref()),
+        ident: new_ident,
+        valid_from: input.valid_from,
+        valid_until: input.valid_until,
     };
-    data::update(&mut tx, id, &patch).await?;
+    data::update(&mut tx, id, &patch).await.map_err(registry_write_error)?;
     let entering: Vec<Uuid> = new_lineage.iter().filter(|c| !old_lineage.contains(c)).copied().collect();
     write_type_rows(&mut tx, &model, id, class_id, &prepared.set, &prepared.clear, &entering).await?;
     check_required(&mut tx, &model, id, &defs).await?;
+    data::refresh_labels(&mut tx, &model, &[class_id], Some(&[id])).await?;
 
     let dto = must_detail(&mut tx, &model, id, None).await?;
     let entry = AuditEntry {
@@ -1004,8 +990,8 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
     nodes.sort_by(|a, b| {
         a.depth
             .cmp(&b.depth)
-            .then_with(|| a.summary.name.to_lowercase().cmp(&b.summary.name.to_lowercase()))
-            .then_with(|| a.summary.name.cmp(&b.summary.name))
+            .then_with(|| a.summary.label.to_lowercase().cmp(&b.summary.label.to_lowercase()))
+            .then_with(|| a.summary.label.cmp(&b.summary.label))
     });
 
     Ok(Graph {
@@ -1048,10 +1034,30 @@ mod tests {
             .unwrap()
     }
 
+    async fn status(pool: &PgPool, key: &str) -> Uuid {
+        sqlx::query_scalar(
+            "SELECT v.id FROM lookup_list_values v JOIN lookup_lists l ON l.id = v.list_id
+             WHERE l.key = 'status' AND v.key = $1",
+        )
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
     fn fields(err: &AppError) -> Vec<&str> {
         let mut f: Vec<&str> = err.details.iter().flatten().map(|d| d.field.as_str()).collect();
         f.sort_unstable();
         f
+    }
+
+    fn parse<T: crate::api::route::Check + serde::de::DeserializeOwned + utoipa::ToSchema + Send + 'static>(
+        v: Value,
+    ) -> Result<T, InvalidBody> {
+        match CheckedBody::<T>::parse(Some(v)) {
+            Ok(CheckedBody(r)) => r,
+            Err(_) => panic!("not a JSON object"),
+        }
     }
 
     /// GH#45: a body with bad core fields and bad attributes reports both at once.
@@ -1060,49 +1066,168 @@ mod tests {
         let Some(db) = scratch::database("invalid_core_fields_do_not_hide_attribute_errors").await else { return };
         let pool = &db.pool;
         crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
-        let (server, in_service) =
-            (id_of(pool, "ci_classes", "server").await, id_of(pool, "statuses", "in_service").await);
+        let (server, in_service) = (id_of(pool, "ci_classes", "server").await, status(pool, "in_service").await);
         let ctx = RequestContext::system("test", "test");
 
-        let body = json!({ "name": "x", "classId": server, "statusId": in_service, "ipAddress": "999.1.1.1",
-            "attributes": { "management_ip": "abc", "cpu_cores": "x" } });
-        let Ok(CheckedBody(Err(invalid))) = CheckedBody::<CreateItemBody>::parse(Some(body)) else {
-            panic!("body passed")
-        };
+        let body = json!({ "classId": server, "validFrom": "yesterday",
+            "attributes": { "name": "x", "status": in_service, "management_ip": "abc", "cpu_cores": "x" } });
+        let Err(invalid) = parse::<CreateItemBody>(body) else { panic!("body passed") };
         let err = create_errors(pool, &ctx, invalid).await;
         assert_eq!(err.code, ErrorCode::ValidationError);
-        assert_eq!(fields(&err), ["attributes.cpu_cores", "attributes.management_ip", "ipAddress"]);
+        assert_eq!(fields(&err), ["attributes.cpu_cores", "attributes.management_ip", "validFrom"]);
 
         // The attribute rules that need the database too: unknown keys and values out of range.
-        let body = json!({ "name": "", "classId": server, "statusId": in_service, "attributes": { "cpu_cores": 0, "nope": 1 } });
-        let Ok(CheckedBody(Err(invalid))) = CheckedBody::<CreateItemBody>::parse(Some(body)) else {
-            panic!("body passed")
-        };
+        let body = json!({ "classId": server, "ident": "-bad", "attributes": { "cpu_cores": 0, "nope": 1 } });
+        let Err(invalid) = parse::<CreateItemBody>(body) else { panic!("body passed") };
         assert_eq!(
             fields(&create_errors(pool, &ctx, invalid).await),
-            ["attributes.cpu_cores", "attributes.nope", "name"]
+            ["attributes.cpu_cores", "attributes.nope", "ident"]
         );
 
         // No usable class id: only the body's own errors.
-        let body =
-            json!({ "name": "x", "classId": "not-a-uuid", "statusId": in_service, "attributes": { "cpu_cores": "x" } });
-        let Ok(CheckedBody(Err(invalid))) = CheckedBody::<CreateItemBody>::parse(Some(body)) else {
-            panic!("body passed")
-        };
+        let body = json!({ "classId": "not-a-uuid", "attributes": { "cpu_cores": "x" } });
+        let Err(invalid) = parse::<CreateItemBody>(body) else { panic!("body passed") };
         assert_eq!(fields(&create_errors(pool, &ctx, invalid).await), ["classId"]);
 
         // Update: the same merge, checked against the CI's current class.
-        let valid = json!({ "name": "srv-1", "classId": server, "statusId": in_service });
-        let Ok(CheckedBody(Ok(valid))) = CheckedBody::<CreateItemBody>::parse(Some(valid)) else {
-            panic!("body failed")
-        };
+        let valid = json!({ "classId": server, "attributes": { "name": "srv-1", "status": in_service } });
+        let Ok(valid) = parse::<CreateItemBody>(valid) else { panic!("body failed") };
         let item = create(pool, &ctx, &valid).await.unwrap();
-        let body = json!({ "hostname": "-bad-", "attributes": { "management_ip": "abc", "cpu_cores": null } });
-        let Ok(CheckedBody(Err(invalid))) = CheckedBody::<UpdateItemBody>::parse(Some(body)) else {
-            panic!("body passed")
-        };
+        let body = json!({ "validUntil": 5, "attributes": { "management_ip": "abc", "cpu_cores": null } });
+        let Err(invalid) = parse::<UpdateItemBody>(body) else { panic!("body passed") };
         let err = update_errors(pool, &ctx, item.summary.id, invalid).await;
-        assert_eq!(fields(&err), ["attributes.management_ip", "hostname"]);
+        assert_eq!(fields(&err), ["attributes.management_ip", "validUntil"]);
+        db.drop().await;
+    }
+
+    fn user_ctx(administrator: bool) -> RequestContext {
+        use crate::auth::permissions::{ClassRights, Permissions};
+        let permissions = Permissions { administrator, all_classes: ClassRights::ALL, ..Default::default() };
+        let principal = crate::auth::Principal {
+            user_id: Uuid::new_v4(),
+            username: if administrator { "admin" } else { "editor" }.into(),
+            credential: crate::auth::Credential::Token,
+            permissions,
+        };
+        RequestContext::user(std::sync::Arc::new(principal), "test".into())
+    }
+
+    /// The barebone core: ident, validity, active and the label from the title attribute.
+    #[tokio::test]
+    async fn core_fields_ident_validity_and_label() {
+        let Some(db) = scratch::database("core_fields_ident_validity_and_label").await else { return };
+        let pool = &db.pool;
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        let (server, in_service) = (id_of(pool, "ci_classes", "server").await, status(pool, "in_service").await);
+        let editor = user_ctx(false);
+        let admin = user_ctx(true);
+
+        let body = |v: Value| parse::<CreateItemBody>(v).unwrap_or_else(|_| panic!("invalid create body"));
+        let created = create(
+            pool,
+            &editor,
+            &body(json!({ "classId": server,
+            "attributes": { "name": "web-01", "status": in_service, "hostname": "web-01.example.com" } })),
+        )
+        .await
+        .unwrap();
+        let ci = &created.summary;
+        assert!(regex::Regex::new("^CI-[0-9A-HJKMNP-TV-Z]{8}$").unwrap().is_match(&ci.ident), "{}", ci.ident);
+        assert_eq!(ci.label, "web-01");
+        assert!(ci.active && ci.valid_until.is_none());
+
+        // Only administrators set or change an ident; resending the current one is fine.
+        let err = create(
+            pool,
+            &editor,
+            &body(json!({ "classId": server, "ident": "SRV-0001",
+            "attributes": { "name": "web-02", "status": in_service } })),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, ErrorCode::Forbidden);
+        let update_body = |v: Value| parse::<UpdateItemBody>(v).unwrap_or_else(|_| panic!("invalid update body"));
+        let err = update(pool, &editor, ci.id, &update_body(json!({ "ident": "SRV-0001" }))).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::Forbidden);
+        update(pool, &editor, ci.id, &update_body(json!({ "ident": ci.ident, "attributes": { "name": "web-01a" } })))
+            .await
+            .unwrap();
+        let changed = update(pool, &admin, ci.id, &update_body(json!({ "ident": "SRV-0001" }))).await.unwrap();
+        assert_eq!((changed.summary.ident.as_str(), changed.summary.label.as_str()), ("SRV-0001", "web-01a"));
+        let audited: Value = sqlx::query_scalar(
+            "SELECT jsonb_build_array(old_value->'ident', new_value->'ident') FROM audit_log
+             WHERE entity_id = $1 AND action = 'update' ORDER BY id DESC LIMIT 1",
+        )
+        .bind(ci.id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(audited, json!([ci.ident, "SRV-0001"]));
+
+        // Unique regardless of case.
+        let err = create(
+            pool,
+            &admin,
+            &body(json!({ "classId": server, "ident": "srv-0001",
+            "attributes": { "name": "web-03", "status": in_service } })),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!((err.code, fields(&err)), (ErrorCode::Conflict, vec!["ident"]));
+
+        // Validity: a CI past its validUntil is inactive and hidden from lists by default.
+        let err = update(pool, &admin, ci.id, &update_body(json!({ "validUntil": "2000-01-01T00:00:00Z" })))
+            .await
+            .unwrap_err();
+        assert_eq!(fields(&err), ["validUntil"], "before validFrom");
+        let retired = create(
+            pool,
+            &editor,
+            &body(json!({ "classId": server, "validFrom": "2020-01-01T00:00:00Z",
+            "validUntil": "2021-01-01T00:00:00Z", "attributes": { "name": "old-01", "status": in_service } })),
+        )
+        .await
+        .unwrap();
+        assert!(!retired.summary.active);
+        let list = |active: &str| {
+            let q: ListItemsQuery = serde_json::from_value(json!({
+                "limit": 50, "offset": 0, "sort": "label", "includeSubclasses": "true", "deleted": "exclude", "active": active
+            }))
+            .unwrap();
+            q
+        };
+        let labels = |page: Page<ConfigurationItem>| page.data.into_iter().map(|c| c.summary.label).collect::<Vec<_>>();
+        assert_eq!(labels(super::list(pool, &editor, &list("true")).await.unwrap()), ["web-01a"]);
+        assert_eq!(labels(super::list(pool, &editor, &list("false")).await.unwrap()), ["old-01"]);
+        assert_eq!(labels(super::list(pool, &editor, &list("all")).await.unwrap()), ["old-01", "web-01a"]);
+
+        // Lookup filter: by status value; another value of the same list widens, another list narrows.
+        let retired_status = status(pool, "retired").await;
+        let mut q = list("all");
+        q.lookup_value_id = Some(crate::api::schemas::UuidList(vec![retired_status]));
+        assert!(labels(super::list(pool, &editor, &q).await.unwrap()).is_empty());
+        q.lookup_value_id = Some(crate::api::schemas::UuidList(vec![retired_status, in_service]));
+        assert_eq!(labels(super::list(pool, &editor, &q).await.unwrap()), ["old-01", "web-01a"]);
+
+        // The title attribute labels CIs; without one they are labelled by their ident.
+        sqlx::query("UPDATE ci_classes SET title_attribute_id = NULL WHERE id = $1")
+            .bind(server)
+            .execute(pool)
+            .await
+            .unwrap();
+        let model = Model::load(&mut pool.acquire().await.unwrap()).await.unwrap();
+        data::refresh_labels(&mut pool.acquire().await.unwrap(), &model, &[server], None).await.unwrap();
+        let again = get(pool, &editor, ci.id).await.unwrap();
+        assert_eq!(again.summary.label, "SRV-0001");
+
+        // Search finds CIs by ident.
+        let q: SearchQuery = serde_json::from_value(json!({
+            "limit": 10, "offset": 0, "q": "srv-0001", "includeSubclasses": "true", "deleted": "exclude", "active": "true"
+        }))
+        .unwrap();
+        let hits = search(pool, &editor, &q).await.unwrap();
+        assert_eq!(hits.data.len(), 1);
+        assert!(hits.data[0].matches.iter().any(|m| m.field == "ident"));
         db.drop().await;
     }
 }
