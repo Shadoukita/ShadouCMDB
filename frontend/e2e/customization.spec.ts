@@ -186,6 +186,9 @@ test("list views: an attribute default sort, and attribute column headers sort t
   if (await customize.isVisible()) await customize.click();
   const sort = page.getByLabel("Default sort");
   await expect(sort.getByRole("option", { name: "Hostname (attribute)" })).toHaveCount(1);
+  // The empty choice is the default sort, not a second "Label" next to the built-in field.
+  await expect(sort.getByRole("option", { name: "Label", exact: true })).toHaveCount(1);
+  await expect(sort.getByRole("option", { name: "Default (label, ascending)" })).toHaveCount(1);
   await sort.selectOption("attributes.hostname");
   await page.getByLabel("Sort direction").selectOption("asc");
   for (const label of ["Hostname (attribute)", "IP address (attribute)"]) {

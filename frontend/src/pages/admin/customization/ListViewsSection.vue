@@ -99,7 +99,7 @@ const columns = computed(() => (view.value?.columns?.length ? view.value.columns
               <label for="lv-sort">Default sort</label>
               <div class="inline-control">
                 <select id="lv-sort" :value="view.defaultSort?.field ?? ''" @change="setSortField(($event.target as HTMLSelectElement).value)">
-                  <option value="">Label (built-in)</option>
+                  <option value="">Default (label, ascending)</option>
                   <option v-for="s in sortOptions" :key="s.field" :value="s.field">{{ s.label }}</option>
                   <option v-if="staleSort" :value="view.defaultSort!.field">{{ staleSort }}</option>
                 </select>
