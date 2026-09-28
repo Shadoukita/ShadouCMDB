@@ -1646,7 +1646,7 @@ export interface paths {
         put?: never;
         /**
          * Create a local user with a password and permission profiles
-         * @description Requires `users.manage`. 403 when assigning a profile that grants permissions the caller does not hold.
+         * @description Requires `users.manage`. 403 when assigning a profile that grants permissions the caller does not hold. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createUser"];
         delete?: never;
@@ -1671,14 +1671,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a user (prefer disabling; the audit log keeps their id and name)
-         * @description Requires `users.manage`. 409 when deleting yourself or the last active Administrator.
+         * @description Requires `users.manage`. 409 when deleting yourself or the last active Administrator. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["deleteUser"];
         options?: never;
         head?: never;
         /**
          * Update a user (partial): rename, disable/enable, assign profiles
-         * @description Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. For an account of an identity provider, the name, e-mail and profiles are set again from the provider at its next sign-in (change the group mappings instead); disabling it holds whatever the provider says. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.
+         * @description Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. For an account of an identity provider, the name, e-mail and profiles are set again from the provider at its next sign-in (change the group mappings instead); disabling it holds whatever the provider says. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updateUser"];
         trace?: never;
@@ -1693,7 +1693,7 @@ export interface paths {
         get?: never;
         /**
          * Set a new password for a user and end their sessions
-         * @description Requires `users.manage`. 409 for an account that signs in through an identity provider (it has no password here).
+         * @description Requires `users.manage`. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["resetUserPassword"];
         post?: never;
