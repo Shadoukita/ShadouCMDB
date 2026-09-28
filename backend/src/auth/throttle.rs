@@ -17,6 +17,13 @@
 //! per-username table. Only when [`SLOW_LANE_WAITERS`] attempts are already
 //! queued is the next one refused (429).
 //!
+//! An attempt is reserved when it passes the gate and released when it is
+//! done ([`Attempt`]), so the budgets hold against concurrent requests too:
+//! a key admits only as many attempts at once as it has free failures left
+//! (at least one), and attempts in flight count against the global budget as
+//! if they had failed. Otherwise every request that arrived before the first
+//! failure was recorded would have its password checked.
+//!
 //! The per-key table is bounded by [`MAX_ENTRIES`]: when it is full, the key
 //! with the oldest failure is evicted. Evicting never disables throttling:
 //! filling the table takes more failures than the global budget allows.
@@ -46,6 +53,8 @@ pub const SLOW_LANE_WAITERS: usize = 64;
 const FORGET_AFTER: Duration = Duration::from_secs(60 * 60);
 /// Upper bound on tracked keys.
 const MAX_ENTRIES: usize = 10_000;
+/// Retry-After for a key whose remaining free attempts are all in flight.
+pub const BUSY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy)]
 struct Entry {
@@ -60,7 +69,7 @@ pub enum Gate {
     Open,
     /// Too many failures overall: go through [`LoginThrottle::slow_lane`] first.
     Slow,
-    /// Too many failures for this key: refuse for this long.
+    /// Too many failures (or attempts in flight) for this key: refuse for this long.
     Locked(Duration),
 }
 
@@ -69,6 +78,10 @@ struct State {
     entries: HashMap<String, Entry>,
     /// Times of the most recent failures (all keys), at most the global budget.
     recent: VecDeque<Instant>,
+    /// Attempts past the gate and not yet done, per key (only keys with any).
+    in_flight: HashMap<String, u32>,
+    /// Attempts past the gate and not yet done, all keys together.
+    in_flight_total: usize,
     /// When the global budget was last reported as exhausted.
     warned_at: Option<Instant>,
 }
@@ -101,6 +114,40 @@ impl<'a> Place<'a> {
 impl Drop for Place<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// An attempt that passed the gate. Until it is done it counts against the
+/// key's free failures and the global budget; report how it ended with
+/// [`Attempt::failure`] or [`Attempt::success`]. Dropping it (an error, a
+/// second factor still due, a client that went away) releases it uncounted.
+#[must_use = "an attempt holds its reservation until it is dropped"]
+pub struct Attempt<'a> {
+    throttle: &'a LoginThrottle,
+    key: String,
+}
+
+impl Attempt<'_> {
+    /// Records the failure; returns the lock it triggered for the key, if any.
+    pub fn failure(self) -> Option<Duration> {
+        self.throttle.failure(&self.key)
+    }
+
+    pub fn success(self) {
+        self.throttle.success(&self.key);
+    }
+}
+
+impl Drop for Attempt<'_> {
+    fn drop(&mut self) {
+        let mut s = self.throttle.state();
+        s.in_flight_total = s.in_flight_total.saturating_sub(1);
+        if let Some(n) = s.in_flight.get_mut(&self.key) {
+            *n -= 1;
+            if *n == 0 {
+                s.in_flight.remove(&self.key);
+            }
+        }
     }
 }
 
@@ -137,26 +184,59 @@ impl LoginThrottle {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Whether an attempt for `key` may go ahead right now.
+    /// Whether an attempt for `key` may go ahead right now, without reserving it.
+    #[cfg(test)]
     pub fn check(&self, key: &str) -> Gate {
         self.check_at(key, Instant::now())
     }
 
+    #[cfg(test)]
     fn check_at(&self, k: &str, now: Instant) -> Gate {
+        self.gate(&mut self.state(), &key(k), now)
+    }
+
+    /// Reserves an attempt for `key` if it may go ahead. `slowed` is for an
+    /// attempt that has had its turn in the slow lane: over the global budget,
+    /// it goes ahead instead of being sent to the slow lane again.
+    pub fn begin(&self, key: &str, slowed: bool) -> Result<Attempt<'_>, Gate> {
+        self.begin_at(key, slowed, Instant::now())
+    }
+
+    fn begin_at(&self, k: &str, slowed: bool, now: Instant) -> Result<Attempt<'_>, Gate> {
+        let k = key(k);
         let mut s = self.state();
-        if let Some(until) = s.entries.get(&key(k)).and_then(|e| e.locked_until)
+        match self.gate(&mut s, &k, now) {
+            Gate::Open => {}
+            Gate::Slow if slowed => {}
+            refused => return Err(refused),
+        }
+        s.in_flight_total += 1;
+        *s.in_flight.entry(k.clone()).or_insert(0) += 1;
+        Ok(Attempt { throttle: self, key: k })
+    }
+
+    fn gate(&self, s: &mut State, k: &str, now: Instant) -> Gate {
+        let entry = s.entries.get(k).filter(|e| now.duration_since(e.last_failure) < FORGET_AFTER);
+        if let Some(until) = entry.and_then(|e| e.locked_until)
             && until > now
         {
             return Gate::Locked(until - now);
+        }
+        // Were all attempts in flight to fail, the key's lock would already be
+        // due: wait for them. Past the free failures, one attempt at a time.
+        let failures = entry.map_or(0, |e| e.failures);
+        let in_flight = s.in_flight.get(k).copied().unwrap_or(0);
+        if in_flight >= FREE_FAILURES.saturating_sub(failures).max(1) {
+            return Gate::Locked(BUSY);
         }
         let Some(budget) = self.global_budget else { return Gate::Open };
         while s.recent.front().is_some_and(|t| now.duration_since(*t) >= GLOBAL_WINDOW) {
             s.recent.pop_front();
         }
-        if s.recent.len() < budget {
+        if s.recent.len() + s.in_flight_total < budget {
             return Gate::Open;
         }
-        if s.warned_at.is_none_or(|t| now.duration_since(t) >= GLOBAL_WINDOW) {
+        if s.recent.len() >= budget && s.warned_at.is_none_or(|t| now.duration_since(t) >= GLOBAL_WINDOW) {
             s.warned_at = Some(now);
             tracing::warn!(
                 failures = s.recent.len(),
@@ -185,7 +265,7 @@ impl LoginThrottle {
     fn failure_at(&self, k: &str, now: Instant) -> Option<Duration> {
         let mut s = self.state();
         if let Some(budget) = self.global_budget {
-            // Requests that passed `check` concurrently can overshoot; keep the newest.
+            // Failures not reserved through `begin` can overshoot; keep the newest.
             while s.recent.len() >= budget {
                 s.recent.pop_front();
             }
@@ -354,6 +434,58 @@ mod tests {
         let gave_up = tokio::time::timeout(Duration::from_millis(1), t.slow_lane()).await;
         assert!(gave_up.is_err());
         assert_eq!(t.slow_lane_waiters.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_key_admits_only_its_free_failures_at_once() {
+        let t = LoginThrottle::default();
+        let now = Instant::now();
+        let attempts: Vec<_> = (0..FREE_FAILURES).map(|_| t.begin_at("Alice", false, now).expect("free")).collect();
+        assert_eq!(t.begin_at("alice", false, now).err(), Some(Gate::Locked(BUSY)), "all free failures in flight");
+        assert_eq!(t.check_at("bob", now), Gate::Open, "other users are unaffected");
+        let mut locked = None;
+        for a in attempts {
+            locked = a.failure();
+        }
+        assert_eq!(locked, Some(Duration::from_secs(1)), "the last one in flight locks the key");
+        assert!(matches!(t.check_at("alice", now), Gate::Locked(_)));
+        // Past the free failures, one attempt at a time.
+        let later = now + Duration::from_secs(2);
+        let one = t.begin_at("alice", false, later).expect("lock expired");
+        assert_eq!(t.begin_at("alice", false, later).err(), Some(Gate::Locked(BUSY)));
+        drop(one);
+        assert!(t.begin_at("alice", false, later).is_ok(), "a dropped attempt is released uncounted");
+        let s = t.state();
+        assert_eq!((s.in_flight.len(), s.in_flight_total), (0, 0));
+        assert_eq!(s.entries["alice"].failures, FREE_FAILURES);
+    }
+
+    #[test]
+    fn a_success_frees_the_key_but_not_the_attempts_in_flight() {
+        let t = LoginThrottle::default();
+        let now = Instant::now();
+        for _ in 1..FREE_FAILURES {
+            t.failure_at("dave", now);
+        }
+        let right = t.begin_at("dave", false, now).unwrap();
+        assert_eq!(t.begin_at("dave", false, now).err(), Some(Gate::Locked(BUSY)));
+        right.success();
+        let a: Vec<_> = (0..FREE_FAILURES).map(|_| t.begin_at("dave", false, now).expect("counter cleared")).collect();
+        assert!(t.begin_at("dave", false, now).is_err());
+        drop(a);
+    }
+
+    #[test]
+    fn attempts_in_flight_count_against_the_global_budget() {
+        let t = LoginThrottle::default();
+        let now = Instant::now();
+        let a: Vec<_> =
+            (0..GLOBAL_BUDGET).map(|i| t.begin_at(&format!("user-{i}"), false, now).expect("within budget")).collect();
+        assert_eq!(t.begin_at("someone-else", false, now).err(), Some(Gate::Slow));
+        let slowed = t.begin_at("someone-else", true, now).expect("goes ahead after the slow lane");
+        drop(slowed);
+        drop(a);
+        assert_eq!(t.check_at("someone-else", now), Gate::Open, "released without failing");
     }
 
     #[test]
