@@ -1007,4 +1007,91 @@ pub(crate) mod tests {
 
         db.drop().await;
     }
+
+    /// GitHub #154: a token must not widen or weaken a permission profile
+    /// (including `requireMfa` on the built-in one) or import profiles, since
+    /// the change would outlive the token's revocation.
+    #[tokio::test]
+    async fn permission_profile_administration_needs_a_session() {
+        let Some(db) = scratch::database("permission_profile_administration_needs_a_session").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let session = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE is_builtin AND name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let admin_path = format!("/api/v1/admin/profiles/{administrators}");
+        let readers = json!({ "name": "Readers", "globalPermissions": ["audit.view"], "classPermissions": [] });
+        let (status, profile, _) = call(&app, "POST", "/api/v1/admin/profiles", &session, Some(readers)).await;
+        assert_eq!(status, 201, "{profile}");
+        let profile_path = format!("/api/v1/admin/profiles/{}", profile["id"].as_str().unwrap());
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let create = json!({ "name": "automation", "profileId": administrators, "expiresAt": expires });
+        let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(create)).await;
+        assert_eq!(status, 201, "{created}");
+        let tok = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+
+        // Reading profiles and exporting the configuration stay open to the token.
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/profiles", &tok, None).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "GET", &admin_path, &tok, None).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, mut file, _) = call(&app, "GET", "/api/v1/admin/config/export", &tok, None).await;
+        assert_eq!(status, 200, "{file}");
+        file["permissionProfiles"][0]["globalPermissions"] = json!(["audit.view", "users.manage"]);
+
+        // Every profile write, and the import, is refused.
+        let writes = [
+            ("PATCH", admin_path.clone(), Some(json!({ "requireMfa": true }))),
+            ("PATCH", profile_path.clone(), Some(json!({ "globalPermissions": ["audit.view", "users.manage"] }))),
+            ("POST", "/api/v1/admin/profiles".to_owned(), Some(json!({ "name": "Rogue", "globalPermissions": [] }))),
+            ("POST", format!("{admin_path}/clone"), Some(json!({ "name": "Rogue administrators" }))),
+            ("DELETE", profile_path.clone(), None),
+            ("POST", "/api/v1/admin/config/import?mode=apply".to_owned(), Some(file.clone())),
+            ("POST", "/api/v1/admin/config/import?mode=dry_run".to_owned(), Some(file.clone())),
+        ];
+        for (method, path, body) in writes {
+            let (status, v, _) = call(&app, method, &path, &tok, body).await;
+            assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{method} {path}: {v}");
+        }
+
+        let (_, v, _) = call(&app, "GET", &admin_path, &session, None).await;
+        assert_eq!(v["requireMfa"], json!(false), "{v}");
+        let (_, v, _) = call(&app, "GET", &profile_path, &session, None).await;
+        assert_eq!(v["globalPermissions"], json!(["audit.view"]), "{v}");
+        let rogue: i64 = sqlx::query_scalar("SELECT count(*) FROM permission_profiles WHERE name LIKE 'Rogue%'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(rogue, 0);
+        let outcomes: Vec<String> =
+            sqlx::query_scalar("SELECT new_value->>'outcome' FROM audit_log WHERE action = 'token.use' ORDER BY id")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(outcomes[..3], ["accepted", "accepted", "accepted"]);
+        assert_eq!(outcomes[3..], ["session_only"; 7]);
+
+        // A session still administers profiles and imports.
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/config/import?mode=apply", &session, Some(file)).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "DELETE", &profile_path, &session, None).await;
+        assert_eq!(status, 204, "{v}");
+
+        db.drop().await;
+    }
 }
