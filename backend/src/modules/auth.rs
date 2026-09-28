@@ -644,7 +644,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Sign in with username and password")
             .description(
-                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. Accounts of an OIDC provider cannot sign in here.",
+                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
             )
             .public()
             .errors(&[ErrorCode::MfaRequired, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
@@ -1058,6 +1058,68 @@ mod tests {
             .expect("locked");
         assert_eq!(e.code, ErrorCode::RateLimited);
         assert_eq!(auth_rows(pool, "login.failure").await.len(), failures.len(), "a 429 writes no row");
+        db.drop().await;
+    }
+
+    /// GH#120: after the directory accepted the password, a user with an
+    /// authenticator gets the second-factor challenge, not a session, and the
+    /// name's failure count is kept until the code is right. Without an
+    /// authenticator the same step opens the session.
+    #[tokio::test]
+    async fn a_directory_sign_in_asks_for_the_second_factor() {
+        let Some(db) = scratch::database("a_directory_sign_in_asks_for_the_second_factor").await else { return };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        let ldap = crate::modules::mfa::tests::provider(pool, "ldap", true, "ldaps://dc.example.test").await;
+        let mut tx = pool.begin().await.unwrap();
+        let linked = |username: &'static str| crate::data::identity_providers::NewLinkedUser {
+            provider_id: ldap,
+            external_id: username,
+            username,
+            display_name: username,
+            email: None,
+        };
+        let dirk = crate::data::identity_providers::insert_linked(&mut tx, &linked("dirk")).await.unwrap();
+        let dora = crate::data::identity_providers::insert_linked(&mut tx, &linked("dora")).await.unwrap();
+        mfa_data::put_pending_totp(&mut tx, dirk, &crate::auth::totp::new_secret()).await.unwrap();
+        mfa_data::confirm_totp(&mut tx, dirk, 1).await.unwrap();
+        tx.commit().await.unwrap();
+        let sessions = |id: Uuid| {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sessions WHERE user_id = $1").bind(id).fetch_one(pool)
+        };
+
+        let attempt = |name: &str| auth.throttle.begin(name, false).expect("the gate lets it through");
+        for _ in 1..crate::auth::throttle::FREE_FAILURES {
+            auth.throttle.failure("Dirk");
+        }
+        let answer =
+            password_accepted(pool, &auth, &headers, &anon(), attempt("Dirk"), dirk, "dirk", LoginMethod::Ldap)
+                .await
+                .unwrap();
+        let Either::Right(ErrorWithCookies(err, cookies)) = answer else { panic!("a session was opened") };
+        assert_eq!(err.code, ErrorCode::MfaRequired);
+        assert!(session::cookie_value(&cookies[0], session::MFA_COOKIE).is_some_and(|t| !t.is_empty()));
+        assert_eq!(sessions(dirk).await.unwrap(), 0, "no session before the second factor");
+        let challenges: i64 = sqlx::query_scalar("SELECT count(*) FROM mfa_challenges WHERE user_id = $1")
+            .bind(dirk)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(challenges, 1);
+        let last_login: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT last_login_at FROM users WHERE id = $1")
+                .bind(dirk)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(last_login, None, "not recorded as a sign-in yet");
+        assert!(auth.throttle.failure("Dirk").is_some(), "the failure count was not cleared");
+
+        let answer =
+            password_accepted(pool, &auth, &headers, &anon(), attempt("dora"), dora, "dora", LoginMethod::Ldap)
+                .await
+                .unwrap();
+        assert!(matches!(answer, Either::Left(_)), "no authenticator: signed in");
+        assert_eq!(sessions(dora).await.unwrap(), 1);
         db.drop().await;
     }
 

@@ -150,12 +150,17 @@ memory (per process, reset on restart).
 **Two-factor authentication.** <a id="two-factor-authentication"></a>Any user can add an authenticator app (TOTP,
 RFC 6238: SHA-1, 6 digits, 30 s; Google Authenticator, Microsoft Authenticator, 1Password, Aegis, … all work).
 
+Local and LDAP/AD directory accounts can; for a directory account `currentPassword` below is the directory password,
+checked against the account's own directory entry (`409` while that directory is disabled, `503
+IDENTITY_PROVIDER_UNAVAILABLE` when it cannot be reached). OIDC accounts have no password here (`409`); their provider
+runs the second factor.
+
 1. `POST /api/v1/auth/mfa/totp {currentPassword}` answers `201 { secret, otpauthUri, algorithm, digits, period }`.
    Show `otpauthUri` as a QR code (or let the user type `secret`). Calling it again replaces an unconfirmed secret.
 2. `POST /api/v1/auth/mfa/totp/confirm {code}` with a code from the app turns MFA on and answers
    `{ codes: [10 recovery codes] }`. They are shown only in this response (the server keeps their SHA-256); each
    signs in once in place of a code. `POST /api/v1/auth/mfa/recovery-codes {currentPassword, code}` replaces them.
-3. From then on `POST /auth/login` with the right password answers `401 MFA_REQUIRED` and sets the
+3. From then on `POST /auth/login` with the right password (local or directory) answers `401 MFA_REQUIRED` and sets the
    `shadoucmdb_mfa` cookie (`HttpOnly`, `Path=/api/v1/auth`, 5 minutes). `POST /api/v1/auth/login/mfa {code}` with an
    authenticator code or a recovery code then signs in like login did before. A challenge takes at most 5 wrong
    codes; after that, or after 5 minutes, the password is asked for again.
@@ -170,7 +175,8 @@ a right password together with a right code does, so holding a session and the p
 guesses at the code.
 
 A permission profile with `requireMfa: true` (any profile, including the built-in Administrator) makes MFA mandatory
-for its holders. They still sign in with their password, but until they have confirmed an authenticator every route
+for its holders with a local or directory (LDAP/AD) account; OIDC accounts are exempt and rely on their provider
+(`mfa.required` is then false). They still sign in with their password, but until they have confirmed an authenticator every route
 except sign-out, `/auth/me`, `PUT /auth/password` and the `/auth/mfa` set-up routes answers
 `403 MFA_ENROLMENT_REQUIRED`; `/auth/me` shows `mfa.enrolmentRequired`. The requirement applies to sessions only: API
 tokens are separate credentials and keep working. A user who lost their device and their recovery codes asks a
@@ -192,8 +198,8 @@ and maps the provider's groups to permission profiles.
   by hand lasts until its next sign-in; change the mappings instead.
 - **Break-glass.** Local accounts keep working next to any provider, including when the provider is down or
   misconfigured. Keep at least one local administrator (with two-factor authentication) and its password in your
-  emergency procedure; `shadoucmdb create-admin` remains the last resort. Two-factor authentication for provider
-  accounts is the provider's job: `requireMfa` on a profile applies to local accounts only.
+  emergency procedure; `shadoucmdb create-admin` remains the last resort. For OIDC accounts two-factor
+  authentication is the provider's job; `requireMfa` on a profile applies to local and directory (LDAP) accounts.
 - **Disabling or deleting a provider** ends the sessions of its accounts. A provider with accounts cannot be deleted
   (`409 IN_USE`): disable it.
 
