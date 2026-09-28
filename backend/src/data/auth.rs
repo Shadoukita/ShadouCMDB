@@ -26,9 +26,19 @@ pub struct LiveSession {
     /// last_seen_at is more than a minute old: worth an UPDATE.
     pub needs_touch: bool,
     /// A profile the user holds requires MFA and they have not set it up.
-    /// Never for accounts of an identity provider: the provider enforces MFA.
+    /// Local and directory (LDAP) accounts; never OIDC accounts, whose
+    /// provider enforces MFA (see [`MFA_REQUIRED`]).
     pub mfa_enrolment_required: bool,
 }
+
+/// Whether a profile the user `u` holds requires MFA here. OIDC accounts are
+/// exempt: their provider runs its own second factor. Local and directory
+/// (LDAP) accounts are covered: a directory password alone is one factor.
+/// Shared by the per-request gate and `/auth/me`, so the two cannot disagree.
+pub const MFA_REQUIRED: &str = "(NOT EXISTS (SELECT 1 FROM identity_providers ip
+                  WHERE ip.id = u.identity_provider_id AND ip.kind = 'oidc')
+         AND EXISTS (SELECT 1 FROM user_permission_profiles up JOIN permission_profiles p ON p.id = up.profile_id
+                  WHERE up.user_id = u.id AND p.require_mfa))";
 
 pub async fn create_session(
     conn: &mut PgConnection,
@@ -54,15 +64,13 @@ pub async fn create_session(
 }
 
 pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -> sqlx::Result<Option<LiveSession>> {
-    let row: Option<(Uuid, Uuid, String, String, bool, bool)> = sqlx::query_as(
+    let row: Option<(Uuid, Uuid, String, String, bool, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT s.id, u.id, u.username, s.csrf_token, s.last_seen_at < now() - interval '1 minute',
-                u.identity_provider_id IS NULL
-                AND EXISTS (SELECT 1 FROM user_permission_profiles up JOIN permission_profiles p ON p.id = up.profile_id
-                        WHERE up.user_id = u.id AND p.require_mfa)
+                {MFA_REQUIRED}
                 AND NOT EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL)
          FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval AND u.is_active",
-    )
+         WHERE s.token_hash = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval AND u.is_active"
+    )))
     .bind(token_hash)
     .bind(interval(idle))
     .fetch_optional(pool)
@@ -247,6 +255,33 @@ pub async fn find_for_login(pool: &PgPool, username: &str) -> sqlx::Result<Optio
         password_hash,
         is_active,
         provider: provider_id.zip(kind),
+    }))
+}
+
+/// What confirming a user's own password needs to know about their account.
+pub struct PasswordCheck {
+    pub username: String,
+    pub password_hash: Option<String>,
+    /// The provider the account belongs to, and its kind (`oidc`, `ldap`).
+    pub provider: Option<(Uuid, String)>,
+    pub external_id: Option<String>,
+}
+
+pub async fn password_check(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<PasswordCheck>> {
+    type Row = (String, Option<String>, Option<Uuid>, Option<String>, Option<String>);
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT u.username, u.password_hash, u.identity_provider_id, p.kind, u.external_id
+         FROM users u LEFT JOIN identity_providers p ON p.id = u.identity_provider_id
+         WHERE u.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|(username, password_hash, provider_id, kind, external_id)| PasswordCheck {
+        username,
+        password_hash,
+        provider: provider_id.zip(kind),
+        external_id,
     }))
 }
 

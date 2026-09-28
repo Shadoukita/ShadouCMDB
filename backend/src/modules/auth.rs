@@ -322,7 +322,7 @@ async fn login(
         None => sso::any_directory(pool).await?.then_some(None),
     };
     if let Some(linked) = directory {
-        return directory_login(pool, auth, headers, ctx, attempt, &b, linked).await.map(Either::Left);
+        return directory_login(pool, auth, headers, ctx, attempt, &b, linked).await;
     }
     // An OIDC account has no password: verify() then checks a dummy hash, so it takes as long.
     if !password::verify(&b.password, row.as_ref().and_then(|r| r.password_hash.as_deref())).await? {
@@ -338,7 +338,25 @@ async fn login(
         record_failure(pool, ctx, &b.username, locked).await?;
         return Err(AppError::new(ErrorCode::Unauthenticated, "This account is disabled"));
     }
-    if mfa_data::get_totp(&mut *pool.acquire().await?, user.id, false).await?.is_some_and(|t| t.confirmed) {
+    password_accepted(pool, auth, headers, ctx, attempt, user.id, &user.username, LoginMethod::Password).await
+}
+
+/// After a right password, local or directory: the second-factor challenge
+/// when the user has set up MFA (401 MFA_REQUIRED and the `shadoucmdb_mfa`
+/// cookie), otherwise the session. `attempt`: the throttle reservation for
+/// the name signed in with, counted a success only once the sign-in is complete.
+#[allow(clippy::too_many_arguments)]
+async fn password_accepted(
+    pool: &PgPool,
+    auth: &AuthState,
+    headers: &HeaderMap,
+    ctx: &RequestContext,
+    attempt: Attempt<'_>,
+    user_id: Uuid,
+    username: &str,
+    method: LoginMethod,
+) -> Result<LoginAnswer, AppError> {
+    if mfa_data::get_totp(&mut *pool.acquire().await?, user_id, false).await?.is_some_and(|t| t.confirmed) {
         // The username's failure count is left alone (the attempt is dropped):
         // were a right password to clear it, each one would buy a fresh set of
         // guesses at the code.
@@ -346,12 +364,12 @@ async fn login(
         let token = session::new_token();
         mfa_data::create_challenge(
             &mut *pool.acquire().await?,
-            user.id,
+            user_id,
             &session::token_hash(&token),
             MFA_CHALLENGE_TTL,
         )
         .await?;
-        tracing::info!(user = %user.username, ip = ?ctx.client.ip, "password accepted, second factor due");
+        tracing::info!(user = %username, ip = ?ctx.client.ip, method = ?method, "password accepted, second factor due");
         let err = AppError::new(
             ErrorCode::MfaRequired,
             "Enter the code from your authenticator app, or a recovery code (POST /api/v1/auth/login/mfa)",
@@ -361,9 +379,9 @@ async fn login(
     }
     attempt.success();
     let purged = data::purge_sessions(pool, auth.config.session_idle).await?;
-    data::record_login(pool, user.id).await?;
-    tracing::info!(user = %user.username, ip = ?ctx.client.ip, purged_sessions = purged, "signed in");
-    Ok(Either::Left(start_session(pool, auth, headers, ctx, user.id, &user.username, LoginMethod::Password).await?))
+    data::record_login(pool, user_id).await?;
+    tracing::info!(user = %username, ip = ?ctx.client.ip, method = ?method, purged_sessions = purged, "signed in");
+    Ok(Either::Left(start_session(pool, auth, headers, ctx, user_id, username, method).await?))
 }
 
 /// A wrong password (or unknown name): counted, logged and audited; returns the 401.
@@ -379,7 +397,8 @@ async fn wrong_credentials(
     Ok(invalid_credentials())
 }
 
-/// Sign-in with a directory password, under the same throttle as local passwords.
+/// Sign-in with a directory password, under the same throttle as local
+/// passwords, and with the second factor when the user has set one up.
 async fn directory_login(
     pool: &PgPool,
     auth: &AuthState,
@@ -388,14 +407,10 @@ async fn directory_login(
     attempt: Attempt<'_>,
     b: &LoginBody,
     linked: Option<Uuid>,
-) -> Result<WithCookies<Json<Session>>, AppError> {
+) -> Result<LoginAnswer, AppError> {
     match sso::directory_sign_in(pool, ctx, &b.username, &b.password, linked).await? {
         sso::DirectoryAnswer::SignedIn { user_id, username } => {
-            attempt.success();
-            let purged = data::purge_sessions(pool, auth.config.session_idle).await?;
-            data::record_login(pool, user_id).await?;
-            tracing::info!(user = %username, ip = ?ctx.client.ip, purged_sessions = purged, "signed in through a directory");
-            start_session(pool, auth, headers, ctx, user_id, &username, LoginMethod::Ldap).await
+            password_accepted(pool, auth, headers, ctx, attempt, user_id, &username, LoginMethod::Ldap).await
         }
         sso::DirectoryAnswer::NoMatch => Err(wrong_credentials(pool, attempt, ctx, &b.username).await?),
         // A right password that is still refused counts like a disabled account's.
@@ -476,49 +491,112 @@ fn principal(ctx: &RequestContext) -> Result<&Principal, AppError> {
     ctx.principal().ok_or_else(unauthenticated)
 }
 
-/// Checks the signed-in user's password before a sensitive change. Throttled
-/// per user like login, so a stolen session cannot be turned into a known
-/// password by guessing the current one. An account of an identity provider
-/// has no password here: 409.
+/// Waits for the per-user password-confirmation throttle. Shared by every
+/// kind of account, so a stolen session cannot be turned into a known
+/// password, local or directory, by guessing the current one.
+async fn password_gate<'a>(auth: &'a AuthState, me: &Principal) -> Result<Attempt<'a>, AppError> {
+    throttle_gate(&auth.password_throttle, &me.user_id.to_string(), "attempts at your current password").await
+}
+
+/// Counts a wrong current password against the user; returns the 400.
+fn wrong_current_password(attempt: Attempt<'_>, me: &Principal) -> AppError {
+    let locked = attempt.failure();
+    tracing::warn!(user = %me.username, locked_secs = locked.map(|d| d.as_secs()), "wrong current password");
+    AppError::field("currentPassword", "The current password is wrong", "invalid_credentials")
+}
+
+/// Ends a verified password attempt for a route that asks no second factor.
 ///
 /// With MFA set up, a right password leaves the per-user count alone, as at
 /// login: were it to clear it, each right password would buy a fresh set of
 /// guesses at the code (GH#141). The count is then cleared only by a right
-/// password together with a right code ([`current_password_attempt`]).
-pub(crate) async fn check_current_password(
-    pool: &PgPool,
-    auth: &AuthState,
-    me: &Principal,
-    current_password: &str,
-) -> Result<(), AppError> {
-    let attempt = current_password_attempt(pool, auth, me, current_password).await?;
+/// password together with a right code ([`confirm_current_password_attempt`]).
+async fn password_only_success(pool: &PgPool, attempt: Attempt<'_>, me: &Principal) -> Result<(), AppError> {
     if !mfa_data::get_totp(&mut *pool.acquire().await?, me.user_id, false).await?.is_some_and(|t| t.confirmed) {
         attempt.success();
     }
     Ok(())
 }
 
-/// Checks the current password like [`check_current_password`] but leaves
-/// the verified attempt open: the caller reports how it ended once the second
-/// factor has been checked too, so a wrong code counts against the same lock.
-pub(crate) async fn current_password_attempt<'a>(
+/// Checks the signed-in user's password before changing it. Throttled per
+/// user like login. An account of an identity provider has no password here
+/// (a directory password is changed in the directory): 409.
+async fn check_current_password(
     pool: &PgPool,
-    auth: &'a AuthState,
+    auth: &AuthState,
     me: &Principal,
     current_password: &str,
-) -> Result<Attempt<'a>, AppError> {
-    let key = me.user_id.to_string();
+) -> Result<(), AppError> {
     let hash = data::password_hash(&mut *pool.acquire().await?, me.user_id).await?;
     if let Some(None) = hash {
         return Err(AppError::conflict(
             "Your account signs in through an identity provider and has no password here; change it there",
         ));
     }
-    let attempt = throttle_gate(&auth.password_throttle, &key, "attempts at your current password").await?;
+    let attempt = password_gate(auth, me).await?;
     if !password::verify(current_password, hash.flatten().as_deref()).await? {
-        let locked = attempt.failure();
-        tracing::warn!(user = %me.username, locked_secs = locked.map(|d| d.as_secs()), "wrong current password");
-        return Err(AppError::field("currentPassword", "The current password is wrong", "invalid_credentials"));
+        return Err(wrong_current_password(attempt, me));
+    }
+    password_only_success(pool, attempt, me).await
+}
+
+/// Confirms who is at the keyboard before an MFA change, like
+/// [`confirm_current_password_attempt`], for a route that asks no second
+/// factor (starting a set-up).
+pub(crate) async fn confirm_current_password(
+    pool: &PgPool,
+    auth: &AuthState,
+    me: &Principal,
+    current_password: &str,
+) -> Result<(), AppError> {
+    let attempt = confirm_current_password_attempt(pool, auth, me, current_password).await?;
+    password_only_success(pool, attempt, me).await
+}
+
+/// Confirms who is at the keyboard before an MFA change: the local password,
+/// or for a directory account the password of their directory entry (asked
+/// of that directory only). An OIDC account has no password to confirm: 409.
+/// Under the same per-user throttle as [`check_current_password`].
+///
+/// Leaves the verified attempt open: the caller reports how it ended once the
+/// second factor has been checked too, so a wrong code counts against the
+/// same lock.
+pub(crate) async fn confirm_current_password_attempt<'a>(
+    pool: &PgPool,
+    auth: &'a AuthState,
+    me: &Principal,
+    current_password: &str,
+) -> Result<Attempt<'a>, AppError> {
+    let account = data::password_check(&mut *pool.acquire().await?, me.user_id).await?;
+    let attempt = password_gate(auth, me).await?;
+    let right = match account.as_ref().map(|a| (a, a.provider.as_ref())) {
+        Some((a, Some((provider_id, kind)))) if kind == sso::LDAP => {
+            let external_id = a.external_id.as_deref().unwrap_or_default();
+            match sso::directory_reauthenticate(pool, *provider_id, &a.username, external_id, current_password).await? {
+                sso::Reauth::Accepted => true,
+                sso::Reauth::Wrong => false,
+                sso::Reauth::Disabled => {
+                    return Err(AppError::conflict(
+                        "Your account's directory is disabled, so your password cannot be confirmed; ask an administrator",
+                    ));
+                }
+                sso::Reauth::Unavailable => {
+                    return Err(AppError::new(
+                        ErrorCode::IdentityProviderUnavailable,
+                        "The directory service could not be reached to confirm your password; try again shortly",
+                    ));
+                }
+            }
+        }
+        Some((_, Some(_))) => {
+            return Err(AppError::conflict(
+                "Your account signs in through an identity provider and has no password here; its sign-in and second factor are managed there",
+            ));
+        }
+        _ => password::verify(current_password, account.and_then(|a| a.password_hash).as_deref()).await?,
+    };
+    if !right {
+        return Err(wrong_current_password(attempt, me));
     }
     Ok(attempt)
 }

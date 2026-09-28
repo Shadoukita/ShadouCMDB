@@ -13,7 +13,7 @@ use utoipa::ToSchema;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use uuid::Uuid;
 
-use super::auth::{check_current_password, current_password_attempt, login_field_schema};
+use super::auth::{confirm_current_password, confirm_current_password_attempt, login_field_schema};
 use super::users;
 use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
@@ -197,7 +197,7 @@ async fn enrol(
     b: PasswordConfirmation,
 ) -> Result<TotpEnrolment, AppError> {
     let me = me(ctx)?;
-    check_current_password(pool, auth, me, &b.current_password).await?;
+    confirm_current_password(pool, auth, me, &b.current_password).await?;
     let mut tx = pool.begin().await?;
     auth_data::get_user(&mut tx, me.user_id, true).await?;
     if data::get_totp(&mut tx, me.user_id, false).await?.is_some_and(|t| t.confirmed) {
@@ -280,7 +280,7 @@ async fn disable(
     b: MfaReauthentication,
 ) -> Result<(), AppError> {
     let me = me(ctx)?;
-    let attempt = current_password_attempt(pool, auth, me, &b.current_password).await?;
+    let attempt = confirm_current_password_attempt(pool, auth, me, &b.current_password).await?;
     let mut tx = pool.begin().await?;
     let Some(t) = data::get_totp(&mut tx, me.user_id, true).await? else { return Err(not_enabled()) };
     if t.confirmed {
@@ -304,7 +304,7 @@ async fn regenerate(
     b: MfaReauthentication,
 ) -> Result<RecoveryCodes, AppError> {
     let me = me(ctx)?;
-    let attempt = current_password_attempt(pool, auth, me, &b.current_password).await?;
+    let attempt = confirm_current_password_attempt(pool, auth, me, &b.current_password).await?;
     let mut tx = pool.begin().await?;
     if !data::get_totp(&mut tx, me.user_id, true).await?.is_some_and(|t| t.confirmed) {
         return Err(not_enabled());

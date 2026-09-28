@@ -354,6 +354,45 @@ pub async fn directory_sign_in(
     Ok(if unavailable { DirectoryAnswer::Unavailable } else { DirectoryAnswer::NoMatch })
 }
 
+/// The answer of a signed-in directory user's own directory to their password.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reauth {
+    Accepted,
+    /// Wrong password, or the name now finds no entry or another entry.
+    Wrong,
+    /// The directory could not be asked.
+    Unavailable,
+    /// The account's directory is disabled (or gone): nothing to ask.
+    Disabled,
+}
+
+/// Confirms a signed-in directory user's password before a sensitive change
+/// (setting up or turning off MFA). Asks only the directory the account is
+/// linked to, for the account's current name, and accepts only the entry the
+/// account is linked to. Changes nothing: no profile sync, no account creation.
+pub async fn directory_reauthenticate(
+    pool: &PgPool,
+    provider_id: Uuid,
+    username: &str,
+    external_id: &str,
+    password: &str,
+) -> Result<Reauth, AppError> {
+    let provider = data::get(&mut *pool.acquire().await?, provider_id, false).await?;
+    let Some(provider) = provider.filter(|p| p.is_enabled && p.kind == LDAP) else { return Ok(Reauth::Disabled) };
+    match ldap::reauthenticate(&ldap_settings(&provider), username, external_id, password).await {
+        Ok(ldap::Outcome::SignedIn(_)) => Ok(Reauth::Accepted),
+        Ok(ldap::Outcome::Ambiguous(n)) => {
+            tracing::warn!(provider = %provider.name, entries = n, "LDAP user filter matched several entries; password confirmation refused");
+            Ok(Reauth::Wrong)
+        }
+        Ok(ldap::Outcome::NotFound | ldap::Outcome::WrongPassword) => Ok(Reauth::Wrong),
+        Err(e) => {
+            tracing::error!(provider = %provider.name, error = %e, "LDAP directory unavailable");
+            Ok(Reauth::Unavailable)
+        }
+    }
+}
+
 /// Whether any directory is enabled (the password form then asks it for unknown names).
 pub async fn any_directory(pool: &PgPool) -> Result<bool, AppError> {
     Ok(sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM identity_providers WHERE is_enabled AND kind = 'ldap')")
