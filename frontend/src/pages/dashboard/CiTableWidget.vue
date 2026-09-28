@@ -10,7 +10,7 @@ import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import CiStateBadge from "../../components/CiStateBadge.vue";
 import { formatRelative } from "../../lib/format";
-import { lookupValueIds, sortParam } from "../../lib/uiSettings";
+import { attributeKey, compareValues, lookupValueIds, sortParam } from "../../lib/uiSettings";
 
 /**
  * "Recently changed" and saved searches: the first `limit` CIs of a server-side
@@ -25,7 +25,12 @@ const lookupLists = useLookupLists();
 const lookupValues = useAllLookupListValues();
 
 const search = computed(() => (props.widget.type === "saved_search" ? props.widget.search : undefined));
-const sort = computed(() => (search.value ? sortParam(search.value.sort) ?? "label" : "-updatedAt") as NonNullable<CiListQuery["sort"]>);
+const sort = computed(() => {
+  if (!search.value) return "-updatedAt";
+  const p = sortParam(search.value.sort) ?? "label";
+  // An attribute sort needs a class; without one (the classes were unticked) the list API would refuse it.
+  return attributeKey(p.replace(/^-/, "")) !== null && !search.value.classKeys?.length ? "label" : p;
+});
 const ready = computed(
   () => !search.value || (!!classes.data.value && !!lookupLists.data.value && !!lookupValues.data.value),
 );
@@ -60,8 +65,10 @@ const rows = computed<CiSummary[]>(() => {
   if (results.value.length > 1) {
     const field = sort.value.replace(/^-/, "");
     const dir = sort.value.startsWith("-") ? -1 : 1;
-    const val = (c: CiSummary) => String((field === "className" ? c.class.name : c[field as keyof CiSummary]) ?? "");
-    all.sort((a, b) => dir * val(a).localeCompare(val(b)));
+    const attr = attributeKey(field);
+    const val = (c: CiSummary): unknown =>
+      attr !== null ? (c as CiSummary & { attributes?: Record<string, unknown> }).attributes?.[attr] : field === "className" ? c.class.name : c[field as keyof CiSummary];
+    all.sort((a, b) => compareValues(val(a), val(b), dir));
   }
   return all.slice(0, limit.value);
 });
