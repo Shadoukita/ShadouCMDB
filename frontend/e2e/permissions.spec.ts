@@ -249,11 +249,12 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   await page.goto(`/cis/${esx}/edit`);
   await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
 
-  // A Database CI opened by URL: refused, not rendered.
+  // A Database CI opened by URL: not rendered, and indistinguishable from a
+  // missing id (the API answers 404 so its existence is not revealed).
   await page.goto(`/cis/${await ciIdByName(request, "crm-db")}`);
-  await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Permission denied");
-  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).not.toContainText("Not found");
+  await expect(page.getByRole("heading", { name: "Configuration item not found" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Not found");
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).not.toContainText("Permission denied");
   await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 1, name: "crm-db" })).toHaveCount(0);
   await snap(page, "31-restricted-denied");
