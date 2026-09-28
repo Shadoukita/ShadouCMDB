@@ -204,11 +204,22 @@ and fields by key. Administrators edit it in **Administration › Customization 
 ```
 layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   tabs[]:     { key, label, sections[] }                   key unique among the layout's tabs
-  sections[]: { key, label, columns 1–4 (default 3),       key unique across the whole layout
-                collapsed, fields[] }
+  sections[]: { key, label, kind (default fields),         key unique across the whole layout
+                columns 1–4 (default 3), collapsed,
+                fields[],                                  kind fields only
+                text }                                     kind note only: 1–4,000 characters
   fields[]:   { field, width 1–4 (default 1) }             field placed once; width ≤ the section's columns
 ```
 
+- **Section kinds.** `kind` says what a section shows. `fields` (the default when `kind` is absent) is a
+  grid of fields. `note` is static text an administrator writes in `text`: plain text or limited
+  Markdown, which the web UI renders without ever rendering raw HTML. `relations`, `history` and `audit`
+  are the detail page's built-in panels (relationships, version history, audit trail); placing one in a
+  section shows it there, in any tab, under the section's label and honouring `collapsed`. Each panel
+  can be placed once per layout, and a panel the layout does not place keeps its usual position on the
+  detail page. Notes and panels have no `fields`, and panels no `text`. The API writes `kind` only
+  for sections that are not `fields`, so layouts saved before section kinds existed round-trip
+  unchanged and need no migration.
 - `field` is a core field (`ident`, `validFrom`, `validUntil`), a detail-page field (`label`, `class`,
   `active`, `createdAt`, `updatedAt`) or `attributes.<key>`. Fields fill a section's grid row by row in
   the order given; `width` is the number of columns a field spans. Narrow screens use at most two
@@ -224,7 +235,8 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
 - **Server-side validation** on `PUT /api/v1/ui-settings` and configuration import: the schema (key
   patterns, 1–4 columns and widths, at most 20 tabs, 50 sections per tab, 200 fields per section) and
   the cross-field rules above (unique keys, a field placed once, width within the section's columns,
-  core fields not hidden). References to attributes that do not exist are accepted, dropped from the
+  core fields not hidden, each built-in panel once, `fields` and `text` only on sections of their kind,
+  note text not blank). References to attributes that do not exist are accepted, dropped from the
   effective settings and listed as `issues`, like everywhere else in the document.
 
 **Layout format v1 and migration 0017.** Before 0017 a layout was `panels[]` (`key`, `label`,

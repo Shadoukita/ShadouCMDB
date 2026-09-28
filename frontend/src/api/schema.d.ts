@@ -3391,18 +3391,29 @@ export interface components {
             fields?: string[];
             collapsed?: boolean;
         };
-        /** @description A section (card) of a tab: a heading and a grid of fields */
+        /**
+         * @description A section (card) of a tab: a heading and, depending on `kind`, a grid of fields, a note or a built-in
+         *     panel of the detail page
+         */
         UiLayoutSection: {
             /** @description Stable machine key, lower_snake_case */
             key: string;
             label: string;
+            /**
+             * @description What the section shows (absent: fields): fields (a grid of `fields`), note (static `text`), or a built-in panel of the detail page (relations, history, audit). Each panel can be placed once per layout; one that is not placed keeps its usual position on the detail page.
+             * @enum {string}
+             */
+            kind?: "fields" | "note" | "relations" | "history" | "audit";
             /**
              * Format: int32
              * @description Grid columns on a wide screen; narrow screens use fewer
              * @default 3
              */
             columns: number;
+            /** @description fields: the grid (other kinds have none) */
             fields?: components["schemas"]["UiLayoutField"][];
+            /** @description note: the text (required for that kind). Plain text or limited Markdown (emphasis, lists, links); raw HTML is shown as text, never rendered */
+            text?: string;
             /** @description Start collapsed on the detail page */
             collapsed?: boolean;
         };
