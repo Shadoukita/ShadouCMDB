@@ -92,8 +92,8 @@ Planned before `v0.1.0` (SHAA-77 workstreams 1 and 8):
 | Static analysis | CodeQL (Rust, JavaScript/TypeScript) |
 | Secrets in commits | gitleaks, GitHub push protection |
 | Dependency updates | Dependabot (cargo, npm, GitHub Actions, Docker) |
-| Dynamic testing | OWASP ZAP baseline against the e2e server |
-| Penetration test | before each major release, results kept |
+| Dynamic testing | OWASP ZAP baseline and API scan against the release binary (`.github/workflows/dast.yml`, rules in `.zap/rules.tsv`; in place) |
+| Penetration test | before each major release, results kept ([v0.1.0](pentest-v0.1.0.md)); its automated part runs on every PR (`frontend/e2e/pentest.spec.ts`, in place) |
 
 **Security fixes ship with a regression test** that fails on the old code and passes on the new.
 
