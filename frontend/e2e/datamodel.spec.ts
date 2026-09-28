@@ -34,7 +34,7 @@ test("the sub-navigation groups Access, Data model and System", async ({ page })
   await page.goto("/admin/templates");
   const sub = page.getByRole("navigation", { name: "Administration" });
   await expect(sub.getByRole("heading")).toHaveText(["Access", "Data model", "System"]);
-  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
+  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
   await expect(sub.getByRole("link", { name: "Templates" })).toHaveAttribute("aria-current", "page");
 });
 
@@ -50,7 +50,12 @@ test("templates: the installed starter cannot be installed twice", async ({ page
 test("a lookup list with ordered values", async ({ page, request }) => {
   await page.goto("/admin/lookups");
   await expect(page).toHaveURL(/\/admin\/lookups\/statuses$/);
-  await page.getByRole("navigation", { name: "Lookups" }).getByRole("link", { name: "Lists" }).click();
+  // Lookup lists live under Data model › Dropdowns; the old Lookups › Lists address leads there.
+  await expect(page.getByRole("navigation", { name: "Lookups" }).getByRole("link")).toHaveText(["Statuses", "Environments", "Locations", "Owners"]);
+  await page.goto("/admin/lookups/lists");
+  await expect(page).toHaveURL(/\/admin\/dropdowns$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Dropdowns" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Administration" }).getByRole("link", { name: "Dropdowns" })).toHaveAttribute("aria-current", "page");
   await page.getByRole("button", { name: "+ New list" }).first().click();
   await page.locator("#ll-name").fill(LIST);
   await expect(page.locator("#ll-key")).toHaveValue(`e2e_tier_${stamp}`);
@@ -253,8 +258,8 @@ test("lookups: add, archive and delete; values in use cannot be deleted", async 
   await expect(page.getByRole("status").filter({ hasText: `Deleted environment ${ENV}.` })).toBeVisible();
   await expect(page.getByRole("row", { name: new RegExp(ENV) })).toHaveCount(0);
 
-  // CIs hold their status as a value of the "status" lookup list.
-  await page.getByRole("navigation", { name: "Lookups" }).getByRole("link", { name: "Lists" }).click();
+  // CIs hold their status as a value of the "status" lookup list, under Dropdowns.
+  await page.goto("/admin/dropdowns");
   await page.getByRole("region", { name: "Lookup lists" }).getByRole("link", { name: "Status", exact: true }).click();
   await page.getByRole("button", { name: "Delete value “In service”" }).click();
   const dialog = page.getByRole("dialog");
@@ -263,7 +268,7 @@ test("lookups: add, archive and delete; values in use cannot be deleted", async 
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
   const TEAM = `E2E team ${stamp}`;
-  await page.getByRole("navigation", { name: "Lookups" }).getByRole("link", { name: "Owners" }).click();
+  await page.goto("/admin/lookups/owners");
   await page.getByRole("button", { name: "+ Add owner" }).first().click();
   await page.locator("#own-name").fill(TEAM);
   await page.getByRole("button", { name: "Add owner", exact: true }).click();

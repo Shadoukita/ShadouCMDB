@@ -6,15 +6,14 @@ import Breadcrumbs from "../../../components/Breadcrumbs.vue";
 import type { FieldSpec } from "../../../components/RecordDialog.vue";
 import { useDocumentTitle } from "../../../lib/composables";
 import LocationsTable from "./LocationsTable.vue";
-import LookupListsPanel from "./LookupListsPanel.vue";
 import OrderedLookupTable, { type Row } from "./OrderedLookupTable.vue";
 import OwnersTable from "./OwnersTable.vue";
 
 /**
- * Administration › Data model › Lookups: the values CIs pick from. Lists are
- * the administrator's own, used by "Lookup list" attributes (status, environment,
- * owner and location included). The statuses, environments, locations and owners
- * tabs keep the older tables, which CIs no longer refer to. The tab is the path
+ * Administration › Data model › Lookups: the older status, environment, location and
+ * owner tables, which CIs no longer refer to. Status, environment, owner and location
+ * are lookup attributes of the CI classes; their values, like the administrator's
+ * own lists, are under Dropdowns. The tab is the path
  * (/admin/lookups/statuses…), so each keeps its own URL state.
  */
 const TABS = [
@@ -22,7 +21,6 @@ const TABS = [
   { kind: "environments", label: "Environments" },
   { kind: "locations", label: "Locations" },
   { kind: "owners", label: "Owners" },
-  { kind: "lists", label: "Lists" },
 ] as const;
 
 const route = useRoute();
@@ -55,9 +53,9 @@ const ENVIRONMENT_FIELDS: FieldSpec[] = [
     <RouterLink v-for="t in TABS" :key="t.kind" :to="`/admin/lookups/${t.kind}`" :aria-current="t.kind === kind ? 'page' : undefined">{{ t.label }}</RouterLink>
   </nav>
 
-  <div v-if="tab && kind !== 'lists'" class="alert alert-warn" role="note">
+  <div v-if="tab" class="alert alert-warn" role="note">
     Configuration items no longer use these {{ tab.label.toLowerCase() }}: status, environment, owner and location are lookup
-    attributes of the CI classes, and their values are kept under <RouterLink to="/admin/lookups/lists">Lists</RouterLink>.
+    attributes of the CI classes, and their values are kept under <RouterLink to="/admin/dropdowns">Dropdowns</RouterLink>.
     This table is kept for older data.
   </div>
   <OrderedLookupTable
@@ -90,7 +88,6 @@ const ENVIRONMENT_FIELDS: FieldSpec[] = [
   />
   <LocationsTable v-else-if="kind === 'locations'" />
   <OwnersTable v-else-if="kind === 'owners'" />
-  <LookupListsPanel v-else-if="kind === 'lists'" />
   <div v-else class="alert alert-error" role="alert">
     There is no lookup called <code>{{ kind }}</code>. <RouterLink to="/admin/lookups/statuses">Open statuses</RouterLink>.
   </div>

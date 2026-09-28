@@ -94,7 +94,7 @@ test.describe("a bare install", () => {
 
   test("a class with a lookup-list attribute is built and used in the inventory", async ({ page, request }) => {
     // The lookup list the class refers to.
-    await page.goto("/admin/lookups/lists");
+    await page.goto("/admin/dropdowns");
     await page.getByRole("button", { name: "+ New list" }).first().click();
     await page.locator("#ll-name").fill(LIST);
     await page.getByRole("button", { name: "Create list" }).click();

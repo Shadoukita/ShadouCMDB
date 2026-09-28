@@ -58,7 +58,8 @@ export const dmKeys = {
   rules: (q: { relationshipTypeId?: string; classId?: string }) => ["relationship-rules", q] as const,
   lookupAdmin: (kind: string, q: unknown) => ["lookup", kind, "admin", q] as const,
   lookupLists: ["lookup-lists"] as const,
-  lookupListValues: (listId: string) => ["lookup-list-values", listId] as const,
+  lookupListValues: (listId: string, parentValueId?: string) =>
+    (parentValueId ? ["lookup-list-values", listId, parentValueId] : ["lookup-list-values", listId]) as readonly string[],
   templates: ["admin", "templates"] as const,
   usage: (resource: Resource, id: string) => ["usage", resource, id] as const,
 };
@@ -128,9 +129,11 @@ export function useRemove(resource: Resource) {
 export function useReorder(resource: Resource) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (rows: { id: string; sortOrder: number; extra?: Record<string, unknown> }[]) => {
+    // Rows get 10, 20, 30… in the given order, unless a row names its `next` sort order (reordering a
+    // filtered part of a list keeps the positions that part had among the rest).
+    mutationFn: async (rows: { id: string; sortOrder: number; next?: number; extra?: Record<string, unknown> }[]) => {
       const writes = rows
-        .map((r, i) => ({ ...r, next: (i + 1) * 10 }))
+        .map((r, i) => ({ ...r, next: r.next ?? (i + 1) * 10 }))
         .filter((r) => r.sortOrder !== r.next || r.extra);
       for (const r of writes) {
         await unwrap(api.PATCH(itemPath(resource), { params: { path: { id: r.id } }, body: { sortOrder: r.next, ...r.extra } as never }));
@@ -328,17 +331,28 @@ export function useCreateLookupList() {
   });
 }
 
-/** The values of one list, in order. Also used by CI forms and detail pages for `lookup` attributes. */
-export function useLookupListValues(listId: MaybeRefOrGetter<string | null | undefined>) {
+/**
+ * The values of one list, in order. Also used by CI forms and detail pages for `lookup` attributes.
+ * `parentValueId` (a value id, or "none" for values not assigned to one) narrows a dependent list
+ * on the server: the values of Model that belong to Cisco.
+ */
+export function useLookupListValues(
+  listId: MaybeRefOrGetter<string | null | undefined>,
+  parentValueId: MaybeRefOrGetter<string | null | undefined> = undefined,
+) {
   return useQuery(() => {
     const id = toValue(listId) ?? "";
+    const parent = toValue(parentValueId) || undefined;
     return {
-      queryKey: dmKeys.lookupListValues(id),
+      queryKey: dmKeys.lookupListValues(id, parent),
       enabled: !!id,
       staleTime: 60_000,
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         unwrap(
-          api.GET("/api/v1/lookup-list-values", { params: { query: { listId: id, limit: MAX_PAGE, sort: "sortOrder" } }, signal }),
+          api.GET("/api/v1/lookup-list-values", {
+            params: { query: { listId: id, limit: MAX_PAGE, sort: "sortOrder", ...(parent ? { parentValueId: parent } : {}) } },
+            signal,
+          }),
         ).then((r) => r.data),
     };
   });
