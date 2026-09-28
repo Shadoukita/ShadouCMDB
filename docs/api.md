@@ -278,7 +278,7 @@ Attribute values are sent and returned as JSON scalars, keyed by attribute key:
 
 | `dataType` | JSON |
 | --- | --- |
-| `text`, `enum` | string (`enum` must be one of `enumValues`; `text` honours `validation.pattern` / `maxLength`) |
+| `text`, `enum` | string (`enum` must be one of `enumValues`; `text` honours `validation.pattern` / `maxLength` and is stored exactly as sent, line breaks (`\n`, `\r\n`) and surrounding whitespace included; `validation.multiline: true` tells forms to edit it in a text area) |
 | `number`, `integer` | number (`validation.min` / `max` apply) |
 | `boolean` | boolean |
 | `date` / `datetime` | `"2025-03-01"` / ISO 8601 with offset |

@@ -14,7 +14,8 @@ Migrations: [`sql/migrations/`](../sql/migrations/)
 (`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`,
 `0003_users_and_permission_profiles`, `0004_data_model_admin`, `0005_ui_settings`, `0006_auth_audit`,
 `0007_audit_retention`, `0008_cmdb_schema_and_areas`, `0009_type_tables`, `0010_api_tokens` …
-`0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`).
+`0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`,
+`0018_audit_hash_chain`, `0019_multiline_notes`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -142,7 +143,7 @@ fields and dropped the columns:
 | `name` | `name`, text, required, max. 200 | every root class; it is the title attribute of every class |
 | `status_id` | `status`, lookup (list `status`), required | the topmost classes whose CIs held a value |
 | `environment_id`, `owner_id`, `location_id` | `environment`, `owner`, `location`, lookups (lists of the same names) | the same rule |
-| `hostname`, `ip_address`, `serial_number`, `notes` | `hostname` (text, hostname pattern), `ip_address` (ip), `serial_number` (text, max. 200), `notes` (text, max. 4000) | the same rule |
+| `hostname`, `ip_address`, `serial_number`, `notes` | `hostname` (text, hostname pattern), `ip_address` (ip), `serial_number` (text, max. 200), `notes` (text, max. 4000, multi-line since migration 0019) | the same rule |
 
 "Topmost" means: a class gets the field if its own CIs (deleted ones included) held a value and no
 ancestor already got it, so each CI's lineage has exactly one such field. A key already used in that

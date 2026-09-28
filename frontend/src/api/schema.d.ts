@@ -2352,6 +2352,11 @@ export interface components {
                     maxLength?: number;
                     /** @description text: regular expression the value must match */
                     pattern?: string;
+                    /**
+                     * @description text: the value may hold line breaks; forms edit it in a multi-line text area.
+                     *     Omitted when false.
+                     */
+                    multiline?: boolean;
                     /** @description Display unit, e.g. "GB" */
                     unit?: string;
                 } | null;
@@ -7431,6 +7436,11 @@ export interface operations {
                         maxLength?: number;
                         /** @description text: regular expression the value must match */
                         pattern?: string;
+                        /**
+                         * @description text: the value may hold line breaks; forms edit it in a multi-line text area.
+                         *     Omitted when false.
+                         */
+                        multiline?: boolean;
                         /** @description Display unit, e.g. "GB" */
                         unit?: string;
                     } | null;
@@ -7716,6 +7726,11 @@ export interface operations {
                         maxLength?: number;
                         /** @description text: regular expression the value must match */
                         pattern?: string;
+                        /**
+                         * @description text: the value may hold line breaks; forms edit it in a multi-line text area.
+                         *     Omitted when false.
+                         */
+                        multiline?: boolean;
                         /** @description Display unit, e.g. "GB" */
                         unit?: string;
                     } | null;
