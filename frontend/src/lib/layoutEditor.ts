@@ -38,6 +38,32 @@ export const WIDTH_PRESETS = [
 ] as const;
 
 const CHANNEL = "layout-updated";
+
+export interface SectionError {
+  /** The API's path, e.g. `settings.layouts.0.tabs.1.sections.0.kind`. */
+  path: string;
+  message: string;
+}
+const SECTION_PATH = /(?:^|\.)layouts\.(\d+)\.tabs\.(\d+)\.sections\.(\d+)(?:\.|$)/;
+
+/**
+ * The API's refusals of a settings document that point into a section of the
+ * layout of `classKey` (`settings.layouts.N.tabs.N.sections.N…`), by the key of
+ * that section in `sent`, the document as it was saved: the editors show them
+ * next to the section even after it moved.
+ */
+export function sectionErrors(error: unknown, sent: UiSettingsDocument | null | undefined, classKey: string | undefined): Record<string, SectionError[]> {
+  const out: Record<string, SectionError[]> = {};
+  if (!(error instanceof ApiError) || !sent) return out;
+  for (const d of error.details) {
+    const m = d.field ? SECTION_PATH.exec(d.field) : null;
+    if (!m) continue;
+    const layout = sent.layouts[Number(m[1])];
+    const section = layout?.classKey === classKey ? layout.tabs?.[Number(m[2])]?.sections?.[Number(m[3])] : undefined;
+    if (section) (out[section.key] ??= []).push({ path: d.field!, message: d.message });
+  }
+  return out;
+}
 /** The browser window the layout editor of a class opens in. */
 export const editorWindowName = (classKey: string) => `layout-editor-${classKey.replace(/[^A-Za-z0-9_-]/g, "_")}`;
 /** The page an editor route edits (and back): `/cis/1/layout-editor` ↔ `/cis/1`. */
@@ -101,6 +127,8 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
   const loading = ref(false);
   const loadError = ref<unknown>(null);
   const saveError = ref<unknown>(null);
+  /** The document of the last save that failed, for placing the API's errors. */
+  const refused = ref<UiSettingsDocument | null>(null);
   const saved = ref<string | null>(null);
   const past = ref<string[]>([]);
   const future = ref<string[]>([]);
@@ -237,6 +265,7 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
       return true;
     } catch (e) {
       saveError.value = e;
+      refused.value = JSON.parse(JSON.stringify(doc.value)) as UiSettingsDocument;
       return false;
     }
   }
@@ -295,6 +324,8 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
     dirty,
     saving: saveMutation.isPending,
     saveError,
+    /** The last refused save's errors by section key (lib sectionErrors). */
+    sectionErrors: computed(() => sectionErrors(saveError.value, refused.value, classKey.value)),
     saved,
     conflict,
     stale,

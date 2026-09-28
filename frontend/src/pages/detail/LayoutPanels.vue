@@ -4,6 +4,7 @@ import type { Ci, EffectiveAttribute } from "../../api/queries";
 import type { TrailStep } from "../../lib/trail";
 import { attributeKey, cellClass, fieldLabel, gridClass, sectionClass, sectionStyle, type ResolvedSection } from "../../lib/uiSettings";
 import AttributeValue from "./AttributeValue.vue";
+import BlockContent from "./BlockContent.vue";
 import CoreFieldValue from "./CoreFieldValue.vue";
 
 /**
@@ -11,7 +12,8 @@ import CoreFieldValue from "./CoreFieldValue.vue";
  * sections on the tab's 12-column grid (side by side where their widths allow
  * it, stacked on small screens), collapsed ones closed, each a grid of label/value cells as wide as
  * the class layout says. On the first tab the built-in sections follow: General,
- * the attribute groups and the record's class and timestamps. Values no current
+ * the attribute groups and the record's class and timestamps. Notes and the
+ * built-in panels a layout places are sections too (BlockContent). Values no current
  * definition describes (e.g. after a class change) are listed last on the first
  * tab (`orphans`), so nothing stored is hidden.
  */
@@ -38,7 +40,8 @@ const orphanKeys = computed(() => {
     <div class="layout-panels">
       <details v-for="p in sections" :key="p.key" :class="['panel', 'layout-panel', ...sectionClass(p)]" :style="sectionStyle(p)" :data-section="p.key" :open="!p.collapsed">
         <summary class="panel-header"><h2>{{ p.label }}</h2></summary>
-        <div class="panel-body">
+        <BlockContent v-if="p.kind !== 'fields'" :kind="p.kind" :text="p.text" :ci="ci" :self="self" :trail="trail" />
+        <div v-else class="panel-body">
           <dl :class="gridClass(p.columns)">
             <div v-for="{ field: f, width } in p.fields" :key="f" :class="['prop', cellClass(width, p.columns)]">
               <dt>{{ fieldLabel(f, defs) }}</dt>

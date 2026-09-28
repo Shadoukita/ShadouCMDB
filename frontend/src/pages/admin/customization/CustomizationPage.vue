@@ -182,7 +182,7 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload)
     <NavigationSection v-else-if="section === 'navigation'" :doc="draft" />
     <DashboardSection v-else-if="section === 'dashboard'" :doc="draft" />
     <ListViewsSection v-else-if="section === 'list-views'" :doc="draft" />
-    <LayoutsSection v-else-if="section === 'layouts'" :doc="draft" />
+    <LayoutsSection v-else-if="section === 'layouts'" :doc="draft" :error="error" />
     <HistorySection v-else-if="section === 'history'" :current="settings.data.value.version" :dirty="dirty" @restored="reloadLatest" />
     <div v-else class="alert alert-error" role="alert">
       There is no section called <code>{{ section }}</code>. <RouterLink to="/admin/customization/branding">Open Branding</RouterLink>.

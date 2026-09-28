@@ -11,7 +11,8 @@ import type { TrailStep } from "../../lib/trail";
 import { useSessionStore } from "../../stores/session";
 import AddRelationshipForm from "./AddRelationshipForm.vue";
 
-const props = defineProps<{ ci: Ci; self: TrailStep; trail: TrailStep[] }>();
+/** `embedded`: placed in a layout section, which gives the heading; only the content is drawn. */
+const props = defineProps<{ ci: Ci; self: TrailStep; trail: TrailStep[]; embedded?: boolean }>();
 const rels = useRelationships(() => props.ci.id);
 const removing = ref<Relationship | null>(null);
 const del = useDeleteRelationship();
@@ -38,8 +39,8 @@ function confirmRemove() {
 </script>
 
 <template>
-  <section class="panel" aria-labelledby="rel-title">
-    <div class="panel-header">
+  <section :class="{ panel: !embedded }" :aria-labelledby="embedded ? undefined : 'rel-title'">
+    <div v-if="!embedded" class="panel-header">
       <h2 id="rel-title">Relationships</h2>
       <span v-if="rels.data.value" class="muted">{{ rels.data.value.page.total }} direct</span>
     </div>

@@ -315,6 +315,33 @@ export const SECTION_GRID = 12;
 /** The most columns a section's grid has, and the widest a field can be. */
 export const MAX_COLUMNS = 12;
 
+/** What a layout section shows: a grid of fields, a note, or one of the detail page's built-in panels. */
+export type SectionKind = NonNullable<NonNullable<NonNullable<UiClassLayout["tabs"]>[number]["sections"]>[number]["kind"]>;
+export type PanelKind = Exclude<SectionKind, "fields" | "note">;
+/** The detail page's built-in panels, each placeable once per layout. */
+export const PANELS: { kind: PanelKind; label: string; hint: string }[] = [
+  { kind: "relations", label: "Relationships", hint: "The CI's relationships, with adding and removing them" },
+  { kind: "history", label: "History", hint: "Changes to the CI, field by field" },
+  { kind: "audit", label: "Audit trail", hint: "Who changed the CI when, with the request id" },
+];
+export const panelLabel = (kind: PanelKind) => PANELS.find((p) => p.kind === kind)?.label ?? kind;
+export const isPanelKind = (kind: SectionKind): kind is PanelKind => kind !== "fields" && kind !== "note";
+/** Longest note text, in characters (the API's limit). */
+export const NOTE_MAX_CHARS = 4000;
+export const sectionKind = (s: { kind?: SectionKind }): SectionKind => s.kind ?? "fields";
+
+/** The built-in panels a layout places somewhere. */
+export function placedPanels(l: UiClassLayout | undefined): Set<PanelKind> {
+  const out = new Set<PanelKind>();
+  for (const t of l?.tabs ?? []) for (const s of t.sections ?? []) if (isPanelKind(sectionKind(s))) out.add(s.kind as PanelKind);
+  return out;
+}
+
+/** The layout without the sections of `kinds` (e.g. panels on the form, or ones the user may not see). */
+export function withoutKinds(l: UiClassLayout, kinds: readonly SectionKind[]): UiClassLayout {
+  return { ...l, tabs: (l.tabs ?? []).map((t) => ({ ...t, sections: (t.sections ?? []).filter((s) => !kinds.includes(sectionKind(s))) })) };
+}
+
 /** Every optional part of a layout filled in (tabs, sections, columns, widths), without the old `panels`. */
 export function normalizeLayout(l: UiClassLayout): UiClassLayout {
   return {
@@ -322,10 +349,10 @@ export function normalizeLayout(l: UiClassLayout): UiClassLayout {
     tabs: (l.tabs ?? []).map((t) => ({
       key: t.key,
       label: t.label,
-      // Content blocks (a `kind` other than fields: notes, panels) are kept as stored, without fields.
+      // Content blocks (a `kind` other than fields: notes, panels) are kept as stored (a copy: the draft is edited), without fields.
       sections: (t.sections ?? []).map((s) =>
-        (s as { kind?: string }).kind && (s as { kind?: string }).kind !== "fields"
-          ? s
+        sectionKind(s) !== "fields"
+          ? { ...s, width: s.width ?? SECTION_GRID }
           : {
               ...s,
               key: s.key,
@@ -361,6 +388,9 @@ export interface ResolvedSection {
   fields: ResolvedField[];
   /** Placed by the built-in rules, not by the administrator: fields no section of the layout holds. */
   auto: boolean;
+  /** A grid of `fields`, or a content block (a note's `text`, a built-in panel) without fields. */
+  kind: SectionKind;
+  text?: string;
 }
 export interface ResolvedTab {
   key: string;
@@ -408,7 +438,10 @@ export function resolveLayout(
   const tabs: ResolvedTab[] = (layout.tabs ?? []).map((t) => ({
     key: t.key,
     label: t.label,
-    sections: (t.sections ?? []).map((s) => {
+    sections: (t.sections ?? []).map((s): ResolvedSection => {
+      const kind = sectionKind(s);
+      const place = { width: sectionWidth(s), newRow: !!s.newRow, minHeight: s.minHeight ?? undefined };
+      if (kind !== "fields") return { key: s.key, label: s.label, collapsed: !!s.collapsed, columns: GRID_COLUMNS, ...place, fields: [], auto: false, kind, text: s.text };
       const columns = Math.min(Math.max(s.columns ?? GRID_COLUMNS, 1), MAX_COLUMNS);
       const fields: ResolvedField[] = [];
       for (const f of s.fields ?? []) {
@@ -426,11 +459,10 @@ export function resolveLayout(
         label: s.label,
         collapsed: !!s.collapsed,
         columns,
-        width: sectionWidth(s),
-        newRow: !!s.newRow,
-        minHeight: s.minHeight ?? undefined,
+        ...place,
         fields,
         auto: false,
+        kind,
       };
     }),
   }));
@@ -444,6 +476,7 @@ export function resolveLayout(
     newRow: false,
     fields: fields.map(one),
     auto: true,
+    kind: "fields",
   });
   const general = core.filter((f) => usable(f) && !taken.has(f));
   const rest = attrs.filter((a) => usable(`${ATTRIBUTE_PREFIX}${a.key}`) && !taken.has(`${ATTRIBUTE_PREFIX}${a.key}`));
@@ -457,7 +490,7 @@ export function resolveLayout(
   if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, sections: [] });
   tabs[0].sections.push(...trailing);
   if (keepEmpty) return tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => !s.auto || s.fields.length > 0) }));
-  const shown = tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => s.fields.length > 0) })).filter((t) => t.sections.length > 0);
+  const shown = tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => s.kind !== "fields" || s.fields.length > 0) })).filter((t) => t.sections.length > 0);
   return shown.length > 0 ? shown : [{ ...tabs[0], sections: [] }];
 }
 

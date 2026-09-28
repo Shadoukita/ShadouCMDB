@@ -5,7 +5,10 @@ import type { UiSettingsDocument } from "../../../api/uiSettings";
 import ConfirmDialog from "../../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
+import NoteText from "../../../components/NoteText.vue";
 import {
+  addNote,
+  addPanel,
   addSection,
   addSectionBeside,
   addTab,
@@ -16,6 +19,8 @@ import {
   findSection,
   hideField,
   isCore,
+  isFieldSection,
+  lastFieldSection,
   locate,
   leftNeighbour,
   materialize,
@@ -40,7 +45,25 @@ import {
 } from "../../../lib/layoutDesign";
 import PreviewResizeHandle from "../../../components/layoutEdit/PreviewResizeHandle.vue";
 import SectionShell, { type DropSide } from "../../../components/layoutEdit/SectionShell.vue";
-import { ATTRIBUTE_PREFIX, attributeKey, CORE_FIELDS, fieldLabel, gridClass, MAX_COLUMNS, resolveLayout, SECTION_GRID, sectionWidth } from "../../../lib/uiSettings";
+import { sectionErrors } from "../../../lib/layoutEditor";
+import {
+  ATTRIBUTE_PREFIX,
+  attributeKey,
+  CORE_FIELDS,
+  fieldLabel,
+  gridClass,
+  isPanelKind,
+  MAX_COLUMNS,
+  NOTE_MAX_CHARS,
+  PANELS,
+  panelLabel,
+  placedPanels,
+  resolveLayout,
+  SECTION_GRID,
+  sectionKind,
+  sectionWidth,
+  type PanelKind,
+} from "../../../lib/uiSettings";
 import ClassPicker from "./ClassPicker.vue";
 import DesignerField from "./designer/DesignerField.vue";
 import OpenOnCiLink from "./designer/OpenOnCiLink.vue";
@@ -55,9 +78,11 @@ import OpenOnCiLink from "./designer/OpenOnCiLink.vue";
  * drag the preview's grip to check smaller screens. Everything also works
  * from the keyboard and from the side panel. Fields the layout does not place
  * show at the end of the first tab, as on the real form. Ident, valid from and
- * valid until can be moved but not hidden.
+ * valid until can be moved but not hidden. Notes (static text, limited Markdown)
+ * and the detail page's built-in panels are sections without fields; the API's
+ * refusals of a section are listed in it (`error`: the failed save).
  */
-const props = defineProps<{ doc: UiSettingsDocument }>();
+const props = defineProps<{ doc: UiSettingsDocument; error?: unknown }>();
 const cls = ref<CiClass>();
 const layout = computed(() => (cls.value ? props.doc.layouts.find((l) => l.classKey === cls.value!.key) : undefined));
 const attrs = useClassAttributes(() => cls.value?.id);
@@ -93,6 +118,13 @@ const autoSections = computed(() => {
 });
 const hidden = computed(() => (layout.value?.hiddenFields ?? []).filter((f) => !isCore(f) && (!f.startsWith(ATTRIBUTE_PREFIX) || !!defFor(f))));
 const isReadOnly = (f: string) => !!layout.value?.readOnlyFields?.includes(f);
+const kindOf = (s: LayoutSection) => sectionKind(s);
+const errorsOf = (s: LayoutSection) => sectionErrors(props.error, props.doc, cls.value?.key)[s.key] ?? [];
+/** Panels the layout does not place yet. */
+const freePanels = computed(() => {
+  const placed = placedPanels(layout.value);
+  return PANELS.filter((p) => !placed.has(p.kind));
+});
 const shownFields = (s: LayoutSection) => (s.fields ?? []).filter((f) => !f.field.startsWith(ATTRIBUTE_PREFIX) || !!defFor(f.field));
 
 // ---------- Selection and announcements ----------
@@ -112,6 +144,8 @@ const selFieldPlace = computed(() => (layout.value && selField.value ? locate(la
 const selSection = computed(() => (layout.value && selection.value?.kind === "section" ? findSection(layout.value, selection.value.key) : undefined));
 const selTab = computed(() => (selection.value?.kind === "tab" ? tabs.value.find((t) => t.key === (selection.value as { key: string }).key) : undefined));
 const sectionOptions = computed(() => (layout.value ? allSections(layout.value) : []));
+/** Sections a field can move to, by tab. */
+const fieldTargets = computed(() => tabs.value.map((t) => ({ tab: t, sections: (t.sections ?? []).filter(isFieldSection) })).filter((x) => x.sections.length > 0));
 // A new class starts with nothing selected, on its first tab.
 watch(cls, () => {
   select(null);
@@ -152,7 +186,8 @@ function hide(field: string) {
 }
 function show(field: string) {
   if (!layout.value) return;
-  const target = selFieldPlace.value?.section ?? selSection.value?.section ?? activeTab.value?.sections?.[0] ?? allSections(layout.value)[0]?.section;
+  const selected = selSection.value && isFieldSection(selSection.value.section) ? selSection.value.section : undefined;
+  const target = selFieldPlace.value?.section ?? selected ?? activeTab.value?.sections?.find(isFieldSection) ?? allSections(layout.value).find((x) => isFieldSection(x.section))?.section;
   if (!target) return;
   placeField(layout.value, field, target.key);
   showTabOf(field);
@@ -214,6 +249,23 @@ function onMoveSection(s: LayoutSection, delta: -1 | 1) {
   moveSection(layout.value, s, delta);
   say(`Section ${s.label} moved ${delta < 0 ? "up" : "down"}.`);
   void nextTick(() => document.getElementById(`designer-grip-${s.key}`)?.focus());
+}
+function onAddNote() {
+  if (!layout.value || !activeTab.value) return;
+  const s = addNote(layout.value, activeTab.value, "Note", "Write the note here.");
+  select({ kind: "section", key: s.key });
+  say(`Note added to ${activeTab.value.label}. Write its text in the side panel.`);
+  void nextTick(() => document.getElementById("designer-note-text")?.focus());
+}
+function onAddPanel(e: Event) {
+  const el = e.target as HTMLSelectElement;
+  const kind = el.value as PanelKind;
+  el.value = "";
+  if (!layout.value || !activeTab.value || !kind) return;
+  const s = addPanel(layout.value, activeTab.value, kind);
+  if (!s) return say(`The ${panelLabel(kind)} panel is already placed.`);
+  select({ kind: "section", key: s.key });
+  say(`${panelLabel(kind)} panel placed in ${activeTab.value.label}.`);
 }
 function onSectionTab(section: LayoutSection, key: string) {
   const t = tabs.value.find((x) => x.key === key);
@@ -326,8 +378,7 @@ function onTabDrop(t: LayoutTab, e: DragEvent) {
   const field = dragField.value;
   onDragEnd();
   if (!field || !layout.value) return;
-  const sections = t.sections ?? [];
-  const into = sections[sections.length - 1] ?? addSection(layout.value, t, t.label);
+  const into = lastFieldSection(layout.value, t);
   placeField(layout.value, field, into.key);
   activeTabKey.value = t.key;
   select({ kind: "field", field });
@@ -405,8 +456,8 @@ function setPreview(w: number | null) {
               <div class="field">
                 <label for="designer-section">Section</label>
                 <select id="designer-section" :value="selFieldPlace.section.key" @change="toSection(selField, ($event.target as HTMLSelectElement).value)">
-                  <optgroup v-for="t in tabs" :key="t.key" :label="t.label">
-                    <option v-for="s in t.sections" :key="s.key" :value="s.key">{{ s.label }}</option>
+                  <optgroup v-for="{ tab: t, sections } in fieldTargets" :key="t.key" :label="t.label">
+                    <option v-for="s in sections" :key="s.key" :value="s.key">{{ s.label }}</option>
                   </optgroup>
                 </select>
               </div>
@@ -427,6 +478,26 @@ function setPreview(w: number | null) {
                 <label for="designer-section-label">Section heading</label>
                 <input id="designer-section-label" v-model="selSection.section.label" type="text" maxlength="100" required />
               </div>
+              <p v-if="kindOf(selSection.section) !== 'fields'" class="muted">
+                {{ kindOf(selSection.section) === "note" ? "Note: static text on the form and the detail page." : `${panelLabel(kindOf(selSection.section) as PanelKind)} panel of the detail page.` }}
+              </p>
+              <div v-if="kindOf(selSection.section) === 'note'" class="field">
+                <label for="designer-note-text">Text</label>
+                <textarea
+                  id="designer-note-text"
+                  v-model="selSection.section.text"
+                  rows="8"
+                  :maxlength="NOTE_MAX_CHARS"
+                  required
+                  :aria-invalid="!selSection.section.text?.trim()"
+                  aria-describedby="designer-note-help"
+                />
+                <span id="designer-note-help" class="hint">
+                  <strong v-if="!selSection.section.text?.trim()" class="designer-error">A note needs text. </strong>
+                  Plain text or limited Markdown: **bold**, *italic*, `code`, [link](https://…), lists with - or 1. HTML is shown as text.
+                  {{ selSection.section.text?.length ?? 0 }} / {{ NOTE_MAX_CHARS }} characters.
+                </span>
+              </div>
               <div class="field">
                 <label for="designer-section-width">Section width</label>
                 <select id="designer-section-width" :value="sectionWidth(selSection.section)" @change="resizeSection(selSection.section, Number(($event.target as HTMLSelectElement).value))">
@@ -437,7 +508,7 @@ function setPreview(w: number | null) {
                 <input type="checkbox" :checked="!!selSection.section.newRow" @change="setNewRow(selSection.section, ($event.target as HTMLInputElement).checked)" />
                 Start a new row
               </label>
-              <div class="field">
+              <div v-if="kindOf(selSection.section) === 'fields'" class="field">
                 <label for="designer-columns">Columns</label>
                 <select id="designer-columns" :value="selSection.section.columns ?? 3" @change="setColumns(selSection.section, Number(($event.target as HTMLSelectElement).value))">
                   <option v-for="n in MAX_COLUMNS" :key="n" :value="n">{{ n }}</option>
@@ -462,7 +533,7 @@ function setPreview(w: number | null) {
                 </button>
               </span>
               <span><button type="button" class="btn btn-sm" :disabled="!canRemoveSection(selSection.section)" @click="confirmRemove = { kind: 'section', section: selSection.section }">Remove section</button></span>
-              <p v-if="!canRemoveSection(selSection.section)" class="hint">The only section cannot be removed.</p>
+              <p v-if="!canRemoveSection(selSection.section)" class="hint">The only section of fields cannot be removed.</p>
             </template>
 
             <template v-else-if="selTab">
@@ -543,7 +614,7 @@ function setPreview(w: number | null) {
                 :section="s"
                 :has-left="hasLeft(s)"
                 :start="places[j]?.start ?? 0"
-                    :dragging="dragSection === s.key"
+                :dragging="dragSection === s.key"
                 :drop="dropSection?.key === s.key ? dropSection.side : null"
                 id-prefix="designer"
                 keys-id="designer-keys"
@@ -557,7 +628,7 @@ function setPreview(w: number | null) {
                 @dropped="(side) => onSectionDrop(s, side)"
               >
                 <section
-                  :class="['panel', 'designer-section', { selected: selection?.kind === 'section' && selection.key === s.key }]"
+                  :class="['panel', 'designer-section', { selected: selection?.kind === 'section' && selection.key === s.key, block: kindOf(s) !== 'fields', invalid: errorsOf(s).length > 0 }]"
                   :aria-label="`Section ${s.label}`"
                 >
                   <div class="panel-header">
@@ -566,9 +637,18 @@ function setPreview(w: number | null) {
                         {{ s.label }}
                       </button>
                     </h2>
-                    <span class="muted">{{ sectionWidth(s) }} / {{ SECTION_GRID }} wide · {{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · collapsed on the detail page</template></span>
+                    <span v-if="kindOf(s) === 'note'" class="muted"><span class="badge">Note</span> · {{ sectionWidth(s) }} / {{ SECTION_GRID }} wide<template v-if="s.collapsed"> · collapsed on the detail page</template></span>
+                    <span v-else-if="isPanelKind(kindOf(s))" class="muted"><span class="badge">{{ panelLabel(kindOf(s) as PanelKind) }} panel</span> · {{ sectionWidth(s) }} / {{ SECTION_GRID }} wide<template v-if="s.collapsed"> · collapsed on the detail page</template></span>
+                    <span v-else class="muted">{{ sectionWidth(s) }} / {{ SECTION_GRID }} wide · {{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · collapsed on the detail page</template></span>
                   </div>
-                  <div class="panel-body">
+                  <ul v-if="errorsOf(s).length > 0" class="designer-errors" role="alert" :aria-label="`Errors in ${s.label}`">
+                    <li v-for="(e, k) in errorsOf(s)" :key="k"><code>{{ e.path }}</code> {{ e.message }}</li>
+                  </ul>
+                  <div v-if="kindOf(s) === 'note'" class="panel-body"><NoteText :text="s.text ?? ''" /></div>
+                  <div v-else-if="isPanelKind(kindOf(s))" class="panel-body">
+                    <p class="hint designer-panel-hint">{{ PANELS.find((p) => p.kind === kindOf(s))?.hint }}. Shown on the detail page, not on the form.</p>
+                  </div>
+                  <div v-else class="panel-body">
                     <div
                       :class="[gridClass(s.columns ?? 3), 'designer-grid', { 'drop-end': dropAt?.section === s.key && dropAt.index === shownFields(s).length }]"
                       :data-section="s.key"
@@ -634,8 +714,19 @@ function setPreview(w: number | null) {
                   </div>
                 </section>
               </template>
-              <div>
+              <div class="designer-add">
                 <button type="button" class="btn btn-sm" @click="onAddSection()">+ Add section to {{ activeTab?.label }}</button>
+                <button type="button" class="btn btn-sm" @click="onAddNote">+ Add note</button>
+                <select
+                  class="btn btn-sm"
+                  :aria-label="`Add a panel to ${activeTab?.label}`"
+                  :disabled="freePanels.length === 0"
+                  :title="freePanels.length === 0 ? 'Every panel is placed' : undefined"
+                  @change="onAddPanel"
+                >
+                  <option value="">+ Add panel</option>
+                  <option v-for="p in freePanels" :key="p.kind" :value="p.kind">{{ p.label }}</option>
+                </select>
               </div>
             </div>
           </div>
@@ -661,6 +752,33 @@ function setPreview(w: number | null) {
 </template>
 
 <style scoped>
+.designer-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.designer-add select {
+  width: auto;
+}
+.designer-section.block {
+  border-style: dashed;
+}
+.designer-section.invalid {
+  border-color: var(--c-danger);
+}
+.designer-errors {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-6);
+  color: var(--c-danger);
+  background: var(--c-danger-bg);
+  font-size: var(--fs-sm);
+}
+.designer-error {
+  color: var(--c-danger);
+}
+.designer-panel-hint {
+  margin: 0;
+}
 .designer {
   display: flex;
   flex-direction: column;

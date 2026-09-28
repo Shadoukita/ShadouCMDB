@@ -21,9 +21,10 @@ import { HIDDEN_CI } from "../../lib/format";
 import { hintFor, nowFormValue, NOW_HINT, toApiValue, toFormValue, type FormValue } from "../../lib/attributeValues";
 import type { LayoutEditor } from "../../lib/layoutEditor";
 import { createReusableTemplate } from "../../lib/reusableTemplate";
-import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, builtInLayout, cellClass, CORE_FIELDS, gridClass, layoutFor, resolveLayout, sectionClass, sectionStyle } from "../../lib/uiSettings";
+import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, builtInLayout, cellClass, CORE_FIELDS, gridClass, layoutFor, PANELS, resolveLayout, sectionClass, sectionStyle, withoutKinds } from "../../lib/uiSettings";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
+import NoteText from "../../components/NoteText.vue";
 import FormErrorBanner from "./FormErrorBanner.vue";
 import FormField from "./FormField.vue";
 
@@ -87,11 +88,16 @@ const requiredField = (f: string) => !!defs.value.find((d) => `${ATTRIBUTE_PREFI
 const keepEditable = (f: string) => props.mode === "create" && requiredField(f);
 const readOnly = computed(() => new Set((layout.value?.readOnlyFields ?? []).filter((f) => !keepEditable(f))));
 
-/** The class's layout, or the built-in one: General (core fields and ungrouped attributes), then the attribute groups. */
+/**
+ * The class's layout, or the built-in one: General (core fields and ungrouped attributes), then the attribute groups.
+ * Notes show on the form too; the built-in panels are the detail page's.
+ */
 const tabs = computed(() => {
-  const l = layout.value ?? builtInLayout("");
+  const l = withoutKinds(layout.value ?? builtInLayout(""), PANELS.map((p) => p.kind));
   return resolveLayout({ ...l, hiddenFields: (l.hiddenFields ?? []).filter((f) => !keepEditable(f)) }, defs.value, CORE_FIELDS);
 });
+/** The first section of fields, which also shows whether the attributes loaded. */
+const firstGrid = computed(() => tabs.value[0]?.sections.find((sec) => sec.kind === "fields")?.key);
 const activeTab = ref(0);
 const tabIndex = computed(() => Math.min(activeTab.value, tabs.value.length - 1));
 const tabFields = (i: number) => tabs.value[i]?.sections.flatMap((sec) => sec.fields.map((c) => c.field)) ?? [];
@@ -324,12 +330,13 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
         :aria-labelledby="tabs.length > 1 ? `form-tab-${t.key}` : undefined"
         class="layout-panels"
       >
-        <details v-for="(sec, j) in t.sections" :key="sec.key" :class="['panel', 'layout-panel', ...sectionClass(sec)]" :style="sectionStyle(sec)" :data-section="sec.key" :open="!sec.collapsed">
+        <details v-for="sec in t.sections" :key="sec.key" :class="['panel', 'layout-panel', ...sectionClass(sec)]" :style="sectionStyle(sec)" :data-section="sec.key" :open="!sec.collapsed">
           <summary class="panel-header">
             <h2>{{ sec.label }}</h2>
           </summary>
-          <div class="panel-body">
-            <template v-if="i === 0 && j === 0">
+          <div v-if="sec.kind === 'note'" class="panel-body"><NoteText :text="sec.text ?? ''" /></div>
+          <div v-else class="panel-body">
+            <template v-if="i === 0 && sec.key === firstGrid">
               <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
               <ErrorAlert
                 v-if="attrs.isError.value"
