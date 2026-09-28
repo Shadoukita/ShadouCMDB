@@ -264,3 +264,99 @@ test("with popups blocked the editor opens in the same tab, and says so", async 
   await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));
   await expect(page.getByRole("tablist", { name: "CI sections" })).toBeVisible();
 });
+
+test("content blocks: a note and built-in panels placed in the editor, on the detail page, the form and in the designer", async ({ page, request }) => {
+  await resetUiSettings(request);
+  await page.goto(`/cis/${ci.id}/layout-editor`);
+  await expect(bar(page)).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 2400 });
+
+  // + Note: added with its text editor open; limited Markdown, raw HTML shown as text.
+  await page.getByRole("button", { name: "Add a note to General" }).click();
+  const text = page.getByRole("textbox", { name: "Text of Note" });
+  await expect(text).toBeFocused();
+  await text.fill("");
+  await expect(page.getByText("A note needs text.")).toBeVisible();
+  await expect(section(page, "Note").getByRole("button", { name: "Apply" })).toBeDisabled();
+  await text.fill("Owned by **Ops**. <b>raw</b> [Runbook](https://example.com/runbook) [bad](javascript:alert(1))\n- check backups\n- ask Ops");
+  await section(page, "Note").getByRole("button", { name: "Apply" }).click();
+  const note = section(page, "Note");
+  await expect(note.locator("strong")).toHaveText("Ops");
+  await expect(note.getByText("<b>raw</b>", { exact: false })).toBeVisible();
+  await expect(note.getByRole("link", { name: "Runbook" })).toHaveAttribute("href", "https://example.com/runbook");
+  await expect(note.getByRole("link", { name: "bad" })).toHaveCount(0);
+  await expect(note.getByRole("listitem")).toHaveText(["check backups", "ask Ops"]);
+  // Renamed like any section.
+  await note.getByRole("button", { name: "Note", exact: true }).click();
+  await page.getByLabel("Section name").fill("Before you edit");
+  await page.keyboard.press("Enter");
+  await expect(section(page, "Before you edit")).toBeVisible();
+
+  // + Panel: the relationships and the audit trail on a tab of their own; each panel once per layout.
+  await tabBar(page).getByRole("button", { name: "+ Tab" }).click();
+  await tabBar(page).getByLabel("Tab name").fill("Links");
+  await page.keyboard.press("Enter");
+  await page.getByLabel("Add a panel to Links").selectOption("relations");
+  await expect(section(page, "Relationships")).toContainText("Relationships panel");
+  await page.getByLabel("Add a panel to Links").selectOption("audit");
+  await expect(section(page, "Audit trail").getByRole("columnheader", { name: "Request id" })).toBeVisible();
+  await expect(page.getByLabel("Add a panel to Links").locator("option")).toHaveText(["+ Panel", "History"]);
+  // The tab's empty field section goes.
+  await section(page, "Links").hover();
+  await section(page, "Links").getByRole("button", { name: "Remove section Links" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Remove" }).click();
+  await snap(page, "layout-blocks-editor");
+
+  // An API refusal is shown next to the block it concerns (here a refusal the editor cannot produce itself).
+  await page.route("**/api/v1/ui-settings", async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    const sent = route.request().postDataJSON() as { settings: { layouts: { tabs: { sections: { kind?: string }[] }[] }[] } };
+    const t = sent.settings.layouts[0].tabs.findIndex((x) => x.sections.some((s) => s.kind === "audit"));
+    const s = sent.settings.layouts[0].tabs[t].sections.findIndex((x) => x.kind === "audit");
+    await route.fulfill({
+      status: 400,
+      json: { error: { code: "VALIDATION_ERROR", message: "Invalid settings", details: [{ field: `settings.layouts.0.tabs.${t}.sections.${s}.kind`, message: "The audit panel can be placed once in a layout" }] } },
+    });
+  });
+  await bar(page).getByRole("button", { name: "Save layout" }).click();
+  await expect(section(page, "Audit trail").getByRole("alert")).toContainText(/settings\.layouts\.0\.tabs\.1\.sections\.\d+\.kind The audit panel can be placed once/);
+  await page.unroute("**/api/v1/ui-settings");
+
+  await bar(page).getByRole("button", { name: "Save layout" }).click();
+  await expect(bar(page).getByRole("status")).toContainText(/Saved as version \d+/);
+  await expect(section(page, "Audit trail").getByRole("alert")).toHaveCount(0);
+
+  // The detail page: the note on General, the panels on Links instead of their usual places; History keeps its tab.
+  await page.goto(`/cis/${ci.id}`);
+  const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
+  await expect(tabs).toHaveText(["General", "Links", "Relationship map", "History"]);
+  const heads = page.locator(".layout-panels > details > summary h2");
+  await expect(heads).toContainText(["General", "Before you edit", "Record"]);
+  await expect(page.locator(".layout-panels .note-text strong")).toHaveText("Ops");
+  await expect(page.locator("#rel-title")).toHaveCount(0);
+  await tabs.filter({ hasText: "Links" }).click();
+  await expect(heads).toHaveText(["Relationships", "Audit trail"]);
+  await expect(page.getByRole("columnheader", { name: "Related CI" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Request id" })).toBeVisible();
+  await snap(page, "layout-blocks-detail");
+
+  // The form: the note, but no panels (a tab of panels only is left out).
+  await page.goto(`/cis/${ci.id}/edit`);
+  await expect(page.locator("form .note-text strong")).toHaveText("Ops");
+  await expect(page.getByRole("tab", { name: "Links" })).toHaveCount(0);
+
+  // The designer draws the blocks; clearing the note's text is refused by the API, next to the note.
+  await page.goto("/admin/customization/layouts?class=server");
+  const d = (label: string) => page.getByRole("region", { name: `Section ${label}`, exact: true });
+  await expect(d("Before you edit").locator(".note-text strong")).toHaveText("Ops");
+  await d("Before you edit").getByRole("button", { name: "Before you edit" }).click();
+  await page.getByLabel("Text", { exact: true }).fill("");
+  await expect(page.getByText("A note needs text.")).toBeVisible();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(d("Before you edit").getByRole("alert")).toContainText(/settings\.layouts\.0\.tabs\.0\.sections\.\d+\.text Must not be blank/);
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+  await page.getByRole("tab", { name: "Links" }).click();
+  await expect(d("Relationships")).toContainText("Relationships panel");
+  await expect(d("Audit trail")).toContainText("Audit trail panel");
+  await snap(page, "layout-blocks-designer");
+});

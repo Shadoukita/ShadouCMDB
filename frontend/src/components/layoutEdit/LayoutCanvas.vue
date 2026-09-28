@@ -2,6 +2,8 @@
 import { computed, nextTick, ref, watch } from "vue";
 import type { EffectiveAttribute } from "../../api/queries";
 import {
+  addNote,
+  addPanel,
   addSection,
   addTab,
   adoptFields,
@@ -11,6 +13,8 @@ import {
   findSection,
   hideField,
   isCore,
+  isFieldSection,
+  lastFieldSection,
   locate,
   moveFieldBy,
   moveSection,
@@ -26,8 +30,24 @@ import {
   type LayoutTab,
 } from "../../lib/layoutDesign";
 import type { LayoutEditor } from "../../lib/layoutEditor";
-import { ATTRIBUTE_PREFIX, attributeKey, CORE_FIELDS, fieldLabel, gridClass, MAX_COLUMNS, resolveLayout } from "../../lib/uiSettings";
+import {
+  ATTRIBUTE_PREFIX,
+  attributeKey,
+  CORE_FIELDS,
+  fieldLabel,
+  gridClass,
+  isPanelKind,
+  MAX_COLUMNS,
+  NOTE_MAX_CHARS,
+  PANELS,
+  panelLabel,
+  placedPanels,
+  resolveLayout,
+  sectionKind,
+  type PanelKind,
+} from "../../lib/uiSettings";
 import ConfirmDialog from "../ConfirmDialog.vue";
+import NoteText from "../NoteText.vue";
 import EditableField, { type SectionOption } from "./EditableField.vue";
 
 /**
@@ -38,7 +58,12 @@ import EditableField, { type SectionOption } from "./EditableField.vue";
  * section's name to rename it; drag fields between sections and onto tabs, and
  * a field's right edge to resize it. Every drag has a keyboard or toolbar
  * equivalent. Fields the layout does not place show at the end of the first tab,
- * as on the real page. Every change goes through the editor (undo, save).
+ * as on the real page. Next to + Section, + Note adds static text (limited
+ * Markdown, edited in place) and + Panel places one of the detail page's
+ * built-in panels (relationships, history, audit trail), each once per layout;
+ * the page draws a placed panel through the `panel` slot. When the API refuses a
+ * save, its messages about a section are listed in that section.
+ * Every change goes through the editor (undo, save).
  */
 const props = defineProps<{
   editor: LayoutEditor;
@@ -51,6 +76,8 @@ defineSlots<{
   field(p: { field: string }): unknown;
   /** After the first tab's sections (the detail page's record details). */
   "first-tab-end"(): unknown;
+  /** A built-in panel placed by the layout, as the page shows it (none on the form). */
+  panel?(p: { kind: PanelKind }): unknown;
 }>();
 
 const layout = computed(() => props.editor.layout);
@@ -68,8 +95,15 @@ const onFirstTab = computed(() => !!activeTab.value && activeTab.value === tabs.
 const autoSections = computed(() => (layout.value ? (resolveLayout(layout.value, props.attrs, CORE_FIELDS, [], true)[0]?.sections ?? []).filter((s) => s.auto) : []));
 const hidden = computed(() => (layout.value?.hiddenFields ?? []).filter((f) => !isCore(f) && known(f)));
 const sectionOptions = computed<SectionOption[]>(() =>
-  layout.value ? allSections(layout.value).map(({ tab, section }) => ({ key: section.key, label: section.label, tab: tab.label })) : [],
+  layout.value ? allSections(layout.value).filter((x) => isFieldSection(x.section)).map(({ tab, section }) => ({ key: section.key, label: section.label, tab: tab.label })) : [],
 );
+/** Panels the layout does not place yet: the ones + Panel offers. */
+const freePanels = computed(() => {
+  const placed = placedPanels(layout.value);
+  return PANELS.filter((p) => !placed.has(p.kind));
+});
+const kindOf = (s: LayoutSection) => sectionKind(s);
+const errorsOf = (s: LayoutSection) => props.editor.sectionErrors[s.key] ?? [];
 
 // ---------- Announcements and focus ----------
 
@@ -116,9 +150,9 @@ function place(field: string, key: string, index?: number) {
   say(`${labelOf(field)} moved to ${at?.tab.label} › ${at?.section.label}.`);
   focus(`le-field-${field}`);
 }
-/** Shows a hidden field again, in the first section of the tab in view. */
+/** Shows a hidden field again, in the first field section of the tab in view. */
 function show(field: string) {
-  const target = activeTab.value?.sections?.[0] ?? (layout.value && allSections(layout.value)[0]?.section);
+  const target = activeTab.value?.sections?.find(isFieldSection) ?? (layout.value && allSections(layout.value).find((x) => isFieldSection(x.section))?.section);
   if (target) place(field, target.key);
 }
 function setReadOnly(field: string, on: boolean) {
@@ -214,6 +248,73 @@ function insertSection(index: number) {
   say(`Section added to ${tab.label}. Type its name.`);
   startRename("section", s.key, s.label);
 }
+function insertNote(index: number) {
+  const tab = activeTab.value;
+  if (!tab) return;
+  let s: LayoutSection | undefined;
+  props.editor.apply((l) => {
+    const own = l.tabs?.find((x) => x.key === tab.key);
+    if (own) s = addNote(l, own, "Note", "Write the note here.", index);
+  });
+  if (!s) return;
+  say(`Note added to ${tab.label}. Type its text.`);
+  startNote(s);
+}
+function insertPanel(index: number, e: Event) {
+  const select = e.target as HTMLSelectElement;
+  const kind = select.value as PanelKind;
+  select.value = "";
+  const tab = activeTab.value;
+  if (!tab || !kind) return;
+  let s: LayoutSection | undefined;
+  props.editor.apply((l) => {
+    const own = l.tabs?.find((x) => x.key === tab.key);
+    if (own) s = addPanel(l, own, kind, index);
+  });
+  if (!s) return say(`The ${panelLabel(kind)} panel is already placed.`);
+  say(`${panelLabel(kind)} panel placed in ${tab.label}.`);
+  focus(`le-section-${s.key}`);
+}
+
+// ---------- Notes ----------
+
+/** The note whose text is being edited, and the text so far. */
+const noteKey = ref<string | null>(null);
+const noteDraft = ref("");
+const noteBlank = computed(() => noteDraft.value.trim() === "");
+function startNote(s: LayoutSection) {
+  noteKey.value = s.key;
+  noteDraft.value = s.text ?? "";
+  void nextTick(() => {
+    const area = document.getElementById(`le-note-${s.key}`) as HTMLTextAreaElement | null;
+    area?.focus();
+    area?.select();
+  });
+}
+function commitNote() {
+  const key = noteKey.value;
+  if (!key || noteBlank.value) return;
+  const text = noteDraft.value.slice(0, NOTE_MAX_CHARS);
+  noteKey.value = null;
+  onSection(key, (_, own) => (own.text = text));
+  say("Note text changed.");
+  focus(`le-section-${key}`);
+}
+function cancelNote() {
+  const key = noteKey.value;
+  noteKey.value = null;
+  if (key) focus(`le-section-${key}`);
+}
+function onNoteKey(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    cancelNote();
+  } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    commitNote();
+  }
+}
+
 /** Runs `change` on the section `key` of the layout being edited. */
 function onSection(key: string, change: (l: NonNullable<typeof layout.value>, s: LayoutSection) => void) {
   props.editor.apply((l) => {
@@ -319,9 +420,7 @@ function onTabDrop(t: LayoutTab, e: DragEvent) {
   props.editor.apply((l) => {
     const own = l.tabs?.find((x) => x.key === t.key);
     if (!own) return;
-    const sections = own.sections ?? [];
-    const into = sections[sections.length - 1] ?? addSection(l, own, own.label);
-    placeField(l, field, into.key);
+    placeField(l, field, lastFieldSection(l, own).key);
   });
   activeTabKey.value = t.key;
   const at = layout.value && locate(layout.value, field);
@@ -392,8 +491,13 @@ function onHiddenDrop(e: DragEvent) {
           <template v-for="(s, j) in activeTab?.sections ?? []" :key="s.key">
             <div v-if="j > 0" class="le-insert">
               <button type="button" class="btn btn-sm le-add" :aria-label="`Add a section before ${s.label}`" @click="insertSection(j)">+ Section</button>
+              <button type="button" class="btn btn-sm le-add" :aria-label="`Add a note before ${s.label}`" @click="insertNote(j)">+ Note</button>
+              <select class="btn btn-sm le-add" :aria-label="`Add a panel before ${s.label}`" :disabled="freePanels.length === 0" :title="freePanels.length === 0 ? 'Every panel is placed' : undefined" @change="insertPanel(j, $event)">
+                <option value="">+ Panel</option>
+                <option v-for="p in freePanels" :key="p.kind" :value="p.kind">{{ p.label }}</option>
+              </select>
             </div>
-            <section class="panel layout-panel le-section" :aria-label="`Section ${s.label}`">
+            <section :class="['panel', 'layout-panel', 'le-section', { 'le-block': kindOf(s) !== 'fields', invalid: errorsOf(s).length > 0 }]" :aria-label="`Section ${s.label}`">
               <div class="panel-header">
                 <h2>
                   <input
@@ -409,7 +513,9 @@ function onHiddenDrop(e: DragEvent) {
                   />
                   <button v-else :id="`le-section-${s.key}`" type="button" class="le-section-label" title="Click to rename" @click="startRename('section', s.key, s.label)">{{ s.label }}</button>
                 </h2>
-                <span class="muted">{{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · starts collapsed</template></span>
+                <span v-if="kindOf(s) === 'note'" class="muted"><span class="badge">Note</span><template v-if="s.collapsed"> · starts collapsed</template></span>
+                <span v-else-if="isPanelKind(kindOf(s))" class="muted"><span class="badge">{{ panelLabel(kindOf(s) as PanelKind) }} panel</span><template v-if="s.collapsed"> · starts collapsed</template></span>
+                <span v-else class="muted">{{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · starts collapsed</template></span>
                 <span class="le-section-tools" role="toolbar" :aria-label="`Section ${s.label}: layout`">
                   <button type="button" class="btn btn-sm" :aria-label="`Move section ${s.label} up`" title="Move up" :disabled="sectionIndex(s) <= 0" @click="onMoveSection(s, -1)">↑</button>
                   <button
@@ -425,7 +531,8 @@ function onHiddenDrop(e: DragEvent) {
                   <button type="button" class="btn btn-sm" :aria-pressed="!!s.collapsed" :aria-label="`Section ${s.label} starts collapsed on the detail page`" @click="onSection(s.key, (_, own) => (own.collapsed = !own.collapsed))">
                     Collapsed
                   </button>
-                  <select :aria-label="`Columns of ${s.label}`" :value="s.columns ?? 3" @change="onSection(s.key, (_, own) => setColumns(own, Number(($event.target as HTMLSelectElement).value)))">
+                  <button v-if="kindOf(s) === 'note'" type="button" class="btn btn-sm" :aria-label="`Edit the text of ${s.label}`" @click="startNote(s)">Edit text</button>
+                  <select v-if="kindOf(s) === 'fields'" :aria-label="`Columns of ${s.label}`" :value="s.columns ?? 3" @change="onSection(s.key, (_, own) => setColumns(own, Number(($event.target as HTMLSelectElement).value)))">
                     <option v-for="n in MAX_COLUMNS" :key="n" :value="n">{{ n }} column{{ n === 1 ? "" : "s" }}</option>
                   </select>
                   <select v-if="tabs.length > 1" :aria-label="`Tab of ${s.label}`" :value="activeTab?.key" @change="onSectionTab(s, ($event.target as HTMLSelectElement).value)">
@@ -434,7 +541,41 @@ function onHiddenDrop(e: DragEvent) {
                   <button type="button" class="btn btn-sm" :aria-label="`Remove section ${s.label}`" :disabled="!layout || !canRemoveSection(layout, s)" @click="confirmRemove = { section: s }">Remove</button>
                 </span>
               </div>
-              <div class="panel-body">
+              <ul v-if="errorsOf(s).length > 0" class="le-errors" role="alert" :aria-label="`Errors in ${s.label}`">
+                <li v-for="(e, k) in errorsOf(s)" :key="k"><code>{{ e.path }}</code> {{ e.message }}</li>
+              </ul>
+              <div v-if="kindOf(s) === 'note'" class="panel-body">
+                <div v-if="noteKey === s.key" class="le-note-edit">
+                  <label :for="`le-note-${s.key}`" class="sr-only">Text of {{ s.label }}</label>
+                  <textarea
+                    :id="`le-note-${s.key}`"
+                    v-model="noteDraft"
+                    rows="5"
+                    :maxlength="NOTE_MAX_CHARS"
+                    :aria-invalid="noteBlank"
+                    :aria-describedby="`le-note-help-${s.key}`"
+                    @keydown="onNoteKey"
+                  />
+                  <div :id="`le-note-help-${s.key}`" class="hint">
+                    <strong v-if="noteBlank" class="le-note-error">A note needs text.</strong>
+                    Plain text or limited Markdown: **bold**, *italic*, `code`, [link](https://…), lists with - or 1. HTML is shown as text.
+                    {{ noteDraft.length }} / {{ NOTE_MAX_CHARS }} characters. Ctrl+Enter applies, Escape cancels.
+                  </div>
+                  <span class="row-actions">
+                    <button type="button" class="btn btn-sm btn-primary" :disabled="noteBlank" @click="commitNote">Apply</button>
+                    <button type="button" class="btn btn-sm" @click="cancelNote">Cancel</button>
+                  </span>
+                </div>
+                <button v-else type="button" class="le-note" :aria-label="`Edit the text of ${s.label}`" title="Click to edit the text" @click="startNote(s)">
+                  <NoteText :text="s.text ?? ''" />
+                </button>
+              </div>
+              <div v-else-if="isPanelKind(kindOf(s))" class="panel-body flush" inert>
+                <slot name="panel" :kind="kindOf(s) as PanelKind">
+                  <p class="hint le-panel-hint">{{ PANELS.find((p) => p.kind === kindOf(s))?.hint }}. Shown on the detail page, not on the form.</p>
+                </slot>
+              </div>
+              <div v-else class="panel-body">
                 <div
                   :class="[gridClass(s.columns ?? 3), 'le-grid', { 'drop-end': dropAt?.section === s.key && dropAt.index === shownFields(s).length }]"
                   :data-section="s.key"
@@ -474,6 +615,17 @@ function onHiddenDrop(e: DragEvent) {
           </template>
           <div class="le-insert">
             <button type="button" class="btn btn-sm le-add" :aria-label="`Add a section to ${activeTab?.label}`" @click="insertSection(activeTab?.sections?.length ?? 0)">+ Section</button>
+            <button type="button" class="btn btn-sm le-add" :aria-label="`Add a note to ${activeTab?.label}`" @click="insertNote(activeTab?.sections?.length ?? 0)">+ Note</button>
+            <select
+              class="btn btn-sm le-add"
+              :aria-label="`Add a panel to ${activeTab?.label}`"
+              :disabled="freePanels.length === 0"
+              :title="freePanels.length === 0 ? 'Every panel is placed' : undefined"
+              @change="insertPanel(activeTab?.sections?.length ?? 0, $event)"
+            >
+              <option value="">+ Panel</option>
+              <option v-for="p in freePanels" :key="p.kind" :value="p.kind">{{ p.label }}</option>
+            </select>
           </div>
 
           <template v-if="onFirstTab">
@@ -697,5 +849,59 @@ function onHiddenDrop(e: DragEvent) {
 }
 .le-keys {
   margin: 0;
+}
+.le-insert {
+  gap: var(--sp-2);
+}
+.le-insert select.le-add {
+  width: auto;
+}
+.le-block {
+  border-style: dashed;
+}
+.le-section.invalid {
+  border-color: var(--c-danger);
+}
+.le-errors {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-6);
+  color: var(--c-danger);
+  background: var(--c-danger-bg);
+  font-size: var(--fs-sm);
+}
+.le-note {
+  display: block;
+  width: 100%;
+  border: 1px dashed transparent;
+  border-radius: var(--radius);
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  padding: var(--sp-1);
+  cursor: text;
+}
+.le-note:hover {
+  border-color: var(--c-border-strong);
+}
+.le-note:focus-visible {
+  outline: 2px solid var(--c-focus);
+}
+.le-note-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.le-note-edit textarea {
+  width: 100%;
+  font: inherit;
+  resize: vertical;
+}
+.le-note-error {
+  color: var(--c-danger);
+}
+.le-panel-hint {
+  margin: 0;
+  padding: var(--sp-3);
 }
 </style>

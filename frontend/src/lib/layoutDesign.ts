@@ -1,6 +1,6 @@
 import type { UiClassLayout } from "../api/uiSettings";
 import { suggestKey } from "./keys";
-import { CORE_FIELDS, GRID_COLUMNS, MAX_COLUMNS, resolveLayout, type AttributeLike } from "./uiSettings";
+import { CORE_FIELDS, GRID_COLUMNS, MAX_COLUMNS, panelLabel, placedPanels, resolveLayout, sectionKind, type AttributeLike, type PanelKind } from "./uiSettings";
 
 /**
  * The form designer's edits (Customization › Detail and form layout) on a class
@@ -9,6 +9,8 @@ import { CORE_FIELDS, GRID_COLUMNS, MAX_COLUMNS, resolveLayout, type AttributeLi
  * keeps the rules the API checks: tab keys unique, section keys unique across
  * the layout, a field placed once, widths within the section's columns, and the
  * core fields (ident, valid from, valid until) never hidden or dropped.
+ * Content blocks (notes and the built-in panels) are sections without fields:
+ * fields never go into one, and each panel is placed at most once.
  */
 
 export type LayoutTab = NonNullable<UiClassLayout["tabs"]>[number];
@@ -25,12 +27,18 @@ export interface FieldPlace {
 
 const tabsOf = (l: UiClassLayout) => (l.tabs ??= []);
 const sectionsOf = (t: LayoutTab) => (t.sections ??= []);
-const fieldsOf = (s: LayoutSection) => (s.fields ??= []);
+/** Whether a section is a grid of fields (not a note or a panel). */
+export const isFieldSection = (s: LayoutSection) => sectionKind(s) === "fields";
+/** A section's fields; a content block has none (and gets no `fields` written). */
+const fieldsOf = (s: LayoutSection) => (isFieldSection(s) ? (s.fields ??= []) : []);
 const columnsOf = (s: LayoutSection) => s.columns ?? GRID_COLUMNS;
 
 export function allSections(l: UiClassLayout): { tab: LayoutTab; section: LayoutSection }[] {
   return tabsOf(l).flatMap((tab) => sectionsOf(tab).map((section) => ({ tab, section })));
 }
+
+/** The sections that hold fields, in reading order. */
+export const fieldSections = (l: UiClassLayout) => allSections(l).filter((x) => isFieldSection(x.section));
 
 export function findSection(l: UiClassLayout, key: string): { tab: LayoutTab; section: LayoutSection } | undefined {
   return allSections(l).find((x) => x.section.key === key);
@@ -60,7 +68,7 @@ export function uniqueKey(label: string, taken: Iterable<string>, fallback: stri
  */
 export function placeField(l: UiClassLayout, field: string, sectionKey: string, index?: number): void {
   const target = findSection(l, sectionKey)?.section;
-  if (!target) return;
+  if (!target || !isFieldSection(target)) return;
   const from = locate(l, field);
   let width = 1;
   let at = index ?? fieldsOf(target).length;
@@ -98,7 +106,7 @@ export function moveFieldBy(l: UiClassLayout, field: string, delta: -1 | 1): Lay
     list.splice(to, 0, f);
     return from.section;
   }
-  const sections = allSections(l).map((x) => x.section);
+  const sections = fieldSections(l).map((x) => x.section);
   const next = sections[sections.indexOf(from.section) + delta];
   if (!next) return undefined;
   placeField(l, field, next.key, delta < 0 ? fieldsOf(next).length : 0);
@@ -136,23 +144,49 @@ export function addSection(l: UiClassLayout, tab: LayoutTab, label: string, inde
   return section;
 }
 
-/** Where removing `tab` puts its fields: the last section of the tab before it (or after it). */
+/** Adds a note (static text) to `tab`, at `index` among its sections (the end when omitted). */
+export function addNote(l: UiClassLayout, tab: LayoutTab, label: string, text: string, index?: number): LayoutSection {
+  const key = uniqueKey(label, allSections(l).map((x) => x.section.key), "note");
+  const section: LayoutSection = { key, label, kind: "note", text, columns: GRID_COLUMNS, collapsed: false };
+  const list = sectionsOf(tab);
+  list.splice(Math.max(0, Math.min(index ?? list.length, list.length)), 0, section);
+  return section;
+}
+
+/** Places a built-in panel in `tab`; undefined when the layout already places it. */
+export function addPanel(l: UiClassLayout, tab: LayoutTab, kind: PanelKind, index?: number): LayoutSection | undefined {
+  if (placedPanels(l).has(kind)) return undefined;
+  const label = panelLabel(kind);
+  const key = uniqueKey(label, allSections(l).map((x) => x.section.key), kind);
+  const section: LayoutSection = { key, label, kind, columns: GRID_COLUMNS, collapsed: false };
+  const list = sectionsOf(tab);
+  list.splice(Math.max(0, Math.min(index ?? list.length, list.length)), 0, section);
+  return section;
+}
+
+/** The last section of `tab` that holds fields; a tab without one gets one, named after the tab. */
+export function lastFieldSection(l: UiClassLayout, tab: LayoutTab): LayoutSection {
+  const own = sectionsOf(tab).filter(isFieldSection);
+  return own[own.length - 1] ?? addSection(l, tab, tab.label);
+}
+
+/** Where removing `tab` puts its fields: the last field section of the tab before it (or after it). */
 export function tabFallback(l: UiClassLayout, tab: LayoutTab): LayoutSection | undefined {
   const tabs = tabsOf(l);
   const i = tabs.indexOf(tab);
   const others = [...tabs.slice(0, i).reverse(), ...tabs.slice(i + 1)];
   for (const t of others) {
-    const s = sectionsOf(t);
+    const s = sectionsOf(t).filter(isFieldSection);
     if (s.length > 0) return s[s.length - 1];
   }
   return undefined;
 }
 
-/** Where removing `section` puts its fields: the section before it in the layout, else the one after it. */
+/** Where removing `section` puts its fields: the field section before it in the layout, else the one after it. */
 export function sectionFallback(l: UiClassLayout, section: LayoutSection): LayoutSection | undefined {
-  const sections = allSections(l).map((x) => x.section);
+  const sections = fieldSections(l).map((x) => x.section);
   const i = sections.indexOf(section);
-  return sections[i - 1] ?? sections[i + 1];
+  return i < 0 ? undefined : (sections[i - 1] ?? sections[i + 1]);
 }
 
 /**
@@ -168,11 +202,11 @@ export function removeTab(l: UiClassLayout, tab: LayoutTab): boolean {
   return true;
 }
 
-/** Removes a section; its fields move to the end of `sectionFallback`. The only section cannot go. */
+/** Removes a section; its fields move to the end of `sectionFallback`. The only field section cannot go; a block always can. */
 export function removeSection(l: UiClassLayout, section: LayoutSection): boolean {
   const into = sectionFallback(l, section);
-  if (!into) return false;
-  fieldsOf(into).push(...fieldsOf(section).map((f) => ({ ...f, width: Math.min(f.width ?? 1, columnsOf(into)) })));
+  if (!into && isFieldSection(section)) return false;
+  if (into) fieldsOf(into).push(...fieldsOf(section).map((f) => ({ ...f, width: Math.min(f.width ?? 1, columnsOf(into)) })));
   for (const t of tabsOf(l)) t.sections = sectionsOf(t).filter((s) => s !== section);
   return true;
 }
@@ -180,16 +214,25 @@ export function removeSection(l: UiClassLayout, section: LayoutSection): boolean
 /** Whether `tab` can be removed: not the only tab, and its fields have somewhere to go. */
 export const canRemoveTab = (l: UiClassLayout, tab: LayoutTab) =>
   tabsOf(l).length > 1 && (!!tabFallback(l, tab) || sectionsOf(tab).every((s) => fieldsOf(s).length === 0));
-/** Whether `section` can be removed: not the only section of the layout. */
-export const canRemoveSection = (l: UiClassLayout, section: LayoutSection) => !!sectionFallback(l, section);
+/** Whether `section` can be removed: a note or a panel, or not the only field section of the layout. */
+export const canRemoveSection = (l: UiClassLayout, section: LayoutSection) => !isFieldSection(section) || !!sectionFallback(l, section);
 
 /** What removing a tab or a section does with its fields, for the confirmation. */
 export function removalSummary(l: UiClassLayout, target: { tab: LayoutTab } | { section: LayoutSection }): string {
+  if ("section" in target && !isFieldSection(target.section)) {
+    const kind = sectionKind(target.section);
+    return kind === "note"
+      ? "The note and its text are removed."
+      : `The ${panelLabel(kind as PanelKind)} panel is no longer placed by this layout: the detail page shows it at its usual position.`;
+  }
   const noun = "tab" in target ? "tab" : "section";
   const fields = "tab" in target ? sectionsOf(target.tab).flatMap((s) => fieldsOf(s)) : fieldsOf(target.section);
   const into = "tab" in target ? tabFallback(l, target.tab) : sectionFallback(l, target.section);
   const n = fields.length;
-  return n === 0 ? `The ${noun} has no fields.` : `Its ${n} field${n === 1 ? "" : "s"} move to the end of the section ${into?.label}.`;
+  const moved = n === 0 ? `The ${noun} has no fields.` : `Its ${n} field${n === 1 ? "" : "s"} move to the end of the section ${into?.label}.`;
+  const blocks = "tab" in target ? sectionsOf(target.tab).filter((s) => !isFieldSection(s)) : [];
+  if (blocks.length === 0) return moved;
+  return `${moved} ${blocks.length === 1 ? "Its note or panel" : `Its ${blocks.length} notes and panels`} (${blocks.map((b) => b.label).join(", ")}) ${blocks.length === 1 ? "is" : "are"} removed with it.`;
 }
 
 export function moveTab(l: UiClassLayout, tab: LayoutTab, delta: -1 | 1): void {

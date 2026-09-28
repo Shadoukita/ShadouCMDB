@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { EffectiveAttribute } from "../../api/queries";
 import type { LayoutEditor } from "../../lib/layoutEditor";
+import type { PanelKind } from "../../lib/uiSettings";
 import ErrorAlert from "../ErrorAlert.vue";
 import LoadingState from "../LoadingState.vue";
 import LayoutCanvas from "./LayoutCanvas.vue";
@@ -19,6 +20,7 @@ defineProps<{
 defineSlots<{
   field(p: { field: string }): unknown;
   "first-tab-end"(): unknown;
+  panel?(p: { kind: PanelKind }): unknown;
 }>();
 </script>
 
@@ -32,6 +34,7 @@ defineSlots<{
     <LayoutCanvas :editor="editor" :attrs="attrs" :form="form">
       <template #field="{ field }"><slot name="field" :field="field" /></template>
       <template #first-tab-end><slot name="first-tab-end" /></template>
+      <template v-if="$slots.panel" #panel="{ kind }"><slot name="panel" :kind="kind" /></template>
     </LayoutCanvas>
   </template>
 </template>
