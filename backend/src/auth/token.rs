@@ -60,7 +60,7 @@ pub enum Refusal {
     OwnerDisabled,
     /// Its permission profile was deleted.
     NoScope,
-    /// The route needs a browser session (sign-out, password, token and user administration).
+    /// The route needs a browser session (sign-out, password, token, user and identity provider administration).
     SessionOnly,
     Forbidden(GlobalPermission),
 }

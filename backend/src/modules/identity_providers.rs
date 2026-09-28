@@ -1095,6 +1095,7 @@ pub fn routes() -> Vec<Route> {
             ))
             .status(StatusCode::CREATED)
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<IdentityProviderCreate>>| async move {
                 Ok(Json(create(&api.pool, &api.auth, &api.ctx, &b).await?))
@@ -1106,6 +1107,7 @@ pub fn routes() -> Vec<Route> {
                 "{ADMIN_ONLY} The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts."
             ))
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<IdentityProviderUpdate>>| async move {
                 Ok(Json(update(&api.pool, &api.auth, &api.ctx, id, &b).await?))
@@ -1115,6 +1117,7 @@ pub fn routes() -> Vec<Route> {
             .summary("Delete an identity provider that no account signs in through")
             .description(format!("{ADMIN_ONLY} 409 IN_USE while accounts belong to it: disable it instead."))
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::InUse])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 remove(&api.pool, &api.auth, &api.ctx, id).await?;

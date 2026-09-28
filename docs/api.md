@@ -98,7 +98,7 @@ Every non-2xx response has this shape:
 | Setup | `GET /setup`, `POST /setup` | `setupRequired` is true while no user exists. `POST` creates the first user with the Administrator profile and signs them in; `409` once any user exists. |
 | Authentication | `POST /auth/login`, `POST /auth/login/mfa`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` | `login` and `me` return `{ user, permissions, mfa, csrfToken }`. `permissions` is the union of the user's profiles: `administrator`, `global[]`, `allClasses` and per-class `classes[]`. Changing your own password needs `currentPassword` and ends your other sessions. |
 | Enterprise sign-in | `GET /auth/providers`, `GET /auth/oidc/{id}/start`, `GET /auth/oidc/callback` | Public. The sign-in page's OIDC buttons and whether a directory is enabled; the OIDC redirect flow (browser navigations, not fetches). See [Enterprise sign-in](#enterprise-sign-in). |
-| Identity providers | `GET/POST /admin/identity-providers`, `GET/PATCH/DELETE /admin/identity-providers/{id}`, `POST /admin/identity-providers/{id}/test` | Administrator profile only (`users.manage` alone is `403`). OIDC providers and LDAP/AD directories with their group-to-profile mappings; secrets are write-only. See [Enterprise sign-in](#enterprise-sign-in). |
+| Identity providers | `GET/POST /admin/identity-providers`, `GET/PATCH/DELETE /admin/identity-providers/{id}`, `POST /admin/identity-providers/{id}/test` | Administrator profile only (`users.manage` alone is `403`); `POST`, `PATCH` and `DELETE` also need a session (API tokens get `403`). OIDC providers and LDAP/AD directories with their group-to-profile mappings; secrets are write-only. See [Enterprise sign-in](#enterprise-sign-in). |
 | Two-factor authentication | `GET /auth/mfa`, `POST/DELETE /auth/mfa/totp`, `POST /auth/mfa/totp/confirm`, `POST /auth/mfa/recovery-codes` | One's own TOTP set-up; needs a session. See [Two-factor authentication](#two-factor-authentication). |
 | Users | `GET/POST /admin/users`, `GET/PATCH/DELETE /admin/users/{id}`, `PUT /admin/users/{id}/password`, `DELETE /admin/users/{id}/mfa` | Needs `users.manage`. `PATCH` renames, disables (`isActive: false`, which ends the user's sessions) and assigns profiles (`profileIds` replaces the set). `PUT …/password` sets a new password and ends the user's sessions. `DELETE …/mfa` turns off a user's two-factor authentication (lost device). A user shows `mfaEnabled` and `identityProvider` (null for a local account). Filters: `q`, `isActive`, `profileId`. |
 | API tokens | `GET/POST /admin/api-tokens`, `GET/DELETE /admin/api-tokens/{id}` | Needs `users.manage` and a session. `POST {name, profileId, expiresAt, userId?}` answers `201 { token, secret }`; the secret is in that response only. `DELETE` revokes (the token stays listed with `status: revoked`). Filters: `q`, `userId`, `status` (`active`, `expired`, `revoked`). See [API tokens](#api-tokens). |
@@ -238,9 +238,11 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
   check. Other schemes (a proxy's `Basic` auth) are ignored and the session applies as usual.
 - The same server-side checks apply as for a session: the route's global permission, then class permissions in the
   service. Sign-out, `/auth/me`, the password change, MFA administration, token administration and account
-  changes (creating, updating, deleting a user and setting their password) need a session and answer tokens with
-  `403 FORBIDDEN`, so a token cannot mint a credential (a token, an account or a password) that outlives its
-  revocation. Listing and reading accounts accept tokens.
+  changes (creating, updating, deleting a user and setting their password) and identity provider changes (adding,
+  changing, including the group mappings, and deleting a provider) need a session and answer tokens with
+  `403 FORBIDDEN`, so a token cannot mint a credential (a token, an account, a password or a sign-in path) that
+  outlives its revocation. Listing and reading accounts and providers, and the provider connection test, accept
+  tokens.
 - Managing tokens needs `users.manage`. As for accounts, a non-administrator can only create or revoke tokens for
   users whose permissions they hold themselves (their own tokens are always revocable).
 - Every request made with a known token, accepted or refused, writes a `token.use` audit row; creating and revoking
