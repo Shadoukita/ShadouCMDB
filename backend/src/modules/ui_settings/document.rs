@@ -268,11 +268,14 @@ pub enum UiSortDirection {
     Desc,
 }
 
-/// Sort for an inventory list; `field` is one of the inventory sort fields
+/// Sort for an inventory list; `field` is one of the inventory sort fields or
+/// `attributes.<key>` (the list's `sort` parameter without the "-")
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiListSort {
-    #[schema(pattern = "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt)$")]
+    #[schema(
+        pattern = "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+    )]
     pub field: String,
     #[serde(default)]
     #[schema(inline)]
@@ -938,6 +941,23 @@ impl Resolver<'_> {
         UiListFilters { q: f.q.clone(), lookups }
     }
 
+    /// Keeps a sort on a built-in field, or on an attribute every one of the classes has.
+    fn sort(&mut self, path: &str, classes: &[String], sort: &Option<UiListSort>) -> Option<UiListSort> {
+        let s = sort.as_ref()?;
+        let Some(a) = s.field.strip_prefix(ATTRIBUTE_PREFIX) else { return Some(s.clone()) };
+        match classes.iter().find(|c| !self.model.classes.get(*c).is_some_and(|attrs| attrs.contains_key(a))) {
+            None if !classes.is_empty() => Some(s.clone()),
+            missing => {
+                let message = match missing {
+                    Some(c) => format!("Attribute \"{a}\" is not defined on class \"{c}\"; the list sorts by label"),
+                    None => format!("Sorting by attribute \"{a}\" needs a class; the list sorts by label"),
+                };
+                self.flag(format!("{path}.field"), IssueCode::UnknownAttribute, message);
+                None
+            }
+        }
+    }
+
     /// Keeps built-in fields and attributes of the class.
     fn fields(&mut self, path: &str, class: &str, fields: &[String]) -> Vec<String> {
         let attrs = &self.model.classes[class];
@@ -997,7 +1017,8 @@ pub fn resolve(doc: &UiSettingsDocument, model: &Model) -> (UiSettingsDocument, 
             if let Some(s) = &w.search {
                 let class_keys = r.classes(&format!("{p}.search.classKeys"), &s.class_keys);
                 let filters = r.filters(&format!("{p}.search.filters"), &s.filters);
-                w.search = Some(UiSavedSearch { class_keys, filters, ..s.clone() });
+                let sort = r.sort(&format!("{p}.search.sort"), &class_keys, &s.sort);
+                w.search = Some(UiSavedSearch { class_keys, filters, sort, ..s.clone() });
             }
             kept.push(w);
         }
@@ -1013,6 +1034,7 @@ pub fn resolve(doc: &UiSettingsDocument, model: &Model) -> (UiSettingsDocument, 
         let mut v = v.clone();
         v.columns = r.fields(&format!("{p}.columns"), &v.class_key, &v.columns);
         v.default_filters = r.filters(&format!("{p}.defaultFilters"), &v.default_filters);
+        v.default_sort = r.sort(&format!("{p}.defaultSort"), std::slice::from_ref(&v.class_key), &v.default_sort);
         out.list_views.push(v);
     }
 
@@ -1328,6 +1350,44 @@ mod tests {
         let search = effective.dashboard.widgets.unwrap()[0].search.clone().unwrap();
         assert_eq!(search.class_keys, ["server"]);
         assert_eq!(search.filters.lookups, BTreeMap::from([("status".to_owned(), vec!["in_service".to_owned()])]));
+    }
+
+    /// GH#112: a sort on an attribute is kept where the class has it, otherwise dropped (label order).
+    #[test]
+    fn attribute_sorts_need_the_attribute() {
+        let sort = |field: &str| json!({"field": field, "direction": "desc"});
+        let search = |classes: serde_json::Value, field: &str| json!({"id": field.replace('.', "_"), "type": "saved_search", "search": {"classKeys": classes, "sort": sort(field)}});
+        let d = doc(json!({
+            "dashboard": {"widgets": [
+                search(json!(["server"]), "attributes.cpu_cores"),
+                search(json!(["server", "application"]), "attributes.serial"),
+                search(json!([]), "attributes.ram"),
+                search(json!([]), "createdAt"),
+            ]},
+            "listViews": [
+                {"classKey": "server", "defaultSort": sort("attributes.cpu_cores")},
+                {"classKey": "application", "defaultSort": sort("attributes.cpu_cores")},
+            ],
+        }));
+        assert!(d.check().is_empty());
+        let (effective, issues) = resolve(&d, &model());
+        let got: Vec<(&str, IssueCode)> = issues.iter().map(|i| (i.path.as_str(), i.code)).collect();
+        assert_eq!(
+            got,
+            [
+                ("dashboard.widgets.1.search.sort.field", IssueCode::UnknownAttribute),
+                ("dashboard.widgets.2.search.sort.field", IssueCode::UnknownAttribute),
+                ("listViews.1.defaultSort.field", IssueCode::UnknownAttribute),
+            ]
+        );
+        let kept: Vec<Option<String>> =
+            effective.dashboard.widgets.unwrap().into_iter().map(|w| w.search.unwrap().sort.map(|s| s.field)).collect();
+        assert_eq!(kept, [Some("attributes.cpu_cores".into()), None, None, Some("createdAt".into())]);
+        assert_eq!(
+            effective.list_views[0].default_sort.as_ref().map(|s| s.field.as_str()),
+            Some("attributes.cpu_cores")
+        );
+        assert_eq!(effective.list_views[1].default_sort, None);
     }
 
     #[test]

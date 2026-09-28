@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::api::route::Check;
 use crate::api::schemas::{self, Deleted, LookupRef, PageMeta, QueryBool, Sort, UuidList, trimmed, ts, ts_opt};
-use crate::data::items::SORT_FIELDS;
+use crate::data::items::{SORT_FIELDS, SORT_PATTERN};
 use crate::http::error::{FieldError, FieldLocation};
 use crate::paged;
 
@@ -404,7 +404,18 @@ impl Check for UpdateItemBody {
 // ---------------------------------------------------------------------------
 
 fn item_sort() -> Schema {
-    schemas::sort_schema(SORT_FIELDS, "label")
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .pattern(Some(SORT_PATTERN))
+        .default(Some("label".into()))
+        .description(Some(format!(
+            "Sort field; prefix with \"-\" for descending. One of: {}, or attributes.<key> (needs classId; the \
+             attribute must be the same one on every class in classId, and not a reference). Attributes sort \
+             case-insensitively for text, by address for IP/CIDR and by list order for lookups; CIs without a \
+             value come last.",
+            SORT_FIELDS.join(", ")
+        )))
+        .into()
 }
 
 fn list_q_schema() -> Schema {

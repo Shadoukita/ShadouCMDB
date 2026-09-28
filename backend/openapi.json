@@ -1706,27 +1706,12 @@
           {
             "name": "sort",
             "in": "query",
-            "description": "Sort field; prefix with \"-\" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt",
+            "description": "Sort field; prefix with \"-\" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt, or attributes.<key> (needs classId; the attribute must be the same one on every class in classId, and not a reference). Attributes sort case-insensitively for text, by address for IP/CIDR and by list order for lookups; CIs without a value come last.",
             "required": false,
             "schema": {
               "type": "string",
               "default": "label",
-              "enum": [
-                "label",
-                "-label",
-                "ident",
-                "-ident",
-                "className",
-                "-className",
-                "validFrom",
-                "-validFrom",
-                "validUntil",
-                "-validUntil",
-                "createdAt",
-                "-createdAt",
-                "updatedAt",
-                "-updatedAt"
-              ]
+              "pattern": "^-?(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             }
           },
           {
@@ -24052,14 +24037,14 @@
       },
       "UiListSort": {
         "type": "object",
-        "description": "Sort for an inventory list; `field` is one of the inventory sort fields",
+        "description": "Sort for an inventory list; `field` is one of the inventory sort fields or\n`attributes.<key>` (the list's `sort` parameter without the \"-\")",
         "required": [
           "field"
         ],
         "properties": {
           "field": {
             "type": "string",
-            "pattern": "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt)$"
+            "pattern": "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
           },
           "direction": {
             "type": "string",
@@ -24297,14 +24282,14 @@
             "oneOf": [
               {
                 "type": "object",
-                "description": "Sort for an inventory list; `field` is one of the inventory sort fields",
+                "description": "Sort for an inventory list; `field` is one of the inventory sort fields or\n`attributes.<key>` (the list's `sort` parameter without the \"-\")",
                 "required": [
                   "field"
                 ],
                 "properties": {
                   "field": {
                     "type": "string",
-                    "pattern": "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt)$"
+                    "pattern": "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
                   },
                   "direction": {
                     "type": "string",

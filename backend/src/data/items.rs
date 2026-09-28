@@ -52,6 +52,13 @@ const COUNT_FROM: &str = "configuration_items ci";
 
 pub const SORT_FIELDS: &[&str] = &["label", "ident", "className", "validFrom", "validUntil", "createdAt", "updatedAt"];
 
+/// `sort=attributes.<key>` sorts on an attribute (see [`ListSort::Attribute`]).
+pub const ATTRIBUTE_SORT_PREFIX: &str = "attributes.";
+
+/// A sort parameter: a core field or an attribute, "-" for descending.
+pub const SORT_PATTERN: &str =
+    "^-?(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$";
+
 fn sort_column(field: &str) -> &'static str {
     match field {
         "ident" => "lower(ci.ident)",
@@ -62,6 +69,45 @@ fn sort_column(field: &str) -> &'static str {
         "updatedAt" => "ci.updated_at",
         _ => "lower(ci.label)",
     }
+}
+
+/// The order of the inventory list.
+#[derive(Debug, Clone)]
+pub enum ListSort<'a> {
+    /// One of [`SORT_FIELDS`]
+    Core(&'a str),
+    /// An attribute, in the table of the class that defines it: every listed
+    /// CI has a row there (see [`values`]).
+    Attribute(TableName, &'a Field),
+}
+
+/// Attribute data types the list can sort on. A reference would order by the
+/// label of a CI the reader may not be allowed to see.
+pub fn is_sortable(t: AttributeDataType) -> bool {
+    t != AttributeDataType::Reference
+}
+
+/// Joins added to [`SUMMARY_FROM`] and the ORDER BY terms. Text sorts
+/// case-insensitively, IP and CIDR by address (inet order), a lookup by the
+/// list's value order, then name. Ties and CIs without a value (last) fall
+/// back to the label.
+fn list_order(sort: &ListSort<'_>, dir: &str) -> (String, String) {
+    let (field, table) = match sort {
+        ListSort::Core(field) => return (String::new(), format!("{} {dir} NULLS LAST, ci.id ASC", sort_column(field))),
+        ListSort::Attribute(table, field) => (*field, table),
+    };
+    let col = field.column();
+    let mut join = format!(" LEFT JOIN {} srt ON srt.id = ci.id", table.sql());
+    let terms = match field.data_type {
+        AttributeDataType::Text | AttributeDataType::Enum => vec![format!("lower(srt.{col})")],
+        AttributeDataType::Lookup => {
+            join.push_str(&format!(" LEFT JOIN cmdb.lookup_list_values srt_v ON srt_v.id = srt.{col}"));
+            vec!["srt_v.sort_order".to_owned(), "lower(srt_v.name)".to_owned()]
+        }
+        _ => vec![format!("srt.{col}")],
+    };
+    let order: Vec<String> = terms.into_iter().map(|t| format!("{t} {dir} NULLS LAST")).collect();
+    (join, format!("{}, lower(ci.label) ASC, ci.id ASC", order.join(", ")))
 }
 
 /// Which CIs by validity (see [`ACTIVE_SQL`]).
@@ -198,15 +244,15 @@ fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
 pub async fn list(
     pool: &PgPool,
     f: &ItemFilters,
-    sort_field: &str,
+    sort: ListSort<'_>,
     desc: bool,
     limit: i64,
     offset: i64,
 ) -> sqlx::Result<(Vec<SummaryRow>, i64)> {
-    let dir = if desc { "DESC" } else { "ASC" };
-    let order = format!("{} {dir} NULLS LAST, ci.id ASC", sort_column(sort_field));
+    let (join, order) = list_order(&sort, if desc { "DESC" } else { "ASC" });
+    let from = format!("{SUMMARY_FROM}{join}");
     let filter = |w: &mut Where<'_>| push_filters(w, f);
-    crud::select_page_counted(pool, SUMMARY_FROM, COUNT_FROM, &summary_columns(), &filter, &order, limit, offset).await
+    crud::select_page_counted(pool, &from, COUNT_FROM, &summary_columns(), &filter, &order, limit, offset).await
 }
 
 /// Global search: same predicate as the list, ranked by exact / prefix / trigram similarity.
