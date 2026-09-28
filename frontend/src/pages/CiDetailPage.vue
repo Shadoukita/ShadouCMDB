@@ -13,11 +13,9 @@ import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { formatDateTime } from "../lib/format";
 import { useTrail, type TrailStep } from "../lib/trail";
-import { DETAIL_BUILTINS, layoutFor, resolveLayout } from "../lib/uiSettings";
+import { builtInLayout, DETAIL_CORE, DETAIL_RECORD, layoutFor, resolveLayout } from "../lib/uiSettings";
 import { useFlashStore } from "../stores/flash";
 import { useSessionStore } from "../stores/session";
-import AttributesPanel from "./detail/AttributesPanel.vue";
-import CorePanel from "./detail/CorePanel.vue";
 import DeleteCiButton from "./detail/DeleteCiButton.vue";
 import HistoryPanel from "./detail/HistoryPanel.vue";
 import LayoutPanels from "./detail/LayoutPanels.vue";
@@ -54,15 +52,16 @@ const notFound = computed(() => {
 const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.value.code === "FORBIDDEN");
 const c = computed(() => ci.data.value);
 
-// The class's layout from Customization, if it has one; otherwise the built-in General + attributes panels.
+// The class's layout from Customization, if it has one; otherwise the built-in one: General (core fields and
+// ungrouped attributes), the attribute groups, then the record's class and timestamps.
 const settings = useAppSettings();
 const classes = useCiClasses();
 const areas = useAreas();
 const classKey = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId)?.key);
 const layout = computed(() => layoutFor(settings.doc.value, classKey.value));
-const attrs = useClassAttributes(() => (layout.value ? c.value?.classId : undefined));
+const attrs = useClassAttributes(() => c.value?.classId);
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || c.value?.attributes[d.key] != null));
-const panels = computed(() => (attrs.data.value ? resolveLayout(layout.value, defs.value, DETAIL_BUILTINS) : null));
+const panels = computed(() => resolveLayout(layout.value ?? builtInLayout(classKey.value ?? ""), defs.value, DETAIL_CORE, DETAIL_RECORD));
 const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.label } : undefined));
 const crumbs = computed<Crumb[]>(() => {
   if (!c.value) return [];
@@ -131,12 +130,14 @@ const crumbs = computed<Crumb[]>(() => {
 
     <div :id="`panel-${tab}`" role="tabpanel" :aria-labelledby="`tab-${tab}`">
       <template v-if="tab === 'overview'">
-        <LayoutPanels v-if="panels" :ci="c" :panels="panels" :defs="defs" :self="self" :trail="trail" />
-        <LoadingState v-else-if="layout && attrs.isLoading.value" label="Loading attribute definitions…" />
-        <div v-else class="grid-2">
-          <CorePanel :ci="c" />
-          <AttributesPanel :ci="c" :self="self" :trail="trail" />
-        </div>
+        <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
+        <ErrorAlert
+          v-else-if="attrs.isError.value"
+          :error="attrs.error.value"
+          title="Could not load this class's attribute definitions"
+          :on-retry="() => attrs.refetch()"
+        />
+        <LayoutPanels v-else :ci="c" :panels="panels" :defs="defs" :self="self" :trail="trail" />
         <div style="height: var(--sp-4)" />
         <RelationshipsPanel :ci="c" :self="self" :trail="trail" />
       </template>

@@ -20,7 +20,8 @@ test("a new CI class works end to end without a frontend change", async ({ page,
   await expect(page.getByRole("link", { name: `New ${className}` })).toBeVisible();
 
   await page.goto(`/cis/new?classId=${cls.id}`);
-  await expect(page.locator("fieldset.group legend")).toHaveText(["Traffic", "Security", "Backends"]);
+  // General (ident, validity) first, then the attribute groups; there is no "Other" section.
+  await expect(page.locator("form .layout-panel > summary h2")).toHaveText(["General", "Traffic", "Security", "Backends"]);
   await expect(page.locator("#attr-max_connections-hint")).toHaveText("1 – 100000");
   await expect(page.locator("#attr-vip_network-hint")).toContainText("CIDR");
 
@@ -50,7 +51,7 @@ test("a new CI class works end to end without a frontend change", async ({ page,
   const created = await apiGet<{ ident: string; label: string }>(request, `/configuration-items/${page.url().split("/").pop()}`);
   expect(created.label).toBe(created.ident);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(created.ident);
-  const attrs = page.locator("dl.props").nth(1);
+  const attrs = page.locator(".layout-panels");
   await expect(attrs).toContainText("10.30.0.10");
   await expect(attrs).toContainText("least_conn");
   await expect(attrs).toContainText("5000");

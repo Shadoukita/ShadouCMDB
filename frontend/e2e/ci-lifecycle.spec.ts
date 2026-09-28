@@ -17,11 +17,16 @@ test("create a Server from its class attributes, with field-level validation", a
   await page.locator("#ci-class").selectOption({ label: "Server" });
   await expect(page).toHaveURL(/\/cis\/new\?classId=/);
 
-  // Attribute groups come from the API (groupName, in sortOrder).
-  const legends = page.locator("fieldset.group legend");
-  await expect(legends.first()).toBeVisible();
-  const groups = await legends.allTextContents();
-  expect(groups).toEqual(expect.arrayContaining(["Hardware", "Compute", "Software", "Network"]));
+  // General comes first: ident, validity, then the attributes without a group (name, hostname…).
+  // The attribute groups follow as sections, from the API (groupName, in sortOrder).
+  const sections = page.locator("form .layout-panel > summary h2");
+  await expect(sections.first()).toHaveText("General");
+  expect(await sections.allTextContents()).toEqual(expect.arrayContaining(["Hardware", "Compute", "Software", "Network"]));
+  expect(await sections.allTextContents()).not.toContain("Other");
+  const general = page.locator("form .layout-panel").first();
+  await expect(general.locator("label").first()).toHaveText("Ident");
+  await expect(general.locator("#attr-name")).toBeVisible();
+  await expect(general.locator("#attr-hostname")).toBeVisible();
   await expect(page.locator("#attr-cpu_cores")).toHaveAttribute("type", "number");
   await expect(page.locator("#attr-purchase_date")).toHaveAttribute("type", "date");
   await expect(page.locator("#attr-os_family")).toHaveJSProperty("tagName", "SELECT");
@@ -59,9 +64,13 @@ test("create a Server from its class attributes, with field-level validation", a
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(name);
   await expect(page.getByRole("status").filter({ hasText: `Created ${name}.` })).toBeVisible();
   ciId = page.url().split("/").pop()!;
-  // General panel first (ident, validity), then the class attributes.
-  await expect(page.locator("dl.props").first()).toContainText(/CI-/);
-  await expect(page.locator("dl.props").nth(1)).toContainText(`${name}.example.internal`);
+  // General panel first: ident, validity and the ungrouped attributes; class and timestamps last.
+  const generalPanel = page.locator(".layout-panels > details").first();
+  await expect(generalPanel.locator("summary h2")).toHaveText("General");
+  await expect(generalPanel.locator("dt").first()).toHaveText("Ident");
+  await expect(generalPanel).toContainText(/CI-/);
+  await expect(generalPanel).toContainText(`${name}.example.internal`);
+  await expect(page.locator(".layout-panels > details > summary h2").last()).toHaveText("Record");
   await snap(page, "05-created-detail");
 });
 
@@ -109,8 +118,8 @@ test("edit: changes are saved with the version and shown in History", async ({ p
   await submit(page, "Save changes");
   await expect(page).toHaveURL(`/cis/${ciId}`);
   await expect(page.getByRole("status").filter({ hasText: `Saved ${name}.` })).toBeVisible();
-  await expect(page.locator("dl.props").nth(1)).toContainText(`${name}-renamed.example.internal`);
-  await expect(page.locator("dl.props").nth(1)).toContainText("32");
+  await expect(page.locator(".layout-panels")).toContainText(`${name}-renamed.example.internal`);
+  await expect(page.locator(".layout-panels")).toContainText("32");
 
   await page.getByRole("tab", { name: "History" }).click();
   const diff = page.locator("ul.diff").first();
@@ -137,7 +146,7 @@ test("edit: a concurrent change shows the 409 VERSION_CONFLICT banner", async ({
   await snap(page, "08-version-conflict");
   await banner.getByRole("link", { name: "Open the current version" }).click();
   await expect(page).toHaveURL(`/cis/${ciId}`);
-  await expect(page.locator("dl.props").nth(1)).toContainText("changed elsewhere");
+  await expect(page.locator(".layout-panels")).toContainText("changed elsewhere");
 });
 
 test("relationships: add in both directions; illegal pairs offer no type", async ({ page }) => {
