@@ -100,7 +100,9 @@ something malicious. Include:
 - which artefacts and versions are affected, with their SHA-256 / image digests;
 - how to check whether they installed one (`sha256sum`, `docker image inspect --format '{{.RepoDigests}}'`);
 - what the malicious artefact could do and what to do if they ran it: isolate the host, rotate
-  the database password and the credentials of every ShadouCMDB user, review the audit log,
+  the database password and the credentials of every ShadouCMDB user (resetting a user's password
+  also ends their sessions and revokes their API tokens; revoke the API tokens of accounts whose
+  password you keep on the **API tokens** administration page), review the audit log,
   restore the database from a backup older than the installation if data may have been altered;
 - the clean replacement version and how to verify it;
 - the advisory ID and where to ask.

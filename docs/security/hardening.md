@@ -198,7 +198,9 @@ reachable, or make sure only you can reach it until you have completed the setup
 
 Then: give each person their own account, grant the smallest permission profile that fits
 their job, and keep the number of administrators small. Deactivate accounts of people who leave
-(it ends their sessions immediately).
+(it ends their sessions immediately and their API tokens stop working). If an account may be
+compromised, reset its password: that ends its sessions and revokes every API token it owns, so a
+token created with the stolen password does not keep working.
 
 ## Enterprise sign-in
 

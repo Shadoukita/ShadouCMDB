@@ -586,11 +586,11 @@ pub fn routes() -> Vec<Route> {
             }),
         route(Method::PUT, "/api/v1/auth/password", "changeOwnPassword")
             .tag(TAG)
-            .summary("Change your own password (ends your other sessions)")
+            .summary("Change your own password (ends your other sessions and revokes your API tokens)")
             .session_only()
             .before_mfa_enrolment()
             .description(
-                "400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
+                "Every API token you own that still works is revoked; create new ones after the change. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
             )
             .errors(&[ErrorCode::RateLimited, ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<PasswordChange>>| async move {
