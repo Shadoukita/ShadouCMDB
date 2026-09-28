@@ -6,14 +6,13 @@ import Breadcrumbs from "../../../components/Breadcrumbs.vue";
 import type { FieldSpec } from "../../../components/RecordDialog.vue";
 import { useDocumentTitle } from "../../../lib/composables";
 import LocationsTable from "./LocationsTable.vue";
-import LookupListsPanel from "./LookupListsPanel.vue";
 import OrderedLookupTable, { type Row } from "./OrderedLookupTable.vue";
 import OwnersTable from "./OwnersTable.vue";
 
 /**
  * Administration › Data model › Lookups: the values CIs pick from. Statuses,
- * environments, locations and owners are fields of every CI; lists are the
- * administrator's own, used by "Lookup list" attributes. The tab is the path
+ * environments, locations and owners are fields of every CI. The administrator's own
+ * lists ("Lookup list" attributes) are under Dropdowns. The tab is the path
  * (/admin/lookups/statuses…), so each keeps its own URL state.
  */
 const TABS = [
@@ -21,7 +20,6 @@ const TABS = [
   { kind: "environments", label: "Environments" },
   { kind: "locations", label: "Locations" },
   { kind: "owners", label: "Owners" },
-  { kind: "lists", label: "Lists" },
 ] as const;
 
 const route = useRoute();
@@ -84,7 +82,6 @@ const ENVIRONMENT_FIELDS: FieldSpec[] = [
   />
   <LocationsTable v-else-if="kind === 'locations'" />
   <OwnersTable v-else-if="kind === 'owners'" />
-  <LookupListsPanel v-else-if="kind === 'lists'" />
   <div v-else class="alert alert-error" role="alert">
     There is no lookup called <code>{{ kind }}</code>. <RouterLink to="/admin/lookups/statuses">Open statuses</RouterLink>.
   </div>

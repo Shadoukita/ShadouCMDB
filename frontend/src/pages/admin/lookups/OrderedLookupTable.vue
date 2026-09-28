@@ -37,9 +37,13 @@ const props = defineProps<{
   columns?: { key: string; label: string }[];
   /** Merged into every create body (e.g. the list id of a value). */
   createExtra?: Record<string, unknown>;
+  /** Initial values of the "add" dialog (e.g. the parent value the table is filtered by). */
+  createDefaults?: Record<string, string>;
+  /** The rows are a filtered part of a longer list: reordering keeps the sort orders they had among the rest. */
+  partial?: boolean;
   emptyHint: string;
 }>();
-const slots = defineSlots<{ cell(props: { row: Row; column: string }): unknown; empty(): unknown }>();
+const slots = defineSlots<{ cell(props: { row: Row; column: string }): unknown; empty(): unknown; toolbar(): unknown }>();
 
 const create = useCreateLookup(props.resource);
 const patch = usePatch(props.resource);
@@ -59,8 +63,11 @@ function commit(dragId: string, targetId: string) {
   const moved = moveItem(list.value, list.value.findIndex((r) => r.id === dragId), list.value.findIndex((r) => r.id === targetId));
   pendingOrder.value = moved.map((r) => r.id);
   notice.value = null;
+  // A filtered part hands its own sort orders out again, if they are distinct; otherwise 10, 20, 30…
+  const own = list.value.map((r) => r.sortOrder).sort((a, b) => a - b);
+  const keep = props.partial && own.every((n, i) => i === 0 || n > own[i - 1]);
   reorder.mutate(
-    moved.map((r) => ({ id: r.id, sortOrder: r.sortOrder })),
+    moved.map((r, i) => ({ id: r.id, sortOrder: r.sortOrder, ...(keep ? { next: own[i] } : {}) })),
     {
       onSuccess: () => (notice.value = `Moved ${dragged?.name ?? props.noun}.`),
       onSettled: () => (pendingOrder.value = null),
@@ -117,6 +124,7 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
       <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
       <ErrorAlert v-if="patch.isError.value" :error="patch.error.value" title="Not saved" />
     </div>
+    <form v-if="slots.toolbar" class="toolbar" role="search" @submit.prevent><slot name="toolbar" /></form>
     <div v-if="error" class="panel-body"><ErrorAlert :error="error" :on-retry="refetch" /></div>
     <LoadingState v-else-if="loading" />
     <EmptyState v-else-if="list.length === 0" :title="`No ${noun === 'status' ? 'statuses' : `${noun}s`} yet`">
@@ -185,6 +193,7 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
     :submit-label="editing ? 'Save' : `Add ${noun}`"
     :fields="fields"
     :record="editing"
+    :defaults="createDefaults"
     :save="save"
     :id-prefix="resource"
     @close="dialogOpen = false"

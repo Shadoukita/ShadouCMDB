@@ -17,6 +17,7 @@ import CustomizationPage from "./pages/admin/customization/CustomizationPage.vue
 import AreasPage from "./pages/admin/datamodel/AreasPage.vue";
 import ClassEditPage from "./pages/admin/datamodel/ClassEditPage.vue";
 import ClassesPage from "./pages/admin/datamodel/ClassesPage.vue";
+import DropdownsPage from "./pages/admin/datamodel/DropdownsPage.vue";
 import RelationshipTypesPage from "./pages/admin/datamodel/RelationshipTypesPage.vue";
 import LookupsPage from "./pages/admin/lookups/LookupsPage.vue";
 import ProfileEditPage from "./pages/admin/ProfileEditPage.vue";
@@ -88,7 +89,10 @@ export const router = createRouter({
         { path: "classes/new", component: ClassEditPage, meta: { permissions: section("classes") } },
         { path: "classes/:id", component: ClassEditPage, meta: { permissions: section("classes") } },
         { path: "relationships", component: RelationshipTypesPage, meta: { permissions: section("relationships") } },
+        { path: "dropdowns", component: DropdownsPage, meta: { permissions: section("dropdowns") } },
         { path: "lookups", redirect: "/admin/lookups/statuses" },
+        // Lookup lists moved to Dropdowns; bookmarks (?list=…) keep working.
+        { path: "lookups/lists", redirect: (to) => ({ path: "/admin/dropdowns", query: to.query }) },
         { path: "lookups/:kind", component: LookupsPage, meta: { permissions: section("lookups") } },
         { path: "templates", component: TemplatesPage, meta: { permissions: section("templates") } },
         { path: "customization", redirect: "/admin/customization/branding" },
