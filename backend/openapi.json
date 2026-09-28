@@ -5818,6 +5818,10 @@
                             "description": "text: regular expression the value must match",
                             "maxLength": 500
                           },
+                          "multiline": {
+                            "type": "boolean",
+                            "description": "text: the value may hold line breaks; forms edit it in a multi-line text area.\nOmitted when false."
+                          },
                           "unit": {
                             "type": "string",
                             "description": "Display unit, e.g. \"GB\"",
@@ -6294,6 +6298,10 @@
                             "type": "string",
                             "description": "text: regular expression the value must match",
                             "maxLength": 500
+                          },
+                          "multiline": {
+                            "type": "boolean",
+                            "description": "text: the value may hold line breaks; forms edit it in a multi-line text area.\nOmitted when false."
                           },
                           "unit": {
                             "type": "string",
@@ -20223,6 +20231,10 @@
                           "type": "string",
                           "description": "text: regular expression the value must match",
                           "maxLength": 500
+                        },
+                        "multiline": {
+                          "type": "boolean",
+                          "description": "text: the value may hold line breaks; forms edit it in a multi-line text area.\nOmitted when false."
                         },
                         "unit": {
                           "type": "string",

@@ -83,7 +83,7 @@ fn ip_address() -> Attr {
     attr("ip_address", "IP address", "ip")
 }
 fn notes() -> Attr {
-    attr("notes", "Notes", "text").valid(r#"{"maxLength":4000}"#)
+    attr("notes", "Notes", "text").valid(r#"{"maxLength":4000,"multiline":true}"#)
 }
 
 const OS_FAMILIES: &[&str] = &["linux", "windows", "bsd", "unix", "other"];
