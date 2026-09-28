@@ -1776,7 +1776,7 @@ export interface paths {
         };
         /**
          * List OIDC providers and LDAP/AD directories with their group mappings (secrets are never returned)
-         * @description Requires `users.manage`.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise).
          */
         get: operations["listIdentityProviders"];
         put?: never;
@@ -1800,7 +1800,7 @@ export interface paths {
         };
         /**
          * Get one identity provider
-         * @description Requires `users.manage`.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise).
          */
         get: operations["getIdentityProvider"];
         put?: never;

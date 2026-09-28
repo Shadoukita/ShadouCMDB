@@ -1,10 +1,11 @@
 //! Administration > Sign-in: OIDC providers and LDAP/AD directories, and the
 //! mapping from their groups to permission profiles.
 //!
-//! Only holders of the built-in Administrator profile may change these (403
-//! otherwise, even with users.manage): a provider decides who gets which
+//! Only holders of the built-in Administrator profile may read or change these
+//! (403 otherwise, even with users.manage): a provider decides who gets which
 //! profile, the Administrator profile included, so it is as powerful as the
-//! Administrator profile itself.
+//! Administrator profile itself, and its settings and group mappings map out
+//! the path to that profile.
 //!
 //! Secrets (the OIDC client secret, the directory's bind password) are
 //! write-only: responses say whether one is set, never what it is, and the
@@ -784,7 +785,8 @@ async fn load(
     Ok(dto(auth, row, &mappings))
 }
 
-pub async fn list(pool: &PgPool, auth: &AuthState) -> Result<Vec<IdentityProvider>, AppError> {
+pub async fn list(pool: &PgPool, auth: &AuthState, ctx: &RequestContext) -> Result<Vec<IdentityProvider>, AppError> {
+    administrator_only(ctx)?;
     let mut conn = pool.acquire().await?;
     let rows = data::list(&mut conn).await?;
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
@@ -1070,16 +1072,19 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, BASE, "listIdentityProviders")
             .tag(ROUTE_TAG)
             .summary("List OIDC providers and LDAP/AD directories with their group mappings (secrets are never returned)")
+            .description(ADMIN_ONLY)
             .requires(manage)
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
-                Ok(Json(list(&api.pool, &api.auth).await?))
+                Ok(Json(list(&api.pool, &api.auth, &api.ctx).await?))
             }),
         route(Method::GET, BY_ID, "getIdentityProvider")
             .tag(ROUTE_TAG)
             .summary("Get one identity provider")
+            .description(ADMIN_ONLY)
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                administrator_only(&api.ctx)?;
                 Ok(Json(load(&mut *api.pool.acquire().await?, &api.auth, id, false).await?))
             }),
         route(Method::POST, BASE, "createIdentityProvider")
