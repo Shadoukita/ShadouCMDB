@@ -21,7 +21,7 @@ import { HIDDEN_CI } from "../../lib/format";
 import { hintFor, nowFormValue, NOW_HINT, toApiValue, toFormValue, type FormValue } from "../../lib/attributeValues";
 import type { LayoutEditor } from "../../lib/layoutEditor";
 import { createReusableTemplate } from "../../lib/reusableTemplate";
-import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, builtInLayout, cellClass, CORE_FIELDS, gridClass, layoutFor, resolveLayout } from "../../lib/uiSettings";
+import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, builtInLayout, cellClass, CORE_FIELDS, gridClass, layoutFor, resolveLayout, sectionClass, sectionStyle } from "../../lib/uiSettings";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import FormErrorBanner from "./FormErrorBanner.vue";
@@ -46,7 +46,7 @@ import FormField from "./FormField.vue";
  */
 const props = defineProps<{ mode: "create" | "edit"; classId: string; className: string; ci?: Ci; editor?: LayoutEditor }>();
 /** One field of the form, as the form and the layout canvas show it. */
-const [DefineField, FormCell] = createReusableTemplate<{ f: string; width?: number }>();
+const [DefineField, FormCell] = createReusableTemplate<{ f: string; width?: number; columns?: number }>();
 
 /** Core CI fields (CORE_FIELDS). These belong to every CI regardless of class; class-specific fields come from the API. */
 type CoreField = "ident" | "validFrom" | "validUntil";
@@ -234,12 +234,12 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
 </script>
 
 <template>
-  <DefineField v-slot="{ f, width }">
+  <DefineField v-slot="{ f, width, columns }">
     <FormField
       v-if="BUILTIN.has(f)"
       :id="FIELD_IDS[f]"
       v-slot="p"
-      :class="width ? cellClass(width) : undefined"
+      :class="width ? cellClass(width, columns) : undefined"
       :label="BUILTIN.get(f)!.label"
       :error="coreError(f)"
       :hint="coreHint(f)"
@@ -273,7 +273,7 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
       v-else-if="defFor(f)"
       :id="`attr-${defFor(f)!.key}`"
       v-slot="p"
-      :class="width ? cellClass(width) : undefined"
+      :class="width ? cellClass(width, columns) : undefined"
       :label="defFor(f)!.label"
       :required="defFor(f)!.isRequired"
       :error="fieldErrors[f]"
@@ -324,7 +324,7 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
         :aria-labelledby="tabs.length > 1 ? `form-tab-${t.key}` : undefined"
         class="layout-panels"
       >
-        <details v-for="(sec, j) in t.sections" :key="sec.key" class="panel layout-panel" :open="!sec.collapsed">
+        <details v-for="(sec, j) in t.sections" :key="sec.key" :class="['panel', 'layout-panel', ...sectionClass(sec)]" :style="sectionStyle(sec)" :data-section="sec.key" :open="!sec.collapsed">
           <summary class="panel-header">
             <h2>{{ sec.label }}</h2>
           </summary>
@@ -339,7 +339,7 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
               />
             </template>
             <div :class="gridClass(sec.columns)">
-              <FormCell v-for="{ field: f, width } in sec.fields" :key="f" :f="f" :width="width" />
+              <FormCell v-for="{ field: f, width } in sec.fields" :key="f" :f="f" :width="width" :columns="sec.columns" />
             </div>
           </div>
         </details>

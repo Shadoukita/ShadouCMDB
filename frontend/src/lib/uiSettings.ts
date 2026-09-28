@@ -313,7 +313,7 @@ export const GRID_COLUMNS = 3;
 /** Columns of a tab's grid: a section spans 1 to 12 of them (the API's default is 12, the full width). */
 export const SECTION_GRID = 12;
 /** The most columns a section's grid has, and the widest a field can be. */
-export const MAX_COLUMNS = 4;
+export const MAX_COLUMNS = 12;
 
 /** Every optional part of a layout filled in (tabs, sections, columns, widths), without the old `panels`. */
 export function normalizeLayout(l: UiClassLayout): UiClassLayout {
@@ -352,6 +352,12 @@ export interface ResolvedSection {
   label: string;
   collapsed: boolean;
   columns: number;
+  /** Columns of the tab's 12-column grid the section spans (SECTION_GRID: the full width). */
+  width: number;
+  /** Starts a new row of the tab's grid. */
+  newRow: boolean;
+  /** At least this many field rows tall, when set. */
+  minHeight?: number;
   fields: ResolvedField[];
   /** Placed by the built-in rules, not by the administrator: fields no section of the layout holds. */
   auto: boolean;
@@ -415,7 +421,17 @@ export function resolveLayout(
           fields.push({ field: c, width: 1 });
         }
       }
-      return { key: s.key, label: s.label, collapsed: !!s.collapsed, columns, fields, auto: false };
+      return {
+        key: s.key,
+        label: s.label,
+        collapsed: !!s.collapsed,
+        columns,
+        width: sectionWidth(s),
+        newRow: !!s.newRow,
+        minHeight: s.minHeight ?? undefined,
+        fields,
+        auto: false,
+      };
     }),
   }));
   const one = (field: string): ResolvedField => ({ field, width: 1 });
@@ -424,6 +440,8 @@ export function resolveLayout(
     label,
     collapsed: false,
     columns: GRID_COLUMNS,
+    width: SECTION_GRID,
+    newRow: false,
     fields: fields.map(one),
     auto: true,
   });
@@ -443,12 +461,32 @@ export function resolveLayout(
   return shown.length > 0 ? shown : [{ ...tabs[0], sections: [] }];
 }
 
+/** A section's width on the tab's 12-column grid (full width when it does not say). */
+export const sectionWidth = (s: { width?: number | null }) => Math.min(Math.max(Math.round(s.width ?? SECTION_GRID), 1), SECTION_GRID);
+
 /**
  * The CSS classes that put a section's grid and its fields in place: `lg-cols-N`
  * on the grid, `lg-w-N` on a field (the stylesheet narrows both on small screens).
+ * Below the tablet breakpoint a grid of 3 or more columns has 2, and a field
+ * spans `lg-n-1` or `lg-n-2` of them: the grids of up to 4 columns keep their
+ * earlier rule (at most 2), finer grids give a field both columns when it takes
+ * more than half of the section.
  */
 export const gridClass = (columns: number) => `lg-grid lg-cols-${columns}`;
-export const cellClass = (width: number) => `lg-cell lg-w-${width}`;
+export function cellClass(width: number, columns: number = GRID_COLUMNS): string {
+  const narrow = columns <= 4 ? Math.min(width, 2) : width * 2 > columns ? 2 : 1;
+  return `lg-cell lg-w-${width} lg-n-${narrow}`;
+}
+/**
+ * The CSS classes and style that put a section on its tab's 12-column grid:
+ * `lg-s-N` spans N columns, `lg-new-row` starts a row, `--lg-min-h` is the
+ * minimum height in field rows. Below the tablet breakpoint every section takes
+ * the full width (the stylesheet).
+ */
+export function sectionClass(s: { width?: number | null; newRow?: boolean | null }): string[] {
+  return ["lg-sec", `lg-s-${sectionWidth(s)}`, ...(s.newRow ? ["lg-new-row"] : [])];
+}
+export const sectionStyle = (s: { minHeight?: number | null }) => (s.minHeight ? { "--lg-min-h": String(s.minHeight) } : undefined);
 
 /** The core fields of every CI, which the form edits: the General section starts with them. */
 export const CORE_FIELDS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key);

@@ -327,9 +327,12 @@ textarea {
 }
 
 /* ---------- Layout grid (tabs → sections → fields; Customization › Detail and form layout) ----------
- * A section is a grid of 1–4 columns (lg-cols-N) and each field spans 1–4 of them (lg-w-N).
- * The grid answers to the width of its layout container, not the window, so the form designer's
- * resizable preview narrows it exactly as a small screen does: at most 2 columns below 820px, 1 below 520px. */
+ * A tab is a grid of 12 columns and each section spans 1–12 of them (lg-sec lg-s-N; lg-new-row starts a
+ * row). A section is a grid of 1–12 columns (lg-cols-N) and each field spans 1–12 of them (lg-w-N).
+ * The grids answer to the width of their container, not the window, so the designers' resizable previews
+ * narrow them exactly as a small screen does. Below 820px of tab width sections stack at the full width.
+ * Below 820px of section width a section's grid has at most 2 columns (a field spans lg-n-1 or lg-n-2 of
+ * them); below 520px, 1. */
 .layout-container {
   container: layout / inline-size;
 }
@@ -342,16 +345,68 @@ textarea {
 .lg-cols-2 { --lg-cols: 2; }
 .lg-cols-3 { --lg-cols: 3; }
 .lg-cols-4 { --lg-cols: 4; }
+.lg-cols-5 { --lg-cols: 5; }
+.lg-cols-6 { --lg-cols: 6; }
+.lg-cols-7 { --lg-cols: 7; }
+.lg-cols-8 { --lg-cols: 8; }
+.lg-cols-9 { --lg-cols: 9; }
+.lg-cols-10 { --lg-cols: 10; }
+.lg-cols-11 { --lg-cols: 11; }
+.lg-cols-12 { --lg-cols: 12; }
 .lg-cell { grid-column: span var(--lg-w, 1); min-width: 0; }
 .lg-w-1 { --lg-w: 1; }
 .lg-w-2 { --lg-w: 2; }
 .lg-w-3 { --lg-w: 3; }
 .lg-w-4 { --lg-w: 4; }
-@container layout (max-width: 820px) {
-  .lg-cols-3, .lg-cols-4 { --lg-cols: 2; }
-  .lg-w-3, .lg-w-4 { --lg-w: 2; }
+.lg-w-5 { --lg-w: 5; }
+.lg-w-6 { --lg-w: 6; }
+.lg-w-7 { --lg-w: 7; }
+.lg-w-8 { --lg-w: 8; }
+.lg-w-9 { --lg-w: 9; }
+.lg-w-10 { --lg-w: 10; }
+.lg-w-11 { --lg-w: 11; }
+.lg-w-12 { --lg-w: 12; }
+.lg-sec {
+  grid-column: span var(--lg-s, 12);
+  min-width: 0;
 }
-@container layout (max-width: 520px) {
+.lg-sec.lg-new-row { grid-column-start: 1; }
+.lg-s-1 { --lg-s: 1; }
+.lg-s-2 { --lg-s: 2; }
+.lg-s-3 { --lg-s: 3; }
+.lg-s-4 { --lg-s: 4; }
+.lg-s-5 { --lg-s: 5; }
+.lg-s-6 { --lg-s: 6; }
+.lg-s-7 { --lg-s: 7; }
+.lg-s-8 { --lg-s: 8; }
+.lg-s-9 { --lg-s: 9; }
+.lg-s-10 { --lg-s: 10; }
+.lg-s-11 { --lg-s: 11; }
+.lg-s-12 { --lg-s: 12; }
+/* A minimum height in field rows (a row of fields is about 3em: label and value), plus the heading. */
+.lg-sec[style*="--lg-min-h"] { min-height: calc(var(--lg-min-h) * 3em + 3em); }
+/* Sections stack at the full width when the tab is narrow… */
+@container layout (max-width: 820px) {
+  .lg-sec, .lg-sec.lg-new-row { grid-column: 1 / -1; }
+}
+/* …and a section's field grid narrows with the section's own width, so a half-width section on a wide
+ * screen gets the grid it would get on a tablet. */
+.layout-container .panel-body {
+  container: section / inline-size;
+}
+/* A container is a stacking context: the section in use comes first, so a picker's list opening over the
+ * next section stays on top. */
+.layout-container .panel-body:focus-within,
+.layout-container .panel-body:hover {
+  position: relative;
+  z-index: 1;
+}
+@container section (max-width: 820px) {
+  .lg-cols-3, .lg-cols-4, .lg-cols-5, .lg-cols-6, .lg-cols-7, .lg-cols-8, .lg-cols-9, .lg-cols-10, .lg-cols-11, .lg-cols-12 { --lg-cols: 2; }
+  .lg-n-1 { --lg-w: 1; }
+  .lg-n-2 { --lg-w: 2; }
+}
+@container section (max-width: 520px) {
   .lg-grid { --lg-cols: 1; }
   .lg-cell { --lg-w: 1; }
 }
@@ -1130,12 +1185,42 @@ nav.tabs a[aria-current="page"] {
 }
 
 /* ---------- Layout panels (Customization › Detail and form layout) ---------- */
-/* Sections stack; each lays its fields out on its own grid. */
+/* Sections sit on the tab's 12-column grid (lg-sec above); each lays its fields out on its own grid. */
 .layout-panels {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: var(--sp-4);
   align-items: start;
+}
+.layout-panels > :not(.lg-sec) {
+  grid-column: 1 / -1;
+}
+/* The live "6 / 12" guide on a field or section while its edge is dragged in the layout editors. */
+.lg-size-guide {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  z-index: 5;
+  padding: 2px var(--sp-2);
+  border-radius: var(--radius);
+  background: var(--c-primary);
+  color: #fff;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+/* The 12 columns, shown while a section's edge is dragged in the layout editors. */
+.layout-panels.lg-guide {
+  --lg-track: calc((100% - 11 * var(--sp-4)) / 12);
+  background: repeating-linear-gradient(
+    to right,
+    var(--c-row-hover) 0,
+    var(--c-row-hover) var(--lg-track),
+    transparent var(--lg-track),
+    transparent calc(var(--lg-track) + var(--sp-4))
+  );
 }
 details.layout-panel > summary {
   cursor: pointer;
