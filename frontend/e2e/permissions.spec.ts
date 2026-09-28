@@ -346,8 +346,8 @@ test("audit.view shows a class-restricted auditor no values of CIs they may not 
     return ((await res.json()) as { data: Entry[] }).data;
   };
   try {
-    // The CI itself stays refused, and so do its values in the audit log: the rows are listed, the values are not.
-    await expectError(await auditor.get(`/configuration-items/${crmDb}`), 403, "FORBIDDEN");
+    // The CI itself stays hidden (404, as for an unknown id), and so do its values in the audit log: the rows are listed, the values are not.
+    await expectError(await auditor.get(`/configuration-items/${crmDb}`), 404, "NOT_FOUND");
     const dbRows = await log(auditor, `entityType=configuration_items&entityId=${crmDb}`);
     expect(dbRows.length).toBeGreaterThan(0);
     for (const row of dbRows) expect(row).toMatchObject({ oldValue: null, newValue: null, redacted: true });
