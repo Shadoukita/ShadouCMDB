@@ -391,3 +391,25 @@ test("repeated wrong passwords lock the username with 429 and Retry-After", asyn
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("alert")).toContainText(/too many|try again/i);
 });
+
+test("concurrent wrong passwords cannot get past the per-username limit (GH#118)", async ({ playwright, baseURL }) => {
+  // Before the fix, every request that arrived before the first failure was counted had its password checked.
+  const victim = `e2e-burst-${stamp}`;
+  const anon = await playwright.request.newContext({ baseURL, storageState: { cookies: [], origins: [] } });
+  const burst = await Promise.all(
+    Array.from({ length: 30 }, (_, i) => anon.post("/api/v1/auth/login", { data: { username: victim, password: `wrong-${i}` } })),
+  );
+  const checked = burst.filter((r) => r.status() === 401);
+  const refused = burst.filter((r) => r.status() === 429);
+  expect(checked.length + refused.length, "only 401 and 429").toBe(30);
+  // 5 free failures, plus one more attempt that then locks the name when the burst is spread out.
+  expect(checked.length).toBeGreaterThan(0);
+  expect(checked.length).toBeLessThanOrEqual(6);
+  for (const res of refused) {
+    expect(Number(res.headers()["retry-after"])).toBeGreaterThan(0);
+    const { error } = await res.json();
+    expect(error.code).toBe("RATE_LIMITED");
+    expect(error.message).toMatch(/^Too many failed sign-ins for this username\. Try again in \d+ s\.$/);
+  }
+  await anon.dispose();
+});
