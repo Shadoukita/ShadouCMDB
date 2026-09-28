@@ -264,3 +264,93 @@ test("with popups blocked the editor opens in the same tab, and says so", async 
   await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));
   await expect(page.getByRole("tablist", { name: "CI sections" })).toBeVisible();
 });
+
+test("sections side by side: resize by dragging, drop beside another, saved, stacked on a phone", async ({ page: origin, request }) => {
+  await resetUiSettings(request);
+  await origin.goto(`/cis/${ci.id}`);
+  const page = await openEditor(origin);
+  const shell = (key: string) => page.locator(`[data-section-shell="${key}"]`);
+  const grid = page.getByRole("region", { name: "Tab General" });
+  const say = page.locator(".le-canvas [aria-live=assertive]");
+
+  // Drag the General section's right edge to the middle of the tab: it snaps to 6 of 12 columns, with a live guide.
+  const edge = (await shell("general").getByTestId("section-edge-right").boundingBox())!;
+  const box = (await grid.boundingBox())!;
+  await page.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.75, edge.y + edge.height / 2, { steps: 4 });
+  await page.mouse.move(box.x + box.width / 2 + 3, edge.y + edge.height / 2, { steps: 6 });
+  await expect(shell("general").getByTestId("section-guide")).toHaveText("6 / 12");
+  await page.mouse.up();
+  await expect(shell("general")).toHaveAttribute("data-width", "6");
+  await expect(shell("general").getByTestId("section-guide")).toHaveCount(0);
+  await expect(say).toHaveText("Section General: 6 of 12 columns wide.");
+  // The whole drag is one undo step.
+  await bar(page).getByRole("button", { name: "Undo" }).click();
+  await expect(shell("general")).toHaveAttribute("data-width", "12");
+  await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
+  await bar(page).getByRole("button", { name: "Redo" }).click();
+  await expect(shell("general")).toHaveAttribute("data-width", "6");
+
+  // A new section at the end of the tab, with a field in it.
+  await page.getByRole("button", { name: "Add a section to General" }).click();
+  await page.getByLabel("Section name").fill("Side by side");
+  await page.getByLabel("Section name").press("Enter");
+  await field(page, "Serial number").hover();
+  await field(page, "Serial number").getByLabel("Move Serial number to section").selectOption({ label: "Side by side" });
+  await expect(section(page, "Side by side").locator(".le-field")).toHaveCount(1);
+  // Renaming keeps the key the section got when it was added.
+  const key = (await page.locator("[data-section-shell]").filter({ has: section(page, "Side by side") }).getAttribute("data-section-shell"))!;
+  const grip = page.getByRole("button", { name: /^Section Side by side, / });
+
+  // Alt+↑ on its grip moves it up, to right below General.
+  await grip.focus();
+  const shells = page.locator("[data-section-shell]");
+  for (let i = 0; i < 10 && (await shells.nth(1).getAttribute("data-section-shell")) !== key; i++) await page.keyboard.press("Alt+ArrowUp");
+  await expect(shells.nth(1)).toHaveAttribute("data-section-shell", key);
+  await expect(grip).toBeFocused();
+
+  // Drag it by its grip onto General's right edge: it sits next to General, sharing the row.
+  await grip.scrollIntoViewIfNeeded();
+  const general = (await shell("general").boundingBox())!;
+  await grip.dragTo(shell("general"), { targetPosition: { x: general.width - 10, y: general.height - 40 } });
+  await expect(say).toHaveText("Section Side by side placed right of General, 6 of 12 columns wide.");
+  await expect(shell(key)).toHaveAttribute("data-width", "6");
+  const g = (await shell("general").boundingBox())!;
+  const n = (await shell(key).boundingBox())!;
+  expect(Math.abs(n.y - g.y)).toBeLessThan(2);
+  expect(n.x).toBeGreaterThan(g.x + g.width - 1);
+
+  // Keyboard: Alt+← / Alt+→ on the section's grip resize it by one column.
+  await grip.focus();
+  await page.keyboard.press("Alt+ArrowLeft");
+  await expect(shell(key)).toHaveAttribute("data-width", "5");
+  await page.keyboard.press("Alt+ArrowRight");
+  await expect(shell(key)).toHaveAttribute("data-width", "6");
+  await snap(page, "layout-edit-side-by-side");
+
+  await bar(page).getByRole("button", { name: "Save layout" }).click();
+  await expect(bar(page).getByRole("status")).toContainText(/Saved as version \d+/);
+  await closeEditor(page);
+
+  // The CI page shows the two sections side by side on a wide screen…
+  const onPage = (key: string) => origin.locator(`.layout-panels > details[data-section="${key}"]`);
+  await expect(onPage(key)).toContainText("Serial number");
+  const a = (await onPage("general").boundingBox())!;
+  const b = (await onPage(key).boundingBox())!;
+  expect(Math.abs(b.y - a.y)).toBeLessThan(2);
+  expect(b.x).toBeGreaterThan(a.x + a.width - 1);
+  expect(Math.abs(b.width - a.width)).toBeLessThan(2);
+  await snap(origin, "layout-side-by-side-detail");
+  // …and stacked at the full width on a phone.
+  await origin.setViewportSize({ width: 390, height: 844 });
+  await expect(async () => {
+    const pa = (await onPage("general").boundingBox())!;
+    const pb = (await onPage(key).boundingBox())!;
+    expect(pb.y).toBeGreaterThan(pa.y + pa.height - 1);
+    expect(Math.abs(pb.width - pa.width)).toBeLessThan(2);
+  }).toPass();
+  await snap(origin, "layout-side-by-side-phone");
+  await origin.setViewportSize({ width: 1440, height: 900 });
+  await resetUiSettings(request);
+});

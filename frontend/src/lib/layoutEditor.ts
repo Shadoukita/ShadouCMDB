@@ -157,8 +157,14 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
   }
   watch(active, (on) => (on ? void load() : unload()), { immediate: true });
 
-  /** Makes one change to the layout (undoable). The class gets a layout of its own if it had none. */
-  function apply(change: (l: UiClassLayout) => void): void {
+  /** The drag gesture the last change belongs to: its further changes share one undo step. */
+  let gesture: string | null = null;
+  /**
+   * Makes one change to the layout (undoable). The class gets a layout of its
+   * own if it had none. Changes with the same `group` (the steps of one drag,
+   * until `endGesture`) are undone together.
+   */
+  function apply(change: (l: UiClassLayout) => void, group?: string): void {
     const d = doc.value;
     const l = layout.value;
     if (!d || !l) return;
@@ -169,13 +175,19 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
     }
     change(own.value ?? l);
     if (JSON.stringify(d) === before) return;
-    past.value.push(before);
+    if (!group || group !== gesture) past.value.push(before);
+    gesture = group ?? null;
     future.value = [];
     saved.value = null;
+  }
+  /** The drag is over: the next change is a new undo step. */
+  function endGesture() {
+    gesture = null;
   }
   /** Replaces the whole draft (undo, redo, discard, reset), keeping the step undoable where asked. */
   function restore(text: string, record: "past" | "future" | null) {
     if (!doc.value) return;
+    gesture = null;
     const now = JSON.stringify(doc.value);
     if (record === "past") past.value.push(now);
     if (record === "future") future.value.push(now);
@@ -203,6 +215,7 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
     if (!d || !own.value) return;
     past.value.push(JSON.stringify(d));
     future.value = [];
+    gesture = null;
     d.layouts = d.layouts.filter((l) => l.classKey !== classKey.value);
     refreshScratch();
     saved.value = null;
@@ -291,6 +304,7 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
     canRedo: computed(() => future.value.length > 0),
     previewWidth,
     apply,
+    endGesture,
     undo,
     redo,
     discard,

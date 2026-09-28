@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import type { EffectiveAttribute } from "../../api/queries";
 import {
   addSection,
+  addSectionBeside,
   addTab,
   adoptFields,
   allSections,
@@ -12,32 +13,43 @@ import {
   hideField,
   isCore,
   locate,
+  leftNeighbour,
   moveFieldBy,
   moveSection,
+  moveSectionBorder,
   moveSectionToTab,
   moveTab,
   placeField,
+  placeSectionAt,
+  placeSectionBeside,
   removalSummary,
   removeSection,
   removeTab,
+  sectionPlaces,
   setColumns,
+  setNewRow,
+  setSectionWidth,
   setWidth,
   type LayoutSection,
   type LayoutTab,
 } from "../../lib/layoutDesign";
 import type { LayoutEditor } from "../../lib/layoutEditor";
-import { ATTRIBUTE_PREFIX, attributeKey, CORE_FIELDS, fieldLabel, gridClass, MAX_COLUMNS, resolveLayout } from "../../lib/uiSettings";
+import { ATTRIBUTE_PREFIX, attributeKey, CORE_FIELDS, fieldLabel, gridClass, MAX_COLUMNS, resolveLayout, SECTION_GRID, sectionWidth } from "../../lib/uiSettings";
 import ConfirmDialog from "../ConfirmDialog.vue";
 import EditableField, { type SectionOption } from "./EditableField.vue";
+import PreviewResizeHandle from "./PreviewResizeHandle.vue";
+import SectionShell, { type DropSide } from "./SectionShell.vue";
 
 /**
  * The CI page's fields in layout edit mode: the class layout's tabs, sections
  * and fields, drawn with the page's own rendering of each field (the `field`
  * slot, with the CI's real values) and edited in place. Add a tab at the end of
- * the tab bar and a section between or after sections; click a tab's or a
- * section's name to rename it; drag fields between sections and onto tabs, and
- * a field's right edge to resize it. Every drag has a keyboard or toolbar
- * equivalent. Fields the layout does not place show at the end of the first tab,
+ * the tab bar, a section below or next to another; click a tab's or a section's
+ * name to rename it; drag fields between sections and onto tabs, and a field's
+ * right edge to resize it. Sections sit on the tab's 12-column grid: drag a
+ * section's edges to resize it, and its grip onto another section's left or
+ * right edge to place it beside it. Every drag has a keyboard or toolbar
+ * equivalent, and a drag is one undo step. Fields the layout does not place show at the end of the first tab,
  * as on the real page. Every change goes through the editor (undo, save).
  */
 const props = defineProps<{
@@ -97,9 +109,9 @@ function moveField(field: string, delta: -1 | 1) {
   say(`${labelOf(field)} moved to position ${at.index + 1} of ${at.section.fields?.length} in ${at.section.label}.`);
   focus(`le-field-${field}`);
 }
-function resizeField(field: string, width: number) {
+function resizeField(field: string, width: number, drag = false) {
   let w = 1;
-  props.editor.apply((l) => (w = setWidth(l, field, width)));
+  props.editor.apply((l) => (w = setWidth(l, field, width)), drag ? `field:${field}` : undefined);
   const at = layout.value && locate(layout.value, field);
   if (at) say(`${labelOf(field)}: ${w} of ${at.section.columns} columns.`);
 }
@@ -202,29 +214,34 @@ function onMoveTab(t: LayoutTab, delta: -1 | 1) {
   say(`Tab ${t.label} moved ${delta < 0 ? "left" : "right"}.`);
   focus(`le-tab-${t.key}`);
 }
-function insertSection(index: number) {
+/** Adds a section at `index` of the tab in view, or next to the section `beside` (sharing its row). */
+function insertSection(index: number, beside?: LayoutSection) {
   const tab = activeTab.value;
   if (!tab) return;
   let s: LayoutSection | undefined;
   props.editor.apply((l) => {
     const own = l.tabs?.find((x) => x.key === tab.key);
-    if (own) s = addSection(l, own, "New section", index);
+    const next = beside && findSection(l, beside.key)?.section;
+    if (own) s = next ? addSectionBeside(l, own, next, "New section") : addSection(l, own, "New section", index);
   });
   if (!s) return;
-  say(`Section added to ${tab.label}. Type its name.`);
+  say(beside ? `Section added next to ${beside.label}, ${sectionWidth(s)} of ${SECTION_GRID} columns wide. Type its name.` : `Section added to ${tab.label}. Type its name.`);
   startRename("section", s.key, s.label);
 }
-/** Runs `change` on the section `key` of the layout being edited. */
-function onSection(key: string, change: (l: NonNullable<typeof layout.value>, s: LayoutSection) => void) {
+/** Runs `change` on the section `key` of the layout being edited (`group`: one undo step for a drag). */
+function onSection(key: string, change: (l: NonNullable<typeof layout.value>, s: LayoutSection) => void, group?: string) {
   props.editor.apply((l) => {
     const s = findSection(l, key)?.section;
     if (s) change(l, s);
-  });
+  }, group);
 }
 function onMoveSection(s: LayoutSection, delta: -1 | 1) {
+  // The keys on the section's grip keep the focus there; the toolbar's buttons hand it to the section's name.
+  const grip = `le-grip-${s.key}`;
+  const fromGrip = document.activeElement?.id === grip;
   onSection(s.key, (l, own) => moveSection(l, own, delta));
   say(`Section ${s.label} moved ${delta < 0 ? "up" : "down"}.`);
-  focus(`le-section-${s.key}`);
+  focus(fromGrip ? grip : `le-section-${s.key}`);
 }
 function onSectionTab(s: LayoutSection, tabKey: string) {
   onSection(s.key, (l, own) => {
@@ -236,6 +253,32 @@ function onSectionTab(s: LayoutSection, tabKey: string) {
   focus(`le-section-${s.key}`);
 }
 const sectionIndex = (s: LayoutSection) => activeTab.value?.sections?.indexOf(s) ?? -1;
+/** Where each section of the tab in view sits on the 12-column grid. */
+const places = computed(() => sectionPlaces(activeTab.value?.sections ?? []));
+const hasLeft = (s: LayoutSection) => !!activeTab.value && !!leftNeighbour(activeTab.value, s);
+
+/** A section's width on the tab's grid: dragged (one undo step per drag), from the keyboard or the toolbar. */
+function resizeSection(s: LayoutSection, width: number, drag = false) {
+  let w = 0;
+  onSection(s.key, (_, own) => (w = setSectionWidth(own, width)), drag ? `section:${s.key}` : undefined);
+  if (w) say(`Section ${s.label}: ${w} of ${SECTION_GRID} columns wide.`);
+}
+/** The border between a section and the one left of it, dragged to grid line `line`. */
+function moveBorder(s: LayoutSection, line: number) {
+  const tab = activeTab.value;
+  if (!tab) return;
+  let r: { left: number; right: number } | undefined;
+  props.editor.apply((l) => {
+    const own = l.tabs?.find((x) => x.key === tab.key);
+    const sec = findSection(l, s.key)?.section;
+    if (own && sec) r = moveSectionBorder(own, sec, line);
+  }, `border:${s.key}`);
+  if (r) say(`Section ${s.label}: ${r.right} of ${SECTION_GRID} columns wide, the section left of it ${r.left}.`);
+}
+function onNewRow(s: LayoutSection, on: boolean) {
+  onSection(s.key, (_, own) => setNewRow(own, on));
+  say(on ? `Section ${s.label} starts a new row.` : `Section ${s.label} continues the row when it fits.`);
+}
 
 const confirmRemove = ref<{ tab: LayoutTab } | { section: LayoutSection } | null>(null);
 const removeTitle = computed(() => {
@@ -305,14 +348,48 @@ function onGridDrop(section: LayoutSection, e: DragEvent) {
   onDragEnd();
   if (field) place(field, section.key, at?.section === section.key ? at.index : undefined);
 }
+const dragSection = ref<string | null>(null);
+const dropSection = ref<{ key: string; side: DropSide } | null>(null);
+function onSectionDragStart(s: LayoutSection) {
+  dragSection.value = s.key;
+}
+function onSectionDragEnd() {
+  dragSection.value = null;
+  dropSection.value = null;
+  dropTab.value = null;
+}
+const SIDE_TEXT: Record<DropSide, string> = { left: "left of", right: "right of", before: "above", after: "below" };
+/** Drops the dragged section on `target`: beside it (left, right) or before or after it in the order. */
+function onSectionDrop(target: LayoutSection, side: DropSide) {
+  const key = dragSection.value;
+  onSectionDragEnd();
+  if (!key || key === target.key) return;
+  props.editor.apply((l) => {
+    const sec = findSection(l, key)?.section;
+    const tgt = findSection(l, target.key)?.section;
+    if (!sec || !tgt) return;
+    if (side === "left" || side === "right") placeSectionBeside(l, sec, tgt, side);
+    else placeSectionAt(l, sec, tgt, side);
+  });
+  const moved = layout.value && findSection(layout.value, key)?.section;
+  if (moved) say(`Section ${moved.label} placed ${SIDE_TEXT[side]} ${target.label}, ${sectionWidth(moved)} of ${SECTION_GRID} columns wide.`);
+  focus(`le-grip-${key}`);
+}
 function onTabOver(t: LayoutTab, e: DragEvent) {
-  if (!dragField.value) return;
+  if (!dragField.value && !dragSection.value) return;
   e.preventDefault();
   dropTab.value = t.key;
 }
-/** Dropping on a tab puts the field at the end of the tab's last section (a tab without one gets one). */
+/** Dropping on a tab puts the field at the end of the tab's last section (a tab without one gets one), a section at the end of the tab. */
 function onTabDrop(t: LayoutTab, e: DragEvent) {
   e.preventDefault();
+  const section = dragSection.value;
+  if (section) {
+    onSectionDragEnd();
+    const s = layout.value && findSection(layout.value, section)?.section;
+    if (s) onSectionTab(s, t.key);
+    return;
+  }
   const field = dragField.value;
   onDragEnd();
   if (!field) return;
@@ -361,6 +438,7 @@ function onHiddenDrop(e: DragEvent) {
     </div>
 
     <div class="le-frame" :style="editor.previewWidth ? { width: `${editor.previewWidth}px` } : undefined" data-testid="le-frame">
+      <PreviewResizeHandle v-model="editor.previewWidth" centered label="Preview width" />
       <div class="layout-container">
         <div class="le-tabs" role="group" aria-label="Tabs of the layout">
           <div v-for="t in tabs" :key="t.key" :class="['le-tab', { current: t === activeTab, 'drop-target': dropTab === t.key }]" @dragover="onTabOver(t, $event)" @dragleave="dropTab = null" @drop="onTabDrop(t, $event)">
@@ -389,10 +467,26 @@ function onHiddenDrop(e: DragEvent) {
         </div>
 
         <div class="layout-panels" role="region" :aria-label="`Tab ${activeTab?.label ?? ''}`">
-          <template v-for="(s, j) in activeTab?.sections ?? []" :key="s.key">
-            <div v-if="j > 0" class="le-insert">
-              <button type="button" class="btn btn-sm le-add" :aria-label="`Add a section before ${s.label}`" @click="insertSection(j)">+ Section</button>
-            </div>
+          <SectionShell
+            v-for="(s, j) in activeTab?.sections ?? []"
+            :key="s.key"
+            :section="s"
+            :has-left="hasLeft(s)"
+            :start="places[j]?.start ?? 0"
+            :dragging="dragSection === s.key"
+            :drop="dropSection?.key === s.key ? dropSection.side : null"
+            id-prefix="le"
+            keys-id="le-keys"
+            @width="(w, drag) => resizeSection(s, w, drag)"
+            @border="(line) => moveBorder(s, line)"
+            @gesture-end="editor.endGesture()"
+            @move="(d) => onMoveSection(s, d)"
+            @add="(where) => (where === 'beside' ? insertSection(j + 1, s) : insertSection(j + 1))"
+            @dragstart="onSectionDragStart(s)"
+            @dragend="onSectionDragEnd"
+            @dropside="(side) => (dropSection = side ? { key: s.key, side } : null)"
+            @dropped="(side) => onSectionDrop(s, side)"
+          >
             <section class="panel layout-panel le-section" :aria-label="`Section ${s.label}`">
               <div class="panel-header">
                 <h2>
@@ -409,7 +503,7 @@ function onHiddenDrop(e: DragEvent) {
                   />
                   <button v-else :id="`le-section-${s.key}`" type="button" class="le-section-label" title="Click to rename" @click="startRename('section', s.key, s.label)">{{ s.label }}</button>
                 </h2>
-                <span class="muted">{{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · starts collapsed</template></span>
+                <span class="muted" data-testid="le-section-size">{{ sectionWidth(s) }} / {{ SECTION_GRID }} wide · {{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · starts collapsed</template></span>
                 <span class="le-section-tools" role="toolbar" :aria-label="`Section ${s.label}: layout`">
                   <button type="button" class="btn btn-sm" :aria-label="`Move section ${s.label} up`" title="Move up" :disabled="sectionIndex(s) <= 0" @click="onMoveSection(s, -1)">↑</button>
                   <button
@@ -422,10 +516,24 @@ function onHiddenDrop(e: DragEvent) {
                   >
                     ↓
                   </button>
+                  <select :aria-label="`Width of ${s.label}`" title="Width on the tab's 12-column grid" :value="sectionWidth(s)" @change="resizeSection(s, Number(($event.target as HTMLSelectElement).value))">
+                    <option v-for="n in SECTION_GRID" :key="n" :value="n">{{ n }} / {{ SECTION_GRID }}</option>
+                  </select>
+                  <button
+                    v-if="j > 0"
+                    type="button"
+                    class="btn btn-sm"
+                    :aria-pressed="!!s.newRow"
+                    :aria-label="`Section ${s.label} starts a new row`"
+                    title="Start a new row even if it fits next to the section before"
+                    @click="onNewRow(s, !s.newRow)"
+                  >
+                    New row
+                  </button>
                   <button type="button" class="btn btn-sm" :aria-pressed="!!s.collapsed" :aria-label="`Section ${s.label} starts collapsed on the detail page`" @click="onSection(s.key, (_, own) => (own.collapsed = !own.collapsed))">
                     Collapsed
                   </button>
-                  <select :aria-label="`Columns of ${s.label}`" :value="s.columns ?? 3" @change="onSection(s.key, (_, own) => setColumns(own, Number(($event.target as HTMLSelectElement).value)))">
+                  <select :aria-label="`Columns of ${s.label}`" title="Columns of the section's field grid" :value="s.columns ?? 3" @change="onSection(s.key, (_, own) => setColumns(own, Number(($event.target as HTMLSelectElement).value)))">
                     <option v-for="n in MAX_COLUMNS" :key="n" :value="n">{{ n }} column{{ n === 1 ? "" : "s" }}</option>
                   </select>
                   <select v-if="tabs.length > 1" :aria-label="`Tab of ${s.label}`" :value="activeTab?.key" @change="onSectionTab(s, ($event.target as HTMLSelectElement).value)">
@@ -458,7 +566,8 @@ function onHiddenDrop(e: DragEvent) {
                     :drop-before="dropAt?.section === s.key && dropAt.index === i && dragField !== f.field"
                     :dragging="dragField === f.field"
                     @move="(d) => moveField(f.field, d)"
-                    @resize="(w) => resizeField(f.field, w)"
+                    @resize="(w, drag) => resizeField(f.field, w, drag)"
+                    @resize-end="editor.endGesture()"
                     @hide="hide(f.field)"
                     @place="(k) => place(f.field, k)"
                     @read-only="(on) => setReadOnly(f.field, on)"
@@ -471,7 +580,7 @@ function onHiddenDrop(e: DragEvent) {
                 </div>
               </div>
             </section>
-          </template>
+          </SectionShell>
           <div class="le-insert">
             <button type="button" class="btn btn-sm le-add" :aria-label="`Add a section to ${activeTab?.label}`" @click="insertSection(activeTab?.sections?.length ?? 0)">+ Section</button>
           </div>
@@ -517,9 +626,11 @@ function onHiddenDrop(e: DragEvent) {
       </div>
     </div>
     <p id="le-keys" class="hint le-keys">
-      Drag a field by its grip to move it, onto a tab to move it there, or drag its right edge to resize it. Keyboard: on a
-      field's grip, Alt+↑ / Alt+↓ move it, Alt+← / Alt+→ make it narrower or wider, Delete hides it; its toolbar moves it to
-      another section.
+      Drag a field by its grip to move it, onto a tab to move it there, or drag its right edge to resize it. Drag a section by
+      the grip on its top edge onto another section's left or right edge to place it beside it, and its edges to resize it on
+      the tab's 12 columns. Drag the grip on the preview's right edge to try any screen width. Keyboard: on a field's or a
+      section's grip, Alt+↑ / Alt+↓ move it, Alt+← / Alt+→ make it narrower or wider, Delete hides a field; the toolbars
+      have the rest.
     </p>
     <div class="sr-only" aria-live="assertive">{{ announcement }}</div>
   </div>
@@ -536,10 +647,12 @@ function onHiddenDrop(e: DragEvent) {
   gap: var(--sp-3);
 }
 .le-frame {
+  position: relative;
   max-width: 100%;
   margin: 0 auto;
   width: 100%;
-  padding: var(--sp-3);
+  /* Room on the right for the preview's grip, clear of the sections' own edge handles. */
+  padding: var(--sp-3) 32px var(--sp-3) var(--sp-3);
   border: 2px dashed var(--c-primary);
   border-radius: var(--radius);
 }
@@ -669,6 +782,9 @@ function onHiddenDrop(e: DragEvent) {
   display: flex;
   justify-content: center;
   margin: calc(-1 * var(--sp-2)) 0;
+}
+.le-section-tools .btn[aria-pressed="true"] {
+  border-color: var(--c-primary);
 }
 .le-insert .le-add {
   opacity: 0.55;

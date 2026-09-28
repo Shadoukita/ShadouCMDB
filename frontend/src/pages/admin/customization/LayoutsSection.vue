@@ -7,6 +7,7 @@ import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import {
   addSection,
+  addSectionBeside,
   addTab,
   adoptFields,
   allSections,
@@ -16,21 +17,30 @@ import {
   hideField,
   isCore,
   locate,
+  leftNeighbour,
   materialize,
   moveFieldBy,
   moveSection,
+  moveSectionBorder,
   moveSectionToTab,
   moveTab,
   placeField,
+  placeSectionAt,
+  placeSectionBeside,
   removalSummary,
   removeSection,
   removeTab,
+  sectionPlaces,
   setColumns,
+  setNewRow,
+  setSectionWidth,
   setWidth,
   type LayoutSection,
   type LayoutTab,
 } from "../../../lib/layoutDesign";
-import { ATTRIBUTE_PREFIX, attributeKey, CORE_FIELDS, fieldLabel, gridClass, MAX_COLUMNS, resolveLayout } from "../../../lib/uiSettings";
+import PreviewResizeHandle from "../../../components/layoutEdit/PreviewResizeHandle.vue";
+import SectionShell, { type DropSide } from "../../../components/layoutEdit/SectionShell.vue";
+import { ATTRIBUTE_PREFIX, attributeKey, CORE_FIELDS, fieldLabel, gridClass, MAX_COLUMNS, resolveLayout, SECTION_GRID, sectionWidth } from "../../../lib/uiSettings";
 import ClassPicker from "./ClassPicker.vue";
 import DesignerField from "./designer/DesignerField.vue";
 import OpenOnCiLink from "./designer/OpenOnCiLink.vue";
@@ -40,7 +50,9 @@ import OpenOnCiLink from "./designer/OpenOnCiLink.vue";
  * layout (format v2: tabs → sections → fields on a grid), shared by the CI form
  * and the detail page. The canvas is the class's form as it will look: drag
  * fields between sections and tabs, drag a field's right edge to change its
- * width, and resize the preview to check smaller screens. Everything also works
+ * width, drag a section's edges to size it on the tab's 12-column grid and its
+ * grip onto another section's left or right edge to place it beside it, and
+ * drag the preview's grip to check smaller screens. Everything also works
  * from the keyboard and from the side panel. Fields the layout does not place
  * show at the end of the first tab, as on the real form. Ident, valid from and
  * valid until can be moved but not hidden.
@@ -175,11 +187,33 @@ function onAddTab() {
   select({ kind: "tab", key: t.key });
   say(`Tab ${t.label} added. Rename it in the side panel.`);
 }
-function onAddSection() {
-  if (!layout.value || !activeTab.value) return;
-  const s = addSection(layout.value, activeTab.value, "New section");
+/** Adds a section at the end of the tab in view, below `after`, or next to `beside` (sharing its row). */
+function onAddSection(opts: { after?: LayoutSection; beside?: LayoutSection } = {}) {
+  const tab = activeTab.value;
+  if (!layout.value || !tab) return;
+  const list = tab.sections ?? [];
+  const s = opts.beside
+    ? addSectionBeside(layout.value, tab, opts.beside, "New section")
+    : addSection(layout.value, tab, "New section", opts.after ? list.indexOf(opts.after) + 1 : undefined);
   select({ kind: "section", key: s.key });
-  say(`Section added to ${activeTab.value.label}.`);
+  say(opts.beside ? `Section added next to ${opts.beside.label}, ${sectionWidth(s)} of ${SECTION_GRID} columns wide.` : `Section added to ${tab.label}.`);
+}
+/** Where each section of the tab in view sits on the 12-column grid. */
+const places = computed(() => sectionPlaces(activeTab.value?.sections ?? []));
+const hasLeft = (s: LayoutSection) => !!activeTab.value && !!leftNeighbour(activeTab.value, s);
+function resizeSection(s: LayoutSection, width: number) {
+  const w = setSectionWidth(s, width);
+  say(`Section ${s.label}: ${w} of ${SECTION_GRID} columns wide.`);
+}
+function moveBorder(s: LayoutSection, line: number) {
+  const r = activeTab.value && moveSectionBorder(activeTab.value, s, line);
+  if (r) say(`Section ${s.label}: ${r.right} of ${SECTION_GRID} columns wide, the section left of it ${r.left}.`);
+}
+function onMoveSection(s: LayoutSection, delta: -1 | 1) {
+  if (!layout.value) return;
+  moveSection(layout.value, s, delta);
+  say(`Section ${s.label} moved ${delta < 0 ? "up" : "down"}.`);
+  void nextTick(() => document.getElementById(`designer-grip-${s.key}`)?.focus());
 }
 function onSectionTab(section: LayoutSection, key: string) {
   const t = tabs.value.find((x) => x.key === key);
@@ -257,14 +291,38 @@ function onGridDrop(section: LayoutSection, e: DragEvent) {
   select({ kind: "field", field });
   say(`${labelOf(field)} moved to ${section.label}.`);
 }
+const dragSection = ref<string | null>(null);
+const dropSection = ref<{ key: string; side: DropSide } | null>(null);
+function onSectionDragEnd() {
+  dragSection.value = null;
+  dropSection.value = null;
+  dropTab.value = null;
+}
+const SIDE_TEXT: Record<DropSide, string> = { left: "left of", right: "right of", before: "above", after: "below" };
+/** Drops the dragged section on `target`: beside it (left, right) or before or after it in the order. */
+function onSectionDrop(target: LayoutSection, side: DropSide) {
+  const s = layout.value && dragSection.value ? findSection(layout.value, dragSection.value)?.section : undefined;
+  onSectionDragEnd();
+  if (!layout.value || !s || s === target) return;
+  if (side === "left" || side === "right") placeSectionBeside(layout.value, s, target, side);
+  else placeSectionAt(layout.value, s, target, side);
+  select({ kind: "section", key: s.key });
+  say(`Section ${s.label} placed ${SIDE_TEXT[side]} ${target.label}, ${sectionWidth(s)} of ${SECTION_GRID} columns wide.`);
+}
 function onTabOver(t: LayoutTab, e: DragEvent) {
-  if (!dragField.value) return;
+  if (!dragField.value && !dragSection.value) return;
   e.preventDefault();
   dropTab.value = t.key;
 }
 /** Dropping on a tab puts the field at the end of the tab's last section (a tab without one gets one). */
 function onTabDrop(t: LayoutTab, e: DragEvent) {
   e.preventDefault();
+  const section = layout.value && dragSection.value ? findSection(layout.value, dragSection.value)?.section : undefined;
+  if (section) {
+    onSectionDragEnd();
+    onSectionTab(section, t.key);
+    return;
+  }
   const field = dragField.value;
   onDragEnd();
   if (!field || !layout.value) return;
@@ -306,8 +364,6 @@ watch(frame, (el) => {
 onBeforeUnmount(() => observer?.disconnect());
 function setPreview(w: number | null) {
   previewWidth.value = w;
-  // A width dragged with the frame's own handle is an inline style; a preset replaces it.
-  if (frame.value) frame.value.style.width = w ? `${w}px` : "";
 }
 </script>
 
@@ -372,6 +428,16 @@ function setPreview(w: number | null) {
                 <input id="designer-section-label" v-model="selSection.section.label" type="text" maxlength="100" required />
               </div>
               <div class="field">
+                <label for="designer-section-width">Section width</label>
+                <select id="designer-section-width" :value="sectionWidth(selSection.section)" @change="resizeSection(selSection.section, Number(($event.target as HTMLSelectElement).value))">
+                  <option v-for="n in SECTION_GRID" :key="n" :value="n">{{ n }} / {{ SECTION_GRID }}{{ n === SECTION_GRID ? " (full width)" : n === SECTION_GRID / 2 ? " (half)" : "" }}</option>
+                </select>
+              </div>
+              <label class="check">
+                <input type="checkbox" :checked="!!selSection.section.newRow" @change="setNewRow(selSection.section, ($event.target as HTMLInputElement).checked)" />
+                Start a new row
+              </label>
+              <div class="field">
                 <label for="designer-columns">Columns</label>
                 <select id="designer-columns" :value="selSection.section.columns ?? 3" @change="setColumns(selSection.section, Number(($event.target as HTMLSelectElement).value))">
                   <option v-for="n in MAX_COLUMNS" :key="n" :value="n">{{ n }}</option>
@@ -385,12 +451,12 @@ function setPreview(w: number | null) {
                 </select>
               </div>
               <span class="row-actions">
-                <button type="button" class="btn btn-sm" :disabled="sectionIndexInTab(selSection.section) <= 0" @click="moveSection(layout, selSection.section, -1)">Move up</button>
+                <button type="button" class="btn btn-sm" :disabled="sectionIndexInTab(selSection.section) <= 0" @click="onMoveSection(selSection.section, -1)">Move up</button>
                 <button
                   type="button"
                   class="btn btn-sm"
                   :disabled="sectionIndexInTab(selSection.section) >= (selSection.tab.sections?.length ?? 0) - 1"
-                  @click="moveSection(layout, selSection.section, 1)"
+                  @click="onMoveSection(selSection.section, 1)"
                 >
                   Move down
                 </button>
@@ -436,16 +502,17 @@ function setPreview(w: number | null) {
       </aside>
       <div class="designer-main">
         <div class="designer-toolbar" role="toolbar" aria-label="Preview width">
-          <span class="muted">Preview</span>
+          <span class="muted">Preview shortcuts</span>
           <button v-for="p in PRESETS" :key="p.label" type="button" class="btn btn-sm" :aria-pressed="previewWidth === p.width" @click="setPreview(p.width)">
             {{ p.label }}
           </button>
           <span class="muted" data-testid="designer-width">{{ measured }} px wide</span>
-          <span class="muted">· drag the frame's lower right corner to resize</span>
+          <span class="muted">· or drag the grip on the frame's right edge to any width</span>
           <button type="button" class="btn btn-sm designer-builtin" @click="confirmBuiltIn = true">Use the built-in layout for {{ cls.name }}</button>
         </div>
 
-        <div ref="frame" class="designer-frame" data-testid="designer-frame" role="region" :aria-label="`Preview of the ${cls.name} form`">
+        <div ref="frame" class="designer-frame" :style="previewWidth ? { width: `${previewWidth}px` } : undefined" data-testid="designer-frame" role="region" :aria-label="`Preview of the ${cls.name} form`">
+          <PreviewResizeHandle v-model="previewWidth" label="Preview width" />
           <div class="layout-container">
             <div class="tabs designer-tabs" role="tablist" aria-label="Tabs of the layout">
               <button
@@ -470,52 +537,70 @@ function setPreview(w: number | null) {
             </div>
 
             <div class="layout-panels" role="tabpanel" :aria-label="activeTab?.label">
-              <section
-                v-for="s in activeTab?.sections ?? []"
+              <SectionShell
+                v-for="(s, j) in activeTab?.sections ?? []"
                 :key="s.key"
-                :class="['panel', 'designer-section', { selected: selection?.kind === 'section' && selection.key === s.key }]"
-                :aria-label="`Section ${s.label}`"
+                :section="s"
+                :has-left="hasLeft(s)"
+                :start="places[j]?.start ?? 0"
+                    :dragging="dragSection === s.key"
+                :drop="dropSection?.key === s.key ? dropSection.side : null"
+                id-prefix="designer"
+                keys-id="designer-keys"
+                @width="(w) => resizeSection(s, w)"
+                @border="(line) => moveBorder(s, line)"
+                @move="(d) => onMoveSection(s, d)"
+                @add="(where) => (where === 'beside' ? onAddSection({ beside: s }) : onAddSection({ after: s }))"
+                @dragstart="dragSection = s.key"
+                @dragend="onSectionDragEnd"
+                @dropside="(side) => (dropSection = side ? { key: s.key, side } : null)"
+                @dropped="(side) => onSectionDrop(s, side)"
               >
-                <div class="panel-header">
-                  <h2>
-                    <button type="button" class="btn-link" :aria-pressed="selection?.kind === 'section' && selection.key === s.key" @click="select({ kind: 'section', key: s.key })">
-                      {{ s.label }}
-                    </button>
-                  </h2>
-                  <span class="muted">{{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · collapsed on the detail page</template></span>
-                </div>
-                <div class="panel-body">
-                  <div
-                    :class="[gridClass(s.columns ?? 3), 'designer-grid', { 'drop-end': dropAt?.section === s.key && dropAt.index === shownFields(s).length }]"
-                    :data-section="s.key"
-                    @dragover="onGridOver(s, $event)"
-                    @drop="onGridDrop(s, $event)"
-                  >
-                    <DesignerField
-                      v-for="(f, i) in shownFields(s)"
-                      :key="f.field"
-                      :field="f.field"
-                      :label="labelOf(f.field)"
-                      :def="defFor(f.field)"
-                      :width="f.width ?? 1"
-                      :columns="s.columns ?? 3"
-                      :selected="selField === f.field"
-                      :read-only="isReadOnly(f.field)"
-                      :core="isCore(f.field)"
-                      :detail-only="!formField(f.field)"
-                      :drop-before="dropAt?.section === s.key && dropAt.index === i && dragField !== f.field"
-                      :dragging="dragField === f.field"
-                      @select="select({ kind: 'field', field: f.field })"
-                      @move="(d) => moveField(f.field, d)"
-                      @resize="(w) => resizeField(f.field, w)"
-                      @hide="hide(f.field)"
-                      @dragstart="(e) => onDragStart(f.field, e)"
-                      @dragend="onDragEnd"
-                    />
-                    <p v-if="shownFields(s).length === 0" :class="['designer-empty', 'lg-cell', `lg-w-${s.columns ?? 3}`]">Drop fields here</p>
+                <section
+                  :class="['panel', 'designer-section', { selected: selection?.kind === 'section' && selection.key === s.key }]"
+                  :aria-label="`Section ${s.label}`"
+                >
+                  <div class="panel-header">
+                    <h2>
+                      <button type="button" class="btn-link" :aria-pressed="selection?.kind === 'section' && selection.key === s.key" @click="select({ kind: 'section', key: s.key })">
+                        {{ s.label }}
+                      </button>
+                    </h2>
+                    <span class="muted">{{ sectionWidth(s) }} / {{ SECTION_GRID }} wide · {{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · collapsed on the detail page</template></span>
                   </div>
-                </div>
-              </section>
+                  <div class="panel-body">
+                    <div
+                      :class="[gridClass(s.columns ?? 3), 'designer-grid', { 'drop-end': dropAt?.section === s.key && dropAt.index === shownFields(s).length }]"
+                      :data-section="s.key"
+                      @dragover="onGridOver(s, $event)"
+                      @drop="onGridDrop(s, $event)"
+                    >
+                      <DesignerField
+                        v-for="(f, i) in shownFields(s)"
+                        :key="f.field"
+                        :field="f.field"
+                        :label="labelOf(f.field)"
+                        :def="defFor(f.field)"
+                        :width="f.width ?? 1"
+                        :columns="s.columns ?? 3"
+                        :selected="selField === f.field"
+                        :read-only="isReadOnly(f.field)"
+                        :core="isCore(f.field)"
+                        :detail-only="!formField(f.field)"
+                        :drop-before="dropAt?.section === s.key && dropAt.index === i && dragField !== f.field"
+                        :dragging="dragField === f.field"
+                        @select="select({ kind: 'field', field: f.field })"
+                        @move="(d) => moveField(f.field, d)"
+                        @resize="(w) => resizeField(f.field, w)"
+                        @hide="hide(f.field)"
+                        @dragstart="(e) => onDragStart(f.field, e)"
+                        @dragend="onDragEnd"
+                      />
+                      <p v-if="shownFields(s).length === 0" :class="['designer-empty', 'lg-cell', `lg-w-${s.columns ?? 3}`]">Drop fields here</p>
+                    </div>
+                  </div>
+                </section>
+              </SectionShell>
 
               <template v-if="onFirstTab">
                 <section v-for="a in autoSections" :key="a.key" class="panel designer-section auto" :aria-label="`Not placed: ${a.label}`">
@@ -550,14 +635,16 @@ function setPreview(w: number | null) {
                 </section>
               </template>
               <div>
-                <button type="button" class="btn btn-sm" @click="onAddSection">+ Add section to {{ activeTab?.label }}</button>
+                <button type="button" class="btn btn-sm" @click="onAddSection()">+ Add section to {{ activeTab?.label }}</button>
               </div>
             </div>
           </div>
         </div>
         <p id="designer-keys" class="hint designer-keys">
-          Drag a field to move it, or drag its right edge to resize it. Keyboard: Tab to a field, Enter selects it, Alt+↑ / Alt+↓
-          move it, Alt+← / Alt+→ make it narrower or wider, Delete hides it.
+          Drag a field to move it, or drag its right edge to resize it. Drag a section by the grip on its top edge onto another
+          section's left or right edge to place it beside it, and its edges to resize it on the tab's 12 columns. Keyboard: Tab to
+          a field, Enter selects it, Alt+↑ / Alt+↓ move it, Alt+← / Alt+→ make it narrower or wider, Delete hides it; the same
+          keys work on a section's grip, and the side panel has every property.
         </p>
       </div>
 
@@ -592,13 +679,13 @@ function setPreview(w: number | null) {
   color: var(--c-primary);
 }
 .designer-frame {
-  resize: horizontal;
-  overflow: auto;
+  position: relative;
   min-width: 320px;
   max-width: 100%;
   border: 1px dashed var(--c-border-strong);
   border-radius: var(--radius);
-  padding: var(--sp-3);
+  /* Room on the right for the preview's grip, clear of the sections' own edge handles. */
+  padding: var(--sp-3) 32px var(--sp-3) var(--sp-3);
   background: var(--c-bg);
 }
 .designer-tabs {
@@ -651,7 +738,7 @@ function setPreview(w: number | null) {
 .designer-side {
   position: sticky;
   top: 0;
-  z-index: 3;
+  z-index: 10; /* above the canvas's handles */
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr);
   gap: var(--sp-3);
