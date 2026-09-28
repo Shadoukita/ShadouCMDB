@@ -51,6 +51,13 @@ export const authApi = {
   me: () => unwrap(api.GET("/api/v1/auth/me")),
 };
 
+/** Changes the signed-in user's own password; the API ends their other sessions and keeps this one. */
+export function useChangeOwnPassword() {
+  return useMutation({
+    mutationFn: (body: { currentPassword: string; newPassword: string }) => unwrap(api.PUT("/api/v1/auth/password", { body })),
+  });
+}
+
 // ---------- Users ----------
 
 export function useUserList(query: MaybeRefOrGetter<UserListQuery>, enabled: MaybeRefOrGetter<boolean> = true) {

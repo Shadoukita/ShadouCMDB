@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { RouterLink, useRoute } from "vue-router";
-import { useEnvironmentsAdmin, useStatusesAdmin } from "../../../api/datamodel";
+import { useEnvironmentsAdmin, useLookupLists, useStatusesAdmin } from "../../../api/datamodel";
 import Breadcrumbs from "../../../components/Breadcrumbs.vue";
-import type { FieldSpec } from "../../../components/RecordDialog.vue";
 import { useDocumentTitle } from "../../../lib/composables";
 import LocationsTable from "./LocationsTable.vue";
 import OrderedLookupTable, { type Row } from "./OrderedLookupTable.vue";
@@ -11,16 +10,16 @@ import OwnersTable from "./OwnersTable.vue";
 
 /**
  * Administration › Data model › Lookups: the older status, environment, location and
- * owner tables, which CIs no longer refer to. Status, environment, owner and location
- * are lookup attributes of the CI classes; their values, like the administrator's
- * own lists, are under Dropdowns. The tab is the path
- * (/admin/lookups/statuses…), so each keeps its own URL state.
+ * owner tables, which CIs no longer refer to (migration 0016). Read only, for history:
+ * status, environment, owner and location are lookup attributes of the CI classes, and
+ * their values are edited under Dropdowns, in the list each tab links to. The tab is
+ * the path (/admin/lookups/statuses…), so each keeps its own URL state.
  */
 const TABS = [
-  { kind: "statuses", label: "Statuses" },
-  { kind: "environments", label: "Environments" },
-  { kind: "locations", label: "Locations" },
-  { kind: "owners", label: "Owners" },
+  { kind: "statuses", label: "Statuses", list: "status" },
+  { kind: "environments", label: "Environments", list: "environment" },
+  { kind: "locations", label: "Locations", list: "location" },
+  { kind: "owners", label: "Owners", list: "owner" },
 ] as const;
 
 const route = useRoute();
@@ -31,17 +30,10 @@ useDocumentTitle(() => `${tab.value?.label ?? "Lookups"} · Lookups`);
 const statuses = useStatusesAdmin();
 const environments = useEnvironmentsAdmin();
 
-const STATUS_FIELDS: FieldSpec[] = [
-  { name: "name", label: "Name", type: "text", required: true, hint: "e.g. In service" },
-  { name: "key", label: "Key", type: "key", from: "name" },
-  { name: "isOperational", label: "Operational", type: "checkbox", text: "Counts as live (in service, maintenance)" },
-  { name: "description", label: "Description", type: "textarea" },
-];
-const ENVIRONMENT_FIELDS: FieldSpec[] = [
-  { name: "name", label: "Name", type: "text", required: true, hint: "e.g. Production" },
-  { name: "key", label: "Key", type: "key", from: "name" },
-  { name: "description", label: "Description", type: "textarea" },
-];
+/** The Dropdowns list that replaced the tab's table: the starter template's key, else Dropdowns itself. */
+const lists = useLookupLists();
+const replacement = computed(() => lists.data.value?.find((l) => l.key === tab.value?.list));
+const replacementTo = computed(() => (replacement.value ? { path: "/admin/dropdowns", query: { list: replacement.value.id } } : "/admin/dropdowns"));
 </script>
 
 <template>
@@ -54,9 +46,9 @@ const ENVIRONMENT_FIELDS: FieldSpec[] = [
   </nav>
 
   <div v-if="tab" class="alert alert-warn" role="note">
-    Configuration items no longer use these {{ tab.label.toLowerCase() }}: status, environment, owner and location are lookup
-    attributes of the CI classes, and their values are kept under <RouterLink to="/admin/dropdowns">Dropdowns</RouterLink>.
-    This table is kept for older data.
+    Read only. Configuration items no longer use these {{ tab.label.toLowerCase() }}: status, environment, owner and location
+    are lookup attributes of the CI classes, and their values are edited under Dropdowns. This table is kept for older data.
+    <RouterLink :to="replacementTo">{{ replacement ? `Edit the “${replacement.name}” list under Dropdowns` : "Open Dropdowns" }}</RouterLink>.
   </div>
   <OrderedLookupTable
     v-if="kind === 'statuses'"
@@ -67,12 +59,11 @@ const ENVIRONMENT_FIELDS: FieldSpec[] = [
     :loading="statuses.isLoading.value"
     :error="statuses.error.value"
     :refetch="() => statuses.refetch()"
-    :fields="STATUS_FIELDS"
     :columns="[{ key: 'isOperational', label: 'Operational' }]"
-    empty-hint="Statuses of CIs are now values of the status lookup list."
+    empty-hint="The former statuses table has no rows."
+    readonly
   >
     <template #cell="{ row }"><span v-if="row.isOperational" class="badge ok">Operational</span></template>
-    <template #empty><RouterLink class="btn" to="/admin/templates">Install the IT infrastructure starter</RouterLink></template>
   </OrderedLookupTable>
   <OrderedLookupTable
     v-else-if="kind === 'environments'"
@@ -83,8 +74,8 @@ const ENVIRONMENT_FIELDS: FieldSpec[] = [
     :loading="environments.isLoading.value"
     :error="environments.error.value"
     :refetch="() => environments.refetch()"
-    :fields="ENVIRONMENT_FIELDS"
-    empty-hint="Environments separate production from test, staging and development."
+    empty-hint="The former environments table has no rows."
+    readonly
   />
   <LocationsTable v-else-if="kind === 'locations'" />
   <OwnersTable v-else-if="kind === 'owners'" />
