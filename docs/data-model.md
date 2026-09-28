@@ -14,7 +14,7 @@ Migrations: [`sql/migrations/`](../sql/migrations/)
 (`0000_extensions`, `0001_core_schema`, `0002_integrity_triggers`,
 `0003_users_and_permission_profiles`, `0004_data_model_admin`, `0005_ui_settings`, `0006_auth_audit`,
 `0007_audit_retention`, `0008_cmdb_schema_and_areas`, `0009_type_tables`, `0010_api_tokens` …
-`0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`).
+`0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -192,6 +192,49 @@ The template contains:
   their names, statuses and other values, and 8 relationships (a CRM service down to its rack).
 - It installs into the area **Infrastruktur** (schema `infrastruktur`), creating the area if needed,
   and builds the type tables and reporting views in the same transaction.
+
+## Detail and form layouts (UI settings, layout format v2)
+
+A class's layout lives in the UI settings document (`ui_settings.settings.layouts[]`, one per class,
+validated by the API as `UiClassLayout`) and applies to both the CI form and the detail page. It is
+presentation, not data, so it is JSON in the settings document rather than tables, and it names classes
+and fields by key. Administrators edit it in **Administration › Customization › Detail and form layout**
+(the form designer).
+
+```
+layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
+  tabs[]:     { key, label, sections[] }                   key unique among the layout's tabs
+  sections[]: { key, label, columns 1–4 (default 3),       key unique across the whole layout
+                collapsed, fields[] }
+  fields[]:   { field, width 1–4 (default 1) }             field placed once; width ≤ the section's columns
+```
+
+- `field` is a core field (`ident`, `validFrom`, `validUntil`), a detail-page field (`label`, `class`,
+  `active`, `createdAt`, `updatedAt`) or `attributes.<key>`. Fields fill a section's grid row by row in
+  the order given; `width` is the number of columns a field spans. Narrow screens use at most two
+  columns (below 820 px of content width) and then one (below 520 px); widths shrink with them.
+- **Unplaced fields are never lost.** Anything the tabs do not place and that is not hidden (an
+  attribute added to the class later, for example) follows at the end of the first tab: a General
+  section with the core fields and the attributes without a group, then the attribute groups. The
+  detail page's "Active" follows "Valid until" wherever that is placed.
+- **Core fields can be moved, not hidden.** `hiddenFields` may not contain `ident`, `validFrom` or
+  `validUntil` (the API answers `400` with the path, e.g. `settings.layouts.0.hiddenFields.1`).
+  They can still be read-only on the form. A required attribute that a layout hides or makes read-only
+  stays editable on a new CI and is reported as the issue `required_field_not_editable`.
+- **Server-side validation** on `PUT /api/v1/ui-settings` and configuration import: the schema (key
+  patterns, 1–4 columns and widths, at most 20 tabs, 50 sections per tab, 200 fields per section) and
+  the cross-field rules above (unique keys, a field placed once, width within the section's columns,
+  core fields not hidden). References to attributes that do not exist are accepted, dropped from the
+  effective settings and listed as `issues`, like everywhere else in the document.
+
+**Layout format v1 and migration 0017.** Before 0017 a layout was `panels[]` (`key`, `label`,
+ordered `fields`, `collapsed`). Migration `0017_layout_tabs` converts the stored settings: the panels
+become the sections of one tab "General" (key `general`), in order, each with 3 columns and every field
+1 column wide; `ident`, `validFrom` and `validUntil` are taken out of `hiddenFields`; nothing else in
+the document changes. The result is saved as a new settings version by `migration 0017`, so the
+previous version stays in the history. The API still accepts `panels` (older exports, API clients,
+restoring a version saved before 0017) and converts them the same way; it never returns them, and a
+layout may not send both `panels` and `tabs`. Only the settings document changes; no table does.
 
 ## Areas, type tables and the DDL engine
 

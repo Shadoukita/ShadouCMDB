@@ -322,13 +322,14 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
 | `navigation.entries[]` | Menu order. `type: page` (`dashboard`, `inventory`, `search`, `audit_log`, `administration`), `type: class` (`classKey`) or `type: section` (`key`, `label`, `items[]` of classes). Each entry can be renamed (`label`) and `hidden`. Pages and classes not listed follow in their default order. |
 | `dashboard.widgets[]` | Widgets in order: `count_by_class` (optional `classKeys`), `count_by_lookup` (`lookupListKey`: CIs per value of that list, e.g. `status`), `recent_changes` (`limit`), `saved_search` (`search`: `classKeys`, `includeSubclasses`, `filters`, `sort`). `null` keeps the built-in dashboard. |
 | `listViews[]` | Per class: `columns` (built-in fields `label`, `ident`, `class`, `validFrom`, `validUntil`, `active`, `createdAt`, `updatedAt`, or `attributes.<key>`), `defaultSort`, `defaultFilters` (`q`, and `lookups`: lookup list key → value keys), `pageSize`. |
-| `layouts[]` | Per class: `panels[]` (`key`, `label`, ordered `fields`, `collapsed`), `hiddenFields`, `readOnlyFields`. Fields not placed in a panel follow in a trailing panel grouped by attribute group. |
+| `layouts[]` | Per class (layout format v2): `tabs[]` (`key`, `label`, `sections[]`), each section `key` (unique in the layout), `label`, `columns` (1–4, default 3), `collapsed` and `fields[]` of `{ field, width }` (1–4 columns, at most the section's), plus `hiddenFields` and `readOnlyFields`. Fields no section places follow at the end of the first tab, grouped by attribute group. `ident`, `validFrom` and `validUntil` cannot be hidden. The older `panels[]` format is still accepted and converted to one "General" tab (see [data model](data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2)). |
 
 - **References are keys.** Classes, attributes and lookups are named by key, so a document moves between installs.
   A reference to something that does not exist is accepted: `GET` returns the *effective* settings without it and
   lists it in `issues[]` (`unknown_class`, `unknown_attribute`, `unknown_lookup_list`, `unknown_lookup_value`, with a path into the stored
   document). A required attribute that a layout hides or makes read-only is flagged as
-  `required_field_not_editable`. The stored document keeps every reference, so a class that comes back (e.g. from
+  `required_field_not_editable`; a hidden core field in a restored older version as `core_field_hidden` (it is
+  shown anyway). The stored document keeps every reference, so a class that comes back (e.g. from
   an import) reappears.
 - **Versioned and audited.** `PUT` takes `{ version, settings, comment? }`: the version you loaded, or `409
   VERSION_CONFLICT`. Each save is a new version kept in history (`GET /ui-settings/versions`); `POST
