@@ -1,4 +1,4 @@
-//! Secrets the server generates for itself (`server_keys`, migration 0020).
+//! Secrets the server generates for itself (`server_keys`, migration 0021).
 
 use sqlx::PgPool;
 

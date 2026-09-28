@@ -25,8 +25,8 @@ use crate::config::DatabaseConfig;
 /// keys are secrets the server makes for itself: a restored database gets a
 /// fresh one, and at worst a sign-in in progress ends with "expired".
 ///
-/// `oidc_login_states` stays on the list although migration 0020 dropped it:
-/// backups from releases at levels 0014–0019 left it out, and restoring one
+/// `oidc_login_states` stays on the list although migration 0021 dropped it:
+/// backups from releases at levels 0014–0020 left it out, and restoring one
 /// first migrates to that level, which creates the table again. Without the
 /// legacy name the restore would refuse that table as missing from the backup.
 pub const EXCLUDED_TABLES: &[&str] = &["sessions", "mfa_challenges", "server_keys", "oidc_login_states"];
