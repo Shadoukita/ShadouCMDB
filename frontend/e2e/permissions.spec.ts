@@ -151,14 +151,14 @@ test("class permissions are enforced per class and per operation", async ({ requ
   const crmDb = await ciIdByName(request, "crm-db");
   const esx = await ciIdByName(request, "fra1-esx-01");
 
-  // View: lists only hold the classes the user may view; a CI of any other class is refused by id.
+  // View: lists only hold the classes the user may view; a CI of any other class answers 404 by id, like a missing one.
   const list = (await (await restricted.get("/configuration-items?limit=200")).json()) as { data: { classId: string }[] };
   expect(list.data.length).toBeGreaterThan(0);
   expect(new Set(list.data.map((c) => c.classId))).toEqual(new Set([applicationId, serverId]));
   const databases = await restricted.get(`/configuration-items?classId=${databaseId}`);
   expect(databases.status()).toBe(200);
   expect((await databases.json()).data).toEqual([]);
-  await expectError(await restricted.get(`/configuration-items/${crmDb}`), 403, "FORBIDDEN");
+  await expectError(await restricted.get(`/configuration-items/${crmDb}`), 404, "NOT_FOUND");
   expect((await restricted.get(`/configuration-items/${esx}`)).status()).toBe(200);
 
   // Create: allowed for Application only.
@@ -174,7 +174,7 @@ test("class permissions are enforced per class and per operation", async ({ requ
   const esxBefore = await apiGet<{ attributes: Record<string, unknown>; version: number }>(request, `/configuration-items/${esx}`);
   await expectError(await restricted.send("PATCH", `/configuration-items/${esx}`, { attributes: { notes: "should not stick" }, version: esxBefore.version }), 403, "FORBIDDEN");
   const dbBefore = await apiGet<{ version: number }>(request, `/configuration-items/${crmDb}`);
-  await expectError(await restricted.send("PATCH", `/configuration-items/${crmDb}`, { attributes: { notes: "should not stick" }, version: dbBefore.version }), 403, "FORBIDDEN");
+  await expectError(await restricted.send("PATCH", `/configuration-items/${crmDb}`, { attributes: { notes: "should not stick" }, version: dbBefore.version }), 404, "NOT_FOUND");
 
   // Delete: refused everywhere (the profile grants no delete).
   await expectError(await restricted.send("DELETE", `/configuration-items/${app.id}`), 403, "FORBIDDEN");
