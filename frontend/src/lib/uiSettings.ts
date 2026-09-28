@@ -410,6 +410,8 @@ export function normalizeLayout(l: UiClassLayout): UiClassLayout {
     tabs: (l.tabs ?? []).map((t) => ({
       key: t.key,
       label: t.label,
+      // Kept with the sections' frames: a free tab saved without it would go back on the grid.
+      ...(t.placement ? { placement: t.placement } : {}),
       // Content blocks (a `kind` other than fields: notes, panels) are kept as stored (a copy: the draft is edited), without fields.
       sections: (t.sections ?? []).map((s) =>
         sectionKind(s) !== "fields"

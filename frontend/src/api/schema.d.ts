@@ -3449,12 +3449,22 @@ export interface components {
             text?: string;
             /** @description Start collapsed on the detail page */
             collapsed?: boolean;
+            /**
+             * @description Where the section sits in a tab with `placement` free. Sent in a grid tab, it converts the tab back to
+             *     the grid on save (see the tab's `placement`); a stored grid tab never has frames.
+             */
+            frame?: components["schemas"]["UiSectionFrame"];
         };
         /** @description A tab of the detail page and the form */
         UiLayoutTab: {
             /** @description Stable machine key, lower_snake_case */
             key: string;
             label: string;
+            /**
+             * @description How the tab arranges its sections (absent: grid). grid: sections fill the 12-column grid row by row. free: each section is a window placed by its `frame`, and windows may overlap. On save, a free tab's sections without a frame get one from their grid position (below the existing windows), z becomes 1..n and the sections are ordered by y, then x: the reading order, used on narrow screens, in print and by screen readers. A grid tab sent with frames is converted back: sections ordered by y, then x, width from w, and the frames dropped.
+             * @enum {string}
+             */
+            placement?: "grid" | "free";
             sections?: components["schemas"]["UiLayoutSection"][];
         };
         /** @description Inventory filters, by key */
@@ -3555,6 +3565,45 @@ export interface components {
                 /** @enum {string} */
                 direction?: "asc" | "desc";
             } | null;
+        };
+        /**
+         * @description A window on a free tab: position and size, and its place in the stacking order. `x` and `w` are
+         *     fractions of the tab's width, so windows scale with the browser window; `y` and `h` are px from the top
+         *     of the tab. The window scrolls its own content, so an overlapped window loses nothing.
+         */
+        UiSectionFrame: {
+            /**
+             * Format: double
+             * @description Left edge, as a fraction of the tab's width (0: the left edge). `x + w` is at most 1.
+             */
+            x: number;
+            /**
+             * Format: int32
+             * @description Top edge in px from the top of the tab
+             */
+            y: number;
+            /**
+             * Format: double
+             * @description Width, as a fraction of the tab's width (1: the full width)
+             */
+            w: number;
+            /**
+             * Format: int32
+             * @description Height in px
+             */
+            h: number;
+            /**
+             * Format: int32
+             * @description Stacking order: a higher z is drawn on top. Saved as 1..n per tab, in the order given (ties: the
+             *     section order).
+             */
+            z: number;
+            /**
+             * Format: int32
+             * @description Smallest height in px the window may be resized to, and its least height when the tab stacks the
+             *     windows on a narrow screen; at most `h`
+             */
+            minH?: number;
         };
         /** @description The current UI settings as the web UI applies them */
         UiSettings: {

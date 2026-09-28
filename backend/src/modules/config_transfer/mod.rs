@@ -1508,11 +1508,12 @@ async fn run(
     if let Some(section) = &file.ui_settings {
         im.section("uiSettings", 0);
         let old = current.ui_settings.as_ref().map(|u| u.settings.clone()).unwrap_or_default();
-        let changed = ui::save_in(im.conn, im.ctx, None, &section.settings, Some("Imported from a configuration file"))
+        let settings = section.settings.clone().normalized();
+        let changed = ui::save_in(im.conn, im.ctx, None, &settings, Some("Imported from a configuration file"))
             .await
             .map_err(|e| at("uiSettings.settings", e))?;
         if changed {
-            im.record("uiSettings", "settings".into(), Some(ChangeAction::Update), diff(&old, &section.settings));
+            im.record("uiSettings", "settings".into(), Some(ChangeAction::Update), diff(&old, &settings));
         } else {
             im.record("uiSettings", "settings".into(), None, Vec::new());
         }
