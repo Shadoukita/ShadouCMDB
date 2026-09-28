@@ -83,7 +83,7 @@ const buttonLabel = (t: Template) =>
       <EmptyState title="Your CMDB is empty">
         There are no CI classes, relationship types or lookups yet, so nobody can record a configuration item. Install a
         starter template to begin with a ready-made model you can change afterwards, or build your own under
-        <RouterLink to="/admin/classes">CI classes</RouterLink> and <RouterLink to="/admin/lookups">Lookups</RouterLink>.
+        <RouterLink to="/admin/classes">CI classes</RouterLink> and <RouterLink to="/admin/dropdowns">Dropdowns</RouterLink>.
       </EmptyState>
     </section>
     <p v-else class="muted">
