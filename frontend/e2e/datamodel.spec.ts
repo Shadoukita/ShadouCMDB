@@ -179,7 +179,7 @@ test("the CI form and detail page follow the new definitions", async ({ page }) 
   await snap(page, "33-ci-form-from-admin-model");
   await page.getByRole("button", { name: `Create ${CLASS}` }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(CI);
-  const attrs = page.locator("dl.props").nth(1);
+  const attrs = page.locator(".layout-panels");
   await expect(attrs).toContainText("Gold");
   await expect(attrs).toContainText("passive");
   await expect(attrs.locator("dt", { hasText: "Rack units" }).locator("+ dd")).toHaveText("2");
