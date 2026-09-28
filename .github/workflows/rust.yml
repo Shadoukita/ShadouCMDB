@@ -111,6 +111,10 @@ jobs:
           # Only the audit_log trigger may move the hash-chain head (migration 0018), whatever the API role is called.
           test "$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc \
             "SELECT has_table_privilege('invqa.api', 'cmdb.audit_log_chain_head', 'SELECT,INSERT,UPDATE,DELETE')")" = f
+          # The API reads and adds server keys but never changes or deletes them (migration 0021).
+          test "$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc \
+            "SELECT has_table_privilege('invqa.api', 'cmdb.server_keys', 'SELECT') AND has_table_privilege('invqa.api', 'cmdb.server_keys', 'INSERT')
+                    AND NOT has_table_privilege('invqa.api', 'cmdb.server_keys', 'UPDATE,DELETE,TRUNCATE')")" = t
           $B prune-audit --older-than 180d
           API_HOST=127.0.0.1 API_PORT=3002 API_DOCS=public $B serve > serve-custom.log &
           PID=$!

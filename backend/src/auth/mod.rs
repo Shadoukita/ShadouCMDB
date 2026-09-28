@@ -81,6 +81,8 @@ pub struct AuthState {
     pub password_throttle: LoginThrottle,
     /// Discovered OIDC providers and their signing keys.
     pub oidc: sso::oidc::Cache,
+    /// Seals the pending OIDC sign-in into its cookie; loaded on first use.
+    oidc_state_key: tokio::sync::OnceCell<sso::login_state::SealingKey>,
     /// Set once the "session cookie without Secure under auto" warning has been logged.
     insecure_cookie_warned: AtomicBool,
 }
@@ -92,6 +94,7 @@ impl AuthState {
             throttle: LoginThrottle::default(),
             password_throttle: LoginThrottle::per_key(),
             oidc: sso::oidc::Cache::default(),
+            oidc_state_key: tokio::sync::OnceCell::new(),
             insecure_cookie_warned: AtomicBool::new(false),
         }
     }
@@ -114,6 +117,13 @@ impl AuthState {
             );
         }
         secure
+    }
+
+    /// The key sealing the `shadoucmdb_oidc` cookie, shared by every API
+    /// process through `server_keys`. A database error is not cached: the
+    /// next sign-in tries again.
+    pub async fn oidc_state_key(&self, pool: &PgPool) -> sqlx::Result<&sso::login_state::SealingKey> {
+        self.oidc_state_key.get_or_try_init(|| sso::login_state::load_or_create_key(pool)).await
     }
 }
 

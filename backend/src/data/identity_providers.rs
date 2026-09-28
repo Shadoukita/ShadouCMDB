@@ -1,10 +1,8 @@
-//! SQL for identity providers (OIDC, LDAP), their group mappings, pending
-//! OIDC sign-ins and the accounts that belong to a provider.
-
-use std::time::Duration;
+//! SQL for identity providers (OIDC, LDAP), their group mappings and the
+//! accounts that belong to a provider.
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgConnection, PgPool};
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 pub const TABLE: &str = "identity_providers";
@@ -211,62 +209,4 @@ pub async fn username_taken(conn: &mut PgConnection, username: &str, except: Opt
 
 pub async fn user_ids(conn: &mut PgConnection, provider_id: Uuid) -> sqlx::Result<Vec<Uuid>> {
     sqlx::query_scalar("SELECT id FROM users WHERE identity_provider_id = $1").bind(provider_id).fetch_all(conn).await
-}
-
-// ---------------------------------------------------------------------------
-// Pending OIDC sign-ins
-// ---------------------------------------------------------------------------
-
-pub struct NewLoginState<'a> {
-    pub state_hash: &'a [u8],
-    pub provider_id: Uuid,
-    pub nonce: &'a str,
-    pub code_verifier: &'a str,
-    pub return_to: Option<&'a str>,
-    pub ttl: Duration,
-}
-
-pub async fn create_login_state(pool: &PgPool, s: &NewLoginState<'_>) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM oidc_login_states WHERE expires_at <= now()").execute(pool).await?;
-    sqlx::query(
-        "INSERT INTO oidc_login_states (state_hash, provider_id, nonce, code_verifier, return_to, expires_at)
-         VALUES ($1, $2, $3, $4, $5, now() + $6::interval)",
-    )
-    .bind(s.state_hash)
-    .bind(s.provider_id)
-    .bind(s.nonce)
-    .bind(s.code_verifier)
-    .bind(s.return_to)
-    .bind(format!("{} seconds", s.ttl.as_secs()))
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct LoginState {
-    pub provider_id: Uuid,
-    pub nonce: String,
-    pub code_verifier: String,
-    pub return_to: Option<String>,
-}
-
-/// Removes the pending sign-in and returns it if it has not expired: each
-/// state can be redeemed once.
-pub async fn take_login_state(pool: &PgPool, state_hash: &[u8]) -> sqlx::Result<Option<LoginState>> {
-    sqlx::query_as(
-        "DELETE FROM oidc_login_states WHERE state_hash = $1
-         RETURNING provider_id, nonce, code_verifier, return_to, expires_at > now() AS live",
-    )
-    .bind(state_hash)
-    .fetch_optional(pool)
-    .await
-    .map(|row: Option<(Uuid, String, String, Option<String>, bool)>| {
-        row.filter(|r| r.4).map(|(provider_id, nonce, code_verifier, return_to, _)| LoginState {
-            provider_id,
-            nonce,
-            code_verifier,
-            return_to,
-        })
-    })
 }

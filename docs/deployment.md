@@ -177,7 +177,7 @@ must be percent-encoded (`@` becomes `%40`), and hex needs none.
 | Role | Used by | Variable | May |
 | --- | --- | --- | --- |
 | `shadoucmdb_owner` | `shadoucmdb migrate`, `restore`, `factory-reset`, `decommission` | `MIGRATION_DATABASE_URL` | Own the database and the `cmdb` system schema; run migrations. Member of `shadoucmdb_app`. |
-| `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log` and `schema_changes`; no `EXECUTE` on the purge. Owns the area schemas (`CREATE` on the database). |
+| `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log`, `schema_changes` and `server_keys`; no `EXECUTE` on the purge. Owns the area schemas (`CREATE` on the database). |
 | `shadoucmdb_maintenance` | `shadoucmdb prune-audit` | `MAINTENANCE_DATABASE_URL` | Execute `cmdb.prune_audit_log()`, nothing else. |
 
 These are the default names; any others work, as does a database not named `shadoucmdb`.
@@ -307,6 +307,11 @@ All optional; every variable is in [`.env.example`](../.env.example).
 - **Timeouts:** `HTTP_HEADER_READ_TIMEOUT_SECS` (default 10) closes connections that do not finish
   their headers in time; `HTTP_REQUEST_TIMEOUT_SECS` (default 120) answers `408 REQUEST_TIMEOUT` to a
   request that runs longer. A reverse proxy in front should have its own, shorter limits.
+- **Request rate limits:** the server does not limit requests per client address, because it cannot
+  tell a real client address from a forged `X-Forwarded-For` without a trusted proxy. Limit the
+  anonymous routes (`/api/v1/auth/*`) per client address at the reverse proxy, which sees the real
+  one. Sign-in attempts are throttled per username by the server either way, and starting an OIDC
+  sign-in stores nothing, so it cannot fill up the server.
 - **Client details:** `AUDIT_CAPTURE_CLIENT_IP=false` and `AUDIT_CAPTURE_USER_AGENT=false` stop the
   server recording the IP address and User-Agent of sign-ins and sessions (for example where a works
   council agreement rules them out). Changes stay attributed to the signed-in user.

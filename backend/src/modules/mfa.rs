@@ -13,12 +13,13 @@ use utoipa::ToSchema;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use uuid::Uuid;
 
-use super::auth::{check_current_password, login_field_schema};
+use super::auth::{check_current_password, current_password_attempt, login_field_schema};
 use super::users;
 use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
 use crate::auth::events::{self, LoginMethod};
 use crate::auth::permissions::GlobalPermission;
+use crate::auth::throttle::Attempt;
 use crate::auth::{AuthState, Principal, totp};
 use crate::data::auth as auth_data;
 use crate::data::crud::AuditAction;
@@ -240,22 +241,28 @@ async fn confirm(pool: &PgPool, ctx: &RequestContext, b: TotpConfirmation) -> Re
     Ok(codes)
 }
 
-/// The password, then a current second factor. A wrong code counts against
-/// the same per-user lock as a wrong password and is audited as `mfa.failure`.
+/// After the password (its `attempt`), a current second factor. A wrong code
+/// counts against the same per-user lock as a wrong password and is audited as
+/// `mfa.failure`; only a right code clears the count.
 async fn reauthenticate(
     pool: &PgPool,
-    auth: &AuthState,
     ctx: &RequestContext,
     tx: &mut PgConnection,
+    attempt: Attempt<'_>,
     b: &MfaReauthentication,
     stage: &str,
 ) -> Result<(), AppError> {
     let me = me(ctx)?;
     match verify_second_factor(tx, me.user_id, &b.code).await? {
-        Some(LoginMethod::RecoveryCode) => audit_recovery_code_used(tx, ctx, me.user_id, &me.username, stage).await,
-        Some(_) => Ok(()),
+        Some(method) => {
+            attempt.success();
+            if matches!(method, LoginMethod::RecoveryCode) {
+                audit_recovery_code_used(tx, ctx, me.user_id, &me.username, stage).await?;
+            }
+            Ok(())
+        }
         None => {
-            let locked = auth.password_throttle.failure(&me.user_id.to_string());
+            let locked = attempt.failure();
             let extra = json!({ "stage": stage, "lockedForSeconds": locked.map(|d| d.as_secs().max(1)) });
             let mut own = pool.begin().await?;
             events::mfa(&mut own, ctx, AuditAction::MfaFailure, me.user_id, &me.username, extra).await?;
@@ -273,11 +280,13 @@ async fn disable(
     b: MfaReauthentication,
 ) -> Result<(), AppError> {
     let me = me(ctx)?;
-    check_current_password(pool, auth, me, &b.current_password).await?;
+    let attempt = current_password_attempt(pool, auth, me, &b.current_password).await?;
     let mut tx = pool.begin().await?;
     let Some(t) = data::get_totp(&mut tx, me.user_id, true).await? else { return Err(not_enabled()) };
     if t.confirmed {
-        reauthenticate(pool, auth, ctx, &mut tx, &b, "disable").await?;
+        reauthenticate(pool, ctx, &mut tx, attempt, &b, "disable").await?;
+    } else {
+        attempt.success();
     }
     if data::delete_mfa(&mut tx, me.user_id).await? {
         let extra = json!({ "reason": "self_service" });
@@ -295,12 +304,12 @@ async fn regenerate(
     b: MfaReauthentication,
 ) -> Result<RecoveryCodes, AppError> {
     let me = me(ctx)?;
-    check_current_password(pool, auth, me, &b.current_password).await?;
+    let attempt = current_password_attempt(pool, auth, me, &b.current_password).await?;
     let mut tx = pool.begin().await?;
     if !data::get_totp(&mut tx, me.user_id, true).await?.is_some_and(|t| t.confirmed) {
         return Err(not_enabled());
     }
-    reauthenticate(pool, auth, ctx, &mut tx, &b, "recovery_codes").await?;
+    reauthenticate(pool, ctx, &mut tx, attempt, &b, "recovery_codes").await?;
     let codes = new_recovery_codes(&mut tx, me.user_id).await?;
     let extra = json!({ "recoveryCodes": codes.codes.len() });
     events::mfa(&mut tx, ctx, AuditAction::MfaRecoveryCodes, me.user_id, &me.username, extra).await?;
@@ -328,7 +337,7 @@ pub async fn reset(pool: &PgPool, ctx: &RequestContext, user_id: Uuid) -> Result
 // ---------------------------------------------------------------------------
 
 const TAG: &str = "Authentication";
-const LOCK_NOTE: &str = "400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After).";
+const LOCK_NOTE: &str = "400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does.";
 
 pub fn routes() -> Vec<Route> {
     vec![
@@ -636,6 +645,44 @@ mod tests {
         let (status, v, _) = second_step(&app, &spent, &totp::code_at(&secret, step + 1)).await;
         let expired = v["error"]["message"].as_str().is_some_and(|m| m.contains("expired"));
         assert_eq!((status, expired), (401, true), "the fifth wrong code drops the challenge: {v}");
+        db.drop().await;
+    }
+
+    /// With the session and the password, guessing the code to turn MFA off
+    /// or get new recovery codes locks like guessing the password: a right
+    /// password does not clear the count, not even on a password-only
+    /// endpoint in between (GH#141).
+    #[tokio::test]
+    async fn right_password_wrong_code_locks_reauthentication() {
+        let Some(db) = scratch::database("right_password_wrong_code_locks_reauthentication").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, _) = setup(&app).await;
+        let step = settled_step().await;
+        let (secret, _) = enrol(&app, pool, &session, step).await;
+        let with = |c: &str| json!({ "currentPassword": PASSWORD, "code": c });
+        let password_only = json!({ "currentPassword": PASSWORD });
+
+        for i in 0..crate::auth::throttle::FREE_FAILURES {
+            let (method, path) = match i % 2 {
+                0 => ("DELETE", "/api/v1/auth/mfa/totp"),
+                _ => ("POST", "/api/v1/auth/mfa/recovery-codes"),
+            };
+            let (status, v, _) =
+                call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(password_only.clone())).await;
+            assert_eq!((status, code(&v)), (409, "CONFLICT"), "{i}: already set up: {v}");
+            let (status, v, _) = call(&app, method, path, &session, Some(with("000000"))).await;
+            assert_eq!((status, v["error"]["details"][0]["field"].as_str()), (400, Some("code")), "{i}: {v}");
+        }
+        let right = totp::code_at(&secret, step);
+        let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(with(&right))).await;
+        assert_eq!((status, code(&v)), (429, "RATE_LIMITED"), "locked: not even the right code is checked");
+        let (status, _, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(password_only)).await;
+        assert_eq!(status, 429, "the password-only endpoints share the lock");
+
+        // Once the lock has passed, the right password and code go through.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(with(&right))).await;
+        assert_eq!(status, 204, "{v}");
         db.drop().await;
     }
 

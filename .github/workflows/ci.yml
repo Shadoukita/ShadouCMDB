@@ -1,7 +1,8 @@
 name: CI
 
 # Node workspaces: the frontend (lint, typecheck, API types, build), and the
-# Playwright walk of the UI served by the release binary against PostgreSQL.
+# Playwright walk of the UI served by the release binary against PostgreSQL,
+# and the changelog fragment check.
 # The Rust checks are in rust.yml, the release dry run in release.yml.
 
 on:
@@ -13,6 +14,19 @@ permissions:
   contents: read
 
 jobs:
+  changelog:
+    name: Changelog fragments
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Entries go in changelog.d/<issue>.md; *Unreleased* in CHANGELOG.md stays a pointer, so pull
+      # requests do not conflict there (CONTRIBUTING.md#changelog). The release PR's collected
+      # version section sits below *Unreleased* and passes.
+      - name: Fragments are valid, CHANGELOG.md Unreleased is not edited
+        run: node tools/changelog/collect.mjs --check
+
   build:
     runs-on: ubuntu-latest
     steps:

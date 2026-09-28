@@ -967,4 +967,124 @@ pub(crate) mod tests {
 
         db.drop().await;
     }
+
+    /// A token with the Administrator profile may read identity providers
+    /// and run the connection test, but not add, change (settings or group
+    /// mappings) or delete one: a provider or mapping it set up would keep
+    /// signing people in after the token's revocation (GH #137).
+    #[tokio::test]
+    async fn identity_provider_administration_needs_a_session() {
+        let Some(db) = scratch::database("identity_provider_administration_needs_a_session").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let session = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE is_builtin AND name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        // Nothing listens on port 1, so the connection test fails fast.
+        let directory = |name: &str, group: &str| {
+            json!({ "kind": "ldap", "name": name,
+                "ldap": { "url": "ldaps://127.0.0.1:1", "userBaseDn": "dc=example,dc=com" },
+                "groupMappings": [{ "group": group, "profileId": administrators }] })
+        };
+        let (status, idp, _) = call(
+            &app,
+            "POST",
+            "/api/v1/admin/identity-providers",
+            &session,
+            Some(directory("Corporate AD", "cn=cmdb-admins,dc=example,dc=com")),
+        )
+        .await;
+        assert_eq!(status, 201, "{idp}");
+        let idp_path = format!("/api/v1/admin/identity-providers/{}", idp["id"].as_str().unwrap());
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let create = json!({ "name": "automation", "profileId": administrators, "expiresAt": expires });
+        let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(create)).await;
+        assert_eq!(status, 201, "{created}");
+        let tok = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+
+        // Reading and the connection test (it changes nothing) stay open to the token.
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/identity-providers", &tok, None).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "GET", &idp_path, &tok, None).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "POST", &format!("{idp_path}/test"), &tok, Some(json!({}))).await;
+        assert_eq!((status, v["ok"].as_bool()), (200, Some(false)), "{v}");
+
+        // Every provider write is refused.
+        let writes = [
+            (
+                "POST",
+                "/api/v1/admin/identity-providers".to_owned(),
+                Some(directory("Rogue directory", "cn=everyone,dc=example,dc=com")),
+            ),
+            (
+                "PATCH",
+                idp_path.clone(),
+                Some(
+                    json!({ "groupMappings": [{ "group": "cn=everyone,dc=example,dc=com", "profileId": administrators }] }),
+                ),
+            ),
+            ("PATCH", idp_path.clone(), Some(json!({ "ldap": { "url": "ldaps://attacker.example.com" } }))),
+            ("PATCH", idp_path.clone(), Some(json!({ "isEnabled": false }))),
+            ("DELETE", idp_path.clone(), None),
+        ];
+        for (method, path, body) in writes {
+            let (status, v, _) = call(&app, method, &path, &tok, body).await;
+            assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{method} {path}: {v}");
+        }
+
+        let (status, v, _) = call(&app, "GET", &idp_path, &session, None).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(
+            (v["isEnabled"].as_bool(), v["ldap"]["url"].as_str(), v["groupMappings"][0]["group"].as_str()),
+            (Some(true), Some("ldaps://127.0.0.1:1"), Some("cn=cmdb-admins,dc=example,dc=com")),
+            "{v}"
+        );
+        let providers: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM identity_providers").fetch_one(pool).await.unwrap();
+        assert_eq!(providers, 1);
+        let outcomes: Vec<String> =
+            sqlx::query_scalar("SELECT new_value->>'outcome' FROM audit_log WHERE action = 'token.use' ORDER BY id")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            outcomes,
+            [
+                "accepted",
+                "accepted",
+                "accepted",
+                "session_only",
+                "session_only",
+                "session_only",
+                "session_only",
+                "session_only"
+            ]
+        );
+
+        // A session still administers providers.
+        let remap =
+            json!({ "groupMappings": [{ "group": "cn=cmdb-owners,dc=example,dc=com", "profileId": administrators }] });
+        let (status, v, _) = call(&app, "PATCH", &idp_path, &session, Some(remap)).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "DELETE", &idp_path, &session, None).await;
+        assert_eq!(status, 204, "{v}");
+
+        db.drop().await;
+    }
 }

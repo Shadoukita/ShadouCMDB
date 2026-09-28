@@ -8,7 +8,8 @@
 | `frontend/` | Vue 3 + Vite + TanStack Query web UI. Talks to the API only. |
 | `sql/` | Database artifacts: migrations, bootstrap scripts, ER diagram. |
 | `docs/` | Architecture, API, deployment and data-model documentation. |
-| `tools/` | Smoke test (`smoke/smoke.ts`, runs against any API URL), the in-place upgrade check (`upgrade/upgrade-check.ts`), the OpenAPI diff script, and the pinned CycloneDX generator for the SBOM (`sbom/`, own lockfile). |
+| `changelog.d/` | Pending changelog entries, one file per change, collected into `CHANGELOG.md` at release ([Changelog](#changelog)). |
+| `tools/` | Smoke test (`smoke/smoke.ts`, runs against any API URL), the in-place upgrade check (`upgrade/upgrade-check.ts`), the OpenAPI diff script, the pinned CycloneDX generator for the SBOM (`sbom/`, own lockfile), and the changelog collector (`changelog/collect.mjs`). |
 | `.github/` | CI, upgrade, supply-chain, CodeQL and release workflows, Dependabot config, pull request template. |
 | `deploy/` | systemd unit, release Dockerfile, READMEs shipped inside the release archives. |
 
@@ -18,8 +19,10 @@
    `shaa-<number>-<short-slug>`, e.g. `shaa-3-backend-api`.
 2. Commit in small, reviewable steps. Write commit subjects in the imperative
    ("Add CI search endpoint") and reference the issue in the body (`Refs SHAA-3`).
-3. Push the branch and open a pull request against `main` using the template.
-4. CI must be green before merging: **CI** (frontend typecheck, API types, build), **Rust** (fmt, clippy,
+3. If operators will notice the change, add a changelog fragment `changelog.d/SHAA-<n>.md`
+   ([Changelog](#changelog)). Never edit `CHANGELOG.md` in a feature or fix PR.
+4. Push the branch and open a pull request against `main` using the template.
+5. CI must be green before merging: **CI** (frontend typecheck, API types, build, changelog fragments), **Rust** (fmt, clippy,
    tests, `openapi --check`, PostgreSQL integration and smoke suite, Windows, Docker), **Upgrade**
    (in-place upgrade from each published release, no data lost or changed), **Supply chain**
    (cargo-deny, npm audit, gitleaks, SBOM, dependency review, actions pinned by SHA), **CodeQL** and, for
@@ -61,6 +64,43 @@ history.
 - **PostgreSQL is external.** No code may assume `localhost` or a co-located database.
 - Keep `README.md`, `docs/` and `sql/diagrams/` accurate in the same PR as the change that affects them.
 
+## Changelog
+
+[`CHANGELOG.md`](CHANGELOG.md) lists the changes operators need to know about or act on; everything
+else is in the generated notes of each GitHub release. Pull requests do not edit it: its *Unreleased*
+section is a fixed pointer, so the file no longer conflicts between open PRs. Instead each change adds
+one file to [`changelog.d/`](changelog.d/):
+
+- **Name:** the issue, `changelog.d/SHAA-123.md` (`GH-45.md` for a GitHub issue without a SHAA
+  issue). A second entry for the same issue gets a suffix, `SHAA-123-api.md`.
+- **First line:** the entry heading exactly as it will appear in the changelog,
+  `### <Section>: <title>`. Sections: `Security`, `Changed (breaking API change)`, `Removed`,
+  `Changed`, `Added`, `Fixed`.
+- **Body:** the text operators read, in the same style as the released entries: what changed and why,
+  the issue link, and an **Upgrade:** (or **Action on upgrade**) paragraph whenever an operator has to
+  do something. Put the link reference definitions the entry uses (`[SHAA-123]: docs/api.md#...`) at
+  its end. One entry per file, no `#`/`##`/`###` headings below the first line.
+
+```md
+### Fixed: the inventory sorts by attributes again
+
+`GET /api/v1/configuration-items` takes `sort=attributes.<key>` again ([SHAA-335]). ...
+
+**Upgrade:** nothing to do.
+
+[SHAA-335]: docs/api.md
+```
+
+To change an entry that is still pending, edit its fragment; to drop it, delete the file. CI runs
+`node tools/changelog/collect.mjs --check`, which fails on a malformed fragment and on any direct
+edit of *Unreleased*. A branch opened before the switch to fragments moves its `CHANGELOG.md` hunk into
+`changelog.d/SHAA-<n>.md` on its next rebase and takes `main`'s `CHANGELOG.md` as is.
+
+At release, `node tools/changelog/collect.mjs --version X.Y.Z` writes the fragments into a new
+`## X.Y.Z (date)` section below *Unreleased*, grouped in the order above (within a section, newest
+issue first), and deletes them ([Cutting a release](#cutting-a-release), step 1). `--dry-run` prints
+that section without changing anything.
+
 ## Local checks
 
 ```sh
@@ -96,8 +136,18 @@ Every version is released from its maintenance branch: `X.Y.0` and all `X.Y.Z` p
 version accordingly.
 
 1. **Bump the version** on `release/X.Y.x` in `backend/Cargo.toml` (`version = "1.2.0"`, or `"1.2.0-rc.1"` for a
-   pre-release) and refresh the lockfile with `cargo update -p shadoucmdb --offline`. Open a PR
-   (`shaa-<n>-release-1.2.0`) against `release/1.2.x` and squash-merge it once CI is green.
+   pre-release) and refresh the lockfile with `cargo update -p shadoucmdb --offline`. For a stable
+   version, **collect the changelog** in the same PR:
+
+   ```sh
+   node tools/changelog/collect.mjs --version 1.2.0 --dry-run   # review the section
+   node tools/changelog/collect.mjs --version 1.2.0             # write it, delete the fragments
+   ```
+
+   Pre-releases leave the fragments in place; they are collected for the final version. Open a PR
+   (`shaa-<n>-release-1.2.0`) against `release/1.2.x` and squash-merge it once CI is green. The tag
+   build refuses a stable version whose `## 1.2.0` section is missing or whose `changelog.d/` still
+   holds fragments.
 2. **Tag the merge commit on `release/1.2.x`** and push the tag:
 
    ```sh
@@ -135,7 +185,10 @@ version accordingly.
 5. **Add the tag to the upgrade matrix** (`from:` in
    [`.github/workflows/upgrade.yml`](.github/workflows/upgrade.yml)) and to the table in
    [docs/operator-setup.md](docs/operator-setup.md#upgrade-paths-tested-in-ci), in a PR to `main`,
-   so every later change is tested against an upgrade from it.
+   so every later change is tested against an upgrade from it. In the same PR, **carry the changelog
+   section to `main`**: copy `## 1.2.0 (...)` from the release branch into `main`'s `CHANGELOG.md`
+   (below *Unreleased*, newest version first) and `git rm` the fragments the collector deleted that
+   are also on `main` (for a patch: those of the backported fixes), so they are not released twice.
 
 Image tags: `1.2.0` gets `1.2.0`, `1.2`, `1` and `latest` (`0.x` versions get no bare major tag). A
 patch on an older line (e.g. `1.1.4` after `1.2.0`) gets `1.1.4` and `1.1` only: `latest`, the bare

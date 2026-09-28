@@ -8,4 +8,5 @@ pub mod identity_providers;
 pub mod items;
 pub mod mfa;
 pub mod relationships;
+pub mod server_keys;
 pub mod ui_settings;

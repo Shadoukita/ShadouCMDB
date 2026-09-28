@@ -50,19 +50,45 @@ pub struct Settings {
     pub ca_certificate: Option<String>,
 }
 
-/// A failure talking to the provider or checking its answer. The text is for
-/// the server log and the administrator's connection test, never the browser.
+/// A failure talking to the provider or checking its answer. `Display` gives
+/// the full text, for the server log only; [`OidcError::summary`] is what the
+/// administrator's connection test may show. Never sent to the browser.
 #[derive(Debug, Clone)]
-pub struct OidcError(pub String);
+pub struct OidcError {
+    pub detail: String,
+    /// No verified TLS answer came back (connect, TLS or transport failure).
+    unreachable: bool,
+}
+
+/// What the connection test shows instead of the transport error: the error
+/// texts would tell a closed, a filtered and a non-TLS port apart (GH#125).
+pub const UNREACHABLE: &str = "Could not reach the provider over verified TLS (no connection, TLS handshake failed or \
+                               no answer); the server log has the details";
+
+impl OidcError {
+    pub fn new(msg: impl Into<String>) -> Self {
+        OidcError { detail: msg.into(), unreachable: false }
+    }
+
+    fn unreachable(msg: String) -> Self {
+        OidcError { detail: msg, unreachable: true }
+    }
+
+    /// The text for the administrator: the detail once the provider answered
+    /// over verified TLS, else [`UNREACHABLE`].
+    pub fn summary(&self) -> &str {
+        if self.unreachable { UNREACHABLE } else { &self.detail }
+    }
+}
 
 impl std::fmt::Display for OidcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.detail)
     }
 }
 
 fn err(msg: impl Into<String>) -> OidcError {
-    OidcError(msg.into())
+    OidcError::new(msg)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -131,7 +157,11 @@ fn http_client(ca_pem: Option<&str>) -> Result<reqwest::Client, OidcError> {
 /// Reads at most [`MAX_RESPONSE`] bytes of a response body.
 async fn body(mut res: reqwest::Response, what: &str) -> Result<Vec<u8>, OidcError> {
     let mut out = Vec::new();
-    while let Some(chunk) = res.chunk().await.map_err(|e| err(format!("{what}: reading the response failed: {e}")))? {
+    while let Some(chunk) = res
+        .chunk()
+        .await
+        .map_err(|e| OidcError::unreachable(format!("{what}: reading the response failed: {}", describe(&e))))?
+    {
         if out.len() + chunk.len() > MAX_RESPONSE {
             return Err(err(format!("{what}: the response is larger than 1 MiB")));
         }
@@ -162,7 +192,7 @@ async fn get_json<T: serde::de::DeserializeOwned>(
         .header("accept", "application/json")
         .send()
         .await
-        .map_err(|e| err(format!("{what}: request to {url} failed: {}", describe(&e))))?;
+        .map_err(|e| OidcError::unreachable(format!("{what}: request to {url} failed: {}", describe(&e))))?;
     let status = res.status();
     if !status.is_success() {
         return Err(err(format!("{what}: {url} answered HTTP {}", status.as_u16())));
@@ -323,7 +353,7 @@ pub async fn exchange_code(
         .form(&form)
         .send()
         .await
-        .map_err(|e| err(format!("token request failed: {}", describe(&e))))?;
+        .map_err(|e| OidcError::unreachable(format!("token request failed: {}", describe(&e))))?;
     let status = res.status();
     let bytes = body(res, "token request").await?;
     if !status.is_success() {
@@ -465,7 +495,7 @@ mod tests {
     }
 
     fn check(v: Value) -> Result<(), String> {
-        check_claims(&claims(v), "https://idp.example.test", "cmdb", &NONCE, NOW).map_err(|e| e.0)
+        check_claims(&claims(v), "https://idp.example.test", "cmdb", &NONCE, NOW).map_err(|e| e.detail)
     }
 
     #[test]
@@ -584,5 +614,41 @@ mod tests {
         assert_eq!(q["code_challenge"], "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
         assert_eq!(q["code_challenge_method"], "S256");
         assert_eq!(q["redirect_uri"], req.redirect_uri);
+    }
+
+    /// GH#125: a closed port, a port that does not speak TLS and one that
+    /// never answers read the same; only the log has the cause.
+    #[tokio::test]
+    async fn unreachable_providers_all_read_the_same() {
+        use tokio::io::AsyncWriteExt;
+        let closed = {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let plain = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let plain_port = plain.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = plain.accept().await {
+                let _ = socket.write_all(b"SSH-2.0-OpenSSH_9.6\r\n").await;
+            }
+        });
+        let mut texts = Vec::new();
+        for port in [closed, plain_port] {
+            let s = Settings {
+                issuer_url: format!("https://127.0.0.1:{port}"),
+                client_id: "cmdb".into(),
+                client_secret: None,
+                scopes: "openid".into(),
+                username_claim: "sub".into(),
+                groups_claim: "groups".into(),
+                ca_certificate: None,
+            };
+            let e = discover(&s).await.err().expect("nothing to discover");
+            assert_eq!(e.summary(), UNREACHABLE, "{e}");
+            assert!(e.to_string().starts_with("discovery: request to "), "{e}");
+            texts.push(e.to_string());
+        }
+        assert_ne!(texts[0], texts[1], "the log keeps the cause");
+        assert_eq!(OidcError::new("discovery: x answered HTTP 404").summary(), "discovery: x answered HTTP 404");
     }
 }
