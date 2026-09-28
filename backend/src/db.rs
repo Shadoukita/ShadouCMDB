@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgSslMode};
 
-use crate::config::{DatabaseConfig, SslMode};
+use crate::config::{DatabaseConfig, RoleNames, SslMode};
 
 /// `sql/migrations/*.sql`, embedded at compile time. The folder is the single
 /// source of truth for the schema; build.rs makes cargo rebuild when it changes.
@@ -25,11 +25,29 @@ const MIGRATIONS_TABLE: &str = "public._sqlx_migrations";
 /// System tables live in `cmdb` (migration 0008); `public` holds the pg_trgm
 /// functions. Admin-defined areas are separate schemas, always schema-qualified.
 pub const SEARCH_PATH: &str = "cmdb, public";
+/// Earlier text of migrations changed after they were applied by pre-release
+/// builds, never in a release: (version, SHA-384 of that text). 0007 to 0009
+/// granted to the default role names only (GH#42); for those names the result
+/// is the same. `migrate` records the current checksum over these and `restore`
+/// accepts backups that carry them.
+pub const SUPERSEDED_CHECKSUMS: &[(i64, &str)] = &[
+    (7, "3b8728b4ac11de7d08e7ed9a8946be7ca8cb75d95506da572a9c3de69b7d52df159a4b3650acc6c5aed15803d7b73766"),
+    (8, "b747f291dc6282d181e8ed1350318a82b442995542594e29da589acd37586929e8da3886ded145b5519a0c8c109d2767"),
+    (9, "874f895b5878b4e1dd0d2c3cd841b099e500a70bd7d7a5f3cd6d7f030a8da10adc55ecfc4e8d337beeb326ac88e7f1d4"),
+];
+
+/// Whether `checksum` (hex) is this binary's migration `version` or a superseded text of it.
+pub fn checksum_matches(version: i64, checksum: &str) -> bool {
+    MIGRATOR.iter().any(|m| m.version == version && hex::encode(&*m.checksum) == checksum)
+        || SUPERSEDED_CHECKSUMS.iter().any(|&(v, sum)| v == version && sum == checksum)
+}
+
 /// Where the Node/Drizzle runner recorded them before this binary existed.
 const DRIZZLE_TABLE: &str = "drizzle.__drizzle_migrations";
 
-pub fn connect_options(cfg: &DatabaseConfig) -> anyhow::Result<PgConnectOptions> {
-    let mut opts = match &cfg.url {
+/// The connection string or PG* values alone, before TLS and session settings.
+fn base_options(cfg: &DatabaseConfig) -> anyhow::Result<PgConnectOptions> {
+    Ok(match &cfg.url {
         Some(url) => {
             PgConnectOptions::from_str(url).context("DATABASE_URL is not a valid PostgreSQL connection string")?
         }
@@ -45,7 +63,16 @@ pub fn connect_options(cfg: &DatabaseConfig) -> anyhow::Result<PgConnectOptions>
             }
             o
         }
-    };
+    })
+}
+
+/// The database user a configuration connects as (libpq defaults applied).
+pub fn user_name(cfg: &DatabaseConfig) -> anyhow::Result<String> {
+    Ok(base_options(cfg)?.get_username().to_owned())
+}
+
+pub fn connect_options(cfg: &DatabaseConfig) -> anyhow::Result<PgConnectOptions> {
+    let mut opts = base_options(cfg)?;
 
     // DATABASE_SSL is the single source of truth: any sslmode in the URL is overridden.
     opts = opts.ssl_mode(match cfg.ssl {
@@ -80,11 +107,32 @@ fn is_loopback_host(host: &str) -> bool {
 }
 
 fn pool_options(cfg: &DatabaseConfig) -> PgPoolOptions {
-    PgPoolOptions::new()
+    let opts = PgPoolOptions::new()
         .max_connections(cfg.pool_max)
         .min_connections(0)
         // Fail fast instead of hanging requests (and /readyz) when the database is unreachable.
-        .acquire_timeout(cfg.connect_timeout)
+        .acquire_timeout(cfg.connect_timeout);
+    if cfg.roles == RoleNames::default() {
+        return opts;
+    }
+    let roles = cfg.roles.clone();
+    opts.after_connect(move |conn, _| {
+        let roles = roles.clone();
+        Box::pin(async move { set_role_names(conn, &roles).await })
+    })
+}
+
+/// For the schema owner's sessions: migrations and [`act_as_api_role`] read the role names from here.
+pub async fn set_role_names(conn: &mut sqlx::PgConnection, roles: &RoleNames) -> sqlx::Result<()> {
+    sqlx::query(
+        "SELECT set_config('shadoucmdb.app_role', $1, false),
+                set_config('shadoucmdb.maintenance_role', $2, false)",
+    )
+    .bind(roles.app.as_deref().unwrap_or_default())
+    .bind(roles.maintenance.as_deref().unwrap_or_default())
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 /// Pool that connects on first use, so the server starts (and reports
@@ -167,26 +215,29 @@ pub async fn migrate(cfg: &DatabaseConfig, adopt_drizzle: bool) -> anyhow::Resul
 
 /// Three-role install: switches the transaction to the API role, which owns
 /// the area schemas and type tables and alters them at run time (migration
-/// 0008 checked the membership). Returns whether it switched; `RESET ROLE`
-/// switches back.
+/// 0008 checked the membership). The role is `shadoucmdb.app_role` (see
+/// [`RoleNames`]), else `shadoucmdb_app`. Returns whether it switched;
+/// `RESET ROLE` switches back.
 pub async fn act_as_api_role(conn: &mut sqlx::PgConnection) -> sqlx::Result<bool> {
-    let as_api_role: bool = sqlx::query_scalar(
-        "SELECT current_user <> 'shadoucmdb_app' AND pg_has_role(current_user, 'shadoucmdb_app', 'MEMBER')
-         FROM pg_roles WHERE rolname = 'shadoucmdb_app'",
+    let api_role: Option<String> = sqlx::query_scalar(
+        "SELECT rolname::text FROM pg_roles
+         WHERE rolname = COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app')
+           AND rolname <> current_user AND pg_has_role(current_user, oid, 'MEMBER')",
     )
     .fetch_optional(&mut *conn)
-    .await?
-    .unwrap_or(false);
-    if as_api_role {
-        sqlx::query("SET LOCAL ROLE shadoucmdb_app").execute(&mut *conn).await?;
+    .await?;
+    if let Some(role) = &api_role {
+        // SET LOCAL ROLE, with the name as a parameter.
+        sqlx::query("SELECT set_config('role', $1, true)").bind(role).execute(&mut *conn).await?;
     }
-    Ok(as_api_role)
+    Ok(api_role.is_some())
 }
 
 async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) -> anyhow::Result<()> {
     let (db, version): (String, String) =
         sqlx::query_as("SELECT current_database(), current_setting('server_version')").fetch_one(pool).await?;
     println!("Connected to database \"{db}\" (PostgreSQL {version}), ssl={}", cfg.ssl.as_str());
+    check_roles(pool, &cfg.roles).await?;
 
     let mut applied = applied_versions(pool).await?;
     if applied.is_empty() && table_exists(pool, DRIZZLE_TABLE).await? {
@@ -206,6 +257,22 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
         MIGRATOR.iter().filter(|m| m.migration_type.is_up_migration() && !applied.contains(&m.version)).collect();
     println!("Migrations: {expected} in binary, {} applied, {} pending", expected - pending.len(), pending.len());
 
+    for &(version, old) in SUPERSEDED_CHECKSUMS {
+        let Some(current) = MIGRATOR.iter().find(|m| m.version == version) else { continue };
+        let updated = sqlx::query(
+            "UPDATE public._sqlx_migrations SET checksum = $1 WHERE version = $2 AND checksum = decode($3, 'hex')",
+        )
+        .bind(&*current.checksum)
+        .bind(version)
+        .bind(old)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        if updated > 0 {
+            println!("  recorded the current text of {} (applied by a pre-release build)", label(current));
+        }
+    }
+
     // Each pending migration runs in its own transaction together with its
     // bookkeeping row, under an advisory lock; re-running is a no-op.
     MIGRATOR.run(pool).await.map_err(|e| {
@@ -213,7 +280,7 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
         let err = anyhow::Error::new(e).context("migration failed");
         if denied {
             // The usual cause on a three-role install: migrating with the API's DATABASE_URL.
-            err.context("this database user may not change the schema; set MIGRATION_DATABASE_URL to the schema owner (shadoucmdb_owner), see docs/deployment.md")
+            err.context("this database user may not change the schema; set MIGRATION_DATABASE_URL to the schema owner role (shadoucmdb_owner in sql/bootstrap/), see docs/deployment.md")
         } else {
             err
         }
@@ -251,6 +318,32 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
 }
 
 /// One-time hand-over from the Node/Drizzle runner: checks that every row in
+/// The API and maintenance roles the migrations grant to must exist; a typo in
+/// a user name would otherwise leave them without privileges, silently.
+async fn check_roles(pool: &PgPool, roles: &RoleNames) -> anyhow::Result<()> {
+    let owner: String = sqlx::query_scalar("SELECT current_user::text").fetch_one(pool).await?;
+    for (var, purpose, role) in
+        [("DATABASE_URL", "API", &roles.app), ("MAINTENANCE_DATABASE_URL", "maintenance", &roles.maintenance)]
+    {
+        let Some(role) = role else { continue };
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT FROM pg_roles WHERE rolname = $1)")
+            .bind(role)
+            .fetch_one(pool)
+            .await?;
+        if !exists {
+            bail!(
+                "the {purpose} role \"{role}\" (the {var} user) does not exist on this server; create it \
+                 (sql/bootstrap/) or correct {var}"
+            );
+        }
+        println!(
+            "{purpose} role: {role}{}",
+            if *role == owner { " (the migrating user; single-role install)" } else { "" }
+        );
+    }
+    Ok(())
+}
+
 /// drizzle.__drizzle_migrations is the SHA-256 of the matching embedded
 /// migration (same order), then records those migrations as applied without
 /// running them. Leaves the drizzle schema in place.
@@ -349,7 +442,18 @@ pub mod scratch {
 
 #[cfg(test)]
 mod tests {
-    use super::is_loopback_host;
+    use super::{MIGRATOR, SUPERSEDED_CHECKSUMS, checksum_matches, is_loopback_host};
+
+    #[test]
+    fn superseded_checksums_are_older_texts_of_shipped_migrations() {
+        for &(version, old) in SUPERSEDED_CHECKSUMS {
+            let m = MIGRATOR.iter().find(|m| m.version == version).expect("a shipped migration");
+            assert_ne!(hex::encode(&*m.checksum), old, "migration {version} still has this text");
+            assert!(checksum_matches(version, old));
+            assert!(checksum_matches(version, &hex::encode(&*m.checksum)));
+            assert!(!checksum_matches(version + 100, old));
+        }
+    }
 
     #[test]
     fn loopback_hosts_are_the_ones_that_never_leave_the_machine() {

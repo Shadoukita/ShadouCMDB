@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use anyhow::Context;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SslMode {
     /// Plain TCP.
@@ -43,6 +45,18 @@ pub struct DatabaseConfig {
     /// Zero disables the per-statement timeout.
     pub statement_timeout: Duration,
     pub connect_timeout: Duration,
+    /// Set on the schema owner's connection only ([`Config::schema_owner_database`]).
+    pub roles: RoleNames,
+}
+
+/// The API and maintenance database roles, whatever the operator named them:
+/// the users of DATABASE_URL and MAINTENANCE_DATABASE_URL. The schema owner's
+/// sessions carry them as `shadoucmdb.app_role` and `shadoucmdb.maintenance_role`
+/// so migrations grant to, and hand ownership to, the right roles.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoleNames {
+    pub app: Option<String>,
+    pub maintenance: Option<String>,
 }
 
 /// When session cookies get the `Secure` attribute.
@@ -224,12 +238,22 @@ fn parse_csp_report_uri(raw: &str) -> Result<String, String> {
 
 impl Config {
     /// The connection for commands that change the schema: MIGRATION_DATABASE_URL
-    /// when set, else the API's.
-    pub fn schema_owner_database(self) -> DatabaseConfig {
-        match &self.migration_url {
+    /// when set, else the API's. It carries the API and maintenance role names.
+    pub fn schema_owner_database(self) -> anyhow::Result<DatabaseConfig> {
+        let roles = RoleNames {
+            app: Some(crate::db::user_name(&self.database).context("DATABASE_URL")?),
+            maintenance: match &self.maintenance_url {
+                Some(url) => {
+                    Some(crate::db::user_name(&self.database.with_url(url)).context("MAINTENANCE_DATABASE_URL")?)
+                }
+                None => None,
+            },
+        };
+        let db = match &self.migration_url {
             Some(url) => self.database.with_url(url),
             None => self.database,
-        }
+        };
+        Ok(DatabaseConfig { roles, ..db })
     }
 
     pub fn from_env() -> anyhow::Result<Config> {
@@ -322,6 +346,7 @@ impl Config {
                 pool_max,
                 statement_timeout: Duration::from_millis(statement_timeout_ms),
                 connect_timeout: Duration::from_millis(connect_timeout_ms),
+                roles: RoleNames::default(),
             },
             migration_url,
             maintenance_url,

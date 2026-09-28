@@ -81,12 +81,14 @@ pub fn ident(name: &str) -> String {
 }
 
 /// A dedicated connection (not a pool) with the session settings that make
-/// the row text round-trip exactly and no statement timeout for long copies.
+/// the row text round-trip exactly and no statement timeout for long copies,
+/// and the role names the migrations it runs grant to.
 pub async fn connect(cfg: &DatabaseConfig) -> anyhow::Result<PgConnection> {
     let mut conn = PgConnection::connect_with(&crate::db::connect_options(cfg)?)
         .await
         .context("could not connect to PostgreSQL")?;
     session_settings(&mut conn).await?;
+    crate::db::set_role_names(&mut conn, &cfg.roles).await?;
     Ok(conn)
 }
 

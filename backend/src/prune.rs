@@ -90,7 +90,7 @@ pub async fn run(cfg: &Config, args: PruneAuditArgs) -> anyhow::Result<()> {
     let Some(url) = &cfg.maintenance_url else {
         bail!(
             "MAINTENANCE_DATABASE_URL is not set. prune-audit connects as the maintenance role \
-             (shadoucmdb_maintenance), never as the API's DATABASE_URL user; see docs/deployment.md"
+             (shadoucmdb_maintenance in sql/bootstrap/), never as the API's DATABASE_URL user; see docs/deployment.md"
         );
     };
     let mut db = cfg.database.with_url(url);
@@ -116,8 +116,10 @@ fn explain(e: sqlx::Error) -> anyhow::Error {
     match e.as_database_error().and_then(|d| d.code()).as_deref() {
         Some("42883") => anyhow::anyhow!("prune_audit_log() does not exist; run `shadoucmdb migrate` first"),
         Some("42501") => anyhow::anyhow!(
-            "the MAINTENANCE_DATABASE_URL user may not execute prune_audit_log(); it must connect as \
-             shadoucmdb_maintenance (see docs/deployment.md, \"Database roles\")"
+            "the MAINTENANCE_DATABASE_URL user may not execute prune_audit_log(). `shadoucmdb migrate` grants it \
+             to the MAINTENANCE_DATABASE_URL user it sees; if that role was created or changed later, run \
+             sql/bootstrap/10_split_roles.sql or grant USAGE on schema cmdb and EXECUTE on \
+             cmdb.prune_audit_log(interval, text, boolean, text) to it (see docs/deployment.md, \"Database roles\")"
         ),
         _ => anyhow::Error::new(e).context("prune_audit_log() failed"),
     }
