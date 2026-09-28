@@ -265,6 +265,15 @@ test("lookups are read only and point to Dropdowns; values in use cannot be dele
   // Owners and locations stay searchable, with the search in the URL.
   await page.goto("/admin/lookups/owners");
   await expect(page.getByRole("button", { name: "+ Add owner" })).toHaveCount(0);
+  // The Kind filter is wide enough for its longest option (GH#158): text + padding + the native arrow.
+  const kindFit = await page.locator("#own-kind").evaluate((el: HTMLSelectElement) => {
+    const s = getComputedStyle(el);
+    const ctx = document.createElement("canvas").getContext("2d")!;
+    ctx.font = s.font;
+    const text = Math.max(...Array.from(el.options, (o) => ctx.measureText(o.text).width));
+    return el.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight) - 16 - text;
+  });
+  expect(kindFit).toBeGreaterThanOrEqual(0);
   await page.locator("#own-q").fill("nobody-" + stamp);
   await expect(page).toHaveURL(/\/admin\/lookups\/owners\?q=/);
   await expect(page.getByRole("heading", { name: "No owners match these filters" })).toBeVisible();
