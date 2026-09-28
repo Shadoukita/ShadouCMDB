@@ -6,7 +6,7 @@ import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import { suggestKey } from "../../../lib/keys";
 import { moveItem } from "../../../lib/reorder";
-import { ATTRIBUTE_PREFIX, BUILTIN_FIELDS, DETAIL_BUILTINS, fieldLabel, FORM_BUILTINS, resolveLayout } from "../../../lib/uiSettings";
+import { ATTRIBUTE_PREFIX, BUILTIN_FIELDS, CORE_FIELDS, DETAIL_CORE, DETAIL_RECORD, fieldLabel, resolveLayout } from "../../../lib/uiSettings";
 import ClassPicker from "./ClassPicker.vue";
 import FieldListEditor from "./FieldListEditor.vue";
 
@@ -21,7 +21,7 @@ const layout = computed(() => (cls.value ? props.doc.layouts.find((l) => l.class
 const attrs = useClassAttributes(() => cls.value?.id);
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive));
 const fields = computed(() => [
-  ...BUILTIN_FIELDS.map((f) => ({ key: f.key, label: f.label, required: false, form: FORM_BUILTINS.includes(f.key) })),
+  ...BUILTIN_FIELDS.map((f) => ({ key: f.key, label: f.label, required: false, form: CORE_FIELDS.includes(f.key) })),
   ...defs.value.map((d) => ({ key: `${ATTRIBUTE_PREFIX}${d.key}`, label: `${d.label} (attribute)`, required: d.isRequired, form: true })),
 ]);
 /** Fields another panel already holds cannot be added to this one. */
@@ -61,7 +61,7 @@ function toggle(list: "hiddenFields" | "readOnlyFields", key: string, on: boolea
 const isHidden = (k: string) => !!layout.value?.hiddenFields?.includes(k);
 const isReadOnly = (k: string) => !!layout.value?.readOnlyFields?.includes(k);
 
-const previewPanels = computed(() => resolveLayout(layout.value, defs.value, DETAIL_BUILTINS) ?? []);
+const previewPanels = computed(() => (layout.value ? resolveLayout(layout.value, defs.value, DETAIL_CORE, DETAIL_RECORD) : []));
 </script>
 
 <template>
@@ -73,8 +73,8 @@ const previewPanels = computed(() => resolveLayout(layout.value, defs.value, DET
     <div v-if="cls" class="panel-body">
       <template v-if="!layout">
         <p>
-          {{ cls.name }} uses the built-in layout: a General panel with the fields every CI has, and the class's attributes
-          in their attribute groups.
+          {{ cls.name }} uses the built-in layout: a General panel with the ident, the validity period and the attributes
+          without a group, then the class's other attribute groups.
         </p>
         <button type="button" class="btn btn-primary" @click="customize">Customize the {{ cls.name }} layout</button>
       </template>

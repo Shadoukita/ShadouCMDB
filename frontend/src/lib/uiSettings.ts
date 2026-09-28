@@ -8,7 +8,7 @@ import type {
   UiSettingsDocument,
   UiWidgetType,
 } from "../api/uiSettings";
-import { groupAttributes } from "./attributes";
+import { GENERAL_SECTION, groupAttributes } from "./attributes";
 
 /**
  * The UI settings document (Administration › Customization) as the screens
@@ -315,25 +315,29 @@ export interface ResolvedPanel {
   fields: string[];
 }
 
+/** An empty layout: what a class without one in Customization gets. */
+export const builtInLayout = (classKey: string): UiClassLayout => ({ classKey, panels: [], hiddenFields: [], readOnlyFields: [] });
+
 /**
- * A class layout as panels of fields: the administrator's panels in order,
- * then everything they do not place — built-in fields in a "General" panel and
- * attributes in their attribute groups. Hidden fields and fields that are not
- * in `builtins` (e.g. timestamps on the form) are left out. Null without a
- * layout, so screens keep their built-in arrangement.
+ * A class layout as panels of fields: the administrator's panels in order, then
+ * everything they do not place — a "General" panel with the unplaced `core`
+ * fields and the attributes without a group, the other attribute groups, and
+ * finally a "Record" panel with the unplaced `record` fields (class,
+ * timestamps). Hidden fields and built-in fields in neither list are left out.
+ * Without a layout of its own a class gets `builtInLayout`: General, then its groups.
  */
 export function resolveLayout(
-  layout: UiClassLayout | undefined,
+  layout: UiClassLayout,
   attrs: readonly AttributeLike[],
-  builtins: readonly string[],
-): ResolvedPanel[] | null {
-  if (!layout) return null;
+  core: readonly string[],
+  record: readonly string[] = [],
+): ResolvedPanel[] {
   const hidden = new Set(layout.hiddenFields ?? []);
   const attrKeys = new Set(attrs.map((a) => a.key));
   const usable = (f: string) => {
     if (hidden.has(f)) return false;
     const a = attributeKey(f);
-    return a === null ? builtins.includes(f) : attrKeys.has(a);
+    return a === null ? core.includes(f) || record.includes(f) : attrKeys.has(a);
   };
   const placed = new Set<string>();
   const panels: ResolvedPanel[] = [];
@@ -342,16 +346,20 @@ export function resolveLayout(
     fields.forEach((f) => placed.add(f));
     panels.push({ key: p.key, label: p.label, collapsed: !!p.collapsed, fields });
   }
-  const general = builtins.filter((f) => usable(f) && !placed.has(f));
-  if (general.length > 0) panels.push({ key: "_general", label: "General", collapsed: false, fields: general });
+  const general = core.filter((f) => usable(f) && !placed.has(f));
   const rest = attrs.filter((a) => usable(`${ATTRIBUTE_PREFIX}${a.key}`) && !placed.has(`${ATTRIBUTE_PREFIX}${a.key}`));
-  for (const [group, items] of groupAttributes(rest)) {
-    panels.push({ key: `_group:${group}`, label: group, collapsed: false, fields: items.map((a) => `${ATTRIBUTE_PREFIX}${a.key}`) });
-  }
+  const groups = groupAttributes(rest).map(([group, items]) => ({ group, fields: items.map((a) => `${ATTRIBUTE_PREFIX}${a.key}`) }));
+  const ungrouped = groups[0]?.group === GENERAL_SECTION ? groups.shift()!.fields : [];
+  panels.push({ key: "_general", label: GENERAL_SECTION, collapsed: false, fields: [...general, ...ungrouped] });
+  for (const g of groups) panels.push({ key: `_group:${g.group}`, label: g.group, collapsed: false, fields: g.fields });
+  const rec = record.filter((f) => usable(f) && !placed.has(f));
+  panels.push({ key: "_record", label: "Record", collapsed: false, fields: rec });
   return panels.filter((p) => p.fields.length > 0);
 }
 
-/** Built-in fields the detail page shows (the label is the page title). */
-export const DETAIL_BUILTINS = BUILTIN_FIELDS.filter((f) => f.key !== "label").map((f) => f.key);
-/** Built-in fields the CI form edits. */
-export const FORM_BUILTINS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key);
+/** The core fields of every CI, which the form edits: the General section starts with them. */
+export const CORE_FIELDS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key);
+/** Core fields the detail page's General panel shows: the edited ones and whether the CI is active. */
+export const DETAIL_CORE = [...CORE_FIELDS, "active"];
+/** Bookkeeping fields the detail page shows last, in a "Record" panel (the label is the page title). */
+export const DETAIL_RECORD = BUILTIN_FIELDS.filter((f) => f.key !== "label" && !DETAIL_CORE.includes(f.key)).map((f) => f.key);

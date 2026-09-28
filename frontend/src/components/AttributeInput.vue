@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { CiSummary } from "../api/queries";
-import type { AttributeShape, Validation } from "../lib/attributeValues";
+import { nowFormValue, NOW_HINT, type AttributeShape, type Validation } from "../lib/attributeValues";
 import CiPicker from "./CiPicker.vue";
 import LookupValueSelect, { type LookupParent } from "./LookupValueSelect.vue";
 
 /**
  * One input per attribute dataType. The value is always a string; see lib/attributeValues for conversion.
  * (Number inputs bind manually because v-model would cast them to numbers.)
+ * Double-clicking a date or datetime input sets it to the current local date and time.
  */
 const props = defineProps<{
   def: AttributeShape;
@@ -53,8 +54,15 @@ function onReference(ci: CiSummary | null) {
     :max="v.max"
     @input="model = ($event.target as HTMLInputElement).value"
   />
-  <input v-else-if="def.dataType === 'date'" :id="id" v-model="model" v-bind="aria" type="date" />
-  <input v-else-if="def.dataType === 'datetime'" :id="id" v-model="model" v-bind="aria" type="datetime-local" />
+  <input
+    v-else-if="def.dataType === 'date' || def.dataType === 'datetime'"
+    :id="id"
+    v-model="model"
+    v-bind="aria"
+    :type="def.dataType === 'date' ? 'date' : 'datetime-local'"
+    :title="NOW_HINT"
+    @dblclick="model = nowFormValue(def.dataType)"
+  />
   <CiPicker
     v-else-if="def.dataType === 'reference'"
     :id="id"

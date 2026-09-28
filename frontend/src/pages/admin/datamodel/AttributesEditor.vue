@@ -8,7 +8,7 @@ import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import LookupValueName from "../../../components/LookupValueName.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
-import { DEFAULT_SECTION, groupAttributes } from "../../../lib/attributes";
+import { GENERAL_SECTION, groupAttributes } from "../../../lib/attributes";
 import { dataTypeLabel } from "../../../lib/dataTypes";
 import { formatDate, formatDateTime } from "../../../lib/format";
 import { moveItem, useDragReorder } from "../../../lib/reorder";
@@ -48,13 +48,13 @@ const defs = computed<AttributeDefinition[]>(() => {
 const groups = computed(() => groupAttributes(defs.value));
 const flat = computed(() => groups.value.flatMap(([, items]) => items));
 const sections = computed(() => [
-  ...new Set([...groups.value.map(([g]) => g), ...(effective.data.value ?? []).map((d) => d.groupName ?? DEFAULT_SECTION)]),
+  ...new Set([...groups.value.map(([g]) => g), ...(effective.data.value ?? []).map((d) => d.groupName ?? GENERAL_SECTION)]),
 ]);
 const inherited = computed(() => (effective.data.value ?? []).filter((d) => d.inherited));
 const nextSortOrder = computed(() => Math.max(0, ...defs.value.map((d) => d.sortOrder)) + 10);
-const sectionOf = (d: AttributeDefinition) => d.groupName || DEFAULT_SECTION;
+const sectionOf = (d: AttributeDefinition) => d.groupName || GENERAL_SECTION;
 /** The groupName to store for a section heading (the default section is "no section"). */
-const storedSection = (section: string) => (section === DEFAULT_SECTION ? null : section);
+const storedSection = (section: string) => (section === GENERAL_SECTION ? null : section);
 
 function save(order: AttributeDefinition[], moved: AttributeDefinition, toSection: string) {
   const changedSection = sectionOf(moved) !== toSection;
@@ -150,7 +150,7 @@ const dialogSection = ref<string | undefined>(undefined);
 
 function openNew(section?: string) {
   editing.value = null;
-  dialogSection.value = section && section !== DEFAULT_SECTION ? section : undefined;
+  dialogSection.value = section && section !== GENERAL_SECTION ? section : undefined;
   dialogOpen.value = true;
 }
 function openEdit(d: AttributeDefinition) {
@@ -279,7 +279,7 @@ function defaultText(d: AttributeDefinition): string {
             <td>{{ d.label }}</td>
             <td class="mono">{{ d.key }}</td>
             <td>{{ dataTypeLabel(d.dataType) }}<span v-if="typeDetail(d)" class="muted"> · {{ typeDetail(d) }}</span></td>
-            <td>{{ d.groupName ?? DEFAULT_SECTION }}</td>
+            <td>{{ d.groupName ?? GENERAL_SECTION }}</td>
             <td><span v-if="d.isRequired" class="badge warn">Required</span></td>
             <td><RouterLink :to="`/admin/classes/${d.definedOn.id}`">{{ d.definedOn.name }}</RouterLink></td>
           </tr>
