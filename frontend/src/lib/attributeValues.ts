@@ -18,7 +18,7 @@ export function toFormValue(def: Pick<AttributeShape, "dataType">, value: unknow
 }
 
 /** Returns the JSON value for the API; null clears. Non-numeric text is sent as-is so the API reports it. */
-export function toApiValue(def: Pick<AttributeShape, "dataType">, value: FormValue): unknown {
+export function toApiValue(def: Pick<AttributeShape, "dataType"> & Partial<Pick<AttributeShape, "validation">>, value: FormValue): unknown {
   if (value === "" || value === undefined) return null;
   switch (def.dataType) {
     case "boolean":
@@ -31,7 +31,9 @@ export function toApiValue(def: Pick<AttributeShape, "dataType">, value: FormVal
     case "datetime":
       return new Date(value).toISOString();
     default:
-      return value.trim() === "" ? null : value.trim();
+      // Multi-line text is stored as typed: trimming would drop a leading indent or trailing line breaks.
+      if (value.trim() === "") return null;
+      return isMultiline(def) ? value : value.trim();
   }
 }
 
@@ -59,7 +61,12 @@ export interface Validation {
   max?: number;
   pattern?: string;
   maxLength?: number;
+  /** Text only: a multi-line text area whose line breaks and surrounding whitespace are kept. */
+  multiline?: boolean;
 }
+
+export const isMultiline = (def: { dataType: string; validation?: unknown }) =>
+  def.dataType === "text" && (def.validation as Validation | null | undefined)?.multiline === true;
 
 export function hintFor(def: EffectiveAttribute): string | undefined {
   const v = (def.validation ?? {}) as Validation;

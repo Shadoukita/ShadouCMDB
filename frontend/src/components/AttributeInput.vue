@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watchEffect } from "vue";
 import type { CiSummary } from "../api/queries";
-import { nowFormValue, NOW_HINT, type AttributeShape, type Validation } from "../lib/attributeValues";
+import { isMultiline, nowFormValue, NOW_HINT, type AttributeShape, type Validation } from "../lib/attributeValues";
 import CiPicker from "./CiPicker.vue";
 import LookupValueSelect, { type LookupParent } from "./LookupValueSelect.vue";
 
@@ -9,6 +9,8 @@ import LookupValueSelect, { type LookupParent } from "./LookupValueSelect.vue";
  * One input per attribute dataType. The value is always a string; see lib/attributeValues for conversion.
  * (Number inputs bind manually because v-model would cast them to numbers.)
  * Double-clicking a date or datetime input sets it to the current local date and time.
+ * A text attribute flagged validation.multiline gets a text area: a single-line input would drop its line breaks.
+ * So does any text value that already has line breaks (set through the API or an import), so an edit cannot flatten it.
  */
 const props = defineProps<{
   def: AttributeShape;
@@ -24,6 +26,11 @@ const emit = defineEmits<{ referenceName: [name: string] }>();
 
 const v = computed(() => (props.def.validation ?? {}) as Validation);
 const enumValues = computed(() => props.def.enumValues ?? []);
+// Once set, it stays: the input must not turn into another element while the operator types.
+const hasLineBreaks = ref(false);
+watchEffect(() => {
+  if (model.value.includes("\n")) hasLineBreaks.value = true;
+});
 const aria = computed(() => ({ "aria-invalid": props.invalid || undefined, "aria-describedby": props.describedBy }));
 
 function onReference(ci: CiSummary | null) {
@@ -90,5 +97,6 @@ function onReference(ci: CiSummary | null) {
     class="mono"
     spellcheck="false"
   />
+  <textarea v-else-if="isMultiline(def) || (def.dataType === 'text' && hasLineBreaks)" :id="id" v-model="model" v-bind="aria" rows="4" :maxlength="v.maxLength" />
   <input v-else :id="id" v-model="model" v-bind="aria" type="text" :maxlength="v.maxLength" />
 </template>

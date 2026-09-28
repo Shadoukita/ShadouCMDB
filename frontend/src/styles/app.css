@@ -624,6 +624,10 @@ dl.props dt {
 dl.props dd {
   word-break: break-word;
 }
+/* Multi-line text attributes keep their line breaks and indentation. */
+.multiline {
+  white-space: pre-wrap;
+}
 dl.props .group-title {
   grid-column: 1 / -1;
   font-size: var(--fs-xs);
@@ -1430,4 +1434,10 @@ table.data td.wrap {
   min-width: 220px;
   padding-top: 3px;
   padding-bottom: 3px;
+}
+/* A free-text column (a description) that takes the width the other columns leave and
+   truncates there, so it never pushes the row actions out of view. Pair it with a title. */
+table.data td.fill {
+  width: 100%;
+  max-width: 0;
 }

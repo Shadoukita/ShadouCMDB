@@ -190,7 +190,7 @@ const valuesEmptyHint = computed(() => {
             <td>
               <RouterLink v-if="l.parentListId" :to="{ query: { list: l.parentListId } }">{{ listName(l.parentListId) }}</RouterLink>
             </td>
-            <td class="muted">{{ l.description ?? "" }}</td>
+            <td class="muted fill" :title="l.description ?? undefined">{{ l.description ?? "" }}</td>
             <td>
               <span v-if="l.isActive" class="badge ok">Active</span>
               <span v-else class="badge off">Archived</span>

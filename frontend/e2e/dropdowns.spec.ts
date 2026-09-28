@@ -181,3 +181,27 @@ test("the CI form: the child dropdown follows its parent", async ({ page, reques
   await expect(page).toHaveURL(at(`/cis/${ciId}`));
   await expect(page.getByText("ProLiant DL380")).toBeVisible();
 });
+
+test("the row actions fit at a 1280 px viewport, however long the description (GH#110)", async ({ page, request }) => {
+  const name = `E2E wide ${stamp}`;
+  await apiSend(request, "POST", "/lookup-lists", {
+    key: `e2e_wide_${stamp}`,
+    name,
+    description: "A long description that an administrator wrote to explain when operators should choose which value. ".repeat(4),
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/admin/dropdowns");
+  const rows = page.getByRole("region", { name: "Lookup lists" }).locator("tbody tr");
+  await expect(rows.filter({ hasText: name })).toHaveCount(1);
+  for (const row of await rows.all()) {
+    const cell = (await row.locator("td.row-actions").boundingBox())!;
+    for (const button of await row.locator("td.row-actions > button").all()) {
+      await expect(button).toBeVisible();
+      const b = (await button.boundingBox())!;
+      // Inside its cell (which hides overflow) and inside the viewport, without scrolling sideways.
+      expect(b.x + b.width).toBeLessThanOrEqual(cell.x + cell.width + 0.5);
+      expect(b.x + b.width).toBeLessThanOrEqual(1280);
+    }
+  }
+  await snap(page, "dropdowns-1280");
+});
