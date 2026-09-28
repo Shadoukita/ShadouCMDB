@@ -16,7 +16,7 @@ import { isInAppNavigation } from "../lib/navigation";
 import { groupByArea } from "../lib/areas";
 import { viewableClasses } from "../lib/permissions";
 import { flattenTree } from "../lib/tree";
-import { attributeKey, BUILTIN, DEFAULT_COLUMNS, fieldLabel, hasFilters, listViewFor, lookupValueIds, sortParam } from "../lib/uiSettings";
+import { attributeKey, BUILTIN, DEFAULT_COLUMNS, fieldLabel, hasFilters, isSortableAttribute, listViewFor, lookupValueIds, sortParam } from "../lib/uiSettings";
 import { useSessionStore } from "../stores/session";
 
 /**
@@ -77,7 +77,17 @@ const attrColumns = computed(() => columns.value.some((c) => attributeKey(c) !==
 const attrs = useClassAttributes(() => (attrColumns.value ? currentClass.value?.id : undefined));
 const attrDefs = computed(() => attrs.data.value ?? []);
 const columnLabel = (field: string) => fieldLabel(field, attrDefs.value);
-const columnSort = (field: string) => BUILTIN.get(field)?.sort;
+/**
+ * The sort a column header toggles: a built-in field's, or the attribute's own when
+ * the list is of one class (the API sorts by an attribute only within a class) and
+ * the attribute is not a reference.
+ */
+const columnSort = (field: string): string | undefined => {
+  const a = attributeKey(field);
+  if (a === null) return BUILTIN.get(field)?.sort;
+  const def = currentClass.value ? attrDefs.value.find((d) => d.key === a) : undefined;
+  return def && isSortableAttribute(def) ? field : undefined;
+};
 
 // Default filters: navigating to a class list (menu, links) with nothing but the class in the URL
 // writes the view's filters into it, so they show in the toolbar and the operator can change them.
@@ -121,6 +131,8 @@ function update(patch: Record<string, string | undefined>, resetPage = true) {
     if (v) next[k] = v;
     else delete next[k];
   }
+  // An attribute sort belongs to its class: another class may not have the attribute, and no class cannot sort by one.
+  if ("classId" in patch && !("sort" in patch) && isAttributeSort(get("sort"))) delete next.sort;
   if (resetPage) delete next.offset;
   const to = { path: "/cis", query: next };
   if ("q" in patch) router.replace(to);
@@ -168,7 +180,7 @@ const toggleSort = (field: string) => update({ sort: sort.value === field ? `-${
 function clearFilters() {
   qText.value = "";
   const next: LocationQueryRaw = {};
-  if (get("sort")) next.sort = get("sort");
+  if (get("sort") && !isAttributeSort(get("sort"))) next.sort = get("sort");
   if (get("limit")) next.limit = get("limit");
   router.push({ path: "/cis", query: next });
 }
@@ -178,6 +190,10 @@ function onPage(p: { limit: number; offset: number }) {
     { limit: p.limit === defaultLimit.value ? undefined : String(p.limit), offset: p.offset ? String(p.offset) : undefined },
     false,
   );
+}
+
+function isAttributeSort(sortValue: string): boolean {
+  return attributeKey(sortValue.replace(/^-/, "")) !== null;
 }
 
 function clampInt(raw: string, fallback: number, min: number, max: number): number {

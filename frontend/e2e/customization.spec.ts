@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { apiGet, ciIdByName, classIdByName, csrf, expect, resetUiSettings as resetSettings, snap, test } from "./support";
+import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, resetUiSettings as resetSettings, snap, test } from "./support";
 
 // Administration › Customization and Export / import, against the demo seed (the Server class
 // and its attributes). The settings apply to every user, so the walk starts from and ends with
@@ -162,6 +162,45 @@ test("list views: a class's columns, default sort, filter and page size apply to
   await expect(page.getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
   await expect(page).not.toHaveURL(/lookupValueId=/);
   await snap(page, "customization-list-view");
+});
+
+test("list views: an attribute default sort, and attribute column headers sort the class's inventory", async ({ page, request }) => {
+  const serverId = await classIdByName(request, "Server");
+  // Text order would put .100 before .11 before .9; the API sorts IP addresses by address, hostnames case-insensitively.
+  for (const [n, host, ip] of [["x", "b-sort", "10.99.0.100"], ["y", "A-sort", "10.99.0.9"], ["z", "c-sort", "10.99.0.11"]]) {
+    await createCi(request, serverId, `e2e-sort-${stamp}-${n}`, { hostname: `${host}-${stamp}`, ip_address: ip });
+  }
+  await page.goto("/admin/customization/list-views?class=server");
+  const customize = page.getByRole("button", { name: "Customize the Server list" });
+  if (await customize.isVisible()) await customize.click();
+  const sort = page.getByLabel("Default sort");
+  await expect(sort.getByRole("option", { name: "Hostname (attribute)" })).toHaveCount(1);
+  await sort.selectOption("attributes.hostname");
+  await page.getByLabel("Sort direction").selectOption("asc");
+  for (const label of ["Hostname (attribute)", "IP address (attribute)"]) {
+    await page.getByLabel("Add to Columns").selectOption({ label });
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+  }
+  await save(page, "e2e attribute sort");
+
+  const names = page.locator("table.data tbody tr td:first-child");
+  await page.goto(`/cis?classId=${serverId}&q=e2e-sort-${stamp}`);
+  await expect(page.getByRole("columnheader", { name: /Hostname/ })).toHaveAttribute("aria-sort", "ascending");
+  await expect(names).toHaveText([`e2e-sort-${stamp}-y`, `e2e-sort-${stamp}-x`, `e2e-sort-${stamp}-z`]);
+
+  await page.getByRole("columnheader", { name: /IP address/ }).getByRole("button").click();
+  await expect(page).toHaveURL(/sort=attributes\.ip_address/);
+  await expect(page.getByRole("columnheader", { name: /IP address/ })).toHaveAttribute("aria-sort", "ascending");
+  await expect(names).toHaveText([`e2e-sort-${stamp}-y`, `e2e-sort-${stamp}-z`, `e2e-sort-${stamp}-x`]);
+  await page.getByRole("columnheader", { name: /IP address/ }).getByRole("button").click();
+  await expect(page).toHaveURL(/sort=-attributes\.ip_address/);
+  await expect(names).toHaveText([`e2e-sort-${stamp}-x`, `e2e-sort-${stamp}-z`, `e2e-sort-${stamp}-y`]);
+  // The sort survives a reload; another class drops it (it may not have the attribute).
+  await page.reload();
+  await expect(page.getByRole("columnheader", { name: /IP address/ })).toHaveAttribute("aria-sort", "descending");
+  await page.getByLabel("Class", { exact: true }).selectOption({ label: "All classes" });
+  await expect(page).not.toHaveURL(/sort=/);
+  await expect(page.getByRole("columnheader", { name: /Label/ })).toHaveAttribute("aria-sort", "ascending");
 });
 
 test("layouts: the form designer arranges tabs, sections and widths for the form and the detail page", async ({ page, request }) => {

@@ -113,6 +113,11 @@ Stored UI settings accept the same field in a list view's `defaultSort` and a sa
 Where the class has no such attribute, the effective settings drop the sort (the list sorts by label)
 and report an `unknown_attribute` issue.
 
+In the web UI ([SHAA-347]), **Administration › Customization › List views** offers the class's
+attributes (not references) as the default sort, and a saved-search widget under **Dashboard** offers
+the attributes every ticked class has. In the inventory of one class, the headers of attribute
+columns sort the list; the sort is dropped when the class filter changes.
+
 **Upgrade:** migration 0020 puts back the sorts migration 0016 had turned into label sorts. A list
 view's default sort, or the sort of a saved-search widget on one class, that was on `hostname`,
 `ipAddress`, `serialNumber` or `statusName` before 0016 becomes `attributes.hostname`,
@@ -123,6 +128,7 @@ current sort. Nothing to do otherwise.
 
 [GH#112]: https://github.com/Shadoukita/ShadouCMDB/issues/112
 [SHAA-335]: docs/api.md
+[SHAA-347]: docs/api.md#customization-and-configuration-exportimport
 
 ### Added: resize sections by dragging and place them side by side in the layout editors
 
