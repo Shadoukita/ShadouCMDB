@@ -89,6 +89,34 @@ test("the secret authenticates API calls, and the list shows the last use", asyn
   await expect(row.getByRole("cell").nth(6)).not.toHaveText("Never");
 });
 
+test("account writes refuse the token, even an Administrator's, while reading accounts accepts it (GH#119)", async ({ playwright, baseURL, request }) => {
+  const ctx = await bearer(playwright, baseURL!);
+  const list = await ctx.get(`/api/v1/admin/users?q=${encodeURIComponent(E2E_USER.username)}`);
+  expect(list.status()).toBe(200);
+  const me = ((await list.json()).data as { id: string; username: string }[]).find((u) => u.username === E2E_USER.username);
+  expect(me, "the token owner in the user list").toBeTruthy();
+  expect((await ctx.get(`/api/v1/admin/users/${me!.id}`)).status()).toBe(200);
+
+  const minted = `e2e-token-minted-${stamp}`;
+  const writes = [
+    ctx.post("/api/v1/admin/users", { data: { username: minted, displayName: "Minted by a token", password: "minted-by-a-token-1", profileIds: [] } }),
+    ctx.patch(`/api/v1/admin/users/${me!.id}`, { data: { displayName: "Renamed by a token" } }),
+    ctx.put(`/api/v1/admin/users/${me!.id}/password`, { data: { password: "set-by-a-token-123" } }),
+    ctx.delete(`/api/v1/admin/users/${me!.id}`),
+  ];
+  for (const res of await Promise.all(writes)) {
+    expect(res.status(), `${res.url()} → ${res.status()}`).toBe(403);
+    const { error } = await res.json();
+    expect(error.code).toBe("FORBIDDEN");
+    expect(error.message).toBe("This endpoint needs a signed-in session; API tokens cannot call it");
+  }
+  await ctx.dispose();
+
+  // Nothing was written.
+  const after = await apiGet<{ data: { username: string }[] }>(request, `/admin/users?q=${encodeURIComponent(minted)}`);
+  expect(after.data).toHaveLength(0);
+});
+
 test("search and filters live in the URL and survive a reload", async ({ page }) => {
   await page.goto("/admin/api-tokens");
   await page.getByRole("searchbox", { name: "Search", exact: true }).fill(stamp);
