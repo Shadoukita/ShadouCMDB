@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { ApiError } from "../api/client";
 import { useAreas } from "../api/datamodel";
@@ -22,26 +22,20 @@ import LayoutPanels from "./detail/LayoutPanels.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
 
-type Tab = "overview" | "graph" | "history";
-const ALL_TABS: [Tab, string][] = [
-  ["overview", "Overview"],
-  ["graph", "Relationship map"],
-  ["history", "History"],
-];
+/** The class layout's tabs (`layout:<key>`; a single one is "overview"), then the relationship map and the history. */
+type Tab = string;
 
 const route = useRoute();
 const id = computed(() => String(route.params.id ?? ""));
 const trail = useTrail();
 const ci = useCi(id);
-const tab = ref<Tab>("overview");
+const tab = ref<Tab>("");
 const flash = useFlashStore();
 const session = useSessionStore();
-// The history is the audit log, which needs audit.view.
-const TABS = computed(() => ALL_TABS.filter(([key]) => key !== "history" || session.can("audit.view")));
 const flashText = computed(() => flash.forCi(id.value));
 useDocumentTitle(() => ci.data.value?.label);
-// Walking to another CI reuses this component; start each record on its overview.
-watch(id, () => (tab.value = "overview"));
+// Walking to another CI reuses this component; start each record on its first tab.
+watch(id, () => (tab.value = ""));
 
 // A malformed id in the URL is rejected by the API as a params validation error; for the operator it is simply "not found".
 const notFound = computed(() => {
@@ -61,7 +55,28 @@ const classKey = computed(() => classes.data.value?.find((k) => k.id === c.value
 const layout = computed(() => layoutFor(settings.doc.value, classKey.value));
 const attrs = useClassAttributes(() => c.value?.classId);
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || c.value?.attributes[d.key] != null));
-const panels = computed(() => resolveLayout(layout.value ?? builtInLayout(classKey.value ?? ""), defs.value, DETAIL_CORE, DETAIL_RECORD));
+const layoutTabs = computed(() => resolveLayout(layout.value ?? builtInLayout(classKey.value ?? ""), defs.value, DETAIL_CORE, DETAIL_RECORD));
+const TABS = computed<[Tab, string][]>(() => [
+  ...(layoutTabs.value.length > 1 ? layoutTabs.value.map((t): [Tab, string] => [`layout:${t.key}`, t.label]) : [["overview", "Overview"] as [Tab, string]]),
+  ["graph", "Relationship map"],
+  // The history is the audit log, which needs audit.view.
+  ...(session.can("audit.view") ? [["history", "History"] as [Tab, string]] : []),
+]);
+/** The tab shown: the chosen one while it exists (a layout can change under the page), else the first. */
+const current = computed<Tab>(() => (TABS.value.some(([k]) => k === tab.value) ? tab.value : TABS.value[0][0]));
+/** Which layout tab is shown (they come first in TABS), or -1. */
+const layoutIndex = computed(() => (current.value === "overview" || current.value.startsWith("layout:") ? TABS.value.findIndex(([k]) => k === current.value) : -1));
+/** Arrow keys, Home and End move between the tabs. */
+function onTabKey(e: KeyboardEvent) {
+  const keys = TABS.value.map(([k]) => k);
+  const at = keys.indexOf(current.value);
+  const to = { ArrowRight: at + 1, ArrowLeft: at - 1 + keys.length, Home: 0, End: keys.length - 1 }[e.key];
+  if (to === undefined) return;
+  e.preventDefault();
+  tab.value = keys[to % keys.length];
+  void nextTick(() => document.getElementById(`tab-${tabId(tab.value)}`)?.focus());
+}
+const tabId = (k: Tab) => k.replace(":", "-");
 const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.label } : undefined));
 const crumbs = computed<Crumb[]>(() => {
   if (!c.value) return [];
@@ -116,20 +131,22 @@ const crumbs = computed<Crumb[]>(() => {
     <div class="tabs" role="tablist" aria-label="CI sections">
       <button
         v-for="[key, label] in TABS"
-        :id="`tab-${key}`"
+        :id="`tab-${tabId(key)}`"
         :key="key"
         type="button"
         role="tab"
-        :aria-selected="tab === key"
-        :aria-controls="`panel-${key}`"
+        :aria-selected="current === key"
+        :aria-controls="`panel-${tabId(key)}`"
+        :tabindex="current === key ? 0 : -1"
         @click="tab = key"
+        @keydown="onTabKey"
       >
         {{ label }}
       </button>
     </div>
 
-    <div :id="`panel-${tab}`" role="tabpanel" :aria-labelledby="`tab-${tab}`">
-      <template v-if="tab === 'overview'">
+    <div :id="`panel-${tabId(current)}`" role="tabpanel" :aria-labelledby="`tab-${tabId(current)}`">
+      <template v-if="layoutIndex >= 0">
         <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
         <ErrorAlert
           v-else-if="attrs.isError.value"
@@ -137,11 +154,21 @@ const crumbs = computed<Crumb[]>(() => {
           title="Could not load this class's attribute definitions"
           :on-retry="() => attrs.refetch()"
         />
-        <LayoutPanels v-else :ci="c" :panels="panels" :defs="defs" :self="self" :trail="trail" />
-        <div style="height: var(--sp-4)" />
-        <RelationshipsPanel :ci="c" :self="self" :trail="trail" />
+        <LayoutPanels
+          v-else
+          :ci="c"
+          :sections="layoutTabs[layoutIndex]?.sections ?? []"
+          :defs="defs"
+          :self="self"
+          :trail="trail"
+          :orphans="layoutIndex === 0"
+        />
+        <template v-if="layoutIndex === 0">
+          <div style="height: var(--sp-4)" />
+          <RelationshipsPanel :ci="c" :self="self" :trail="trail" />
+        </template>
       </template>
-      <RelationshipGraphPanel v-else-if="tab === 'graph'" :ci="c" :self="self" :trail="trail" />
+      <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="trail" />
       <HistoryPanel v-else :ci="c" />
     </div>
   </template>
