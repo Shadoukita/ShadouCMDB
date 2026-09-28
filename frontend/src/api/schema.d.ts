@@ -3393,7 +3393,9 @@ export interface components {
         };
         /**
          * @description A section (card) of a tab: a heading and, depending on `kind`, a grid of fields, a note or a built-in
-         *     panel of the detail page
+         *     panel of the detail page. Sections sit on the tab's grid of 12 columns and fill it row by row in the
+         *     order given, so two sections of width 6 sit side by side. Below the tablet breakpoint every section
+         *     takes the full width; sizes are never in pixels.
          */
         UiLayoutSection: {
             /** @description Stable machine key, lower_snake_case */
@@ -3406,10 +3408,23 @@ export interface components {
             kind?: "fields" | "note" | "relations" | "history" | "audit";
             /**
              * Format: int32
-             * @description Grid columns on a wide screen; narrow screens use fewer
+             * @description Columns of the section's field grid on a wide screen; narrow screens use fewer
              * @default 3
              */
             columns: number;
+            /**
+             * Format: int32
+             * @description Columns of the tab's 12-column grid the section spans (12: the full width)
+             * @default 12
+             */
+            width: number;
+            /** @description Start a new row of the tab's grid, even if the section would fit next to the previous one */
+            newRow?: boolean;
+            /**
+             * Format: int32
+             * @description Minimum height in field rows (the height of one row of fields); absent: as tall as its content
+             */
+            minHeight?: number;
             /** @description fields: the grid (other kinds have none) */
             fields?: components["schemas"]["UiLayoutField"][];
             /** @description note: the text (required for that kind). Plain text or limited Markdown (emphasis, lists, links); raw HTML is shown as text, never rendered */

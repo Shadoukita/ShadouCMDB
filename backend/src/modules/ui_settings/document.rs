@@ -372,6 +372,8 @@ pub struct UiListView {
 
 /// Grid columns of a section that does not say (and of converted v1 panels).
 pub const DEFAULT_COLUMNS: u8 = 3;
+/// Columns of a tab's grid, and the most a section's field grid can have.
+pub const GRID_COLUMNS: u8 = 12;
 /// Core fields of every CI: a layout can move them but never hide them.
 pub const CORE_FIELDS: &[&str] = &["ident", "validFrom", "validUntil"];
 
@@ -380,6 +382,12 @@ fn default_columns() -> u8 {
 }
 fn default_width() -> u8 {
     1
+}
+fn default_section_width() -> u8 {
+    GRID_COLUMNS
+}
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 fn layout_field_schema() -> Schema {
@@ -394,7 +402,7 @@ pub struct UiLayoutField {
     pub field: String,
     /// Grid columns the field spans, at most the section's `columns`
     #[serde(default = "default_width")]
-    #[schema(minimum = 1, maximum = 4, default = 1)]
+    #[schema(minimum = 1, maximum = 12, default = 1)]
     pub width: u8,
 }
 
@@ -464,7 +472,9 @@ fn note_text_schema() -> Schema {
 }
 
 /// A section (card) of a tab: a heading and, depending on `kind`, a grid of fields, a note or a built-in
-/// panel of the detail page
+/// panel of the detail page. Sections sit on the tab's grid of 12 columns and fill it row by row in the
+/// order given, so two sections of width 6 sit side by side. Below the tablet breakpoint every section
+/// takes the full width; sizes are never in pixels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiLayoutSection {
@@ -476,10 +486,21 @@ pub struct UiLayoutSection {
     #[serde(default, skip_serializing_if = "is_fields")]
     #[schema(schema_with = section_kind_schema)]
     pub kind: UiSectionKind,
-    /// Grid columns on a wide screen; narrow screens use fewer
+    /// Columns of the section's field grid on a wide screen; narrow screens use fewer
     #[serde(default = "default_columns")]
-    #[schema(minimum = 1, maximum = 4, default = 3)]
+    #[schema(minimum = 1, maximum = 12, default = 3)]
     pub columns: u8,
+    /// Columns of the tab's 12-column grid the section spans (12: the full width)
+    #[serde(default = "default_section_width")]
+    #[schema(minimum = 1, maximum = 12, default = 12)]
+    pub width: u8,
+    /// Start a new row of the tab's grid, even if the section would fit next to the previous one
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub new_row: bool,
+    /// Minimum height in field rows (the height of one row of fields); absent: as tall as its content
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, minimum = 1, maximum = 50)]
+    pub min_height: Option<u8>,
     /// fields: the grid (other kinds have none)
     #[serde(default)]
     #[schema(max_items = 200)]
@@ -590,6 +611,9 @@ pub fn convert_panels(panels: Vec<UiLayoutPanel>) -> Vec<UiLayoutTab> {
             label: p.label,
             kind: UiSectionKind::Fields,
             columns: DEFAULT_COLUMNS,
+            width: GRID_COLUMNS,
+            new_row: false,
+            min_height: None,
             fields: p.fields.into_iter().map(|field| UiLayoutField { field, width: 1 }).collect(),
             text: None,
             collapsed: p.collapsed,
@@ -1144,6 +1168,68 @@ mod tests {
     }
 
     #[test]
+    fn sections_sit_on_a_twelve_column_grid() {
+        let d = doc(json!({"layouts": [{"classKey": "server", "tabs": [{"key": "t", "label": "T", "sections": [
+            {"key": "a", "label": "A", "width": 6, "columns": 12, "minHeight": 4,
+             "fields": [{"field": "ident", "width": 12}]},
+            {"key": "b", "label": "B", "width": 6, "columns": 5, "fields": [{"field": "label", "width": 5}]},
+            {"key": "c", "label": "C", "width": 4, "newRow": true},
+            {"key": "d", "label": "D", "columns": 6, "fields": [{"field": "validFrom", "width": 7}]},
+        ]}]}]}));
+        let s = &d.layouts[0].tabs[0].sections;
+        assert_eq!((s[0].width, s[0].new_row, s[0].min_height), (6, false, Some(4)));
+        assert_eq!((s[2].width, s[2].new_row, s[2].min_height), (4, true, None));
+        assert_eq!(s[3].width, GRID_COLUMNS);
+        let fields: Vec<String> = d.check().into_iter().map(|e| e.field).collect();
+        assert_eq!(fields, ["layouts.0.tabs.0.sections.3.fields.0.width"]);
+        // Only what differs from the default is written for the optional keys.
+        let out = serde_json::to_value(&d).unwrap();
+        let sections = &out["layouts"][0]["tabs"][0]["sections"];
+        assert_eq!((&sections[0]["minHeight"], &sections[2]["newRow"]), (&json!(4), &json!(true)));
+        assert!(sections[1].get("newRow").is_none() && sections[1].get("minHeight").is_none(), "{out}");
+        assert_eq!(doc(out), d);
+    }
+
+    /// A layout saved before the grid (columns and widths 1-4, no section width) reads as full-width
+    /// sections stacked in order, exactly as it rendered before, and stays the same when saved again.
+    #[test]
+    fn layouts_without_section_widths_keep_their_meaning() {
+        let old = json!({"layouts": [{"classKey": "server", "tabs": [{"key": "general", "label": "General",
+        "sections": [
+            {"key": "main", "label": "Main", "columns": 4, "collapsed": false,
+             "fields": [{"field": "ident", "width": 4}, {"field": "attributes.cpu_cores", "width": 1}]},
+            {"key": "hw", "label": "Hardware", "fields": [{"field": "validFrom"}]},
+        ]}]}]});
+        let d = doc(old.clone());
+        assert!(d.check().is_empty());
+        let s = &d.layouts[0].tabs[0].sections;
+        for section in s {
+            assert_eq!((section.width, section.new_row, section.min_height), (GRID_COLUMNS, false, None));
+        }
+        assert_eq!(
+            (s[0].columns, s[0].fields[0].width, s[1].columns, s[1].fields[0].width),
+            (4, 4, DEFAULT_COLUMNS, 1)
+        );
+        // Saved again: the defaults are spelled out, nothing else changes, and it reads back the same.
+        let out = serde_json::to_value(&d).unwrap();
+        let mut expected = old;
+        let sections = expected["layouts"][0]["tabs"][0]["sections"].as_array_mut().unwrap();
+        sections[0]["width"] = json!(12);
+        sections[1].as_object_mut().unwrap().extend([
+            ("columns".to_owned(), json!(3)),
+            ("width".to_owned(), json!(12)),
+            ("collapsed".to_owned(), json!(false)),
+        ]);
+        sections[1]["fields"][0]["width"] = json!(1);
+        let exp = &expected["layouts"][0];
+        assert_eq!(out["layouts"][0]["tabs"], exp["tabs"]);
+        assert_eq!(doc(out), d);
+        // v1 panels become full-width sections too.
+        let v1 = doc(json!({"layouts": [{"classKey": "server", "panels": [{"key": "p", "label": "P"}]}]}));
+        assert_eq!(v1.layouts[0].tabs[0].sections[0].width, GRID_COLUMNS);
+    }
+
+    #[test]
     fn v1_panels_become_sections_of_one_general_tab() {
         let d = doc(json!({"layouts": [{"classKey": "server",
             "panels": [
@@ -1153,7 +1239,7 @@ mod tests {
             "hiddenFields": ["attributes.serial"], "readOnlyFields": ["ident"]}]}));
         let v2 = doc(json!({"layouts": [{"classKey": "server",
             "tabs": [{"key": "general", "label": "General", "sections": [
-                {"key": "hw", "label": "Hardware", "columns": 3, "collapsed": true,
+                {"key": "hw", "label": "Hardware", "columns": 3, "width": 12, "collapsed": true,
                  "fields": [{"field": "attributes.cpu_cores", "width": 1}, {"field": "validFrom", "width": 1}]},
                 {"key": "empty", "label": "Empty", "columns": 3, "fields": []},
             ]}],
@@ -1284,7 +1370,10 @@ mod tests {
         let d = doc(stored.clone());
         assert_eq!(d.layouts[0].tabs[0].sections[0].kind, UiSectionKind::Fields);
         assert!(d.check().is_empty());
-        assert_eq!(serde_json::to_value(&d).unwrap()["layouts"], stored["layouts"]);
+        // Written back unchanged except for the grid width every section returns (default 12).
+        let mut expected = stored["layouts"].clone();
+        expected[0]["tabs"][0]["sections"][0]["width"] = json!(12);
+        assert_eq!(serde_json::to_value(&d).unwrap()["layouts"], expected);
         // v1 panels still convert to field sections.
         let v1 = doc(
             json!({"layouts": [{"classKey": "server", "panels": [{"key": "p", "label": "P", "fields": ["ident"]}]}]}),

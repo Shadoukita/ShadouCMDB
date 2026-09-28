@@ -8,6 +8,8 @@
 
 pub mod assets;
 pub mod document;
+#[cfg(test)]
+mod grid_tests;
 
 use axum::extract::RawPathParams;
 use axum::http::{HeaderValue, Method, StatusCode, header};
