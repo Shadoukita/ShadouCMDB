@@ -16,6 +16,7 @@ import AttributeInput from "../../components/AttributeInput.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import LookupSelect from "../../components/LookupSelect.vue";
+import type { LookupParent } from "../../components/LookupValueSelect.vue";
 import { useAppSettings } from "../../lib/appSettings";
 import { groupAttributes } from "../../lib/attributes";
 import { vAutofocus } from "../../lib/directives";
@@ -122,6 +123,11 @@ const FIELD_IDS: Record<string, string> = {
   notes: "f-notes",
 };
 const defFor = (f: string) => defs.value.find((d) => d.key === attributeKey(f));
+/** A dependent lookup's parent field (Manufacturer for Model): its label and the value chosen in it. */
+function lookupParent(d: (typeof defs.value)[number]): LookupParent | null {
+  const p = d.parentAttributeId ? attrs.data.value?.find((a) => a.id === d.parentAttributeId) : undefined;
+  return p ? { label: p.label, value: values.value[p.key] ?? "" } : null;
+}
 const coreError = (f: string) => fieldErrors.value[BUILTIN.get(f)?.form ?? f];
 function coreHint(f: string): string | undefined {
   return [f === "ipAddress" ? "IPv4 or IPv6" : "", readOnly.value.has(f) ? "read-only" : ""].filter(Boolean).join(" · ") || undefined;
@@ -203,7 +209,8 @@ async function onSubmit() {
 
 function attrHint(d: (typeof defs.value)[number]): string | undefined {
   const ro = readOnly.value.has(`${ATTRIBUTE_PREFIX}${d.key}`) ? "read-only" : "";
-  return [hintFor(d), d.inherited ? `from ${d.definedOn.name}` : "", d.isActive ? "" : "retired attribute", ro].filter(Boolean).join(" · ") || undefined;
+  const parent = lookupParent(d);
+  return [hintFor(d), parent ? `depends on ${parent.label}` : "", d.inherited ? `from ${d.definedOn.name}` : "", d.isActive ? "" : "retired attribute", ro].filter(Boolean).join(" · ") || undefined;
 }
 
 const CORE_IDS: Record<string, string> = { name: "f-name", statusId: "f-status" };
@@ -298,6 +305,7 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
                     :invalid="p.invalid"
                     :described-by="p.describedBy"
                     :reference-name="refNames[defFor(f)!.key]"
+                    :lookup-parent="lookupParent(defFor(f)!)"
                     @reference-name="(name) => (refNames[defFor(f)!.key] = name)"
                   />
                 </fieldset>

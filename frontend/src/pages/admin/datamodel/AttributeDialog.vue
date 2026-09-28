@@ -11,7 +11,7 @@ import {
   type AttributeUpdateBody,
   type DataType,
 } from "../../../api/datamodel";
-import { useCiClasses, type CiClass } from "../../../api/queries";
+import { useCiClasses, useClassAttributes, type CiClass } from "../../../api/queries";
 import AttributeInput from "../../../components/AttributeInput.vue";
 import FormDialog from "../../../components/FormDialog.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
@@ -30,7 +30,9 @@ import FormField from "../../form/FormField.vue";
  * after creation. The data type can change between the plain types; the server
  * dry-runs the conversion of every stored value and refuses the change if one
  * would not convert. Every save is previewed as DDL first. The default value is
- * entered with the same input the CI form uses for that type.
+ * entered with the same input the CI form uses for that type. A lookup attribute
+ * on a list with a parent list names its parent field: the attribute (on this
+ * class or an ancestor) bound to the parent list, whose value narrows its choices.
  */
 const props = defineProps<{
   open: boolean;
@@ -44,6 +46,7 @@ const emit = defineEmits<{ close: []; saved: [message: string] }>();
 
 const classes = useCiClasses();
 const lists = useLookupLists();
+const classAttrs = useClassAttributes(() => props.cls.id);
 const create = useCreateAttribute();
 const update = usePatch<AttributeDefinition>("attribute-definitions");
 const flow = useSchemaChangeFlow();
@@ -55,6 +58,7 @@ const key = ref("");
 const dataType = ref<DataType>("text");
 const referenceClassId = ref("");
 const lookupListId = ref("");
+const parentAttributeId = ref("");
 const isRequired = ref(false);
 const groupName = ref("");
 const helpText = ref("");
@@ -86,6 +90,7 @@ function seed() {
   dataType.value = (d?.dataType as DataType) ?? "text";
   referenceClassId.value = d?.referenceClassId ?? "";
   lookupListId.value = d?.lookupListId ?? "";
+  parentAttributeId.value = d?.parentAttributeId ?? "";
   isRequired.value = d?.isRequired ?? false;
   groupName.value = d ? (d.groupName ?? "") : (props.defaultSection ?? "");
   helpText.value = d?.helpText ?? "";
@@ -138,6 +143,24 @@ const concreteClasses = computed(() => flattenTree(classes.data.value ?? []));
 const typeHint = computed(() => DATA_TYPES.find((t) => t.key === dataType.value)?.hint || undefined);
 const refClassName = computed(() => classes.data.value?.find((c) => c.id === referenceClassId.value)?.name);
 const listName = computed(() => lists.data.value?.find((l) => l.id === lookupListId.value)?.name);
+/** The parent list of the chosen list, if it depends on one. */
+const parentList = computed(() => {
+  const pid = lists.data.value?.find((l) => l.id === lookupListId.value)?.parentListId;
+  return pid ? lists.data.value?.find((l) => l.id === pid) : undefined;
+});
+/** Lookup attributes of this class and its ancestors bound to the parent list. */
+const parentCandidates = computed(() =>
+  parentList.value
+    ? (classAttrs.data.value ?? []).filter((a) => a.dataType === "lookup" && a.lookupListId === parentList.value!.id && a.id !== props.def?.id)
+    : [],
+);
+// A new attribute on a dependent list starts with its parent field when there is only one candidate.
+watch([lookupListId, parentCandidates], () => {
+  if (!isNew.value) return;
+  if (!parentCandidates.value.some((a) => a.id === parentAttributeId.value)) {
+    parentAttributeId.value = parentCandidates.value.length === 1 ? parentCandidates.value[0].id : "";
+  }
+});
 
 const apiErrors = computed(() => (error.value instanceof ApiError ? error.value.fieldErrors() : {}));
 /** Errors for a field and its sub-paths (enumValues.2, validation.min). */
@@ -147,7 +170,7 @@ function errorFor(field: string): string | undefined {
     .map(([, m]) => m);
   return messages.length ? messages.join("; ") : undefined;
 }
-const PLACED = ["label", "key", "dataType", "referenceClassId", "lookupListId", "enumValues", "validation", "groupName", "helpText", "description", "defaultValue", "isRequired"];
+const PLACED = ["label", "key", "dataType", "referenceClassId", "lookupListId", "parentAttributeId", "enumValues", "validation", "groupName", "helpText", "description", "defaultValue", "isRequired"];
 const unplaced = computed(() =>
   error.value instanceof ApiError ? error.value.details.filter((d) => !PLACED.some((f) => d.field === f || d.field.startsWith(`${f}.`))) : [],
 );
@@ -212,6 +235,7 @@ async function submit() {
         sortOrder: props.nextSortOrder,
         ...(dataType.value === "reference" ? { referenceClassId: referenceClassId.value } : {}),
         ...(dataType.value === "lookup" ? { lookupListId: lookupListId.value } : {}),
+        ...(dataType.value === "lookup" && parentList.value && parentAttributeId.value ? { parentAttributeId: parentAttributeId.value } : {}),
         ...(dv !== null ? { defaultValue: dv } : {}),
       };
     const outcome = await flow.run({
@@ -233,6 +257,7 @@ async function submit() {
     ...common,
     ...(typeChanged.value ? { dataType: dataType.value } : {}),
     ...(dataType.value === "reference" ? {} : { defaultValue: dv }),
+    ...(dataType.value === "lookup" && (parentAttributeId.value || null) !== d.parentAttributeId ? { parentAttributeId: parentAttributeId.value || null } : {}),
   };
   const outcome = await flow.run({
     title: `Save attribute “${body.label}”`,
@@ -307,7 +332,26 @@ async function submit() {
           <option v-for="l in lists.data.value ?? []" :key="l.id" :value="l.id">{{ l.name }}{{ l.isActive ? "" : " (archived)" }}</option>
         </select>
         <input v-else :id="p.id" type="text" readonly :value="listName ?? lookupListId" :aria-describedby="p.describedBy" />
-        <span v-if="isNew" class="hint"><RouterLink to="/admin/lookups/lists">Manage lookup lists</RouterLink></span>
+        <span v-if="isNew" class="hint"><RouterLink to="/admin/dropdowns">Manage dropdowns</RouterLink></span>
+      </FormField>
+      <FormField
+        v-if="dataType === 'lookup' && parentList"
+        id="ad-parent-attr"
+        v-slot="p"
+        :label="`Parent field (${parentList.name})`"
+        :error="errorFor('parentAttributeId')"
+        :hint="
+          parentCandidates.length
+            ? `CI forms offer only the ${listName ?? 'values'} of the ${parentList.name} chosen in this field`
+            : `No attribute of ${cls.name} or its parents uses the list ${parentList.name}: add one first. Without a parent field every value can be chosen.`
+        "
+      >
+        <select :id="p.id" v-model="parentAttributeId" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
+          <option value="">— none: every value can be chosen —</option>
+          <option v-for="a in parentCandidates" :key="a.id" :value="a.id">
+            {{ a.label }}{{ a.inherited ? ` (from ${a.definedOn.name})` : "" }}{{ a.isActive ? "" : " (retired)" }}
+          </option>
+        </select>
       </FormField>
       <FormField id="ad-section" v-slot="p" label="Form section" :error="errorFor('groupName')" hint="Attributes with the same section are shown together">
         <input :id="p.id" v-model="groupName" type="text" list="ad-sections" maxlength="100" placeholder="e.g. Hardware" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />

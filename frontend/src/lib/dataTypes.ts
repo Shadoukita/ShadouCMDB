@@ -7,7 +7,7 @@ export const DATA_TYPES: { key: DataType; label: string; hint: string }[] = [
   { key: "number", label: "Decimal number", hint: "Optional minimum and maximum" },
   { key: "boolean", label: "Yes / no", hint: "" },
   { key: "enum", label: "Choice list", hint: "One of a fixed set of values defined on the attribute" },
-  { key: "lookup", label: "Lookup list", hint: "One value of an admin-defined list (Administration › Lookups)" },
+  { key: "lookup", label: "Lookup list", hint: "One value of an admin-defined list (Administration › Dropdowns)" },
   { key: "date", label: "Date", hint: "" },
   { key: "datetime", label: "Date and time", hint: "" },
   { key: "ip", label: "IP address", hint: "IPv4 or IPv6" },

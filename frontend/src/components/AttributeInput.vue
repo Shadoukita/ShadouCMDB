@@ -3,7 +3,7 @@ import { computed } from "vue";
 import type { CiSummary } from "../api/queries";
 import type { AttributeShape, Validation } from "../lib/attributeValues";
 import CiPicker from "./CiPicker.vue";
-import LookupValueSelect from "./LookupValueSelect.vue";
+import LookupValueSelect, { type LookupParent } from "./LookupValueSelect.vue";
 
 /**
  * One input per attribute dataType. The value is always a string; see lib/attributeValues for conversion.
@@ -15,6 +15,8 @@ const props = defineProps<{
   invalid?: boolean;
   describedBy?: string;
   referenceName?: string;
+  /** For a lookup attribute with a parent field: that field's label and current value. */
+  lookupParent?: LookupParent | null;
 }>();
 const model = defineModel<string>({ required: true });
 const emit = defineEmits<{ referenceName: [name: string] }>();
@@ -67,6 +69,7 @@ function onReference(ci: CiSummary | null) {
     :id="id"
     v-model="model"
     :list-id="def.lookupListId"
+    :parent="lookupParent"
     :invalid="invalid"
     :described-by="describedBy"
   />
