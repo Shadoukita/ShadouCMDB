@@ -21200,7 +21200,8 @@
               "unknown_attribute",
               "unknown_lookup_list",
               "unknown_lookup_value",
-              "required_field_not_editable"
+              "required_field_not_editable",
+              "core_field_hidden"
             ]
           },
           "message": {
@@ -23718,7 +23719,7 @@
       },
       "UiClassLayout": {
         "type": "object",
-        "description": "Detail page and form layout of one class. Fields not placed in a panel\nfollow in a trailing panel, grouped by attribute group as before.",
+        "description": "Detail page and form layout of one class (layout format v2): tabs of\nsections, each a grid of fields with a width. Fields the tabs do not place\n(and that are not hidden) follow at the end of the first tab, grouped by\nattribute group; so do attributes added to the class later.",
         "required": [
           "classKey"
         ],
@@ -23728,12 +23729,12 @@
             "description": "Stable machine key, lower_snake_case",
             "pattern": "^[a-z][a-z0-9_]{0,62}$"
           },
-          "panels": {
+          "tabs": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/UiLayoutPanel"
+              "$ref": "#/components/schemas/UiLayoutTab"
             },
-            "maxItems": 50
+            "maxItems": 20
           },
           "hiddenFields": {
             "type": "array",
@@ -23754,6 +23755,16 @@
             "description": "Fields shown but not editable on the form",
             "maxItems": 200,
             "uniqueItems": true
+          },
+          "panels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiLayoutPanel",
+              "writeOnly": true
+            },
+            "description": "Layout format v1, still accepted (older exports, API clients and saved versions): converted to\none \"General\" tab with a section per panel and never returned. Send `tabs` instead.",
+            "deprecated": true,
+            "maxItems": 50
           }
         },
         "additionalProperties": false
@@ -23776,9 +23787,32 @@
         },
         "additionalProperties": false
       },
+      "UiLayoutField": {
+        "type": "object",
+        "description": "A field on a section's grid. Fields fill the grid row by row in the order given.",
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "A built-in field or attributes.<key>",
+            "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Grid columns the field spans, at most the section's `columns`",
+            "default": 1,
+            "maximum": 4,
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
       "UiLayoutPanel": {
         "type": "object",
-        "description": "A panel (card) on the detail page and the form",
+        "description": "A panel of the layout format before tabs (v1). Accepted on input and converted to a section of one\n\"General\" tab; never returned.",
         "required": [
           "key",
           "label"
@@ -23806,8 +23840,77 @@
             "uniqueItems": true
           },
           "collapsed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiLayoutSection": {
+        "type": "object",
+        "description": "A section (card) of a tab: a heading and a grid of fields",
+        "required": [
+          "key",
+          "label"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "columns": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Grid columns on a wide screen; narrow screens use fewer",
+            "default": 3,
+            "maximum": 4,
+            "minimum": 1
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiLayoutField"
+            },
+            "maxItems": 200
+          },
+          "collapsed": {
             "type": "boolean",
             "description": "Start collapsed on the detail page"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiLayoutTab": {
+        "type": "object",
+        "description": "A tab of the detail page and the form",
+        "required": [
+          "key",
+          "label"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiLayoutSection"
+            },
+            "maxItems": 50
           }
         },
         "additionalProperties": false

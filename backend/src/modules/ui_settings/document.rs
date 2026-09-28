@@ -370,11 +370,74 @@ pub struct UiListView {
     pub page_size: Option<i64>,
 }
 
-/// A panel (card) on the detail page and the form
+/// Grid columns of a section that does not say (and of converted v1 panels).
+pub const DEFAULT_COLUMNS: u8 = 3;
+/// Core fields of every CI: a layout can move them but never hide them.
+pub const CORE_FIELDS: &[&str] = &["ident", "validFrom", "validUntil"];
+
+fn default_columns() -> u8 {
+    DEFAULT_COLUMNS
+}
+fn default_width() -> u8 {
+    1
+}
+
+fn layout_field_schema() -> Schema {
+    string().pattern(Some(FIELD_PATTERN)).description(Some("A built-in field or attributes.<key>")).into()
+}
+
+/// A field on a section's grid. Fields fill the grid row by row in the order given.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiLayoutField {
+    #[schema(schema_with = layout_field_schema)]
+    pub field: String,
+    /// Grid columns the field spans, at most the section's `columns`
+    #[serde(default = "default_width")]
+    #[schema(minimum = 1, maximum = 4, default = 1)]
+    pub width: u8,
+}
+
+/// A section (card) of a tab: a heading and a grid of fields
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiLayoutSection {
+    /// Unique within the layout (across its tabs)
+    #[schema(schema_with = key_schema)]
+    pub key: String,
+    #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
+    pub label: String,
+    /// Grid columns on a wide screen; narrow screens use fewer
+    #[serde(default = "default_columns")]
+    #[schema(minimum = 1, maximum = 4, default = 3)]
+    pub columns: u8,
+    #[serde(default)]
+    #[schema(max_items = 200)]
+    pub fields: Vec<UiLayoutField>,
+    /// Start collapsed on the detail page
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+/// A tab of the detail page and the form
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiLayoutTab {
+    /// Unique among the layout's tabs
+    #[schema(schema_with = key_schema)]
+    pub key: String,
+    #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
+    pub label: String,
+    #[serde(default)]
+    #[schema(max_items = 50)]
+    pub sections: Vec<UiLayoutSection>,
+}
+
+/// A panel of the layout format before tabs (v1). Accepted on input and converted to a section of one
+/// "General" tab; never returned.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiLayoutPanel {
-    /// Unique within the layout
     #[schema(schema_with = key_schema)]
     pub key: String,
     #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
@@ -382,27 +445,82 @@ pub struct UiLayoutPanel {
     #[schema(schema_with = panel_fields_schema)]
     #[serde(default)]
     pub fields: Vec<String>,
-    /// Start collapsed on the detail page
     #[serde(default)]
     pub collapsed: bool,
 }
 
-/// Detail page and form layout of one class. Fields not placed in a panel
-/// follow in a trailing panel, grouped by attribute group as before.
+/// Detail page and form layout of one class (layout format v2): tabs of
+/// sections, each a grid of fields with a width. Fields the tabs do not place
+/// (and that are not hidden) follow at the end of the first tab, grouped by
+/// attribute group; so do attributes added to the class later.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "ClassLayoutInput")]
 pub struct UiClassLayout {
     #[schema(schema_with = key_schema)]
     pub class_key: String,
     #[serde(default)]
-    #[schema(max_items = 50)]
-    pub panels: Vec<UiLayoutPanel>,
+    #[schema(max_items = 20)]
+    pub tabs: Vec<UiLayoutTab>,
     #[schema(schema_with = hidden_fields_schema)]
     #[serde(default)]
     pub hidden_fields: Vec<String>,
     #[schema(schema_with = read_only_fields_schema)]
     #[serde(default)]
     pub read_only_fields: Vec<String>,
+    /// Layout format v1, still accepted (older exports, API clients and saved versions): converted to
+    /// one "General" tab with a section per panel and never returned. Send `tabs` instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(max_items = 50, deprecated, write_only)]
+    pub panels: Vec<UiLayoutPanel>,
+}
+
+/// What `UiClassLayout` is read from: either format, converted to v2.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClassLayoutInput {
+    class_key: String,
+    #[serde(default)]
+    tabs: Vec<UiLayoutTab>,
+    #[serde(default)]
+    hidden_fields: Vec<String>,
+    #[serde(default)]
+    read_only_fields: Vec<String>,
+    #[serde(default)]
+    panels: Vec<UiLayoutPanel>,
+}
+
+impl TryFrom<ClassLayoutInput> for UiClassLayout {
+    type Error = String;
+
+    fn try_from(l: ClassLayoutInput) -> Result<Self, String> {
+        if !l.panels.is_empty() && !l.tabs.is_empty() {
+            return Err("custom|Send tabs, or panels in the older layout format, not both".into());
+        }
+        let tabs = if l.panels.is_empty() { l.tabs } else { convert_panels(l.panels) };
+        Ok(UiClassLayout {
+            class_key: l.class_key,
+            tabs,
+            hidden_fields: l.hidden_fields,
+            read_only_fields: l.read_only_fields,
+            panels: Vec::new(),
+        })
+    }
+}
+
+/// Layout format v1 -> v2: the panels become the sections of one "General" tab, each field one column
+/// wide on a grid of [`DEFAULT_COLUMNS`]. Migration 0017 does the same to the stored settings.
+pub fn convert_panels(panels: Vec<UiLayoutPanel>) -> Vec<UiLayoutTab> {
+    let sections = panels
+        .into_iter()
+        .map(|p| UiLayoutSection {
+            key: p.key,
+            label: p.label,
+            columns: DEFAULT_COLUMNS,
+            fields: p.fields.into_iter().map(|field| UiLayoutField { field, width: 1 }).collect(),
+            collapsed: p.collapsed,
+        })
+        .collect();
+    vec![UiLayoutTab { key: "general".into(), label: "General".into(), sections }]
 }
 
 /// Every UI setting. All sections are optional; `{}` is the default UI.
@@ -563,16 +681,38 @@ impl UiSettingsDocument {
             if !seen.insert(l.class_key.as_str()) {
                 e.push(custom(at(format!("{p}.classKey")), "One layout per class"));
             }
-            let mut panels = HashSet::new();
+            let mut tabs = HashSet::new();
+            let mut sections = HashSet::new();
             let mut placed = HashSet::new();
-            for (j, panel) in l.panels.iter().enumerate() {
-                if !panels.insert(panel.key.as_str()) {
-                    e.push(custom(at(format!("{p}.panels.{j}.key")), "Panel keys must be unique in a layout"));
+            for (t, tab) in l.tabs.iter().enumerate() {
+                let pt = format!("{p}.tabs.{t}");
+                if !tabs.insert(tab.key.as_str()) {
+                    e.push(custom(at(format!("{pt}.key")), "Tab keys must be unique in a layout"));
                 }
-                for (k, f) in panel.fields.iter().enumerate() {
-                    if !placed.insert(f.as_str()) {
-                        e.push(custom(at(format!("{p}.panels.{j}.fields.{k}")), "A field can be in one panel only"));
+                for (j, s) in tab.sections.iter().enumerate() {
+                    let ps = format!("{pt}.sections.{j}");
+                    if !sections.insert(s.key.as_str()) {
+                        e.push(custom(at(format!("{ps}.key")), "Section keys must be unique in a layout"));
                     }
+                    for (k, f) in s.fields.iter().enumerate() {
+                        if !placed.insert(f.field.as_str()) {
+                            e.push(custom(at(format!("{ps}.fields.{k}.field")), "A field can be placed once only"));
+                        }
+                        if f.width > s.columns {
+                            e.push(custom(
+                                at(format!("{ps}.fields.{k}.width")),
+                                format!("At most the section's {} column(s)", s.columns),
+                            ));
+                        }
+                    }
+                }
+            }
+            for (k, f) in l.hidden_fields.iter().enumerate() {
+                if CORE_FIELDS.contains(&f.as_str()) {
+                    e.push(custom(
+                        at(format!("{p}.hiddenFields.{k}")),
+                        "Ident, valid from and valid until belong to every CI: move them, but they cannot be hidden",
+                    ));
                 }
             }
         }
@@ -597,6 +737,8 @@ pub enum IssueCode {
     UnknownLookupValue,
     /// A required attribute is hidden or read-only on the form: CIs of the class cannot be created in the UI (kept, only flagged)
     RequiredFieldNotEditable,
+    /// A core field (ident, validFrom, validUntil) is hidden, e.g. in a restored older version; it is shown anyway
+    CoreFieldHidden,
 }
 
 /// A reference the effective settings ignore, or a setting worth a second look
@@ -757,9 +899,24 @@ pub fn resolve(doc: &UiSettingsDocument, model: &Model) -> (UiSettingsDocument, 
             continue;
         }
         let mut l = l.clone();
-        for (j, panel) in l.panels.iter_mut().enumerate() {
-            panel.fields = r.fields(&format!("{p}.panels.{j}.fields"), &l.class_key, &panel.fields);
+        for (t, tab) in l.tabs.iter_mut().enumerate() {
+            for (j, s) in tab.sections.iter_mut().enumerate() {
+                let ps = format!("{p}.tabs.{t}.sections.{j}.fields");
+                let names: Vec<String> = s.fields.iter().map(|f| f.field.clone()).collect();
+                let kept: HashSet<String> = r.fields(&ps, &l.class_key, &names).into_iter().collect();
+                s.fields.retain(|f| kept.contains(&f.field));
+            }
         }
+        for (k, f) in l.hidden_fields.iter().enumerate() {
+            if CORE_FIELDS.contains(&f.as_str()) {
+                r.flag(
+                    format!("{p}.hiddenFields.{k}"),
+                    IssueCode::CoreFieldHidden,
+                    format!("\"{f}\" belongs to every CI and cannot be hidden; it is shown"),
+                );
+            }
+        }
+        l.hidden_fields.retain(|f| !CORE_FIELDS.contains(&f.as_str()));
         l.hidden_fields = r.fields(&format!("{p}.hiddenFields"), &l.class_key, &l.hidden_fields);
         l.read_only_fields = r.fields(&format!("{p}.readOnlyFields"), &l.class_key, &l.read_only_fields);
         // Positions refer to the stored document, like every other issue path.
@@ -848,10 +1005,15 @@ mod tests {
                 {"id": "a", "type": "count_by_lookup", "limit": 5},
                 {"id": "b", "type": "count_by_class", "lookupListKey": "status"},
             ]},
-            "layouts": [{"classKey": "server", "panels": [
-                {"key": "p", "label": "P", "fields": ["label", "attributes.hostname"]},
-                {"key": "p", "label": "Q", "fields": ["attributes.hostname"]},
-            ], "hiddenFields": ["ident"]}],
+            "layouts": [{"classKey": "server", "tabs": [
+                {"key": "main", "label": "Main", "sections": [
+                    {"key": "p", "label": "P", "columns": 2, "fields": [
+                        {"field": "label"}, {"field": "attributes.hostname", "width": 3}]},
+                ]},
+                {"key": "main", "label": "Other", "sections": [
+                    {"key": "p", "label": "Q", "fields": [{"field": "attributes.hostname"}]},
+                ]},
+            ], "hiddenFields": ["ident", "attributes.notes"]}],
         }));
         let fields: Vec<String> = d.check().into_iter().map(|e| e.field).collect();
         assert_eq!(
@@ -862,10 +1024,78 @@ mod tests {
                 "dashboard.widgets.1.limit",
                 "dashboard.widgets.1.lookupListKey",
                 "dashboard.widgets.2.lookupListKey",
-                "layouts.0.panels.1.key",
-                "layouts.0.panels.1.fields.0",
+                "layouts.0.tabs.0.sections.0.fields.1.width",
+                "layouts.0.tabs.1.key",
+                "layouts.0.tabs.1.sections.0.key",
+                "layouts.0.tabs.1.sections.0.fields.0.field",
+                "layouts.0.hiddenFields.0",
             ]
         );
+    }
+
+    #[test]
+    fn layout_defaults_fill_in_columns_and_widths() {
+        let d = doc(json!({"layouts": [{"classKey": "server", "tabs": [
+            {"key": "t", "label": "T", "sections": [{"key": "s", "label": "S", "fields": [{"field": "ident"}]}]},
+        ]}]}));
+        let s = &d.layouts[0].tabs[0].sections[0];
+        assert_eq!((s.columns, s.fields[0].width, s.collapsed), (DEFAULT_COLUMNS, 1, false));
+        assert!(d.check().is_empty());
+    }
+
+    #[test]
+    fn v1_panels_become_sections_of_one_general_tab() {
+        let d = doc(json!({"layouts": [{"classKey": "server",
+            "panels": [
+                {"key": "hw", "label": "Hardware", "fields": ["attributes.cpu_cores", "validFrom"], "collapsed": true},
+                {"key": "empty", "label": "Empty"},
+            ],
+            "hiddenFields": ["attributes.serial"], "readOnlyFields": ["ident"]}]}));
+        let v2 = doc(json!({"layouts": [{"classKey": "server",
+            "tabs": [{"key": "general", "label": "General", "sections": [
+                {"key": "hw", "label": "Hardware", "columns": 3, "collapsed": true,
+                 "fields": [{"field": "attributes.cpu_cores", "width": 1}, {"field": "validFrom", "width": 1}]},
+                {"key": "empty", "label": "Empty", "columns": 3, "fields": []},
+            ]}],
+            "hiddenFields": ["attributes.serial"], "readOnlyFields": ["ident"]}]}));
+        assert_eq!(d, v2);
+        assert!(d.check().is_empty());
+        // Never written back in the old format.
+        let out = serde_json::to_value(&d).unwrap();
+        assert!(out["layouts"][0].get("panels").is_none(), "{out}");
+        assert_eq!(
+            out["layouts"][0]["tabs"][0]["sections"][0]["fields"][0],
+            json!({"field": "attributes.cpu_cores", "width": 1})
+        );
+    }
+
+    #[test]
+    fn a_layout_is_in_one_format_only() {
+        let err = serde_json::from_value::<UiSettingsDocument>(json!({"layouts": [{"classKey": "server",
+            "panels": [{"key": "p", "label": "P"}],
+            "tabs": [{"key": "t", "label": "T"}]}]}))
+        .unwrap_err();
+        assert!(err.to_string().contains("not both"), "{err}");
+    }
+
+    #[test]
+    fn hidden_core_fields_and_unknown_placed_attributes_are_ignored() {
+        let d = doc(json!({"layouts": [{"classKey": "server",
+            "tabs": [{"key": "t", "label": "T", "sections": [{"key": "s", "label": "S", "fields": [
+                {"field": "attributes.gone"}, {"field": "attributes.cpu_cores", "width": 2}]}]}],
+            "hiddenFields": ["validUntil"]}]}));
+        let (effective, issues) = resolve(&d, &model());
+        let got: Vec<(&str, IssueCode)> = issues.iter().map(|i| (i.path.as_str(), i.code)).collect();
+        assert_eq!(
+            got,
+            [
+                ("layouts.0.tabs.0.sections.0.fields.0", IssueCode::UnknownAttribute),
+                ("layouts.0.hiddenFields.0", IssueCode::CoreFieldHidden),
+            ]
+        );
+        let l = &effective.layouts[0];
+        assert_eq!(l.tabs[0].sections[0].fields, [UiLayoutField { field: "attributes.cpu_cores".into(), width: 2 }]);
+        assert!(l.hidden_fields.is_empty());
     }
 
     #[test]

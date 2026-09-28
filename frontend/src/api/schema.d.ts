@@ -2598,7 +2598,7 @@ export interface components {
             /** @description Path in the stored document, e.g. "listViews.2.columns.3" */
             path: string;
             /** @enum {string} */
-            code: "unknown_class" | "unknown_attribute" | "unknown_lookup_list" | "unknown_lookup_value" | "required_field_not_editable";
+            code: "unknown_class" | "unknown_attribute" | "unknown_lookup_list" | "unknown_lookup_value" | "required_field_not_editable" | "core_field_hidden";
             message: string;
         };
         LdapConfig: {
@@ -3321,32 +3321,75 @@ export interface components {
             defaultTheme: "light" | "dark" | "system";
         };
         /**
-         * @description Detail page and form layout of one class. Fields not placed in a panel
-         *     follow in a trailing panel, grouped by attribute group as before.
+         * @description Detail page and form layout of one class (layout format v2): tabs of
+         *     sections, each a grid of fields with a width. Fields the tabs do not place
+         *     (and that are not hidden) follow at the end of the first tab, grouped by
+         *     attribute group; so do attributes added to the class later.
          */
         UiClassLayout: {
             /** @description Stable machine key, lower_snake_case */
             classKey: string;
-            panels?: components["schemas"]["UiLayoutPanel"][];
+            tabs?: components["schemas"]["UiLayoutTab"][];
             /** @description Fields not shown on the detail page or the form */
             hiddenFields?: string[];
             /** @description Fields shown but not editable on the form */
             readOnlyFields?: string[];
+            /**
+             * @deprecated
+             * @description Layout format v1, still accepted (older exports, API clients and saved versions): converted to
+             *     one "General" tab with a section per panel and never returned. Send `tabs` instead.
+             */
+            panels?: components["schemas"]["UiLayoutPanel"][];
         };
         /** @description Dashboard widgets in display order; null keeps the built-in dashboard */
         UiDashboard: {
             /** @default null */
             widgets: components["schemas"]["UiWidget"][] | null;
         };
-        /** @description A panel (card) on the detail page and the form */
+        /** @description A field on a section's grid. Fields fill the grid row by row in the order given. */
+        UiLayoutField: {
+            /** @description A built-in field or attributes.<key> */
+            field: string;
+            /**
+             * Format: int32
+             * @description Grid columns the field spans, at most the section's `columns`
+             * @default 1
+             */
+            width: number;
+        };
+        /**
+         * @description A panel of the layout format before tabs (v1). Accepted on input and converted to a section of one
+         *     "General" tab; never returned.
+         */
         UiLayoutPanel: {
             /** @description Stable machine key, lower_snake_case */
             key: string;
             label: string;
             /** @description Fields in display order (built-in fields or attributes.<key>) */
             fields?: string[];
+            collapsed?: boolean;
+        };
+        /** @description A section (card) of a tab: a heading and a grid of fields */
+        UiLayoutSection: {
+            /** @description Stable machine key, lower_snake_case */
+            key: string;
+            label: string;
+            /**
+             * Format: int32
+             * @description Grid columns on a wide screen; narrow screens use fewer
+             * @default 3
+             */
+            columns: number;
+            fields?: components["schemas"]["UiLayoutField"][];
             /** @description Start collapsed on the detail page */
             collapsed?: boolean;
+        };
+        /** @description A tab of the detail page and the form */
+        UiLayoutTab: {
+            /** @description Stable machine key, lower_snake_case */
+            key: string;
+            label: string;
+            sections?: components["schemas"]["UiLayoutSection"][];
         };
         /** @description Inventory filters, by key */
         UiListFilters: {
