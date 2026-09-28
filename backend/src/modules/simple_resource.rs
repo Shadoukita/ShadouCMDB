@@ -98,6 +98,10 @@ pub trait Resource: Send + Sync + 'static {
     /// rows are database objects (schemas, tables, columns).
     const ARCHIVE_ON_DELETE: bool = false;
 
+    /// Set for resources kept for compatibility: every operation is marked
+    /// deprecated in the OpenAPI document and its description starts with this.
+    const DEPRECATED: Option<&'static str> = None;
+
     /// Description of the PATCH operation (empty: none).
     const UPDATE_DESCRIPTION: &'static str = "";
 
@@ -418,6 +422,15 @@ pub fn routes<R: Resource>() -> Vec<Route> {
                     Ok(Json(usage::<R>(&api.pool, id).await?))
                 }),
         );
+    }
+    if let Some(note) = R::DEPRECATED {
+        for r in &mut routes {
+            r.deprecated = true;
+            r.description = Some(match r.description.take() {
+                Some(d) => format!("{note} {d}"),
+                None => note.to_owned(),
+            });
+        }
     }
     routes
 }

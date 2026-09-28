@@ -7,6 +7,7 @@ import { toValue, type MaybeRefOrGetter } from "vue";
 import { api, unwrap, type JsonBody, type ListQuery, type Schemas } from "./client";
 import { MAX_PAGE } from "./queries";
 
+export type Area = Schemas["Area"];
 export type AttributeDefinition = Schemas["AttributeDefinition"];
 export type DataType = JsonBody<"/api/v1/attribute-definitions", "post">["dataType"];
 export type RelationshipRule = Schemas["RelationshipRule"];
@@ -16,6 +17,8 @@ export type StarterTemplate = Schemas["StarterTemplate"];
 export type TemplateInstallResult = Schemas["TemplateInstallResult"];
 export type UsageReport = Schemas["UsageReport"];
 
+export type AreaCreateBody = JsonBody<"/api/v1/areas", "post">;
+export type AreaUpdateBody = JsonBody<"/api/v1/areas/{id}", "patch">;
 export type ClassCreateBody = JsonBody<"/api/v1/ci-classes", "post">;
 export type ClassUpdateBody = JsonBody<"/api/v1/ci-classes/{id}", "patch">;
 export type AttributeCreateBody = JsonBody<"/api/v1/attribute-definitions", "post">;
@@ -36,6 +39,7 @@ export type OwnerKind = OwnerBody["kind"];
 
 /** Every data model and lookup resource. Each has GET/PATCH/DELETE /{resource}/{id} and GET …/{id}/usage. */
 export type Resource =
+  | "areas"
   | "ci-classes"
   | "attribute-definitions"
   | "relationship-types"
@@ -54,15 +58,17 @@ export const dmKeys = {
   rules: (q: { relationshipTypeId?: string; classId?: string }) => ["relationship-rules", q] as const,
   lookupAdmin: (kind: string, q: unknown) => ["lookup", kind, "admin", q] as const,
   lookupLists: ["lookup-lists"] as const,
-  lookupListValues: (listId: string) => ["lookup-list-values", listId] as const,
+  lookupListValues: (listId: string, parentValueId?: string) =>
+    (parentValueId ? ["lookup-list-values", listId, parentValueId] : ["lookup-list-values", listId]) as readonly string[],
   templates: ["admin", "templates"] as const,
   usage: (resource: Resource, id: string) => ["usage", resource, id] as const,
 };
 
 /** Query-key prefixes a change to each resource can make stale. */
 const AFFECTS: Record<Resource, readonly (readonly unknown[])[]> = {
-  "ci-classes": [["ci-classes"], ["attribute-definitions"], ["relationship-rules"], ["relationship-types"], ["cis"], dmKeys.templates],
-  "attribute-definitions": [["ci-classes"], ["attribute-definitions"], ["cis", "detail"], dmKeys.templates],
+  areas: [["areas"], ["technical-names"], ["ci-classes"], ["cis"], ["schema-changes"], dmKeys.templates],
+  "ci-classes": [["areas"], ["technical-names"], ["ci-classes"], ["attribute-definitions"], ["relationship-rules"], ["relationship-types"], ["cis"], ["schema-changes"], dmKeys.templates],
+  "attribute-definitions": [["technical-names"], ["ci-classes"], ["attribute-definitions"], ["cis", "detail"], ["schema-changes"], dmKeys.templates],
   "relationship-types": [["relationship-types"], ["relationship-rules"], ["relationships"], ["cis", "graph"], dmKeys.templates],
   "relationship-rules": [["relationship-rules"], ["relationship-types"], dmKeys.templates],
   statuses: [["lookup", "statuses"], ["cis"], dmKeys.templates],
@@ -123,9 +129,11 @@ export function useRemove(resource: Resource) {
 export function useReorder(resource: Resource) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (rows: { id: string; sortOrder: number; extra?: Record<string, unknown> }[]) => {
+    // Rows get 10, 20, 30… in the given order, unless a row names its `next` sort order (reordering a
+    // filtered part of a list keeps the positions that part had among the rest).
+    mutationFn: async (rows: { id: string; sortOrder: number; next?: number; extra?: Record<string, unknown> }[]) => {
       const writes = rows
-        .map((r, i) => ({ ...r, next: (i + 1) * 10 }))
+        .map((r, i) => ({ ...r, next: r.next ?? (i + 1) * 10 }))
         .filter((r) => r.sortOrder !== r.next || r.extra);
       for (const r of writes) {
         await unwrap(api.PATCH(itemPath(resource), { params: { path: { id: r.id } }, body: { sortOrder: r.next, ...r.extra } as never }));
@@ -134,6 +142,29 @@ export function useReorder(resource: Resource) {
     },
     // Also after a partial failure: the rows written so far did change.
     onSettled: () => invalidateResource(qc, resource),
+  });
+}
+
+// ---------- Areas ----------
+
+/**
+ * Every area, archived ones included, in tab order. Areas are few (one per
+ * menu tab), so they are fetched whole; screens filter out archived ones.
+ */
+export function useAreas() {
+  return useQuery({
+    queryKey: ["areas"],
+    staleTime: 5 * 60_000,
+    queryFn: ({ signal }) =>
+      unwrap(api.GET("/api/v1/areas", { params: { query: { limit: MAX_PAGE, sort: "sortOrder" } }, signal })).then((r) => r.data),
+  });
+}
+
+export function useCreateArea() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AreaCreateBody) => unwrap(api.POST("/api/v1/areas", { body })),
+    onSuccess: () => invalidateResource(qc, "areas"),
   });
 }
 
@@ -300,19 +331,46 @@ export function useCreateLookupList() {
   });
 }
 
-/** The values of one list, in order. Also used by CI forms and detail pages for `lookup` attributes. */
-export function useLookupListValues(listId: MaybeRefOrGetter<string | null | undefined>) {
+/**
+ * The values of one list, in order. Also used by CI forms and detail pages for `lookup` attributes.
+ * `parentValueId` (a value id, or "none" for values not assigned to one) narrows a dependent list
+ * on the server: the values of Model that belong to Cisco.
+ */
+export function useLookupListValues(
+  listId: MaybeRefOrGetter<string | null | undefined>,
+  parentValueId: MaybeRefOrGetter<string | null | undefined> = undefined,
+) {
   return useQuery(() => {
     const id = toValue(listId) ?? "";
+    const parent = toValue(parentValueId) || undefined;
     return {
-      queryKey: dmKeys.lookupListValues(id),
+      queryKey: dmKeys.lookupListValues(id, parent),
       enabled: !!id,
       staleTime: 60_000,
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         unwrap(
-          api.GET("/api/v1/lookup-list-values", { params: { query: { listId: id, limit: MAX_PAGE, sort: "sortOrder" } }, signal }),
+          api.GET("/api/v1/lookup-list-values", {
+            params: { query: { listId: id, limit: MAX_PAGE, sort: "sortOrder", ...(parent ? { parentValueId: parent } : {}) } },
+            signal,
+          }),
         ).then((r) => r.data),
     };
+  });
+}
+
+/** Every value of every list, page by page. UI settings name lookup values by list key and value key; filters need their ids. */
+export function useAllLookupListValues() {
+  return useQuery({
+    queryKey: ["lookup-list-values", "all"],
+    staleTime: 60_000,
+    queryFn: async ({ signal }) => {
+      const out: LookupListValue[] = [];
+      for (let offset = 0; ; offset += MAX_PAGE) {
+        const r = await unwrap(api.GET("/api/v1/lookup-list-values", { params: { query: { limit: MAX_PAGE, offset, sort: "sortOrder" } }, signal }));
+        out.push(...r.data);
+        if (r.data.length === 0 || out.length >= r.page.total) return out;
+      }
+    },
   });
 }
 

@@ -9,11 +9,17 @@
 //!
 //! Both are `Secure` when the request reached the proxy over HTTPS (see
 //! [`CookieSecure`]).
+//!
+//! A sign-in whose password was right but whose second factor is due sets
+//! `shadoucmdb_mfa` instead: a random token naming the pending challenge,
+//! HttpOnly, sent only to `/api/v1/auth`, gone after a few minutes.
+//!
+//! An OIDC sign-in sets `shadoucmdb_oidc` (HttpOnly, sent only to
+//! `/api/v1/auth/oidc`, 10 minutes) to the `state` it sends the provider.
 
 use std::net::{IpAddr, SocketAddr};
 
 use axum::http::{HeaderMap, HeaderValue, header};
-use password_hash::rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 
 use crate::config::{AuthConfig, CookieSecure};
@@ -21,11 +27,17 @@ use crate::config::{AuthConfig, CookieSecure};
 pub const SESSION_COOKIE: &str = "shadoucmdb_session";
 pub const CSRF_COOKIE: &str = "shadoucmdb_csrf";
 pub const CSRF_HEADER: &str = "x-csrf-token";
+pub const MFA_COOKIE: &str = "shadoucmdb_mfa";
+const MFA_COOKIE_PATH: &str = "/api/v1/auth";
+/// The state of a pending OIDC sign-in, checked against the callback's `state`
+/// parameter so a callback only completes in the browser that started it.
+pub const OIDC_COOKIE: &str = "shadoucmdb_oidc";
+const OIDC_COOKIE_PATH: &str = "/api/v1/auth/oidc";
 
 /// 256 random bits, hex-encoded.
 pub fn new_token() -> String {
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
+    getrandom::fill(&mut bytes).expect("OS random number generator");
     hex::encode(bytes)
 }
 
@@ -126,7 +138,11 @@ pub(crate) fn secure_cookies(cfg: &AuthConfig, headers: &HeaderMap) -> bool {
 }
 
 fn build(name: &str, value: &str, max_age_secs: u64, http_only: bool, secure: bool) -> HeaderValue {
-    let mut c = format!("{name}={value}; Path=/; Max-Age={max_age_secs}; SameSite=Lax");
+    build_at("/", name, value, max_age_secs, http_only, secure)
+}
+
+fn build_at(path: &str, name: &str, value: &str, max_age_secs: u64, http_only: bool, secure: bool) -> HeaderValue {
+    let mut c = format!("{name}={value}; Path={path}; Max-Age={max_age_secs}; SameSite=Lax");
     if http_only {
         c.push_str("; HttpOnly");
     }
@@ -140,6 +156,33 @@ fn build(name: &str, value: &str, max_age_secs: u64, http_only: bool, secure: bo
 pub fn login_cookies(cfg: &AuthConfig, secure: bool, token: &str, csrf: &str) -> Vec<HeaderValue> {
     let max_age = cfg.session_max_age.as_secs();
     vec![build(SESSION_COOKIE, token, max_age, true, secure), build(CSRF_COOKIE, csrf, max_age, false, secure)]
+}
+
+/// Set-Cookie header naming a pending second-factor challenge.
+pub fn mfa_cookie(secure: bool, token: &str, ttl: std::time::Duration) -> HeaderValue {
+    build_at(MFA_COOKIE_PATH, MFA_COOKIE, token, ttl.as_secs(), true, secure)
+}
+
+/// Set-Cookie header that deletes the challenge cookie.
+pub fn clear_mfa_cookie(secure: bool) -> HeaderValue {
+    build_at(MFA_COOKIE_PATH, MFA_COOKIE, "", 0, true, secure)
+}
+
+/// Set-Cookie header binding a pending OIDC sign-in to this browser. SameSite=Lax
+/// still sends it on the provider's top-level redirect back to the callback.
+pub fn oidc_cookie(secure: bool, state: &str, ttl: std::time::Duration) -> HeaderValue {
+    build_at(OIDC_COOKIE_PATH, OIDC_COOKIE, state, ttl.as_secs(), true, secure)
+}
+
+pub fn clear_oidc_cookie(secure: bool) -> HeaderValue {
+    build_at(OIDC_COOKIE_PATH, OIDC_COOKIE, "", 0, true, secure)
+}
+
+/// The value a Set-Cookie header built here sets for `name`.
+pub fn cookie_value(set_cookie: &HeaderValue, name: &str) -> Option<String> {
+    let text = set_cookie.to_str().ok()?;
+    let (k, v) = text.split(';').next()?.split_once('=')?;
+    (k == name).then(|| v.to_owned())
 }
 
 /// Set-Cookie headers that delete both cookies.
@@ -222,10 +265,15 @@ mod tests {
             session_idle: Duration::from_secs(60),
             session_max_age: Duration::from_secs(3600),
             cookie_secure: CookieSecure::Auto,
+            public_url: None,
         };
         let c = login_cookies(&cfg, true, "tok", "csrf");
         assert_eq!(c[0], "shadoucmdb_session=tok; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly; Secure");
         assert_eq!(c[1], "shadoucmdb_csrf=csrf; Path=/; Max-Age=3600; SameSite=Lax; Secure");
+        assert_eq!(
+            mfa_cookie(false, "tok", Duration::from_secs(300)),
+            "shadoucmdb_mfa=tok; Path=/api/v1/auth; Max-Age=300; SameSite=Lax; HttpOnly"
+        );
         let c = logout_cookies(false);
         assert_eq!(c[0], "shadoucmdb_session=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly");
         assert!(secure_cookies(&AuthConfig { cookie_secure: CookieSecure::Always, ..cfg.clone() }, &HeaderMap::new()));

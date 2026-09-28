@@ -29,18 +29,22 @@
 -- Soft delete: areas are archived with is_active = false (the API's DELETE);
 -- the separate purge drops the schema. Nothing else here is deleted.
 
--- Three-role installs (sql/bootstrap/): the API role, shadoucmdb_app, owns the
--- area schemas and type tables, because it creates and alters them at run
--- time. The migrations run as shadoucmdb_owner, which builds the tables of the
--- existing classes (0009) and the reporting views (`shadoucmdb migrate`) and
--- hands them over, so it must be a member of shadoucmdb_app. Only an
--- administrator can grant that, so check it before anything changes.
+-- Three-role installs (sql/bootstrap/): the API role (shadoucmdb_app by
+-- default) owns the area schemas and type tables, because it creates and
+-- alters them at run time. The migrations run as the schema owner
+-- (shadoucmdb_owner), which builds the tables of the existing classes (0009)
+-- and the reporting views (`shadoucmdb migrate`) and hands them over, so it
+-- must be a member of the API role. Only an administrator can grant that, so
+-- check it before anything changes. The role names come from the session
+-- settings described in 0007; a single-role install needs no membership.
 DO $$
+DECLARE
+  app_role name := COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app');
 BEGIN
-  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_app') AND current_user <> 'shadoucmdb_app'
-     AND NOT pg_has_role(current_user, 'shadoucmdb_app', 'MEMBER') THEN
-    RAISE EXCEPTION 'role % must be a member of shadoucmdb_app to build the per-type tables. As an administrator run: GRANT shadoucmdb_app TO %; (sql/bootstrap/10_split_roles.sql does this too), then run `shadoucmdb migrate` again',
-      current_user, quote_ident(current_user) USING ERRCODE = 'insufficient_privilege';
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) AND current_user <> app_role
+     AND NOT pg_has_role(current_user, app_role, 'MEMBER') THEN
+    RAISE EXCEPTION 'role % must be a member of the API role % to build the per-type tables. As an administrator run: GRANT % TO %; (sql/bootstrap/10_split_roles.sql does this too), then run `shadoucmdb migrate` again',
+      current_user, app_role, quote_ident(app_role), quote_ident(current_user) USING ERRCODE = 'insufficient_privilege';
   END IF;
 END;
 $$;
@@ -378,18 +382,22 @@ $$;
 -- database for the schemas of new areas. The maintenance role reaches
 -- cmdb.prune_audit_log() and nothing else.
 DO $$
+DECLARE
+  app_role name := COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app');
+  maintenance_role name :=
+    COALESCE(NULLIF(current_setting('shadoucmdb.maintenance_role', true), ''), 'shadoucmdb_maintenance');
 BEGIN
-  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_maintenance') THEN
-    GRANT USAGE ON SCHEMA cmdb TO shadoucmdb_maintenance;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = maintenance_role) AND current_user <> maintenance_role THEN
+    EXECUTE format('GRANT USAGE ON SCHEMA cmdb TO %I', maintenance_role);
   END IF;
-  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_app') AND current_user <> 'shadoucmdb_app' THEN
-    GRANT USAGE ON SCHEMA cmdb TO shadoucmdb_app;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON cmdb.areas TO shadoucmdb_app;
-    GRANT SELECT, INSERT ON cmdb.schema_changes TO shadoucmdb_app;
-    GRANT REFERENCES ON cmdb.configuration_items, cmdb.lookup_list_values TO shadoucmdb_app;
-    EXECUTE format('GRANT CREATE ON DATABASE %I TO shadoucmdb_app', current_database());
-    ALTER DEFAULT PRIVILEGES IN SCHEMA cmdb GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO shadoucmdb_app;
-    ALTER DEFAULT PRIVILEGES IN SCHEMA cmdb GRANT USAGE, SELECT ON SEQUENCES TO shadoucmdb_app;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) AND current_user <> app_role THEN
+    EXECUTE format('GRANT USAGE ON SCHEMA cmdb TO %I', app_role);
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON cmdb.areas TO %I', app_role);
+    EXECUTE format('GRANT SELECT, INSERT ON cmdb.schema_changes TO %I', app_role);
+    EXECUTE format('GRANT REFERENCES ON cmdb.configuration_items, cmdb.lookup_list_values TO %I', app_role);
+    EXECUTE format('GRANT CREATE ON DATABASE %I TO %I', current_database(), app_role);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA cmdb GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', app_role);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA cmdb GRANT USAGE, SELECT ON SEQUENCES TO %I', app_role);
   END IF;
 END;
 $$;

@@ -1,0 +1,196 @@
+name: Upgrade
+
+# In-place upgrade from every published release in the matrix to this commit,
+# the way an operator does it (deploy/linux/README.txt, "Upgrade"): the old
+# release's binary from its GitHub Release, the old bootstrap script, data
+# created through the old API, then `migrate` with the new binary. Fails when
+# a migration drops or rewrites existing data (tools/upgrade/upgrade-check.ts,
+# and through the UI frontend/e2e/core-upgrade.spec.ts) or the upgraded
+# instance fails `verify` or the smoke suite.
+# Covered paths are listed in docs/deployment.md, "Upgrading".
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # sqlx checks its compile-time queries against backend/.sqlx, not a live database.
+  SQLX_OFFLINE: "true"
+
+jobs:
+  build:
+    name: Build this commit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --workspace frontend --include-workspace-root --no-audit --no-fund
+      # Built before cargo: rust-embed puts frontend/dist into the binary, so the upgraded UI can be walked.
+      - run: npm run build --workspace frontend
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: backend
+      - run: cargo build --release --locked
+        working-directory: backend
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: shadoucmdb-head
+          path: backend/target/release/shadoucmdb
+          if-no-files-found: error
+          retention-days: 3
+
+  upgrade:
+    name: Upgrade ${{ matrix.from }} -> this commit
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # One line per published release customers may upgrade from.
+        from: [v0.1.0-rc.1]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: pgadmin
+          POSTGRES_PASSWORD: ci-admin-password
+          POSTGRES_DB: postgres
+        # Not 5432: nothing may assume a default local install.
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pgadmin -d postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      FROM: ${{ matrix.from }}
+      # Throwaway credentials for the CI-only PostgreSQL service container.
+      ADMIN_URL: postgres://pgadmin:ci-admin-password@127.0.0.1:55432/postgres
+      ADMIN_DB_URL: postgres://pgadmin:ci-admin-password@127.0.0.1:55432/shadoucmdb
+      OWNER_PASSWORD: ci-owner-password
+      APP_PASSWORD: ci-app-password
+      MAINTENANCE_PASSWORD: ci-maintenance-password
+      PGHOST: 127.0.0.1
+      PGPORT: "55432"
+      PGDATABASE: shadoucmdb
+      PGUSER: shadoucmdb_app
+      PGPASSWORD: ci-app-password
+      DATABASE_SSL: disable
+      API_HOST: 127.0.0.1
+      API_PORT: "3000"
+      API_URL: http://127.0.0.1:3000
+      UPGRADE_PASSWORD: ci-upgrade-admin-password
+      UPGRADE_VIEWER_PASSWORD: ci-upgrade-viewer-password
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The old release's bootstrap script comes from its tag.
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --workspace frontend --include-workspace-root --no-audit --no-fund
+      - run: npx playwright install --with-deps --only-shell chromium
+        working-directory: frontend
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: shadoucmdb-head
+          path: head
+      - name: Download the ${{ matrix.from }} release and check its checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir old && cd old
+          gh release download "$FROM" --repo "$GITHUB_REPOSITORY" --pattern '*-linux-x64.tar.gz' --pattern SHA256SUMS
+          sha256sum --ignore-missing -c SHA256SUMS
+          tar xzf ./*-linux-x64.tar.gz --strip-components=1
+          chmod +x ../head/shadoucmdb
+          echo "OLD=$PWD/shadoucmdb" >> "$GITHUB_ENV"
+          echo "NEW=$(cd ../head && pwd)/shadoucmdb" >> "$GITHUB_ENV"
+          ./shadoucmdb --version
+          ../head/shadoucmdb --version
+
+      - name: "${{ matrix.from }}: bootstrap the database with its own script, migrate, seed --demo"
+        run: |
+          git show "$FROM:sql/bootstrap/00_create_role_and_database.sql" > bootstrap.sql
+          # Older scripts create one role and ignore the other two passwords.
+          psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -v app_password="$APP_PASSWORD" \
+            -v owner_password="$OWNER_PASSWORD" -v maintenance_password="$MAINTENANCE_PASSWORD" -f bootstrap.sql
+          if psql "$ADMIN_URL" -tAc "SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_owner'" | grep -q .; then
+            echo "MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb" >> "$GITHUB_ENV"
+            MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb "$OLD" migrate
+          else
+            "$OLD" migrate
+          fi
+          "$OLD" seed --demo
+
+      - name: "${{ matrix.from }}: create data through its API (tools/upgrade/upgrade-check.ts seed)"
+        run: |
+          "$OLD" serve > old.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 30); do curl -sf "$API_URL/readyz" && break; sleep 1; done
+          node tools/upgrade/upgrade-check.ts seed > snapshot.json
+          kill -TERM $PID && wait $PID
+          grep -q "server stopped" old.log
+          psql "$ADMIN_DB_URL" -tAc "SELECT version, description FROM _sqlx_migrations ORDER BY version"
+
+      - name: Upgrade to this commit (deploy/linux/README.txt, "Upgrade")
+        run: |
+          if [ -z "${MIGRATION_DATABASE_URL:-}" ]; then
+            echo "Single-role install: migrate as shadoucmdb_app, then split the roles (sql/bootstrap/10_split_roles.sql)"
+            "$NEW" migrate
+            psql "$ADMIN_DB_URL" -v ON_ERROR_STOP=1 \
+              -v owner_password="$OWNER_PASSWORD" -v maintenance_password="$MAINTENANCE_PASSWORD" -f sql/bootstrap/10_split_roles.sql
+            echo "MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb" >> "$GITHUB_ENV"
+            export MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb
+          fi
+          "$NEW" migrate | tee migrate.txt
+          "$NEW" seed
+          "$NEW" verify
+
+      - name: Every object, audit row and permission is unchanged, also in the UI; smoke suite
+        env:
+          SMOKE_USERNAME: upgrade-admin
+          SMOKE_PASSWORD: ci-upgrade-admin-password
+        run: |
+          "$NEW" serve > new.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 30); do curl -sf "$API_URL/readyz" && break; sleep 1; done
+          curl -sf "$API_URL/readyz" | tee readyz.json
+          grep -q '"upToDate":true' readyz.json
+          node tools/upgrade/upgrade-check.ts check < snapshot.json
+          # The same data through the UI: former fixed fields as class fields, labels, the edit form.
+          (cd frontend && E2E_BASE_URL="$API_URL" E2E_USERNAME=upgrade-admin E2E_PASSWORD="$UPGRADE_PASSWORD" \
+            E2E_UPGRADE_SNAPSHOT="$GITHUB_WORKSPACE/snapshot.json" npx playwright test e2e/core-upgrade.spec.ts)
+          # Brings the demo template up to date; the demo inventory came from the old release.
+          "$NEW" seed --demo
+          "$NEW" verify
+          node tools/smoke/smoke.ts
+          kill -TERM $PID && wait $PID
+          grep -q "server stopped" new.log
+          errors=$(grep -c '"level":"ERROR"' new.log || true)
+          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' new.log; exit 1; fi
+
+      - name: Server logs
+        if: failure()
+        run: tail -n 100 old.log new.log 2>/dev/null || true
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upgrade-${{ matrix.from }}-playwright
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: ignore

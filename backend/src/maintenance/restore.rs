@@ -122,7 +122,7 @@ pub fn check_compatible(header: &Header) -> anyhow::Result<()> {
                 m.description,
                 header.app_version
             ),
-            Some(sum) if *sum != m.checksum => bail!(
+            Some(_) if !crate::db::checksum_matches(m.version, &m.checksum) => bail!(
                 "migration {:04} ({}) in the backup differs from the one in this binary; use the release the \
                  backup was taken with ({})",
                 m.version,

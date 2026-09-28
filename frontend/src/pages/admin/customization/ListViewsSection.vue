@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { useCiList, useClassAttributes, useLookup, type CiClass, type CiListQuery } from "../../../api/queries";
+import { computed, ref, watch } from "vue";
+import { useCiList, useClassAttributes, type CiClass, type CiListQuery } from "../../../api/queries";
 import type { UiSettingsDocument } from "../../../api/uiSettings";
 import CiCell from "../../../components/CiCell.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import {
   ATTRIBUTE_PREFIX,
-
   BUILTIN_FIELDS,
   DEFAULT_COLUMNS,
   EMPTY_FILTERS,
@@ -17,7 +16,7 @@ import {
 } from "../../../lib/uiSettings";
 import ClassPicker from "./ClassPicker.vue";
 import FieldListEditor from "./FieldListEditor.vue";
-import KeyChecklist from "./KeyChecklist.vue";
+import LookupFilterEditor from "./LookupFilterEditor.vue";
 
 /**
  * Customization › List views: per class, the inventory's columns, default sort,
@@ -33,14 +32,10 @@ const columnOptions = computed(() => [
   ...BUILTIN_FIELDS.map((f) => ({ key: f.key, label: f.label })),
   ...attrDefs.value.map((d) => ({ key: `${ATTRIBUTE_PREFIX}${d.key}`, label: `${d.label} (attribute)` })),
 ]);
-const statuses = useLookup("statuses");
-const environments = useLookup("environments");
-const locations = useLookup("locations");
-const keyed = (data: { key?: string; name: string }[] | undefined) => (data ?? []).filter((o) => o.key).map((o) => ({ key: o.key!, label: o.name }));
 
 function customize() {
   if (!cls.value) return;
-  props.doc.listViews.push({ classKey: cls.value.key, columns: [...DEFAULT_COLUMNS], defaultSort: null, defaultFilters: { ...EMPTY_FILTERS }, pageSize: null });
+  props.doc.listViews.push({ classKey: cls.value.key, columns: [...DEFAULT_COLUMNS], defaultSort: null, defaultFilters: { ...EMPTY_FILTERS, lookups: {} }, pageSize: null });
 }
 function removeView() {
   props.doc.listViews = props.doc.listViews.filter((v) => v !== view.value);
@@ -49,17 +44,26 @@ function setSortField(field: string) {
   if (!view.value) return;
   view.value.defaultSort = field ? { field, direction: view.value.defaultSort?.direction ?? "asc" } : null;
 }
+// The typed page size is kept here until it is committed on change: a re-render
+// (the preview reloading) would otherwise put the stored value back into the box.
+const pageSizeText = ref("");
+watch(
+  () => [view.value, view.value?.pageSize] as const,
+  ([v]) => (pageSizeText.value = v?.pageSize == null ? "" : String(v.pageSize)),
+  { immediate: true },
+);
 function setPageSize(v: string) {
   if (!view.value) return;
   const n = Number.parseInt(v, 10);
   view.value.pageSize = Number.isFinite(n) ? Math.min(200, Math.max(10, n)) : null;
+  pageSizeText.value = view.value.pageSize == null ? "" : String(view.value.pageSize);
 }
 
 // ---------- Preview ----------
 const previewQuery = computed<CiListQuery>(() => ({
   classId: cls.value?.id,
   limit: 5,
-  sort: (sortParam(view.value?.defaultSort) ?? "name") as CiListQuery["sort"],
+  sort: (sortParam(view.value?.defaultSort) ?? "label") as CiListQuery["sort"],
 }));
 const preview = useCiList(previewQuery);
 const columns = computed(() => (view.value?.columns?.length ? view.value.columns : DEFAULT_COLUMNS));
@@ -73,7 +77,7 @@ const columns = computed(() => (view.value?.columns?.length ? view.value.columns
     </div>
     <div v-if="cls" class="panel-body">
       <template v-if="!view">
-        <p>{{ cls.name }} uses the default list: every built-in column, sorted by name, no filters, 50 rows a page.</p>
+        <p>{{ cls.name }} uses the default list: every built-in column, sorted by label, no filters, 50 rows a page.</p>
         <button type="button" class="btn btn-primary" @click="customize">Customize the {{ cls.name }} list</button>
       </template>
       <template v-else>
@@ -89,7 +93,7 @@ const columns = computed(() => (view.value?.columns?.length ? view.value.columns
               <label for="lv-sort">Default sort</label>
               <div class="inline-control">
                 <select id="lv-sort" :value="view.defaultSort?.field ?? ''" @change="setSortField(($event.target as HTMLSelectElement).value)">
-                  <option value="">Name (built-in)</option>
+                  <option value="">Label (built-in)</option>
                   <option v-for="s in SORT_FIELDS" :key="s.field" :value="s.field">{{ s.label }}</option>
                 </select>
                 <select v-if="view.defaultSort" v-model="view.defaultSort.direction" aria-label="Sort direction">
@@ -100,15 +104,13 @@ const columns = computed(() => (view.value?.columns?.length ? view.value.columns
             </div>
             <div class="field">
               <label for="lv-size">Rows per page (10-200)</label>
-              <input id="lv-size" type="number" min="10" max="200" placeholder="50" :value="view.pageSize ?? ''" @change="setPageSize(($event.target as HTMLInputElement).value)" />
+              <input id="lv-size" type="number" min="10" max="200" placeholder="50" :value="pageSizeText" @input="pageSizeText = ($event.target as HTMLInputElement).value" @change="setPageSize(pageSizeText)" />
             </div>
             <div class="field">
               <label for="lv-q">Default search text</label>
               <input id="lv-q" type="text" maxlength="200" :value="view.defaultFilters!.q ?? ''" @input="view.defaultFilters!.q = ($event.target as HTMLInputElement).value || null" />
             </div>
-            <KeyChecklist v-model="view.defaultFilters!.statusKeys!" legend="Default statuses" hint="None ticked: any status" :options="keyed(statuses.data.value)" />
-            <KeyChecklist v-model="view.defaultFilters!.environmentKeys!" legend="Default environments" :options="keyed(environments.data.value)" />
-            <KeyChecklist v-model="view.defaultFilters!.locationKeys!" legend="Default locations" :options="keyed(locations.data.value)" />
+            <LookupFilterEditor :filters="view.defaultFilters!" legend-prefix="Default: " />
             <p class="hint">
               Default filters are filled in when an operator opens the {{ cls.name }} list without filters of their own;
               they can change or clear them there.

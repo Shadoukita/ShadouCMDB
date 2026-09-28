@@ -31,7 +31,7 @@ function confirm() {
   <button type="button" class="btn btn-danger" @click="open = true">Delete</button>
   <ConfirmDialog
     :open="open"
-    :title="`Delete ${ci.class.name.toLowerCase()} “${ci.name}”?`"
+    :title="`Delete ${ci.class.name.toLowerCase()} “${ci.label}”?`"
     :confirm-label="total > 0 ? `Delete CI and ${plural(total, 'relationship')}` : 'Delete CI'"
     :busy="del.isPending.value"
     @cancel="cancel"
@@ -39,7 +39,7 @@ function confirm() {
   >
     <ErrorAlert v-if="del.isError.value" :error="del.error.value" title="Delete failed" />
     <p>
-      <strong>{{ ci.name }}</strong> ({{ ci.class.name }}{{ ci.hostname ? `, ${ci.hostname}` : "" }}) will be removed from the
+      <strong>{{ ci.label }}</strong> ({{ ci.class.name }}, {{ ci.ident }}) will be removed from the
       inventory. The record and its history stay available as a deleted CI.
     </p>
     <LoadingState v-if="rels.isLoading.value" label="Checking relationships…" />
@@ -47,11 +47,12 @@ function confirm() {
     <p v-if="rels.data.value && total === 0">It has no relationships, so no other CI is affected.</p>
     <template v-if="rels.data.value && total > 0">
       <p>
-        These <strong>{{ plural(total, "relationship") }}</strong> will break:
+        <template v-if="total === 1">This relationship will break:</template>
+        <template v-else>These <strong>{{ plural(total, "relationship") }}</strong> will break:</template>
       </p>
       <ul>
         <li v-for="{ r, d } in edges" :key="r.id">
-          {{ ci.name }} <em>{{ d.label }}</em> <strong>{{ d.other.name }}</strong> <span class="muted">({{ d.other.className }})</span>
+          {{ ci.label }} <em>{{ d.label }}</em> <strong>{{ d.other.name }}</strong> <span class="muted">({{ d.other.className }})</span>
         </li>
       </ul>
       <p v-if="total > edges.length" class="muted">…and {{ total - edges.length }} more.</p>

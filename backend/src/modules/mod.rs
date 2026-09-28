@@ -1,17 +1,21 @@
 //! API modules: each declares its routes and implements its service on top of data/.
 
+pub mod api_tokens;
 pub mod areas;
 pub mod audit;
 pub mod auth;
 pub mod classes;
 pub mod config_transfer;
 pub mod health;
+pub mod identity_providers;
 pub mod items;
 pub mod lookups;
+pub mod mfa;
 pub mod profiles;
 pub mod relationships;
 pub mod schema_changes;
 pub mod simple_resource;
+pub mod sso;
 pub mod templates;
 pub mod ui_settings;
 pub mod users;

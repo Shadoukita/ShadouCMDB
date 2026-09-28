@@ -53,7 +53,8 @@ DECLARE
   nulls bigint;
   notes jsonb := '[]'::jsonb;
   -- Three-role install: the API role owns what it will alter at run time (see 0008).
-  handover boolean := EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_app') AND current_user <> 'shadoucmdb_app';
+  app_role name := COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app');
+  handover boolean := EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) AND current_user <> app_role;
 BEGIN
   FOR area IN SELECT key FROM cmdb.areas ORDER BY sort_order, key LOOP
     stmt := format('CREATE SCHEMA %I', area.key);
@@ -149,14 +150,14 @@ BEGIN
 
   IF handover THEN
     FOR area IN SELECT key FROM cmdb.areas ORDER BY sort_order, key LOOP
-      stmt := format('ALTER SCHEMA %I OWNER TO shadoucmdb_app', area.key);
+      stmt := format('ALTER SCHEMA %I OWNER TO %I', area.key, app_role);
       EXECUTE stmt;
       stmts := stmts || stmt;
     END LOOP;
     FOR cls IN
       SELECT c.key, a.key AS area FROM cmdb.ci_classes c JOIN cmdb.areas a ON a.id = c.area_id ORDER BY a.key, c.key
     LOOP
-      stmt := format('ALTER TABLE %I.%I OWNER TO shadoucmdb_app', cls.area, cls.key);
+      stmt := format('ALTER TABLE %I.%I OWNER TO %I', cls.area, cls.key, app_role);
       EXECUTE stmt;
       stmts := stmts || stmt;
     END LOOP;

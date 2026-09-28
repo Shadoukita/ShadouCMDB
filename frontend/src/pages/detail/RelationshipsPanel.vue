@@ -84,7 +84,7 @@ function confirmRemove() {
                   v-if="mayRemove(r)"
                   type="button"
                   class="btn-link danger"
-                  :aria-label="`Remove relationship: ${ci.name} ${d.label} ${d.other.name}`"
+                  :aria-label="`Remove relationship: ${ci.label} ${d.label} ${d.other.name}`"
                   @click="removing = r"
                 >
                   Remove

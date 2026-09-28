@@ -17,7 +17,7 @@ const props = withDefaults(
     invalid?: boolean;
     describedBy?: string;
   }>(),
-  { id: undefined, classId: undefined, excludeId: undefined, placeholder: "Search by name, hostname, IP…", describedBy: undefined },
+  { id: undefined, classId: undefined, excludeId: undefined, placeholder: "Search by label, ident, attribute…", describedBy: undefined },
 );
 const emit = defineEmits<{ select: [ci: CiSummary | null] }>();
 
@@ -31,8 +31,10 @@ const q = useDebounced(() => text.value.trim(), 200);
 const { data, isFetching, isError } = useCiList(() => ({
   q: q.value || undefined,
   classId: props.classId || undefined,
+  // Planned and retired CIs can be referenced too.
+  active: "all",
   limit: 15,
-  sort: "name",
+  sort: "label",
 }));
 const items = computed(() => (data.value?.data ?? []).filter((c) => c.id !== props.excludeId));
 
@@ -115,9 +117,10 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
         @mousedown.prevent="choose(ci)"
         @mouseenter="active = i"
       >
-        <span>{{ ci.name }}</span>
+        <span>{{ ci.label }}</span>
         <span class="muted">{{ ci.class.name }}</span>
-        <span v-if="ci.hostname" class="muted mono">{{ ci.hostname }}</span>
+        <span class="muted mono">{{ ci.ident }}</span>
+        <span v-if="!ci.active" class="muted">inactive</span>
       </li>
       <li v-if="data && data.page.total > items.length" class="note">
         {{ data.page.total - items.length }} more — keep typing to narrow down

@@ -13,6 +13,7 @@ covers installation; this page covers what to change and why.
 - [ ] A dedicated, non-superuser database role; no other application shares it ([roles](#database-roles))
 - [ ] The env file readable only by the service account ([secrets](#secrets-and-configuration))
 - [ ] First administrator created by you, before the server is reachable by others ([first run](#first-run))
+- [ ] With single sign-on: `PUBLIC_URL` on https, a read-only directory account, and a local break-glass administrator with MFA ([enterprise sign-in](#enterprise-sign-in))
 - [ ] Encrypted, tested backups ([backup](#backup-and-restore))
 - [ ] Logs collected centrally, sign-in failures alerted on ([logging](#logging-and-monitoring))
 - [ ] Subscribed to security releases ([updates](#updates))
@@ -108,9 +109,10 @@ users ──HTTPS──▶ reverse proxy ──HTTP──▶ shadoucmdb ──TL
 
 ## Database TLS
 
-Set `DATABASE_SSL=verify-full`. The default, `require`, encrypts the connection but doesn't check
+Keep the default, `DATABASE_SSL=verify-full`. `require` encrypts the connection but doesn't check
 the server's certificate, so anyone who can intercept traffic between the server and the database
-can impersonate the database and read the credentials and data.
+can impersonate the database and read the credentials and data. The server logs a warning at
+startup when `require` is used with a host that is not loopback.
 
 ```sh
 DATABASE_SSL=verify-full
@@ -197,6 +199,40 @@ reachable, or make sure only you can reach it until you have completed the setup
 Then: give each person their own account, grant the smallest permission profile that fits
 their job, and keep the number of administrators small. Deactivate accounts of people who leave
 (it ends their sessions immediately).
+
+## Enterprise sign-in
+
+OIDC providers and LDAP/AD directories are configured in the web UI (API:
+[Enterprise sign-in](../api.md#enterprise-sign-in)). Recommended set-up:
+
+- **Keep a local break-glass administrator.** Local accounts keep working next to every provider.
+  Give one local administrator a long password and two-factor authentication, keep them in your
+  emergency procedure, and use them only when the provider is down or misconfigured. Mark the
+  built-in Administrator profile `requireMfa` so that account cannot sign in on a password alone.
+- **Enforce MFA at the provider.** For provider accounts ShadouCMDB relies on the provider for
+  the second factor (conditional access, Okta policies, Keycloak OTP); `requireMfa` covers local
+  accounts only.
+- **`PUBLIC_URL=https://...`** It is the only source of the OIDC redirect URI (never the request's
+  Host header). Register exactly `{PUBLIC_URL}/api/v1/auth/oidc/callback` at the provider.
+- **Map groups, not everyone.** A sign-in whose groups map to no profile is refused. Map a
+  dedicated group per profile ("CMDB-Admins" → Administrator) rather than a company-wide group,
+  and review the mappings like any other admin rights: whoever controls a mapped group in the
+  provider controls who holds that profile here. Only holders of the Administrator profile can
+  change providers and mappings.
+- **Directory service account read-only.** It only searches for users; it needs no write rights.
+  Prefer `ldaps://`; `ldap://` is accepted only with StartTLS, and certificates are always
+  verified. For a private CA paste its certificate into the directory's `caCertificate`, or
+  install it in the operating system's trust store (read once per server process, at the first provider connection).
+- **Outbound traffic.** The server calls the OIDC provider (discovery, keys, token endpoint) and
+  the directory (636, or 389 with StartTLS). Allow exactly those in the egress firewall; OIDC calls
+  honour `HTTPS_PROXY`/`NO_PROXY`.
+- **Secrets at rest.** The OIDC client secret and the directory bind password are stored in the
+  database (the server has to present them) and in backups; they are never returned by the API
+  or written to the audit log. Protect database access and backups accordingly, and rotate
+  them at the provider if a backup is lost.
+- **Leavers.** Disable the person in the provider. Their next sign-in is refused; a session they
+  already have lasts until it idles out (`SESSION_IDLE_TIMEOUT_MINUTES`) or ends. To end it at
+  once, disable the account in ShadouCMDB too, or disable the provider (ends all its sessions).
 
 ## Backup and restore
 

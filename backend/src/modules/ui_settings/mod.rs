@@ -380,7 +380,14 @@ pub async fn restore(
     body: &UiSettingsRestore,
 ) -> Result<UiSettings, AppError> {
     let old = data::version(pool, version).await?.ok_or_else(|| AppError::missing("UI settings version", version))?;
-    let doc = parse_stored(&old.settings);
+    // A version saved before an upgrade that renamed fields (e.g. migration 0016) would come back as
+    // the defaults; refuse it instead of silently discarding the administrator's settings.
+    let doc: UiSettingsDocument = serde_json::from_value(old.settings.clone()).map_err(|_| {
+        AppError::conflict(format!(
+            "Version {version} was saved before an upgrade changed the settings format and cannot be restored; \
+             the upgrade saved a converted copy of the settings current at the time as a newer version"
+        ))
+    })?;
     let comment = body.comment.clone().unwrap_or_else(|| format!("Restored version {version}"));
     let mut tx = pool.begin().await?;
     save_in(&mut tx, ctx, Some(body.version), &doc, Some(&comment)).await?;
@@ -622,8 +629,11 @@ pub fn routes() -> Vec<Route> {
         route(Method::POST, "/api/v1/ui-settings/versions/{version}/restore", "restoreUiSettingsVersion")
             .tag(TAG)
             .summary("Make an earlier version current again (saved as a new version)")
+            .description(
+                "409 CONFLICT for a version saved before an upgrade changed the settings format (e.g. migration 0016); the upgrade saved a converted copy as a newer version.",
+            )
             .requires(GlobalPermission::CustomizationManage)
-            .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict])
+            .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict, ErrorCode::Conflict])
             .handle(
                 |api, In(VersionPath(v), NoQuery, Body(b)): In<VersionPath, NoQuery, Body<UiSettingsRestore>>| async move {
                     Ok(Json(restore(&api.pool, &api.ctx, v, &b).await?))

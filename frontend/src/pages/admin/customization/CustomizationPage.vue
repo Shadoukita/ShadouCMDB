@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, RouterLink, useRoute } from "vue-router";
 import { ApiError } from "../../../api/client";
 import { useSaveUiSettings, useUiSettings, useUiSettingsVersion, type UiSettingsDocument } from "../../../api/uiSettings";
@@ -117,7 +117,15 @@ async function reloadLatest() {
   if (stored.data.value?.version === version.value) reset();
 }
 
+// Unsaved changes: confirm before leaving the page in the app, and let the browser ask before a reload or closing the tab.
 onBeforeRouteLeave(() => (dirty.value ? window.confirm("Discard your unsaved customization changes?") : true));
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (!dirty.value) return;
+  e.preventDefault();
+  e.returnValue = "";
+}
+onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
+onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload));
 </script>
 
 <template>

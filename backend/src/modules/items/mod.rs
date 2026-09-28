@@ -7,7 +7,7 @@ pub use service::value_schema;
 
 use axum::http::{Method, StatusCode};
 
-use crate::api::route::{Body, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
+use crate::api::route::{CheckedBody, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::http::error::ErrorCode;
 use schemas::{CreateItemBody, GraphQuery, ListItemsQuery, SearchQuery, UpdateItemBody};
 
@@ -21,7 +21,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Inventory list: paginated, searchable, filterable, sortable")
             .description(
-                "Returns CIs in classes the caller may view, each with its attribute values (`attributes`, `attributeReferences`) as on `getConfigurationItem`. Soft-deleted CIs are hidden unless `deleted=include|only`.",
+                "Returns CIs in classes the caller may view, each with its attribute values (`attributes`, `attributeReferences`) as on `getConfigurationItem`. Only active CIs (inside their validity period) unless `active=false|all`; soft-deleted CIs are hidden unless `deleted=include|only`.",
             )
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ListItemsQuery>, NoBody>| async move {
                 Ok(Json(service::list(&api.pool, &api.ctx, &q).await?))
@@ -38,20 +38,31 @@ pub fn routes() -> Vec<Route> {
         route(Method::POST, BASE, "createConfigurationItem")
             .tag(TAG)
             .summary("Create a CI, including its attribute values")
-            .description("Needs create on the class.")
+            .description(
+                "Needs create on the class. The ident is generated unless an administrator sends one (403 for anyone else, 409 when another CI has it). The label follows from the class's title attribute.",
+            )
             .status(StatusCode::CREATED)
+            .errors(&[ErrorCode::Conflict])
             .class_checked()
-            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<CreateItemBody>>| async move {
-                Ok(Json(service::create(&api.pool, &api.ctx, &b).await?))
+            .handle(|api, In(NoPath, NoQuery, CheckedBody(b)): In<NoPath, NoQuery, CheckedBody<CreateItemBody>>| async move {
+                match b {
+                    Ok(b) => Ok(Json(service::create(&api.pool, &api.ctx, &b).await?)),
+                    Err(invalid) => Err(service::create_errors(&api.pool, &api.ctx, invalid).await),
+                }
             }),
         route(Method::PATCH, BY_ID, "updateConfigurationItem")
             .tag(TAG)
             .summary("Update a CI (partial); attributes are merged, null clears one")
-            .description("Needs edit on the CI's class (and create on the new class when `classId` changes).")
+            .description(
+                "Needs edit on the CI's class (and create on the new class when `classId` changes). Changing `ident` is for administrators only (403 for anyone else; resending the current value is allowed) and is recorded in the audit log like every change.",
+            )
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::VersionConflict])
             .class_checked()
-            .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<UpdateItemBody>>| async move {
-                Ok(Json(service::update(&api.pool, &api.ctx, id, &b).await?))
+            .handle(|api, In(IdPath(id), NoQuery, CheckedBody(b)): In<IdPath, NoQuery, CheckedBody<UpdateItemBody>>| async move {
+                match b {
+                    Ok(b) => Ok(Json(service::update(&api.pool, &api.ctx, id, &b).await?)),
+                    Err(invalid) => Err(service::update_errors(&api.pool, &api.ctx, id, invalid).await),
+                }
             }),
         route(Method::DELETE, BY_ID, "deleteConfigurationItem")
             .tag(TAG)
@@ -80,7 +91,7 @@ pub fn routes() -> Vec<Route> {
             .tag("Search")
             .summary("Global search across CIs, ranked, with the fields that matched")
             .description(
-                "Matches name, hostname and serial number (substring), IP address (prefix, or containment when `q` is an IP or CIDR), notes (word prefix) and attribute values (text/enum substring, IP/CIDR prefix). Exact matches rank first, then name prefix, then trigram similarity. Only CIs in classes the caller may view.",
+                "Matches label and ident (substring and word prefix) and attribute values (text/enum substring, IP/CIDR prefix, IP containment when `q` is an IP or CIDR). Exact label or ident matches rank first, then label prefix, then trigram similarity. Only CIs in classes the caller may view; only active CIs unless `active=false|all`.",
             )
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<SearchQuery>, NoBody>| async move {
                 Ok(Json(service::search(&api.pool, &api.ctx, &q).await?))

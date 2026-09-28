@@ -36,6 +36,9 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
 ## Pointing the app at an external PostgreSQL
 
+Installing from a release? Follow the step-by-step [operator setup guide](docs/operator-setup.md),
+from an empty directory to a verified install. The steps below are the same flow for a source checkout.
+
 1. **Create the database and its roles** on your PostgreSQL server (run as an admin there):
 
    ```sh
@@ -71,13 +74,9 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
    | `DATABASE_SSL` | Use when |
    | --- | --- |
-   | `verify-full` (**recommended**) | Production and managed databases. Add `DATABASE_SSL_CA_FILE` if the CA is not publicly trusted (e.g. the RDS CA bundle). |
-   | `require` (default) | Encrypted, but the server certificate is not verified: anyone on the network path can impersonate the database and read the password. Acceptable only while you set up the CA file. |
+   | `verify-full` (default) | Production and managed databases. Add `DATABASE_SSL_CA_FILE` if the CA is not publicly trusted (e.g. the RDS CA bundle). |
+   | `require` | Encrypted, but the server certificate is not verified. Logs a warning at startup unless the host is loopback. |
    | `disable` | Only for a database on a trusted private network without TLS. |
-
-   Use `DATABASE_SSL=verify-full` wherever the database is not on the same host. The default stays
-   `require` only so that a first start against a database with a private CA does not fail before
-   `DATABASE_SSL_CA_FILE` is set.
 
    There is no default host. If nothing is configured, the backend exits with an error naming
    the missing variable. Every variable is documented in [`.env.example`](.env.example).
@@ -136,7 +135,9 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
 6. **Start the backend.** `shadoucmdb serve` serves the API, `/healthz`, `/readyz` and the embedded web UI on
    `API_HOST:API_PORT` (default `0.0.0.0:3000`). `GET /healthz` reports liveness. `GET /readyz` returns 200 only
-   when the database is reachable and all migrations are applied, and 503 otherwise. During development,
+   when the database is reachable and all migrations are applied, and 503 otherwise. If migrations are pending,
+   `serve` logs a warning at startup and API calls answer 503 `SCHEMA_NOT_MIGRATED` until you run
+   `shadoucmdb migrate`. During development,
    `cargo run -- serve` in `backend/` does the same. To run as a systemd service, a Windows Service or a
    container, see [docs/deployment.md](docs/deployment.md).
 
@@ -149,7 +150,8 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
    Further users and their permission profiles are managed under Administration. Behind a TLS proxy, let it
    send `X-Forwarded-Proto` so session cookies are marked `Secure`
-   (see [docs/deployment.md](docs/deployment.md#https-and-session-cookies)).
+   (see [docs/deployment.md](docs/deployment.md#https-and-session-cookies)). For single sign-on through an
+   OIDC provider or LDAP/AD, set `PUBLIC_URL` and see [Enterprise sign-in](docs/api.md#enterprise-sign-in).
 
 8. **Use the API.** It lives under `/api/v1`. With `API_DOCS=authenticated` or `public` (off by default) the
    OpenAPI 3.1 contract is served at `/openapi.json`, and there is a browsable UI at `/docs`. The same contract is committed as

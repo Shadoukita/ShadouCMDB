@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
   pull_request:
 
 permissions:
@@ -38,7 +38,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -49,7 +49,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: backend
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
       - run: cargo fmt --check
@@ -89,6 +89,34 @@ jobs:
           echo "error-level log lines: $errors"
           if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log; exit 1; fi
 
+      # Nothing may depend on the default role or database names (GH#42). These need quoting.
+      - name: "Three roles with custom names: bootstrap, migrate, seed, verify, prune-audit, smoke suite"
+        env:
+          ADMIN_URL: postgres://ci:ci-only-password@127.0.0.1:5432/postgres
+          U: 127.0.0.1:5432/invqa-cmdb
+        run: |
+          psql "$ADMIN_URL" -X -v ON_ERROR_STOP=1 \
+            -v owner_role=invqa-owner -v app_role=invqa.api -v maintenance_role=Invqa-Maint -v db_name=invqa-cmdb \
+            -v owner_password=ci-owner -v app_password=ci-app -v maintenance_password=ci-maint \
+            -f ../sql/bootstrap/00_create_role_and_database.sql
+          export DATABASE_URL="postgres://invqa.api:ci-app@$U" MAINTENANCE_DATABASE_URL="postgres://Invqa-Maint:ci-maint@$U"
+          B=./target/release/shadoucmdb
+          MIGRATION_DATABASE_URL="postgres://invqa-owner:ci-owner@$U" $B migrate | tee migrate.txt
+          grep -q "API role: invqa.api" migrate.txt
+          grep -q "maintenance role: Invqa-Maint" migrate.txt
+          MIGRATION_DATABASE_URL="postgres://invqa-owner:ci-owner@$U" $B migrate | grep -q "nothing to do"
+          $B seed --demo
+          $B verify
+          $B prune-audit --older-than 180d
+          API_HOST=127.0.0.1 API_PORT=3002 $B serve > serve-custom.log &
+          PID=$!
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3002/healthz && break; sleep 1; done
+          curl -sf http://127.0.0.1:3002/readyz | grep -q '"upToDate":true'
+          API_URL=http://127.0.0.1:3002 node ../tools/smoke/smoke.ts
+          kill -TERM $PID && wait $PID
+          errors=$(grep -c '"level":"ERROR"' serve-custom.log || true)
+          if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve-custom.log; exit 1; fi
+
       - name: systemd unit (deploy/systemd/shadoucmdb.service)
         run: |
           sudo install -m 0755 target/release/shadoucmdb /usr/local/bin/shadoucmdb
@@ -120,7 +148,7 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -199,20 +227,20 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build both platforms
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Load amd64
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
@@ -220,7 +248,7 @@ jobs:
           tags: shadoucmdb:amd64
           cache-from: type=gha
       - name: Load arm64
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/arm64

@@ -4,6 +4,7 @@ import { useGraph, type Ci } from "../../api/queries";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
+import { plural } from "../../lib/format";
 import type { TrailStep } from "../../lib/trail";
 import GraphTree from "./GraphTree.vue";
 
@@ -15,7 +16,7 @@ const props = defineProps<{ ci: Ci; self: TrailStep; trail: TrailStep[] }>();
 const depth = ref(3);
 const direction = ref<"both" | "outgoing" | "incoming">("outgoing");
 const graph = useGraph(() => props.ci.id, depth, direction);
-const hops = (d: number) => `${d} ${d === 1 ? "hop" : "hops"}`;
+const hops = (d: number) => plural(d, "hop");
 </script>
 
 <template>

@@ -11,10 +11,7 @@ use utoipa::{IntoParams, PartialSchema, ToSchema};
 use uuid::Uuid;
 
 use crate::api::route::Check;
-use crate::api::schemas::{
-    self, Deleted, LookupRef, OwnerRef, PageMeta, QueryBool, Sort, UuidList, description_schema, name_schema,
-    nullable_uuid_schema, trimmed, ts, ts_opt,
-};
+use crate::api::schemas::{self, Deleted, LookupRef, PageMeta, QueryBool, Sort, UuidList, trimmed, ts, ts_opt};
 use crate::data::items::SORT_FIELDS;
 use crate::http::error::{FieldError, FieldLocation};
 use crate::paged;
@@ -27,31 +24,21 @@ use crate::paged;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConfigurationItemSummary {
     pub id: Uuid,
-    pub name: String,
+    /// Short unique identifier, e.g. "CI-7K3M9Q2X" (generated; only an administrator can change it)
+    pub ident: String,
+    /// Display name: the value of the class's title attribute, or the ident when there is none
+    pub label: String,
     pub class_id: Uuid,
     pub class: LookupRef,
-    pub status_id: Uuid,
-    pub status: LookupRef,
+    /// Start of the validity period
+    #[serde(serialize_with = "ts::serialize")]
+    pub valid_from: DateTime<Utc>,
+    /// End of the validity period (exclusive); null means open-ended
+    #[serde(serialize_with = "ts_opt::serialize")]
     #[schema(required = true)]
-    pub environment_id: Option<Uuid>,
-    #[schema(required = true)]
-    pub environment: Option<LookupRef>,
-    #[schema(required = true)]
-    pub owner_id: Option<Uuid>,
-    #[schema(required = true)]
-    pub owner: Option<OwnerRef>,
-    #[schema(required = true)]
-    pub location_id: Option<Uuid>,
-    #[schema(required = true)]
-    pub location: Option<LookupRef>,
-    #[schema(required = true)]
-    pub hostname: Option<String>,
-    #[schema(required = true)]
-    pub ip_address: Option<String>,
-    #[schema(required = true)]
-    pub serial_number: Option<String>,
-    #[schema(required = true)]
-    pub notes: Option<String>,
+    pub valid_until: Option<DateTime<Utc>>,
+    /// True while validFrom <= now < validUntil (derived, not stored)
+    pub active: bool,
     /// Optimistic-locking counter; send it back in PATCH to detect concurrent edits
     pub version: i32,
     #[serde(serialize_with = "ts::serialize")]
@@ -87,16 +74,18 @@ fn summary_with(extra: Vec<(&str, RefOr<Schema>, Option<&str>)>) -> RefOr<Schema
 
 fn summary_nested(schemas: &mut Vec<(String, RefOr<Schema>)>) {
     schemas.push((LookupRef::name().into_owned(), LookupRef::schema()));
-    schemas.push((OwnerRef::name().into_owned(), OwnerRef::schema()));
-    OwnerRef::schemas(schemas);
 }
 
-/// The referenced CI of a reference attribute.
+/// The referenced CI of a reference attribute; `name` is its label. When the
+/// caller may not view the referenced CI's class, `hidden` is true, `name` is
+/// null and `deleted` is false: only the id (already the attribute's value) is
+/// disclosed.
 #[derive(Debug, Clone, Serialize)]
 pub struct AttributeReference {
     pub id: Uuid,
-    pub name: String,
+    pub name: Option<String>,
     pub deleted: bool,
+    pub hidden: bool,
 }
 
 /// A CI with its attribute values.
@@ -121,11 +110,26 @@ impl PartialSchema for ConfigurationItem {
     fn schema() -> RefOr<Schema> {
         let reference = ObjectBuilder::new()
             .property("id", schemas::uuid_builder())
-            .property("name", ObjectBuilder::new().schema_type(Type::String))
-            .property("deleted", ObjectBuilder::new().schema_type(Type::Boolean))
+            .property(
+                "name",
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::from_iter([Type::String, Type::Null]))
+                    .description(Some("The referenced CI's label; null when `hidden`")),
+            )
+            .property(
+                "deleted",
+                ObjectBuilder::new().schema_type(Type::Boolean).description(Some("Always false when `hidden`")),
+            )
+            .property(
+                "hidden",
+                ObjectBuilder::new().schema_type(Type::Boolean).description(Some(
+                    "True when the caller may not view the referenced CI's class; its name and state are withheld",
+                )),
+            )
             .required("id")
             .required("name")
             .required("deleted")
+            .required("hidden")
             .additional_properties(Some(AdditionalProperties::FreeForm(false)));
         summary_with(vec![
             (
@@ -157,7 +161,7 @@ impl ToSchema for ConfigurationItem {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchMatch {
-    /// "name", "hostname", "serialNumber", "ipAddress", "notes" or "attributes.<key>"
+    /// "label", "ident" or "attributes.<key>"
     pub field: String,
     pub label: String,
     pub value: String,
@@ -255,8 +259,35 @@ pub struct Graph {
 // Requests
 // ---------------------------------------------------------------------------
 
-fn serial_schema() -> Schema {
-    schemas::nullable_trimmed_schema(200)
+fn ident_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .pattern(Some(schemas::IDENT_PATTERN))
+        .max_length(Some(64))
+        .description(Some(
+            "Administrators only (403 for anyone else). Unique regardless of case; leave out to have one generated",
+        ))
+        .into()
+}
+
+fn valid_from_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .format(Some(utoipa::openapi::SchemaFormat::KnownFormat(utoipa::openapi::KnownFormat::DateTime)))
+        .description(Some("Start of the validity period; defaults to now"))
+        .into()
+}
+
+fn valid_until_schema() -> Schema {
+    AnyOfBuilder::new()
+        .item(
+            ObjectBuilder::new()
+                .schema_type(Type::String)
+                .format(Some(utoipa::openapi::SchemaFormat::KnownFormat(utoipa::openapi::KnownFormat::DateTime))),
+        )
+        .item(ObjectBuilder::new().schema_type(Type::Null))
+        .description(Some("End of the validity period (exclusive, after validFrom); null: open-ended"))
+        .into()
 }
 
 fn attributes_schema(description: &str) -> Schema {
@@ -283,36 +314,36 @@ fn update_attributes_schema() -> Schema {
 pub struct CreateItemBody {
     /// A concrete (non-abstract), active class
     pub class_id: Uuid,
-    #[schema(schema_with = name_schema)]
-    #[serde(deserialize_with = "trimmed")]
-    pub name: String,
-    pub status_id: Uuid,
-    #[schema(schema_with = nullable_uuid_schema)]
+    #[schema(schema_with = ident_schema)]
     #[serde(default)]
-    pub environment_id: Option<Uuid>,
-    #[schema(schema_with = nullable_uuid_schema)]
+    pub ident: Option<String>,
+    #[schema(schema_with = valid_from_schema)]
     #[serde(default)]
-    pub owner_id: Option<Uuid>,
-    #[schema(schema_with = nullable_uuid_schema)]
+    pub valid_from: Option<DateTime<Utc>>,
+    #[schema(schema_with = valid_until_schema)]
     #[serde(default)]
-    pub location_id: Option<Uuid>,
-    #[schema(schema_with = schemas::nullable_hostname_schema)]
-    #[serde(default)]
-    pub hostname: Option<String>,
-    #[schema(schema_with = schemas::nullable_ip_schema)]
-    #[serde(default)]
-    pub ip_address: Option<String>,
-    #[schema(schema_with = serial_schema)]
-    #[serde(default, deserialize_with = "schemas::trimmed_opt")]
-    pub serial_number: Option<String>,
-    #[schema(schema_with = description_schema)]
-    #[serde(default)]
-    pub notes: Option<String>,
+    pub valid_until: Option<DateTime<Utc>>,
     #[schema(schema_with = create_attributes_schema)]
     #[serde(default)]
     pub attributes: Option<Map<String, Value>>,
 }
-impl Check for CreateItemBody {}
+impl Check for CreateItemBody {
+    fn check(&self) -> Vec<FieldError> {
+        validity_errors(self.valid_from, self.valid_until)
+    }
+}
+
+fn validity_errors(from: Option<DateTime<Utc>>, until: Option<DateTime<Utc>>) -> Vec<FieldError> {
+    match (from, until) {
+        (Some(from), Some(until)) if until <= from => vec![FieldError {
+            location: FieldLocation::Body,
+            field: "validUntil".into(),
+            message: "Must be after validFrom".into(),
+            code: "custom".into(),
+        }],
+        _ => Vec::new(),
+    }
+}
 
 fn version_schema() -> Schema {
     ObjectBuilder::new()
@@ -333,32 +364,15 @@ fn class_change_schema() -> Schema {
 pub struct UpdateItemBody {
     #[schema(schema_with = class_change_schema)]
     pub class_id: Option<Uuid>,
-    #[schema(schema_with = name_schema)]
-    #[serde(default, deserialize_with = "schemas::trimmed_opt")]
-    pub name: Option<String>,
-    #[schema(nullable = false)]
-    pub status_id: Option<Uuid>,
-    #[schema(schema_with = nullable_uuid_schema)]
+    #[schema(schema_with = ident_schema)]
+    #[serde(default)]
+    pub ident: Option<String>,
+    #[schema(schema_with = valid_from_schema)]
+    #[serde(default)]
+    pub valid_from: Option<DateTime<Utc>>,
+    #[schema(schema_with = valid_until_schema)]
     #[serde(default, deserialize_with = "schemas::patch")]
-    pub environment_id: Option<Option<Uuid>>,
-    #[schema(schema_with = nullable_uuid_schema)]
-    #[serde(default, deserialize_with = "schemas::patch")]
-    pub owner_id: Option<Option<Uuid>>,
-    #[schema(schema_with = nullable_uuid_schema)]
-    #[serde(default, deserialize_with = "schemas::patch")]
-    pub location_id: Option<Option<Uuid>>,
-    #[schema(schema_with = schemas::nullable_hostname_schema)]
-    #[serde(default, deserialize_with = "schemas::patch")]
-    pub hostname: Option<Option<String>>,
-    #[schema(schema_with = schemas::nullable_ip_schema)]
-    #[serde(default, deserialize_with = "schemas::patch")]
-    pub ip_address: Option<Option<String>>,
-    #[schema(schema_with = serial_schema)]
-    #[serde(default, deserialize_with = "schemas::patch_trimmed")]
-    pub serial_number: Option<Option<String>>,
-    #[schema(schema_with = description_schema)]
-    #[serde(default, deserialize_with = "schemas::patch")]
-    pub notes: Option<Option<String>>,
+    pub valid_until: Option<Option<DateTime<Utc>>>,
     #[schema(schema_with = update_attributes_schema)]
     #[serde(default)]
     pub attributes: Option<Map<String, Value>>,
@@ -369,26 +383,19 @@ pub struct UpdateItemBody {
 impl Check for UpdateItemBody {
     fn check(&self) -> Vec<FieldError> {
         let any = self.class_id.is_some()
-            || self.name.is_some()
-            || self.status_id.is_some()
-            || self.environment_id.is_some()
-            || self.owner_id.is_some()
-            || self.location_id.is_some()
-            || self.hostname.is_some()
-            || self.ip_address.is_some()
-            || self.serial_number.is_some()
-            || self.notes.is_some()
+            || self.ident.is_some()
+            || self.valid_from.is_some()
+            || self.valid_until.is_some()
             || self.attributes.is_some();
-        if any {
-            Vec::new()
-        } else {
-            vec![FieldError {
+        if !any {
+            return vec![FieldError {
                 location: FieldLocation::Body,
                 field: "(root)".into(),
                 message: "Provide at least one field to update".into(),
                 code: "custom".into(),
-            }]
+            }];
         }
+        validity_errors(self.valid_from, self.valid_until.flatten())
     }
 }
 
@@ -397,7 +404,7 @@ impl Check for UpdateItemBody {
 // ---------------------------------------------------------------------------
 
 fn item_sort() -> Schema {
-    schemas::sort_schema(SORT_FIELDS, "name")
+    schemas::sort_schema(SORT_FIELDS, "label")
 }
 
 fn list_q_schema() -> Schema {
@@ -405,7 +412,7 @@ fn list_q_schema() -> Schema {
         .schema_type(Type::String)
         .min_length(Some(1))
         .max_length(Some(200))
-        .description(Some("Search name, hostname, serial number, IP address, notes and attribute values"))
+        .description(Some("Search label, ident and attribute values"))
         .into()
 }
 
@@ -427,9 +434,39 @@ fn include_subclasses_schema() -> Schema {
 fn ip_within_schema() -> Schema {
     let mut s = schemas::cidr_schema();
     if let Schema::AnyOf(a) = &mut s {
-        a.description = Some("Only CIs whose ipAddress is inside this CIDR, e.g. 10.20.0.0/16".into());
+        a.description = Some("Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16".into());
     }
     s
+}
+
+fn lookup_value_filter_schema() -> Schema {
+    schemas::uuid_list_described(
+        "Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different \
+         lists must all match (status A or B, and environment C).",
+    )
+}
+
+/// Which CIs by validity: active (the default), inactive, or all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum ActiveQuery {
+    #[serde(rename = "true")]
+    True,
+    #[serde(rename = "false")]
+    False,
+    #[serde(rename = "all")]
+    All,
+}
+
+fn active_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["true", "false", "all"]))
+        .default(Some("true".into()))
+        .description(Some(
+            "true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside \
+             it; all: both",
+        ))
+        .into()
 }
 
 fn deleted_items_schema() -> Schema {
@@ -440,10 +477,8 @@ fn deleted_items_schema() -> Schema {
 pub trait ItemFilterQuery {
     fn class_id(&self) -> Option<&UuidList>;
     fn include_subclasses(&self) -> bool;
-    fn status_id(&self) -> Option<&UuidList>;
-    fn environment_id(&self) -> Option<&UuidList>;
-    fn owner_id(&self) -> Option<&UuidList>;
-    fn location_id(&self) -> Option<&UuidList>;
+    fn active(&self) -> ActiveQuery;
+    fn lookup_value_id(&self) -> Option<&UuidList>;
     fn ip_within(&self) -> Option<&str>;
     fn deleted(&self) -> Deleted;
 }
@@ -457,17 +492,11 @@ macro_rules! item_filters {
             fn include_subclasses(&self) -> bool {
                 self.include_subclasses.into()
             }
-            fn status_id(&self) -> Option<&UuidList> {
-                self.status_id.as_ref()
+            fn active(&self) -> ActiveQuery {
+                self.active
             }
-            fn environment_id(&self) -> Option<&UuidList> {
-                self.environment_id.as_ref()
-            }
-            fn owner_id(&self) -> Option<&UuidList> {
-                self.owner_id.as_ref()
-            }
-            fn location_id(&self) -> Option<&UuidList> {
-                self.location_id.as_ref()
+            fn lookup_value_id(&self) -> Option<&UuidList> {
+                self.lookup_value_id.as_ref()
             }
             fn ip_within(&self) -> Option<&str> {
                 self.ip_within.as_deref()
@@ -498,14 +527,10 @@ pub struct ListItemsQuery {
     pub class_id: Option<UuidList>,
     #[param(required = false, schema_with = include_subclasses_schema)]
     pub include_subclasses: QueryBool,
-    #[param(schema_with = schemas::uuid_list_schema)]
-    pub status_id: Option<UuidList>,
-    #[param(schema_with = schemas::uuid_list_schema)]
-    pub environment_id: Option<UuidList>,
-    #[param(schema_with = schemas::uuid_list_schema)]
-    pub owner_id: Option<UuidList>,
-    #[param(schema_with = schemas::uuid_list_schema)]
-    pub location_id: Option<UuidList>,
+    #[param(required = false, schema_with = active_schema)]
+    pub active: ActiveQuery,
+    #[param(schema_with = lookup_value_filter_schema)]
+    pub lookup_value_id: Option<UuidList>,
     #[param(schema_with = ip_within_schema)]
     pub ip_within: Option<String>,
     #[param(required = false, schema_with = deleted_items_schema)]
@@ -532,14 +557,10 @@ pub struct SearchQuery {
     pub class_id: Option<UuidList>,
     #[param(required = false, schema_with = include_subclasses_schema)]
     pub include_subclasses: QueryBool,
-    #[param(schema_with = schemas::uuid_list_schema)]
-    pub status_id: Option<UuidList>,
-    #[param(schema_with = schemas::uuid_list_schema)]
-    pub environment_id: Option<UuidList>,
-    #[param(schema_with = schemas::uuid_list_schema)]
-    pub owner_id: Option<UuidList>,
-    #[param(schema_with = schemas::uuid_list_schema)]
-    pub location_id: Option<UuidList>,
+    #[param(required = false, schema_with = active_schema)]
+    pub active: ActiveQuery,
+    #[param(schema_with = lookup_value_filter_schema)]
+    pub lookup_value_id: Option<UuidList>,
     #[param(schema_with = ip_within_schema)]
     pub ip_within: Option<String>,
     #[param(required = false, schema_with = deleted_items_schema)]

@@ -10,32 +10,47 @@ build = "build.rs"
 [dependencies]
 anyhow = "1"
 # Password hashing: argon2id with the crate defaults (OWASP: m=19 MiB, t=2, p=1).
-argon2 = { version = "0.5", features = ["std"] }
+argon2 = "0.6"
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "query", "tokio", "tracing"] }
 # Logo and favicon travel base64-encoded in JSON (uploads and config export files).
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
 # Backup files are gzip-compressed JSON Lines (zlib-rs: pure Rust, already in the tree, no C zlib to link).
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 futures-util = { version = "0.3", default-features = false }
+# Session and CSRF tokens straight from the OS random number generator.
+getrandom = "0.4"
 hex = "0.4"
 # The accept loop is hyper-util's, not axum::serve, so HTTP/1 header reads get a timeout (slowloris).
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "server-graceful", "service", "http1", "http2"] }
+# TOTP codes (RFC 6238 is HMAC-SHA1); both already in the tree through sqlx.
+hmac = "0.13"
 ipnetwork = "0.21"
+# LDAP/AD sign-in: rustls with ring (LDAPS and StartTLS), no OpenSSL.
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 mime_guess = "2"
-password-hash = { version = "0.5", features = ["getrandom"] }
 regex = "1"
+# OIDC discovery, JWKS and token requests. rustls with the ring provider we configure
+# ourselves (the same one sqlx uses), so no second crypto library enters the build.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "form"] }
+# Verifies OIDC ID token signatures (RSA, ECDSA, Ed25519); already in the tree through rustls.
+ring = "0.17"
 # Reads the password for `create-admin` without echoing it.
 rpassword = "7"
+# Trust anchors for the identity-provider TLS clients: extra CA PEMs per provider.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pki-types = { version = "1", features = ["std"] }
 rust-embed = { version = "8", features = ["mime-guess"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: JSON objects keep insertion order (attribute values follow the class definition order).
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_path_to_error = "0.1"
-sha2 = "0.10"
+sha1 = "0.11"
+sha2 = "0.11"
 # rustls with ring and the Mozilla root set: no OpenSSL and no system TLS library,
 # so the same code builds unchanged for Linux (x64/arm64) and Windows.
 sqlx = { version = "0.9", default-features = false, features = [
@@ -60,6 +75,7 @@ utoipa = { version = "6", features = ["uuid", "chrono", "preserve_order", "prese
 # Swagger UI assets are vendored into the binary: /docs works on air-gapped hosts.
 utoipa-swagger-ui = { version = "10", features = ["axum", "vendored"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+webpki-roots = "1"
 
 # musl's allocator serialises on one lock and scales poorly across threads; the
 # static release builds (x86_64/aarch64-unknown-linux-musl) use mimalloc instead.

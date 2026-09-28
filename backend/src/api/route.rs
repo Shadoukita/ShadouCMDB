@@ -5,10 +5,13 @@
 //!
 //! Access control is part of the declaration too: every route needs a signed-in
 //! user unless it is marked [`RouteBuilder::public`], and may require a global
-//! permission ([`RouteBuilder::requires`]). The session is resolved, CSRF is
-//! checked for state-changing methods and the permission is checked before the
-//! request is validated, so an unauthenticated caller learns nothing about a
-//! route beyond 401.
+//! permission ([`RouteBuilder::requires`]). The session (or the API token of an
+//! `Authorization: Bearer` header) is resolved, CSRF is checked for
+//! state-changing methods on a session and the permission is checked before
+//! the request is validated, so an unauthenticated caller learns nothing about
+//! a route beyond 401. Routes marked [`RouteBuilder::session_only`] refuse
+//! API tokens. A session whose user must set up MFA first reaches only the
+//! routes marked [`RouteBuilder::before_mfa_enrolment`].
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -18,7 +21,7 @@ use axum::Extension;
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, RawPathParams, RawQuery, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodFilter, MethodRouter, on};
 use serde::Serialize;
@@ -219,35 +222,66 @@ impl<T: ToSchema + DeserializeOwned + Check + Send + 'static> BodyInput for Body
     }
 
     fn parse(body: Option<Value>) -> Result<Self, AppError> {
-        let Some(value) = body else {
-            return Err(AppError::validation(vec![FieldError {
-                location: FieldLocation::Body,
-                field: "(root)".into(),
-                message: "Required".into(),
-                code: "required".into(),
-            }]));
-        };
-        // The body schema plus the components it references.
-        let spec = validate::cached_schema::<T>(|| {
-            let mut components = Vec::new();
-            T::schemas(&mut components);
-            let components: serde_json::Map<String, Value> = components
-                .into_iter()
-                .map(|(name, schema)| (name, serde_json::to_value(schema).unwrap_or(Value::Null)))
-                .collect();
-            serde_json::json!({ "schema": T::schema(), "components": components })
-        });
-        let errors = validate::check(&spec["schema"], &value, FieldLocation::Body, spec["components"].as_object());
-        if !errors.is_empty() {
-            return Err(AppError::validation(errors));
-        }
-        let parsed: T = deserialize(value, FieldLocation::Body)?;
-        let errors = parsed.check();
-        if !errors.is_empty() {
-            return Err(AppError::validation(errors));
-        }
-        Ok(Body(parsed))
+        parse_body(required_body(body)?).map(Body).map_err(|e| AppError::validation(e.errors))
     }
+}
+
+/// A body that failed validation: the raw JSON and what is wrong with it.
+pub struct InvalidBody {
+    pub raw: Value,
+    pub errors: Vec<FieldError>,
+}
+
+/// A JSON body of type `T` whose validation errors go to the handler instead
+/// of straight to a 400, so it can add the errors only it can find (rules that
+/// need the database) and report everything in one response.
+pub struct CheckedBody<T>(pub Result<T, InvalidBody>);
+
+impl<T: ToSchema + DeserializeOwned + Check + Send + 'static> BodyInput for CheckedBody<T> {
+    fn schema() -> Option<RefOr<Schema>> {
+        Some(T::schema())
+    }
+
+    fn parse(body: Option<Value>) -> Result<Self, AppError> {
+        Ok(CheckedBody(parse_body(required_body(body)?)))
+    }
+}
+
+fn required_body(body: Option<Value>) -> Result<Value, AppError> {
+    body.ok_or_else(|| {
+        AppError::validation(vec![FieldError {
+            location: FieldLocation::Body,
+            field: "(root)".into(),
+            message: "Required".into(),
+            code: "required".into(),
+        }])
+    })
+}
+
+fn parse_body<T: ToSchema + DeserializeOwned + Check + 'static>(value: Value) -> Result<T, InvalidBody> {
+    // The body schema plus the components it references.
+    let spec = validate::cached_schema::<T>(|| {
+        let mut components = Vec::new();
+        T::schemas(&mut components);
+        let components: serde_json::Map<String, Value> = components
+            .into_iter()
+            .map(|(name, schema)| (name, serde_json::to_value(schema).unwrap_or(Value::Null)))
+            .collect();
+        serde_json::json!({ "schema": T::schema(), "components": components })
+    });
+    let errors = validate::check(&spec["schema"], &value, FieldLocation::Body, spec["components"].as_object());
+    if !errors.is_empty() {
+        return Err(InvalidBody { raw: value, errors });
+    }
+    let parsed: T = match deserialize(value.clone(), FieldLocation::Body) {
+        Ok(parsed) => parsed,
+        Err(e) => return Err(InvalidBody { raw: value, errors: e.details.unwrap_or_default() }),
+    };
+    let errors = parsed.check();
+    if !errors.is_empty() {
+        return Err(InvalidBody { raw: value, errors });
+    }
+    Ok(parsed)
 }
 
 /// After schema validation deserialisation only fails in custom deserialisers,
@@ -394,6 +428,50 @@ impl Output for StatusOnly {
     }
 }
 
+/// An error answer that still sets cookies (sign-in: the second factor is due).
+/// Documented through the route's error codes.
+pub struct ErrorWithCookies(pub AppError, pub Vec<HeaderValue>);
+
+impl Output for ErrorWithCookies {
+    fn doc() -> Option<ResponseDoc> {
+        None
+    }
+    fn respond(self, _: StatusCode) -> Response {
+        let mut res = self.0.into_response();
+        for c in self.1 {
+            res.headers_mut().append(header::SET_COOKIE, c);
+        }
+        res
+    }
+}
+
+/// A redirect for a browser navigation (OIDC sign-in): the route's 3xx
+/// status, `Location`, Set-Cookie headers and no body. Never cached.
+pub struct Redirect {
+    pub location: String,
+    pub cookies: Vec<HeaderValue>,
+}
+
+impl Output for Redirect {
+    fn doc() -> Option<ResponseDoc> {
+        None
+    }
+    fn respond(self, status: StatusCode) -> Response {
+        let Ok(location) = HeaderValue::from_str(&self.location) else {
+            tracing::error!("redirect target is not a valid header value");
+            return AppError::internal().into_response();
+        };
+        let mut res = status.into_response();
+        let headers = res.headers_mut();
+        headers.insert(header::LOCATION, location);
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        for c in self.cookies {
+            headers.append(header::SET_COOKIE, c);
+        }
+        res
+    }
+}
+
 /// Another output plus Set-Cookie headers (login, logout, first-run setup).
 pub struct WithCookies<R>(pub R, pub Vec<HeaderValue>);
 
@@ -422,8 +500,14 @@ pub struct Route {
     pub tag: String,
     pub summary: String,
     pub description: Option<String>,
+    /// Marked deprecated in the OpenAPI document (still served).
+    pub deprecated: bool,
     pub status: StatusCode,
     pub access: Access,
+    /// API tokens are refused (403): the route needs a browser session.
+    pub session_only: bool,
+    /// Answers a session that must set up MFA before anything else.
+    pub before_mfa_enrolment: bool,
     /// Error codes beyond VALIDATION_ERROR / INTERNAL_ERROR / DATABASE_UNAVAILABLE
     /// (and the 401/403 implied by `access`).
     pub errors: Vec<ErrorCode>,
@@ -445,6 +529,8 @@ pub struct RouteBuilder {
     description: Option<String>,
     status: Option<StatusCode>,
     access: Access,
+    session_only: bool,
+    before_mfa_enrolment: bool,
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
     body_limit: Option<usize>,
@@ -460,6 +546,8 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         description: None,
         status: None,
         access: Access::Authenticated,
+        session_only: false,
+        before_mfa_enrolment: false,
         errors: Vec::new(),
         also_returns: Vec::new(),
         body_limit: None,
@@ -501,6 +589,20 @@ impl RouteBuilder {
         self.access = Access::Permission(permission);
         self
     }
+    /// Refuse API tokens (403 FORBIDDEN): sign-out, password changes and token
+    /// administration need a signed-in session, so a token cannot outlive its
+    /// revocation by minting another.
+    pub fn session_only(mut self) -> Self {
+        self.session_only = true;
+        self
+    }
+    /// Reachable by a session whose user holds a profile requiring MFA and has
+    /// not set it up yet (sign-out, the current session, MFA set-up). Every
+    /// other route answers such a session 403 MFA_ENROLMENT_REQUIRED.
+    pub fn before_mfa_enrolment(mut self) -> Self {
+        self.before_mfa_enrolment = true;
+        self
+    }
     /// The service checks per-class permissions, so the route can answer 403.
     pub fn class_checked(self) -> Self {
         self.errors(&[ErrorCode::Forbidden])
@@ -536,15 +638,20 @@ impl RouteBuilder {
         let status = self.status.unwrap_or(if response.is_some() { StatusCode::OK } else { StatusCode::NO_CONTENT });
         let filter = MethodFilter::try_from(self.method.clone()).expect("supported HTTP method");
         let access = self.access;
+        let session_only = self.session_only;
+        let before_mfa_enrolment = self.before_mfa_enrolment;
         let safe_method = self.method == Method::GET || self.method == Method::HEAD;
+        let (method, operation_id) = (self.method.clone(), Arc::<str>::from(self.operation_id.as_str()));
 
         let handler = move |State(state): State<AppState>,
+                            uri: Uri,
                             raw_path: RawPathParams,
                             RawQuery(raw_query): RawQuery,
                             headers: HeaderMap,
                             peer: Option<Extension<ConnectInfo<SocketAddr>>>,
                             body: Result<Bytes, BytesRejection>| {
             let f = f.clone();
+            let (method, operation_id) = (method.clone(), operation_id.clone());
             async move {
                 let run = async move {
                     // AUDIT_CAPTURE_*: what is not captured is never stored (sessions, audit_log) or logged.
@@ -555,7 +662,9 @@ impl RouteBuilder {
                         peer_ip,
                         user_agent: auth::session::user_agent(&headers).filter(|_| capture.user_agent),
                     };
-                    let ctx = authorise(&state, &headers, access, safe_method).await?.with_client(client);
+                    let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
+                    let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };
+                    let ctx = authorise(&state, &headers, rule, client, used).await?;
                     let body = read_body(&headers, body)?;
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
                     let api = Api { pool: state.pool, ctx, auth: state.auth, headers };
@@ -572,8 +681,11 @@ impl RouteBuilder {
             tag: self.tag,
             summary: self.summary,
             description: self.description,
+            deprecated: false,
             status,
             access,
+            session_only,
+            before_mfa_enrolment,
             errors: self.errors,
             also_returns: self.also_returns,
             path_params: P::params(),
@@ -588,34 +700,64 @@ impl RouteBuilder {
     }
 }
 
+/// A route's access rule.
+#[derive(Clone, Copy)]
+struct Rule {
+    access: Access,
+    session_only: bool,
+    before_mfa_enrolment: bool,
+    safe_method: bool,
+}
+
 /// Resolves the caller and enforces the route's access rule: 401 without a
-/// live session, 403 CSRF_TOKEN_INVALID for a state-changing request without
-/// the session's token, 403 FORBIDDEN without the required permission.
+/// live session or a valid API token, 403 CSRF_TOKEN_INVALID for a
+/// state-changing request without the session's token, 403 FORBIDDEN without
+/// the required permission (or for a token on a session-only route), 403
+/// MFA_ENROLMENT_REQUIRED for a session that must set up MFA first.
+///
+/// An `Authorization: Bearer` header selects token authentication and the
+/// cookies are then ignored: a bad token is 401, never a fall-back to the
+/// session, so the header cannot be used to skip the session's CSRF check.
 async fn authorise(
     state: &AppState,
     headers: &HeaderMap,
-    access: Access,
-    safe_method: bool,
+    rule: Rule,
+    client: ClientInfo,
+    used: auth::token::Use<'_>,
 ) -> Result<RequestContext, AppError> {
     let request_id = request_id::current();
-    if access == Access::Public {
-        return Ok(RequestContext::anonymous(request_id));
+    if rule.access == Access::Public {
+        return Ok(RequestContext::anonymous(request_id).with_client(client));
+    }
+    if let Some(secret) = auth::token::bearer(headers) {
+        let required = match rule.access {
+            Access::Permission(p) => Some(p),
+            _ => None,
+        };
+        return auth::token::authenticate(&state.pool, secret, required, rule.session_only, request_id, client, used)
+            .await;
     }
     let Some(principal) = auth::authenticate(&state.pool, &state.auth.config, headers).await? else {
         return Err(unauthenticated());
     };
-    if !safe_method && !auth::csrf_ok(&principal, headers) {
+    if !rule.safe_method && !auth::csrf_ok(&principal, headers) {
         return Err(AppError::new(
             ErrorCode::CsrfTokenInvalid,
             "Missing or wrong X-CSRF-Token header (send the csrfToken from /api/v1/auth/me)",
         ));
     }
-    if let Access::Permission(p) = access
+    if principal.mfa_enrolment_required() && !rule.before_mfa_enrolment {
+        return Err(AppError::new(
+            ErrorCode::MfaEnrolmentRequired,
+            "Your permission profile requires two-factor authentication: set it up first (POST /api/v1/auth/mfa/totp)",
+        ));
+    }
+    if let Access::Permission(p) = rule.access
         && !principal.permissions.has(p)
     {
         return Err(forbidden(format!("This requires the {} permission", p.as_str())));
     }
-    Ok(RequestContext::user(Arc::new(principal), request_id))
+    Ok(RequestContext::user(Arc::new(principal), request_id).with_client(client))
 }
 
 /// JSON is the only accepted body type. An empty body counts as no body

@@ -93,9 +93,29 @@ export interface paths {
         put?: never;
         /**
          * Sign in with username and password
-         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429.
+         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. Accounts of an OIDC provider cannot sign in here.
          */
         post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish signing in with an authenticator code or a recovery code
+         * @description After POST /api/v1/auth/login answered MFA_REQUIRED: reads the `shadoucmdb_mfa` cookie it set and, for a right code, sets the session cookies like login. Each authenticator code works once; each recovery code works once and is then used up. 401 for a wrong code; after 5 wrong codes, or 5 minutes, the password is asked for again (401). Wrong codes count as failed sign-ins for the username: the same lock applies as for wrong passwords (429 RATE_LIMITED with Retry-After).
+         */
+        post: operations["loginSecondFactor"];
         delete?: never;
         options?: never;
         head?: never;
@@ -111,7 +131,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sign out: end this session and clear its cookies */
+        /**
+         * Sign out: end this session and clear its cookies
+         * @description Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
         post: operations["logout"];
         delete?: never;
         options?: never;
@@ -126,7 +149,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The signed-in user, their effective permissions and the CSRF token */
+        /**
+         * The signed-in user, their effective permissions, MFA status and the CSRF token
+         * @description Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
         get: operations["getCurrentSession"];
         put?: never;
         post?: never;
@@ -146,9 +172,170 @@ export interface paths {
         get?: never;
         /**
          * Change your own password (ends your other sessions)
-         * @description 400 when `currentPassword` is wrong. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.
+         * @description 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["changeOwnPassword"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your two-factor authentication status
+         * @description Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["getMfaStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/totp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start setting up an authenticator app: returns a new secret to confirm
+         * @description Nothing changes at sign-in until the secret is confirmed (POST /api/v1/auth/mfa/totp/confirm); calling this again replaces an unconfirmed secret. 409 when an authenticator is already set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["startTotpEnrolment"];
+        /**
+         * Turn your two-factor authentication off (or cancel an unfinished set-up)
+         * @description Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        delete: operations["disableTotp"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/totp/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)
+         * @description From now on sign-in asks for a code after the password. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["confirmTotpEnrolment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/recovery-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace your recovery codes with 10 new ones (shown once)
+         * @description Needs the password and a current code. The old codes stop working. 409 when MFA is not set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["regenerateRecoveryCodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{id}/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Turn a user's two-factor authentication off (lost authenticator and recovery codes)
+         * @description Requires `users.manage`. Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        delete: operations["resetUserMfa"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How users can sign in besides a local account: OIDC buttons and whether a directory is enabled */
+        get: operations["getSignInOptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/{id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start signing in with an OIDC provider (browser navigation; redirects to the provider)
+         * @description Redirects (302) to the provider's authorization endpoint with the authorization code flow, PKCE (S256), `state` and `nonce`, and sets the `shadoucmdb_oidc` cookie (HttpOnly, 10 min). On a problem it redirects to `/login?ssoError=<code>` instead: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`.
+         */
+        get: operations["startOidcSignIn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The redirect URI to register at OIDC providers: finishes the sign-in
+         * @description `{PUBLIC_URL}/api/v1/auth/oidc/callback`. Needs the `shadoucmdb_oidc` cookie set by the start route in the same browser. Exchanges the code, checks the ID token, creates or updates the account and sets its profiles from the group mappings, then sets the session cookies (like POST /api/v1/auth/login) and redirects (302) to `returnTo`. On a problem it redirects to `/login?ssoError=<code>`: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`.
+         */
+        get: operations["completeOidcSignIn"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -165,13 +352,13 @@ export interface paths {
         };
         /**
          * Inventory list: paginated, searchable, filterable, sortable
-         * @description Returns CIs in classes the caller may view, each with its attribute values (`attributes`, `attributeReferences`) as on `getConfigurationItem`. Soft-deleted CIs are hidden unless `deleted=include|only`.
+         * @description Returns CIs in classes the caller may view, each with its attribute values (`attributes`, `attributeReferences`) as on `getConfigurationItem`. Only active CIs (inside their validity period) unless `active=false|all`; soft-deleted CIs are hidden unless `deleted=include|only`.
          */
         get: operations["listConfigurationItems"];
         put?: never;
         /**
          * Create a CI, including its attribute values
-         * @description Needs create on the class.
+         * @description Needs create on the class. The ident is generated unless an administrator sends one (403 for anyone else, 409 when another CI has it). The label follows from the class's title attribute.
          */
         post: operations["createConfigurationItem"];
         delete?: never;
@@ -203,7 +390,7 @@ export interface paths {
         head?: never;
         /**
          * Update a CI (partial); attributes are merged, null clears one
-         * @description Needs edit on the CI's class (and create on the new class when `classId` changes).
+         * @description Needs edit on the CI's class (and create on the new class when `classId` changes). Changing `ident` is for administrators only (403 for anyone else; resending the current value is allowed) and is recorded in the audit log like every change.
          */
         patch: operations["updateConfigurationItem"];
         trace?: never;
@@ -237,7 +424,7 @@ export interface paths {
         };
         /**
          * Global search across CIs, ranked, with the fields that matched
-         * @description Matches name, hostname and serial number (substring), IP address (prefix, or containment when `q` is an IP or CIDR), notes (word prefix) and attribute values (text/enum substring, IP/CIDR prefix). Exact matches rank first, then name prefix, then trigram similarity. Only CIs in classes the caller may view.
+         * @description Matches label and ident (substring and word prefix) and attribute values (text/enum substring, IP/CIDR prefix, IP containment when `q` is an IP or CIDR). Exact label or ident matches rank first, then label prefix, then trigram similarity. Only CIs in classes the caller may view; only active CIs unless `active=false|all`.
          */
         get: operations["searchConfigurationItems"];
         put?: never;
@@ -413,7 +600,7 @@ export interface paths {
         head?: never;
         /**
          * Update a ci class (partial)
-         * @description Requires `datamodel.manage`.
+         * @description Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled.
          */
         patch: operations["updateCiClass"];
         trace?: never;
@@ -522,7 +709,7 @@ export interface paths {
         head?: never;
         /**
          * Update a attribute definition (partial)
-         * @description Requires `datamodel.manage`. `dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert. Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. Preview any change with `POST /api/v1/schema-changes/preview`.
+         * @description Requires `datamodel.manage`. `dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. `parentAttributeId` (lookup fields on a list with a parent list) names the field bound to the parent list, on this class or an ancestor; CI writes then only accept a value that belongs to the CI's value of that field. Preview any change with `POST /api/v1/schema-changes/preview`.
          */
         patch: operations["updateAttributeDefinition"];
         trace?: never;
@@ -558,7 +745,7 @@ export interface paths {
         put?: never;
         /**
          * Purge an archived field: drop its column and values
-         * @description Requires `datamodel.manage`. Irreversible. The field must be archived (DELETE) and `confirm` must repeat its technical name. Drops the column (and every stored value) from the type's table and rebuilds the reporting views. Returns the schema change that ran.
+         * @description Requires `datamodel.manage`. Irreversible. The field must be archived (DELETE) and `confirm` must repeat its technical name. Drops the column (and every stored value) from the type's table and rebuilds the reporting views. Returns the schema change that ran. Refused (409 IN_USE) while other fields name it as their parent field.
          */
         post: operations["purgeAttributeDefinition"];
         delete?: never;
@@ -811,13 +998,15 @@ export interface paths {
         };
         /**
          * List status records (paginated, searchable, sortable)
-         * @description `q` matches key, name, description (case-insensitive substring).
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
          */
         get: operations["listStatuses"];
         put?: never;
         /**
          * Create a status
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createStatus"];
         delete?: never;
@@ -833,20 +1022,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get one status */
+        /**
+         * Get one status
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         */
         get: operations["getStatus"];
         put?: never;
         post?: never;
         /**
          * Delete a status
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteStatus"];
         options?: never;
         head?: never;
         /**
          * Update a status (partial)
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateStatus"];
         trace?: never;
@@ -860,7 +1055,8 @@ export interface paths {
         };
         /**
          * What still refers to a status
-         * @description Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getStatusUsage"];
         put?: never;
@@ -880,13 +1076,15 @@ export interface paths {
         };
         /**
          * List environment records (paginated, searchable, sortable)
-         * @description `q` matches key, name, description (case-insensitive substring).
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
          */
         get: operations["listEnvironments"];
         put?: never;
         /**
          * Create a environment
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createEnvironment"];
         delete?: never;
@@ -902,20 +1100,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get one environment */
+        /**
+         * Get one environment
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         */
         get: operations["getEnvironment"];
         put?: never;
         post?: never;
         /**
          * Delete a environment
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteEnvironment"];
         options?: never;
         head?: never;
         /**
          * Update a environment (partial)
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateEnvironment"];
         trace?: never;
@@ -929,7 +1133,8 @@ export interface paths {
         };
         /**
          * What still refers to a environment
-         * @description Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getEnvironmentUsage"];
         put?: never;
@@ -949,13 +1154,15 @@ export interface paths {
         };
         /**
          * List location records (paginated, searchable, sortable)
-         * @description `q` matches key, name, description, address (case-insensitive substring).
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description, address (case-insensitive substring).
          */
         get: operations["listLocations"];
         put?: never;
         /**
          * Create a location
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createLocation"];
         delete?: never;
@@ -971,20 +1178,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get one location */
+        /**
+         * Get one location
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         */
         get: operations["getLocation"];
         put?: never;
         post?: never;
         /**
          * Delete a location
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteLocation"];
         options?: never;
         head?: never;
         /**
          * Update a location (partial)
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateLocation"];
         trace?: never;
@@ -998,7 +1211,8 @@ export interface paths {
         };
         /**
          * What still refers to a location
-         * @description Counts of configurationItems, deletedConfigurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getLocationUsage"];
         put?: never;
@@ -1018,13 +1232,15 @@ export interface paths {
         };
         /**
          * List owner records (paginated, searchable, sortable)
-         * @description `q` matches name, email, external_ref (case-insensitive substring).
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches name, email, external_ref (case-insensitive substring).
          */
         get: operations["listOwners"];
         put?: never;
         /**
          * Create a owner
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         post: operations["createOwner"];
         delete?: never;
@@ -1040,20 +1256,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get one owner */
+        /**
+         * Get one owner
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         */
         get: operations["getOwner"];
         put?: never;
         post?: never;
         /**
          * Delete a owner
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
          */
         delete: operations["deleteOwner"];
         options?: never;
         head?: never;
         /**
          * Update a owner (partial)
-         * @description Requires `datamodel.manage`.
+         * @deprecated
+         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
          */
         patch: operations["updateOwner"];
         trace?: never;
@@ -1067,7 +1289,8 @@ export interface paths {
         };
         /**
          * What still refers to a owner
-         * @description Counts of configurationItems, deletedConfigurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @deprecated
+         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getOwnerUsage"];
         put?: never;
@@ -1115,14 +1338,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a lookup list
-         * @description Requires `datamodel.manage`. Hard delete of the list and its values, allowed only while no attribute definition uses the list (409 IN_USE otherwise). Retire it with `PATCH {"isActive": false}` instead.
+         * @description Requires `datamodel.manage`. Hard delete of the list and its values, allowed only while no attribute definition uses the list and no other list depends on it (409 IN_USE otherwise). Retire it with `PATCH {"isActive": false}` instead.
          */
         delete: operations["deleteLookupList"];
         options?: never;
         head?: never;
         /**
          * Update a lookup list (partial)
-         * @description Requires `datamodel.manage`.
+         * @description Requires `datamodel.manage`. `parentListId` makes the list depend on another list (no cycles). Setting, changing or clearing it unassigns every value's `parentValueId` and every bound field's `parentAttributeId` in the same transaction (each change audited): reassign them afterwards with `PATCH /api/v1/lookup-list-values/{id}` and `PATCH /api/v1/attribute-definitions/{id}`. Until a value is assigned, it cannot be chosen on a field that has a parent field.
          */
         patch: operations["updateLookupList"];
         trace?: never;
@@ -1136,7 +1359,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list
-         * @description Counts of attributeDefinitions, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getLookupListUsage"];
         put?: never;
@@ -1184,14 +1407,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a lookup list value
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Hard delete, allowed only while no CI stores the value, no attribute uses it as default and no value of a dependent list belongs to it (409 IN_USE otherwise; the details name what still refers to it). Retire it with `PATCH {"isActive": false}` instead.
          */
         delete: operations["deleteLookupListValue"];
         options?: never;
         head?: never;
         /**
          * Update a lookup list value (partial)
-         * @description Requires `datamodel.manage`.
+         * @description Requires `datamodel.manage`. `isActive: false` on a value that other values belong to retires those too (and theirs, down the chain), each change audited. It is refused (409 IN_USE) while CIs store one of those active dependent values: the parent could then no longer be chosen while its children stay on the CIs. Reactivating a value does not reactivate its dependents, and a value whose parent value is retired cannot be reactivated or created.
          */
         patch: operations["updateLookupListValue"];
         trace?: never;
@@ -1205,7 +1428,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list value
-         * @description Counts of attributeValues, attributeDefaults. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
          */
         get: operations["getLookupListValueUsage"];
         put?: never;
@@ -1351,7 +1574,7 @@ export interface paths {
         put?: never;
         /**
          * Make an earlier version current again (saved as a new version)
-         * @description Requires `customization.manage`.
+         * @description Requires `customization.manage`. 409 CONFLICT for a version saved before an upgrade changed the settings format (e.g. migration 0016); the upgrade saved a converted copy as a newer version.
          */
         post: operations["restoreUiSettingsVersion"];
         delete?: never;
@@ -1397,7 +1620,7 @@ export interface paths {
         };
         /**
          * Change history (read-only, paginated, newest first by default)
-         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. Passwords, session tokens and CSRF tokens are never recorded. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned.
+         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, no_scope, session_only, forbidden), method, path, `operationId`, `ipAddress` and `userAgent`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
          */
         get: operations["listAuditLog"];
         put?: never;
@@ -1455,7 +1678,7 @@ export interface paths {
         head?: never;
         /**
          * Update a user (partial): rename, disable/enable, assign profiles
-         * @description Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.
+         * @description Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. For an account of an identity provider, the name, e-mail and profiles are set again from the provider at its next sign-in (change the group mappings instead); disabling it holds whatever the provider says. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.
          */
         patch: operations["updateUser"];
         trace?: never;
@@ -1470,7 +1693,7 @@ export interface paths {
         get?: never;
         /**
          * Set a new password for a user and end their sessions
-         * @description Requires `users.manage`.
+         * @description Requires `users.manage`. 409 for an account that signs in through an identity provider (it has no password here).
          */
         put: operations["resetUserPassword"];
         post?: never;
@@ -1527,7 +1750,7 @@ export interface paths {
         head?: never;
         /**
          * Update a permission profile (partial; permission lists replace the current ones)
-         * @description Requires `profiles.manage`. The built-in Administrator profile cannot be changed (409). Takes effect on the holders' next request.
+         * @description Requires `profiles.manage`. The built-in Administrator profile accepts only `requireMfa` (409 for anything else). Takes effect on the holders' next request.
          */
         patch: operations["updatePermissionProfile"];
         trace?: never;
@@ -1546,6 +1769,126 @@ export interface paths {
          * @description Requires `profiles.manage`.
          */
         post: operations["clonePermissionProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/api-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List API tokens (paginated, searchable, filterable by owner and status); never their secrets
+         * @description Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["listApiTokens"];
+        put?: never;
+        /**
+         * Create an API token; the response carries its secret, shown this once
+         * @description Requires `users.manage`. The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not. 400 when the owner is disabled or the owner or profile does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["createApiToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/api-tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one API token (without its secret)
+         * @description Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["getApiToken"];
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an API token (it stays listed as revoked; revoking twice is a no-op)
+         * @description Requires `users.manage`. 403 when the owner holds permissions you do not (your own tokens are always revocable). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        delete: operations["revokeApiToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/identity-providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List OIDC providers and LDAP/AD directories with their group mappings (secrets are never returned)
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise).
+         */
+        get: operations["listIdentityProviders"];
+        put?: never;
+        /**
+         * Add an OIDC provider or an LDAP/AD directory
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused.
+         */
+        post: operations["createIdentityProvider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/identity-providers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one identity provider
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise).
+         */
+        get: operations["getIdentityProvider"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an identity provider that no account signs in through
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). 409 IN_USE while accounts belong to it: disable it instead.
+         */
+        delete: operations["deleteIdentityProvider"];
+        options?: never;
+        head?: never;
+        /**
+         * Change an identity provider (partial); groupMappings replaces all mappings
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts.
+         */
+        patch: operations["updateIdentityProvider"];
+        trace?: never;
+    };
+    "/api/v1/admin/identity-providers/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to.
+         */
+        post: operations["testIdentityProvider"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1583,7 +1926,7 @@ export interface paths {
         put?: never;
         /**
          * Import a configuration file (dry run or apply)
-         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. Profiles cannot grant more than the importing user holds (403). Every applied change is audited.
+         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited.
          */
         post: operations["importConfig"];
         delete?: never;
@@ -1596,6 +1939,40 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ApiToken: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /**
+             * Format: uuid
+             * @description The owner: the token acts as this user, within its profile
+             */
+            userId: string;
+            username: string;
+            /** @description A disabled owner's tokens are refused */
+            ownerIsActive: boolean;
+            profile: components["schemas"]["ProfileRef"] | null;
+            /** @description The first characters of the secret, to recognise it; never the secret */
+            tokenPrefix: string;
+            /** @enum {string} */
+            status: "active" | "expired" | "revoked";
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date-time */
+            revokedAt: string | null;
+            revokedBy: string | null;
+            /** Format: date-time */
+            lastUsedAt: string | null;
+            /** @description Client address of the last accepted request (evidence only) */
+            lastUsedIp: string | null;
+            createdBy: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ApiTokenList: {
+            data: components["schemas"]["ApiToken"][];
+            page: components["schemas"]["PageMeta"];
+        };
         Area: {
             /** Format: uuid */
             id: string;
@@ -1659,6 +2036,12 @@ export interface components {
              * @description When dataType is "lookup": the admin-defined list its values come from
              */
             lookupListId: string | null;
+            /**
+             * Format: uuid
+             * @description When the lookup list has a parent list: the field (on this class or an ancestor) bound to the parent
+             *     list. A CI's value must then belong to the CI's value of that field.
+             */
+            parentAttributeId: string | null;
             validation: {
                 [key: string]: unknown;
             } | null;
@@ -1694,7 +2077,7 @@ export interface components {
             actorId: string | null;
             actorName: string | null;
             /** @enum {string} */
-            action: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge";
+            action: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes";
             /** @description Table of the changed entity, e.g. configuration_items (sessions for authentication events) */
             entityType: string;
             /** Format: uuid */
@@ -1742,6 +2125,12 @@ export interface components {
             sortOrder: number;
             /** @description Archived classes keep their CIs but accept no new ones */
             isActive: boolean;
+            /**
+             * Format: uuid
+             * @description The attribute (of this class or an ancestor) whose value labels its CIs in lists, references, the graph
+             *     and search; null labels them by their ident
+             */
+            titleAttributeId: string | null;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -1780,7 +2169,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 2 and reads 1 and 2
+             * @description File format version; this server writes version 3 and reads 1 to 3
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -1804,26 +2193,25 @@ export interface components {
         ConfigurationItem: {
             /** Format: uuid */
             id: string;
-            name: string;
+            /** @description Short unique identifier, e.g. "CI-7K3M9Q2X" (generated; only an administrator can change it) */
+            ident: string;
+            /** @description Display name: the value of the class's title attribute, or the ident when there is none */
+            label: string;
             /** Format: uuid */
             classId: string;
             class: components["schemas"]["LookupRef"];
-            /** Format: uuid */
-            statusId: string;
-            status: components["schemas"]["LookupRef"];
-            /** Format: uuid */
-            environmentId: string | null;
-            environment: components["schemas"]["LookupRef"] | null;
-            /** Format: uuid */
-            ownerId: string | null;
-            owner: components["schemas"]["OwnerRef"] | null;
-            /** Format: uuid */
-            locationId: string | null;
-            location: components["schemas"]["LookupRef"] | null;
-            hostname: string | null;
-            ipAddress: string | null;
-            serialNumber: string | null;
-            notes: string | null;
+            /**
+             * Format: date-time
+             * @description Start of the validity period
+             */
+            validFrom: string;
+            /**
+             * Format: date-time
+             * @description End of the validity period (exclusive); null means open-ended
+             */
+            validUntil: string | null;
+            /** @description True while validFrom <= now < validUntil (derived, not stored) */
+            active: boolean;
             /**
              * Format: int32
              * @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits
@@ -1847,8 +2235,12 @@ export interface components {
                 [key: string]: {
                     /** Format: uuid */
                     id: string;
-                    name: string;
+                    /** @description The referenced CI's label; null when `hidden` */
+                    name: string | null;
+                    /** @description Always false when `hidden` */
                     deleted: boolean;
+                    /** @description True when the caller may not view the referenced CI's class; its name and state are withheld */
+                    hidden: boolean;
                 };
             };
         };
@@ -1859,26 +2251,25 @@ export interface components {
         ConfigurationItemSummary: {
             /** Format: uuid */
             id: string;
-            name: string;
+            /** @description Short unique identifier, e.g. "CI-7K3M9Q2X" (generated; only an administrator can change it) */
+            ident: string;
+            /** @description Display name: the value of the class's title attribute, or the ident when there is none */
+            label: string;
             /** Format: uuid */
             classId: string;
             class: components["schemas"]["LookupRef"];
-            /** Format: uuid */
-            statusId: string;
-            status: components["schemas"]["LookupRef"];
-            /** Format: uuid */
-            environmentId: string | null;
-            environment: components["schemas"]["LookupRef"] | null;
-            /** Format: uuid */
-            ownerId: string | null;
-            owner: components["schemas"]["OwnerRef"] | null;
-            /** Format: uuid */
-            locationId: string | null;
-            location: components["schemas"]["LookupRef"] | null;
-            hostname: string | null;
-            ipAddress: string | null;
-            serialNumber: string | null;
-            notes: string | null;
+            /**
+             * Format: date-time
+             * @description Start of the validity period
+             */
+            validFrom: string;
+            /**
+             * Format: date-time
+             * @description End of the validity period (exclusive); null means open-ended
+             */
+            validUntil: string | null;
+            /** @description True while validFrom <= now < validUntil (derived, not stored) */
+            active: boolean;
             /**
              * Format: int32
              * @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits
@@ -1893,6 +2284,21 @@ export interface components {
              * @description Set when the CI was deleted (soft delete); history keeps resolving
              */
             deletedAt: string | null;
+        };
+        ConnectionTest: {
+            /** @description The provider answered as expected */
+            ok: boolean;
+            /** @description What was checked, or what went wrong (for the administrator) */
+            message: string;
+            /** @description Findings, one per line */
+            details: string[];
+            user: components["schemas"]["DirectoryUserPreview"] | null;
+        };
+        /** @description A new token and its secret. The secret is shown here only: store it now. */
+        CreatedApiToken: {
+            token: components["schemas"]["ApiToken"];
+            /** @description Send as `Authorization: Bearer <secret>`. Not retrievable later. */
+            secret: string;
         };
         /** @description Areas, classes (parents before children is not required), attributes, relationship types and rules */
         DataModelSection: {
@@ -1918,6 +2324,7 @@ export interface components {
                 color?: string | null;
                 sortOrder?: number;
                 isActive?: boolean;
+                titleAttribute?: string | null;
             }[];
             attributes?: {
                 /** @description Stable machine key, lower_snake_case */
@@ -1932,6 +2339,7 @@ export interface components {
                 enumValues?: string[] | null;
                 referenceClass?: string | null;
                 lookupList?: string | null;
+                parentAttribute?: string | null;
                 validation?: {
                     /** @description number/integer: minimum */
                     min?: number;
@@ -1974,6 +2382,16 @@ export interface components {
                 targetClass: string;
             }[];
         };
+        /** @description What a directory says about a user (connection test) */
+        DirectoryUserPreview: {
+            dn: string;
+            username: string | null;
+            displayName: string | null;
+            email: string | null;
+            groups: string[];
+            /** @description The profiles these groups map to; empty means the user would be refused */
+            profiles: string[];
+        };
         EffectiveAttribute: {
             /** Format: uuid */
             id: string;
@@ -1997,6 +2415,12 @@ export interface components {
              * @description When dataType is "lookup": the admin-defined list its values come from
              */
             lookupListId: string | null;
+            /**
+             * Format: uuid
+             * @description When the lookup list has a parent list: the field (on this class or an ancestor) bound to the parent
+             *     list. A CI's value must then belong to the CI's value of that field.
+             */
+            parentAttributeId: string | null;
             validation: {
                 [key: string]: unknown;
             } | null;
@@ -2061,7 +2485,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
                 message: string;
                 details?: {
                     /** @enum {string} */
@@ -2101,6 +2525,50 @@ export interface components {
             /** Format: uuid */
             targetCiId: string;
             notes: string | null;
+        };
+        /** @description Users in this group get this profile */
+        GroupMapping: {
+            /** @description As the provider reports it (a group name or id, or a group DN); compared case-insensitively */
+            group: string;
+            /** Format: uuid */
+            profileId: string;
+            profileName: string;
+        };
+        IdentityProvider: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ProviderKind"];
+            /** @description Shown on the sign-in button and in the audit trail */
+            name: string;
+            /** @description Disabled: nobody signs in through it and its accounts' sessions ended */
+            isEnabled: boolean;
+            /**
+             * Format: int32
+             * @description Button order (OIDC); the order directories are asked in (LDAP)
+             */
+            sortOrder: number;
+            /** @description Extra CA certificates (PEM) trusted for this provider */
+            caCertificate: string | null;
+            oidc: components["schemas"]["OidcConfig"] | null;
+            ldap: components["schemas"]["LdapConfig"] | null;
+            groupMappings: components["schemas"]["GroupMapping"][];
+            /**
+             * Format: int64
+             * @description Accounts that sign in through this provider
+             */
+            userCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description The identity provider an account signs in through */
+        IdentityProviderRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description oidc or ldap */
+            kind: string;
         };
         /** @description What a statement does to data that already exists */
         Impact: {
@@ -2150,8 +2618,25 @@ export interface components {
             /** @description Path in the stored document, e.g. "listViews.2.columns.3" */
             path: string;
             /** @enum {string} */
-            code: "unknown_class" | "unknown_attribute" | "unknown_status" | "unknown_environment" | "unknown_location" | "required_field_not_editable";
+            code: "unknown_class" | "unknown_attribute" | "unknown_lookup_list" | "unknown_lookup_value" | "required_field_not_editable" | "core_field_hidden";
             message: string;
+        };
+        LdapConfig: {
+            /** @description ldaps://host[:port] or ldap://host[:port] (then with StartTLS) */
+            url: string;
+            startTls: boolean;
+            /** @description Service account the user search binds as; null searches anonymously */
+            bindDn: string | null;
+            /** @description A bind password is stored (it is never returned) */
+            bindPasswordSet: boolean;
+            userBaseDn: string;
+            /** @description {username} is replaced by the escaped sign-in name */
+            userFilter: string;
+            usernameAttribute: string;
+            displayNameAttribute: string;
+            emailAttribute: string;
+            /** @description Holds the DNs of the user's groups (memberOf) */
+            groupAttribute: string;
         };
         Liveness: {
             /** @enum {string} */
@@ -2198,6 +2683,11 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+            /**
+             * Format: uuid
+             * @description The list this one depends on (e.g. "Model" depends on "Manufacturer"): each value names its parent value
+             */
+            parentListId: string | null;
         };
         LookupListList: {
             data: components["schemas"]["LookupList"][];
@@ -2221,6 +2711,12 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+            /**
+             * Format: uuid
+             * @description The value of the parent list this value belongs to (lists with a parent list only). Null on a value
+             *     left unassigned when its list got another parent list: it cannot be chosen until it is assigned again.
+             */
+            parentValueId: string | null;
         };
         LookupListValueList: {
             data: components["schemas"]["LookupListValue"][];
@@ -2278,6 +2774,7 @@ export interface components {
                 description?: string | null;
                 sortOrder?: number;
                 isActive?: boolean;
+                parent?: string | null;
                 values?: {
                     /** @description Stable machine key, lower_snake_case */
                     key: string;
@@ -2286,8 +2783,40 @@ export interface components {
                     color?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parent?: string | null;
                 }[];
             }[];
+        };
+        /** @description The user's two-factor state. */
+        MfaStatus: {
+            /** @description An authenticator app is set up: sign-in asks for its code after the password */
+            totpEnabled: boolean;
+            /** @description A permission profile the user holds requires MFA */
+            required: boolean;
+            /**
+             * @description Required but not set up: until it is, the session only reaches sign-out,
+             *     /auth/me and the MFA set-up routes (others answer 403 MFA_ENROLMENT_REQUIRED)
+             */
+            enrolmentRequired: boolean;
+            /**
+             * Format: int64
+             * @description Unused recovery codes
+             */
+            recoveryCodesRemaining: number;
+        };
+        OidcConfig: {
+            issuerUrl: string;
+            clientId: string;
+            /** @description A client secret is stored (it is never returned) */
+            clientSecretSet: boolean;
+            /** @description Requested besides openid */
+            scopes: string;
+            /** @description ID token claim used as the username (dots descend into objects) */
+            usernameClaim: string;
+            /** @description ID token claim listing the user's groups (dots descend into objects) */
+            groupsClaim: string;
+            /** @description Register this at the provider; null until PUBLIC_URL is set */
+            redirectUri: string | null;
         };
         Owner: {
             /** Format: uuid */
@@ -2308,13 +2837,6 @@ export interface components {
             data: components["schemas"]["Owner"][];
             page: components["schemas"]["PageMeta"];
         };
-        OwnerRef: {
-            /** Format: uuid */
-            id: string;
-            name: string;
-            /** @enum {string} */
-            kind: "person" | "team";
-        };
         PageMeta: {
             /** Format: int64 */
             limit: number;
@@ -2331,8 +2853,13 @@ export interface components {
             id: string;
             name: string;
             description: string | null;
-            /** @description The Administrator profile: every permission, read-only, cannot be deleted */
+            /** @description The Administrator profile: every permission, read-only (except requireMfa), cannot be deleted */
             isBuiltin: boolean;
+            /**
+             * @description Holders must set up two-factor authentication; until they do, their
+             *     session only reaches the MFA set-up routes
+             */
+            requireMfa: boolean;
             globalPermissions: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
             classPermissions: components["schemas"]["ClassPermission"][];
             /**
@@ -2356,6 +2883,8 @@ export interface components {
             name: string;
             isBuiltin: boolean;
         };
+        /** @enum {string} */
+        ProviderKind: "oidc" | "ldap";
         /** @description Branding for the login page (no sign-in needed) */
         PublicBranding: {
             appName: string;
@@ -2376,10 +2905,13 @@ export interface components {
         Readiness: {
             /** @enum {string} */
             status: "ready" | "not_ready";
-            /** @enum {string} */
-            database: "ok" | "unreachable";
+            /**
+             * @description `ok` once the database answered both queries; otherwise why it did not.
+             * @enum {string}
+             */
+            database: "ok" | "unreachable" | "authentication_failed" | "permission_denied" | "error";
             migrations: {
-                /** @description Absent when the database is unreachable */
+                /** @description Absent unless the database state is `ok` */
                 applied?: number;
                 /** @description Migrations shipped with this build */
                 expected: number;
@@ -2389,6 +2921,11 @@ export interface components {
         /** @description The result of a reconcile */
         ReconcileResult: {
             schemaChange: components["schemas"]["SchemaChange"] | null;
+        };
+        /** @description One-time recovery codes. Shown only in this response: only their hashes are kept. */
+        RecoveryCodes: {
+            /** @description Each signs in once in place of an authenticator code (case, dashes and spaces do not matter) */
+            codes: string[];
         };
         Relationship: {
             /** Format: uuid */
@@ -2409,6 +2946,7 @@ export interface components {
             source: {
                 /** Format: uuid */
                 id: string;
+                /** @description The CI's label */
                 name: string;
                 classKey: string;
                 className: string;
@@ -2419,6 +2957,7 @@ export interface components {
             target: {
                 /** Format: uuid */
                 id: string;
+                /** @description The CI's label */
                 name: string;
                 classKey: string;
                 className: string;
@@ -2445,26 +2984,25 @@ export interface components {
             nodes: {
                 /** Format: uuid */
                 id: string;
-                name: string;
+                /** @description Short unique identifier, e.g. "CI-7K3M9Q2X" (generated; only an administrator can change it) */
+                ident: string;
+                /** @description Display name: the value of the class's title attribute, or the ident when there is none */
+                label: string;
                 /** Format: uuid */
                 classId: string;
                 class: components["schemas"]["LookupRef"];
-                /** Format: uuid */
-                statusId: string;
-                status: components["schemas"]["LookupRef"];
-                /** Format: uuid */
-                environmentId: string | null;
-                environment: components["schemas"]["LookupRef"] | null;
-                /** Format: uuid */
-                ownerId: string | null;
-                owner: components["schemas"]["OwnerRef"] | null;
-                /** Format: uuid */
-                locationId: string | null;
-                location: components["schemas"]["LookupRef"] | null;
-                hostname: string | null;
-                ipAddress: string | null;
-                serialNumber: string | null;
-                notes: string | null;
+                /**
+                 * Format: date-time
+                 * @description Start of the validity period
+                 */
+                validFrom: string;
+                /**
+                 * Format: date-time
+                 * @description End of the validity period (exclusive); null means open-ended
+                 */
+                validUntil: string | null;
+                /** @description True while validFrom <= now < validUntil (derived, not stored) */
+                active: boolean;
                 /**
                  * Format: int32
                  * @description Optimistic-locking counter; send it back in PATCH to detect concurrent edits
@@ -2571,7 +3109,7 @@ export interface components {
             data: {
                 item: components["schemas"]["ConfigurationItemSummary"];
                 matches: {
-                    /** @description "name", "hostname", "serialNumber", "ipAddress", "notes" or "attributes.<key>" */
+                    /** @description "label", "ident" or "attributes.<key>" */
                     field: string;
                     label: string;
                     value: string;
@@ -2600,6 +3138,7 @@ export interface components {
         Session: {
             user: components["schemas"]["User"];
             permissions: components["schemas"]["EffectivePermissions"];
+            mfa: components["schemas"]["MfaStatus"];
             /**
              * @description Send as the X-CSRF-Token header on every POST, PUT, PATCH and DELETE
              *     (also readable from the shadoucmdb_csrf cookie)
@@ -2609,6 +3148,22 @@ export interface components {
         SetupStatus: {
             /** @description True while no user exists: the UI shows the first-run screen */
             setupRequired: boolean;
+        };
+        /** @description How users can sign in besides a local account. */
+        SignInOptions: {
+            /** @description Enabled OIDC providers, in button order (empty unless PUBLIC_URL is set) */
+            oidc: components["schemas"]["SignInProvider"][];
+            /** @description An LDAP/AD directory is enabled: the username/password form also takes directory accounts */
+            directory: boolean;
+        };
+        /** @description A button on the sign-in page. */
+        SignInProvider: {
+            /** Format: uuid */
+            id: string;
+            /** @description "Sign in with {name}" */
+            name: string;
+            /** @description GET this (a browser navigation, not a fetch) to start signing in */
+            startUrl: string;
         };
         StarterTemplate: {
             key: string;
@@ -2626,11 +3181,9 @@ export interface components {
                 /** Format: int64 */
                 relationshipRules: number;
                 /** Format: int64 */
-                statuses: number;
+                lookupLists: number;
                 /** Format: int64 */
-                environments: number;
-                /** Format: int64 */
-                locations: number;
+                lookupListValues: number;
             } & Record<string, never>;
             present: {
                 /** Format: int64 */
@@ -2644,11 +3197,9 @@ export interface components {
                 /** Format: int64 */
                 relationshipRules: number;
                 /** Format: int64 */
-                statuses: number;
+                lookupLists: number;
                 /** Format: int64 */
-                environments: number;
-                /** Format: int64 */
-                locations: number;
+                lookupListValues: number;
             } & Record<string, never>;
             /** @enum {string} */
             status: "not_installed" | "partial" | "installed";
@@ -2714,11 +3265,9 @@ export interface components {
                 /** Format: int64 */
                 relationshipRules: number;
                 /** Format: int64 */
-                statuses: number;
+                lookupLists: number;
                 /** Format: int64 */
-                environments: number;
-                /** Format: int64 */
-                locations: number;
+                lookupListValues: number;
             } & Record<string, never>;
             existing: {
                 /** Format: int64 */
@@ -2732,15 +3281,29 @@ export interface components {
                 /** Format: int64 */
                 relationshipRules: number;
                 /** Format: int64 */
-                statuses: number;
+                lookupLists: number;
                 /** Format: int64 */
-                environments: number;
-                /** Format: int64 */
-                locations: number;
+                lookupListValues: number;
             } & Record<string, never>;
             /** @description Rows not installed because they would clash with the current data model */
             skipped: string[];
             schemaChange: components["schemas"]["SchemaChange"] | null;
+        };
+        /** @description A new authenticator secret, to be confirmed with a code from the app. */
+        TotpEnrolment: {
+            /** @description Base32, for typing into the app by hand */
+            secret: string;
+            /** @description `otpauth://totp/...`: show it as a QR code */
+            otpauthUri: string;
+            /** @description HMAC algorithm (always SHA1, what every app supports) */
+            algorithm: string;
+            /** Format: int32 */
+            digits: number;
+            /**
+             * Format: int32
+             * @description Seconds per code
+             */
+            period: number;
         };
         /** @description An uploaded image */
         UiAsset: {
@@ -2780,32 +3343,75 @@ export interface components {
             defaultTheme: "light" | "dark" | "system";
         };
         /**
-         * @description Detail page and form layout of one class. Fields not placed in a panel
-         *     follow in a trailing panel, grouped by attribute group as before.
+         * @description Detail page and form layout of one class (layout format v2): tabs of
+         *     sections, each a grid of fields with a width. Fields the tabs do not place
+         *     (and that are not hidden) follow at the end of the first tab, grouped by
+         *     attribute group; so do attributes added to the class later.
          */
         UiClassLayout: {
             /** @description Stable machine key, lower_snake_case */
             classKey: string;
-            panels?: components["schemas"]["UiLayoutPanel"][];
-            /** @description Fields not shown on the detail page or the form (name cannot be hidden) */
+            tabs?: components["schemas"]["UiLayoutTab"][];
+            /** @description Fields not shown on the detail page or the form */
             hiddenFields?: string[];
-            /** @description Fields shown but not editable on the form (name cannot be read-only) */
+            /** @description Fields shown but not editable on the form */
             readOnlyFields?: string[];
+            /**
+             * @deprecated
+             * @description Layout format v1, still accepted (older exports, API clients and saved versions): converted to
+             *     one "General" tab with a section per panel and never returned. Send `tabs` instead.
+             */
+            panels?: components["schemas"]["UiLayoutPanel"][];
         };
         /** @description Dashboard widgets in display order; null keeps the built-in dashboard */
         UiDashboard: {
             /** @default null */
             widgets: components["schemas"]["UiWidget"][] | null;
         };
-        /** @description A panel (card) on the detail page and the form */
+        /** @description A field on a section's grid. Fields fill the grid row by row in the order given. */
+        UiLayoutField: {
+            /** @description A built-in field or attributes.<key> */
+            field: string;
+            /**
+             * Format: int32
+             * @description Grid columns the field spans, at most the section's `columns`
+             * @default 1
+             */
+            width: number;
+        };
+        /**
+         * @description A panel of the layout format before tabs (v1). Accepted on input and converted to a section of one
+         *     "General" tab; never returned.
+         */
         UiLayoutPanel: {
             /** @description Stable machine key, lower_snake_case */
             key: string;
             label: string;
             /** @description Fields in display order (built-in fields or attributes.<key>) */
             fields?: string[];
+            collapsed?: boolean;
+        };
+        /** @description A section (card) of a tab: a heading and a grid of fields */
+        UiLayoutSection: {
+            /** @description Stable machine key, lower_snake_case */
+            key: string;
+            label: string;
+            /**
+             * Format: int32
+             * @description Grid columns on a wide screen; narrow screens use fewer
+             * @default 3
+             */
+            columns: number;
+            fields?: components["schemas"]["UiLayoutField"][];
             /** @description Start collapsed on the detail page */
             collapsed?: boolean;
+        };
+        /** @description A tab of the detail page and the form */
+        UiLayoutTab: {
+            /** @description Stable machine key, lower_snake_case */
+            key: string;
+            label: string;
+            sections?: components["schemas"]["UiLayoutSection"][];
         };
         /** @description Inventory filters, by key */
         UiListFilters: {
@@ -2814,12 +3420,10 @@ export interface components {
              * @default null
              */
             q: string | null;
-            /** @description Status keys */
-            statusKeys?: string[];
-            /** @description Environment keys */
-            environmentKeys?: string[];
-            /** @description Location keys */
-            locationKeys?: string[];
+            /** @description Lookup list key -> value keys: CIs holding one of the values in a lookup attribute of that list, for every list given (e.g. {"status": ["in_service"], "environment": ["production"]}) */
+            lookups?: {
+                [key: string]: string[];
+            };
         };
         /** @description Sort for an inventory list; `field` is one of the inventory sort fields */
         UiListSort: {
@@ -2831,7 +3435,7 @@ export interface components {
         UiListView: {
             /** @description Stable machine key, lower_snake_case */
             classKey: string;
-            /** @description Columns in display order: built-in fields (name, class, status, environment, owner, location, hostname, ipAddress, serialNumber, notes, createdAt, updatedAt) or attributes.<key> */
+            /** @description Columns in display order: built-in fields (label, ident, class, validFrom, validUntil, active, createdAt, updatedAt) or attributes.<key> */
             columns?: string[];
             defaultSort?: components["schemas"]["UiListSort"] | null;
             defaultFilters?: components["schemas"]["UiListFilters"];
@@ -2893,12 +3497,10 @@ export interface components {
                  * @default null
                  */
                 q: string | null;
-                /** @description Status keys */
-                statusKeys?: string[];
-                /** @description Environment keys */
-                environmentKeys?: string[];
-                /** @description Location keys */
-                locationKeys?: string[];
+                /** @description Lookup list key -> value keys: CIs holding one of the values in a lookup attribute of that list, for every list given (e.g. {"status": ["in_service"], "environment": ["production"]}) */
+                lookups?: {
+                    [key: string]: string[];
+                };
             } & Record<string, never>;
             /** @default null */
             sort: {
@@ -3002,7 +3604,7 @@ export interface components {
             /** @description Stable machine key, lower_snake_case */
             id: string;
             /** @enum {string} */
-            type: "count_by_class" | "count_by_status" | "count_by_environment" | "recent_changes" | "saved_search";
+            type: "count_by_class" | "count_by_lookup" | "recent_changes" | "saved_search";
             /** @description Display label; null keeps the default */
             title?: string | null;
             /** @enum {string} */
@@ -3014,6 +3616,8 @@ export interface components {
             limit?: number;
             /** @description CI class keys */
             classKeys?: string[];
+            /** @description count_by_lookup: the lookup list whose values are counted (required for that type) */
+            lookupListKey?: string;
             /** @description saved_search: the search (required for that type) */
             search?: components["schemas"]["UiSavedSearch"];
         };
@@ -3043,6 +3647,9 @@ export interface components {
             isActive: boolean;
             /** @description Holds the built-in Administrator profile */
             isAdministrator: boolean;
+            /** @description Has set up two-factor authentication (an authenticator app) */
+            mfaEnabled: boolean;
+            identityProvider: components["schemas"]["IdentityProviderRef"] | null;
             profiles: components["schemas"]["ProfileRef"][];
             /** Format: date-time */
             passwordChangedAt: string;
@@ -3057,6 +3664,34 @@ export interface components {
             data: components["schemas"]["User"][];
             page: components["schemas"]["PageMeta"];
         };
+        Vec: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ProviderKind"];
+            /** @description Shown on the sign-in button and in the audit trail */
+            name: string;
+            /** @description Disabled: nobody signs in through it and its accounts' sessions ended */
+            isEnabled: boolean;
+            /**
+             * Format: int32
+             * @description Button order (OIDC); the order directories are asked in (LDAP)
+             */
+            sortOrder: number;
+            /** @description Extra CA certificates (PEM) trusted for this provider */
+            caCertificate: string | null;
+            oidc: components["schemas"]["OidcConfig"] | null;
+            ldap: components["schemas"]["LdapConfig"] | null;
+            groupMappings: components["schemas"]["GroupMapping"][];
+            /**
+             * Format: int64
+             * @description Accounts that sign in through this provider
+             */
+            userCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        }[];
         VersionInfo: {
             /** @description Version of the running server (SemVer), e.g. 0.1.0; compare it with security advisories */
             version: string;
@@ -3130,7 +3765,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3168,7 +3803,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not ready: database unreachable or migrations pending */
+            /** @description Not ready: database unreachable, credentials or privileges refused, or migrations pending */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3206,7 +3841,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3281,7 +3916,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3326,7 +3961,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Wrong credentials (code UNAUTHENTICATED), or the password was right and the second factor is due (code MFA_REQUIRED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3362,7 +3997,88 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description The LDAP directory could not be reached (code IDENTITY_PROVIDER_UNAVAILABLE; local accounts still sign in), the database is unreachable (code DATABASE_UNAVAILABLE), or migrations are pending (code SCHEMA_NOT_MIGRATED) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    loginSecondFactor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The 6-digit code from the authenticator app, or an unused recovery code */
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3389,7 +4105,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3398,7 +4114,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3416,7 +4132,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3445,8 +4161,17 @@ export interface operations {
                     "application/json": components["schemas"]["Session"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3463,7 +4188,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3507,7 +4232,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3516,8 +4241,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3552,7 +4286,667 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMfaStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaStatus"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    startTotpEnrolment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    currentPassword: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpEnrolment"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    disableTotp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    currentPassword: string;
+                    /** @description The 6-digit code from the authenticator app, or an unused recovery code */
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    confirmTotpEnrolment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The 6-digit code the app shows for the new secret */
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodes"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    regenerateRecoveryCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    currentPassword: string;
+                    /** @description The 6-digit code from the authenticator app, or an unused recovery code */
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodes"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    resetUserMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getSignInOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInOptions"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    startOidcSignIn: {
+        parameters: {
+            query?: {
+                /** @description Path on this server to open after signing in (default /) */
+                returnTo?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect: the browser follows the Location header */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    completeOidcSignIn: {
+        parameters: {
+            query?: {
+                /** @description Authorization code */
+                code?: string;
+                /** @description The state sent with the authorization request */
+                state?: string;
+                /** @description The provider's issuer (RFC 9207), checked when present */
+                iss?: string;
+                /** @description Set by the provider when the sign-in did not happen */
+                error?: string;
+                /** @description The provider's explanation (logged only) */
+                error_description?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect: the browser follows the Location header */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3570,22 +4964,18 @@ export interface operations {
                 limit?: number;
                 /** @description Rows to skip */
                 offset?: number;
-                /** @description Search name, hostname, serial number, IP address, notes and attribute values */
+                /** @description Search label, ident and attribute values */
                 q?: string;
-                /** @description Sort field; prefix with "-" for descending. One of: name, hostname, ipAddress, serialNumber, className, statusName, createdAt, updatedAt */
-                sort?: "name" | "-name" | "hostname" | "-hostname" | "ipAddress" | "-ipAddress" | "serialNumber" | "-serialNumber" | "className" | "-className" | "statusName" | "-statusName" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
+                /** @description Sort field; prefix with "-" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt */
+                sort?: "label" | "-label" | "ident" | "-ident" | "className" | "-className" | "validFrom" | "-validFrom" | "validUntil" | "-validUntil" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
                 /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
                 classId?: string;
                 includeSubclasses?: "true" | "false";
-                /** @description One or more ids, comma-separated */
-                statusId?: string;
-                /** @description One or more ids, comma-separated */
-                environmentId?: string;
-                /** @description One or more ids, comma-separated */
-                ownerId?: string;
-                /** @description One or more ids, comma-separated */
-                locationId?: string;
-                /** @description Only CIs whose ipAddress is inside this CIDR, e.g. 10.20.0.0/16 */
+                /** @description true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both */
+                active?: "true" | "false" | "all";
+                /** @description Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C). */
+                lookupValueId?: string;
+                /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
                 ipWithin?: string;
                 /** @description Soft-deleted CIs: exclude (default), include, or only */
                 deleted?: "exclude" | "include" | "only";
@@ -3614,8 +5004,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3632,7 +5031,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3658,17 +5057,15 @@ export interface operations {
                      * @description A concrete (non-abstract), active class
                      */
                     classId: string;
-                    name: string;
-                    /** Format: uuid */
-                    statusId: string;
-                    environmentId?: string | null;
-                    ownerId?: string | null;
-                    locationId?: string | null;
-                    hostname?: string | null;
-                    /** @description IPv4 or IPv6 address */
-                    ipAddress?: (string) | null;
-                    serialNumber?: string | null;
-                    notes?: string | null;
+                    /** @description Administrators only (403 for anyone else). Unique regardless of case; leave out to have one generated */
+                    ident?: string;
+                    /**
+                     * Format: date-time
+                     * @description Start of the validity period; defaults to now
+                     */
+                    validFrom?: string;
+                    /** @description End of the validity period (exclusive, after validFrom); null: open-ended */
+                    validUntil?: string | null;
                     /** @description Values by attribute key (see GET /api/v1/ci-classes/{id}/attributes). Required attributes must be present; attributes left out get their defaultValue. */
                     attributes?: {
                         [key: string]: (string | number | boolean) | null;
@@ -3695,7 +5092,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3704,8 +5101,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3731,7 +5137,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3771,7 +5177,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3780,7 +5186,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3807,7 +5213,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3845,7 +5251,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3854,7 +5260,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3881,7 +5287,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3909,17 +5315,15 @@ export interface operations {
                      * @description Changing class requires clearing attributes the new class does not have
                      */
                     classId?: string;
-                    name?: string;
-                    /** Format: uuid */
-                    statusId?: string;
-                    environmentId?: string | null;
-                    ownerId?: string | null;
-                    locationId?: string | null;
-                    hostname?: string | null;
-                    /** @description IPv4 or IPv6 address */
-                    ipAddress?: (string) | null;
-                    serialNumber?: string | null;
-                    notes?: string | null;
+                    /** @description Administrators only (403 for anyone else). Unique regardless of case; leave out to have one generated */
+                    ident?: string;
+                    /**
+                     * Format: date-time
+                     * @description Start of the validity period; defaults to now
+                     */
+                    validFrom?: string;
+                    /** @description End of the validity period (exclusive, after validFrom); null: open-ended */
+                    validUntil?: string | null;
                     /** @description Merged into the current values; null clears an attribute */
                     attributes?: {
                         [key: string]: (string | number | boolean) | null;
@@ -3948,7 +5352,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3957,7 +5361,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4002,7 +5406,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4051,7 +5455,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4060,7 +5464,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4087,7 +5491,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4110,15 +5514,11 @@ export interface operations {
                 /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
                 classId?: string;
                 includeSubclasses?: "true" | "false";
-                /** @description One or more ids, comma-separated */
-                statusId?: string;
-                /** @description One or more ids, comma-separated */
-                environmentId?: string;
-                /** @description One or more ids, comma-separated */
-                ownerId?: string;
-                /** @description One or more ids, comma-separated */
-                locationId?: string;
-                /** @description Only CIs whose ipAddress is inside this CIDR, e.g. 10.20.0.0/16 */
+                /** @description true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both */
+                active?: "true" | "false" | "all";
+                /** @description Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C). */
+                lookupValueId?: string;
+                /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
                 ipWithin?: string;
                 /** @description Soft-deleted CIs: exclude (default), include, or only */
                 deleted?: "exclude" | "include" | "only";
@@ -4147,8 +5547,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4165,7 +5574,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4222,8 +5631,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4240,7 +5658,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4293,7 +5711,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4302,7 +5720,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4338,7 +5756,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4378,7 +5796,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4387,7 +5805,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4414,7 +5832,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4452,7 +5870,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4461,7 +5879,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4488,7 +5906,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4536,7 +5954,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4545,7 +5963,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4590,7 +6008,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4638,8 +6056,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4656,7 +6083,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4707,7 +6134,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4716,7 +6143,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4761,7 +6188,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4801,8 +6228,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4828,7 +6264,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4866,7 +6302,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4875,7 +6311,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4911,7 +6347,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4963,7 +6399,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4972,7 +6408,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5026,7 +6462,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5073,7 +6509,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5082,7 +6518,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5127,7 +6563,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5182,8 +6618,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5200,7 +6645,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5237,6 +6682,8 @@ export interface operations {
                     color?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    /** @description Attribute of this class or an ancestor whose value labels the CIs (text, enum, number, integer, date, datetime, ip or cidr); null labels them by their ident. A new class takes its parent's. */
+                    titleAttributeId?: string | null;
                 };
             };
         };
@@ -5259,7 +6706,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5268,7 +6715,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5313,7 +6760,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5353,8 +6800,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5380,7 +6836,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5418,7 +6874,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5427,7 +6883,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5463,7 +6919,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5494,6 +6950,8 @@ export interface operations {
                     color?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    /** @description Attribute of this class or an ancestor whose value labels the CIs (text, enum, number, integer, date, datetime, ip or cidr); null labels them by their ident. A new class takes its parent's. */
+                    titleAttributeId?: string | null;
                 };
             };
         };
@@ -5516,7 +6974,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5525,7 +6983,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5579,7 +7037,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5619,8 +7077,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5646,7 +7113,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5689,8 +7156,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5716,7 +7192,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5763,7 +7239,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5772,7 +7248,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5817,7 +7293,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5871,8 +7347,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5889,7 +7374,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -5918,6 +7403,7 @@ export interface operations {
                     dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
                     referenceClassId?: string | null;
                     lookupListId?: string | null;
+                    parentAttributeId?: string | null;
                     label: string;
                     description?: string | null;
                     isRequired?: boolean;
@@ -5965,7 +7451,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5974,7 +7460,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6019,7 +7505,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6059,8 +7545,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6086,7 +7581,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6124,7 +7619,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6133,7 +7628,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6169,7 +7664,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6219,6 +7714,7 @@ export interface operations {
                     defaultValue?: string | number | boolean | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parentAttributeId?: string | null;
                 };
             };
         };
@@ -6241,7 +7737,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6250,7 +7746,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6304,7 +7800,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6344,8 +7840,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6371,7 +7876,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6418,7 +7923,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6427,7 +7932,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6472,7 +7977,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6524,8 +8029,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6542,7 +8056,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6594,7 +8108,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6603,7 +8117,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6639,7 +8153,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6679,8 +8193,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6706,7 +8229,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6744,7 +8267,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6753,7 +8276,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6789,7 +8312,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6840,7 +8363,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6849,7 +8372,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6894,7 +8417,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6934,8 +8457,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6961,7 +8493,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7012,8 +8544,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7030,7 +8571,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7079,7 +8620,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7088,7 +8629,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7124,7 +8665,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7164,8 +8705,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7191,7 +8741,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7229,7 +8779,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7238,7 +8788,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7274,7 +8824,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7325,7 +8875,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7334,7 +8884,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7379,7 +8929,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7419,8 +8969,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7446,7 +9005,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7493,7 +9052,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7502,7 +9061,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7520,7 +9079,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7560,7 +9119,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7569,7 +9128,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7596,7 +9155,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7647,7 +9206,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7656,7 +9215,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7710,7 +9269,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7739,7 +9298,7 @@ export interface operations {
                     "application/json": components["schemas"]["ReconcileResult"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7748,7 +9307,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7775,7 +9334,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7824,7 +9383,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7833,7 +9392,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7851,7 +9410,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7900,8 +9459,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7918,7 +9486,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7968,7 +9536,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7977,7 +9545,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8013,7 +9581,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8053,8 +9621,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8080,7 +9657,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8118,7 +9695,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8127,7 +9704,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8163,7 +9740,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8215,7 +9792,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8224,7 +9801,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8269,7 +9846,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8309,8 +9886,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8336,7 +9922,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8384,8 +9970,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8402,7 +9997,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8451,7 +10046,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8460,7 +10055,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8496,7 +10091,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8536,8 +10131,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8563,7 +10167,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8601,7 +10205,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8610,7 +10214,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8646,7 +10250,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8697,7 +10301,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8706,7 +10310,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8751,7 +10355,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8791,8 +10395,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8818,7 +10431,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8869,8 +10482,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8887,7 +10509,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8940,7 +10562,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8949,7 +10571,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8985,7 +10607,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9025,8 +10647,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9052,7 +10683,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9090,7 +10721,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9099,7 +10730,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9135,7 +10766,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9190,7 +10821,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9199,7 +10830,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9244,7 +10875,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9284,8 +10915,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9311,7 +10951,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9362,8 +11002,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9380,7 +11029,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9429,7 +11078,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9438,7 +11087,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9474,7 +11123,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9514,8 +11163,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9541,7 +11199,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9579,7 +11237,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9588,7 +11246,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9624,7 +11282,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9675,7 +11333,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9684,7 +11342,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9729,7 +11387,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9769,8 +11427,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9796,7 +11463,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9819,6 +11486,8 @@ export interface operations {
                 /** @description Sort field; prefix with "-" for descending. One of: sortOrder, name, key, createdAt, updatedAt */
                 sort?: "sortOrder" | "-sortOrder" | "name" | "-name" | "key" | "-key" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
                 isActive?: "true" | "false";
+                /** @description Lists that depend on this list; "none" for lists without a parent list */
+                parentListId?: "none" | string;
             };
             header?: never;
             path?: never;
@@ -9844,8 +11513,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9862,7 +11540,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9889,6 +11567,7 @@ export interface operations {
                     description?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parentListId?: string | null;
                 };
             };
         };
@@ -9911,7 +11590,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9920,7 +11599,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9956,7 +11635,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9996,8 +11675,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10023,7 +11711,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10061,7 +11749,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10070,7 +11758,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10106,7 +11794,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10135,6 +11823,7 @@ export interface operations {
                     description?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parentListId?: string | null;
                 };
             };
         };
@@ -10157,7 +11846,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10166,7 +11855,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10211,7 +11900,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10251,8 +11940,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10278,7 +11976,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10303,6 +12001,8 @@ export interface operations {
                 /** @description Values of these lists (comma-separated ids) */
                 listId?: string;
                 isActive?: "true" | "false";
+                /** @description Values that belong to this value of the parent list (what a dependent dropdown offers once its parent is chosen); "none" for values without a parent value */
+                parentValueId?: "none" | string;
             };
             header?: never;
             path?: never;
@@ -10328,8 +12028,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10346,7 +12055,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10376,6 +12085,7 @@ export interface operations {
                     color?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parentValueId?: string | null;
                 };
             };
         };
@@ -10398,7 +12108,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10407,7 +12117,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10443,7 +12153,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10483,8 +12193,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10510,7 +12229,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10548,7 +12267,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10557,7 +12276,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10593,7 +12312,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10623,6 +12342,7 @@ export interface operations {
                     color?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
+                    parentValueId?: string | null;
                 };
             };
         };
@@ -10645,7 +12365,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10654,7 +12374,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10699,7 +12419,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10739,8 +12459,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10766,7 +12495,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10795,7 +12524,7 @@ export interface operations {
                     "application/json": components["schemas"]["StarterTemplateList"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10804,7 +12533,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10822,7 +12551,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10862,7 +12591,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10871,7 +12600,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10898,7 +12627,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10927,8 +12656,17 @@ export interface operations {
                     "application/json": components["schemas"]["UiSettings"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10945,7 +12683,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10995,7 +12733,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11004,7 +12742,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11040,7 +12778,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11078,7 +12816,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11121,7 +12859,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11130,7 +12868,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11148,7 +12886,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11188,7 +12926,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11197,7 +12935,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11224,7 +12962,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11275,7 +13013,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11284,7 +13022,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11329,7 +13067,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11394,7 +13132,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11446,7 +13184,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11455,7 +13193,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11482,7 +13220,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11520,7 +13258,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11529,7 +13267,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11556,7 +13294,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11576,10 +13314,10 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values";
                 /** @description History of these entities */
                 entityId?: string;
-                action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge";
+                action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes";
                 /** @description Changes made by this user (their id) */
                 actorId?: string;
                 /** @description Case-insensitive substring */
@@ -11614,7 +13352,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11623,7 +13361,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11641,7 +13379,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11691,7 +13429,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11700,7 +13438,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11718,7 +13456,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11770,7 +13508,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11779,7 +13517,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11815,7 +13553,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11855,7 +13593,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11864,7 +13602,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11891,7 +13629,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11929,7 +13667,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11938,7 +13676,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11974,7 +13712,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12026,7 +13764,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12035,7 +13773,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12080,7 +13818,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12127,7 +13865,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12136,7 +13874,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12147,6 +13885,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12172,7 +13919,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12219,7 +13966,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12228,7 +13975,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12246,7 +13993,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12284,6 +14031,8 @@ export interface operations {
                         edit: boolean;
                         delete: boolean;
                     }[];
+                    /** @description Holders must set up two-factor authentication (default false) */
+                    requireMfa?: boolean;
                 };
             };
         };
@@ -12306,7 +14055,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12315,7 +14064,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12351,7 +14100,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12391,7 +14140,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12400,7 +14149,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12427,7 +14176,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12465,7 +14214,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12474,7 +14223,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12510,7 +14259,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12550,6 +14299,11 @@ export interface operations {
                         edit: boolean;
                         delete: boolean;
                     }[];
+                    /**
+                     * @description Holders must set up two-factor authentication. The only field the
+                     *     built-in Administrator profile accepts.
+                     */
+                    requireMfa?: boolean;
                 };
             };
         };
@@ -12572,7 +14326,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12581,7 +14335,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12626,7 +14380,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12672,7 +14426,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12681,7 +14435,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12726,7 +14480,894 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listApiTokens: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Case-insensitive substring search */
+                q?: string;
+                /** @description Sort field; prefix with "-" for descending. One of: createdAt, name, expiresAt, lastUsedAt */
+                sort?: "createdAt" | "-createdAt" | "name" | "-name" | "expiresAt" | "-expiresAt" | "lastUsedAt" | "-lastUsedAt";
+                /** @description One or more ids, comma-separated */
+                userId?: string;
+                status?: "active" | "expired" | "revoked";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiTokenList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createApiToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description What the token is for, e.g. "backup script" */
+                    name: string;
+                    /**
+                     * Format: uuid
+                     * @description The owner; default: yourself. Use a dedicated user for a service token.
+                     */
+                    userId?: string;
+                    /**
+                     * Format: uuid
+                     * @description The scope: the token may do what both this profile and its owner allow
+                     */
+                    profileId: string;
+                    /**
+                     * Format: date-time
+                     * @description In the future, at most 366 days from now (ISO 8601)
+                     */
+                    expiresAt: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedApiToken"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getApiToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiToken"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    revokeApiToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listIdentityProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Vec"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createIdentityProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    kind: "oidc" | "ldap";
+                    name: string;
+                    /** @description Default true */
+                    isEnabled?: boolean;
+                    sortOrder?: number;
+                    caCertificate?: string | null;
+                    /** @description Required for kind oidc */
+                    oidc?: {
+                        issuerUrl: string;
+                        clientId: string;
+                        clientSecret?: string | null;
+                        /** @description Space-separated; openid is always added. Default: profile email */
+                        scopes?: string;
+                        usernameClaim?: string;
+                        groupsClaim?: string;
+                    } | null;
+                    /** @description Required for kind ldap */
+                    ldap?: {
+                        url: string;
+                        /** @description Default: true for ldap://, false for ldaps:// */
+                        startTls?: boolean;
+                        bindDn?: string | null;
+                        bindPassword?: string | null;
+                        userBaseDn: string;
+                        userFilter?: string;
+                        usernameAttribute?: string;
+                        displayNameAttribute?: string;
+                        emailAttribute?: string;
+                        groupAttribute?: string;
+                    } | null;
+                    /** @description Replaces all mappings of the provider */
+                    groupMappings?: {
+                        group: string;
+                        /** Format: uuid */
+                        profileId: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityProvider"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getIdentityProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityProvider"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteIdentityProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateIdentityProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    /** @description false stops sign-ins through it and ends its accounts' sessions */
+                    isEnabled?: boolean;
+                    sortOrder?: number;
+                    caCertificate?: string | null;
+                    /** @description Only for kind oidc; fields left out are kept */
+                    oidc?: {
+                        issuerUrl?: string;
+                        clientId?: string;
+                        clientSecret?: string | null;
+                        /** @description Space-separated; openid is always added. Default: profile email */
+                        scopes?: string;
+                        usernameClaim?: string;
+                        groupsClaim?: string;
+                    } | null;
+                    /** @description Only for kind ldap; fields left out are kept */
+                    ldap?: {
+                        url?: string;
+                        startTls?: boolean;
+                        bindDn?: string | null;
+                        bindPassword?: string | null;
+                        userBaseDn?: string;
+                        userFilter?: string;
+                        usernameAttribute?: string;
+                        displayNameAttribute?: string;
+                        emailAttribute?: string;
+                        groupAttribute?: string;
+                    } | null;
+                    /** @description Replaces all mappings of the provider */
+                    groupMappings?: {
+                        group: string;
+                        /** Format: uuid */
+                        profileId: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityProvider"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    testIdentityProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    username?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionTest"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12755,7 +15396,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConfigFile"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12764,7 +15405,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12782,7 +15423,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12813,7 +15454,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 2 and reads 1 and 2
+                     * @description File format version; this server writes version 3 and reads 1 to 3
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
@@ -12855,7 +15496,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not signed in, session expired, or wrong credentials (code UNAUTHENTICATED) */
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12864,7 +15505,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12909,7 +15550,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE) */
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
             503: {
                 headers: {
                     [name: string]: unknown;

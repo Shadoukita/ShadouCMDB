@@ -25,6 +25,9 @@ pub struct LiveSession {
     pub csrf_token: String,
     /// last_seen_at is more than a minute old: worth an UPDATE.
     pub needs_touch: bool,
+    /// A profile the user holds requires MFA and they have not set it up.
+    /// Never for accounts of an identity provider: the provider enforces MFA.
+    pub mfa_enrolment_required: bool,
 }
 
 pub async fn create_session(
@@ -51,8 +54,12 @@ pub async fn create_session(
 }
 
 pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -> sqlx::Result<Option<LiveSession>> {
-    let row: Option<(Uuid, Uuid, String, String, bool)> = sqlx::query_as(
-        "SELECT s.id, u.id, u.username, s.csrf_token, s.last_seen_at < now() - interval '1 minute'
+    let row: Option<(Uuid, Uuid, String, String, bool, bool)> = sqlx::query_as(
+        "SELECT s.id, u.id, u.username, s.csrf_token, s.last_seen_at < now() - interval '1 minute',
+                u.identity_provider_id IS NULL
+                AND EXISTS (SELECT 1 FROM user_permission_profiles up JOIN permission_profiles p ON p.id = up.profile_id
+                        WHERE up.user_id = u.id AND p.require_mfa)
+                AND NOT EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL)
          FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval AND u.is_active",
     )
@@ -60,12 +67,13 @@ pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -
     .bind(interval(idle))
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch)| LiveSession {
+    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, mfa_enrolment_required)| LiveSession {
         session_id,
         user_id,
         username,
         csrf_token,
         needs_touch,
+        mfa_enrolment_required,
     }))
 }
 
@@ -177,10 +185,12 @@ pub struct UserRow {
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Set for an account that signs in through an identity provider.
+    pub identity_provider_id: Option<Uuid>,
 }
 
-pub const USER_COLUMNS: &str =
-    "id, username, display_name, email, is_active, password_changed_at, last_login_at, created_at, updated_at";
+pub const USER_COLUMNS: &str = "id, username, display_name, email, is_active, password_changed_at, last_login_at, \
+     created_at, updated_at, identity_provider_id";
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserProfileRow {
@@ -214,20 +224,34 @@ pub async fn get_user(conn: &mut PgConnection, id: Uuid, for_update: bool) -> sq
 pub struct LoginRow {
     pub id: Uuid,
     pub username: String,
-    pub password_hash: String,
+    /// None for an account that signs in through an identity provider.
+    pub password_hash: Option<String>,
     pub is_active: bool,
+    /// The provider the account belongs to, and its kind (`oidc`, `ldap`).
+    pub provider: Option<(Uuid, String)>,
 }
 
 pub async fn find_for_login(pool: &PgPool, username: &str) -> sqlx::Result<Option<LoginRow>> {
-    let row: Option<(Uuid, String, String, bool)> =
-        sqlx::query_as("SELECT id, username, password_hash, is_active FROM users WHERE lower(username) = lower($1)")
-            .bind(username)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|(id, username, password_hash, is_active)| LoginRow { id, username, password_hash, is_active }))
+    type Row = (Uuid, String, Option<String>, bool, Option<Uuid>, Option<String>);
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT u.id, u.username, u.password_hash, u.is_active, u.identity_provider_id, p.kind
+         FROM users u LEFT JOIN identity_providers p ON p.id = u.identity_provider_id
+         WHERE lower(u.username) = lower($1)",
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id, username, password_hash, is_active, provider_id, kind)| LoginRow {
+        id,
+        username,
+        password_hash,
+        is_active,
+        provider: provider_id.zip(kind),
+    }))
 }
 
-pub async fn password_hash(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<String>> {
+/// None: no such user; Some(None): the user signs in through an identity provider.
+pub async fn password_hash(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<Option<String>>> {
     sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1").bind(id).fetch_optional(conn).await
 }
 
@@ -312,12 +336,13 @@ pub struct ProfileRow {
     pub name: String,
     pub description: Option<String>,
     pub is_builtin: bool,
+    pub require_mfa: bool,
     pub user_count: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-pub const PROFILE_COLUMNS: &str = "p.id, p.name, p.description, p.is_builtin,
+pub const PROFILE_COLUMNS: &str = "p.id, p.name, p.description, p.is_builtin, p.require_mfa,
     (SELECT count(*) FROM user_permission_profiles up WHERE up.profile_id = p.id) AS user_count,
     p.created_at, p.updated_at";
 
@@ -352,12 +377,20 @@ pub async fn existing_classes(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Re
     sqlx::query_scalar("SELECT id FROM ci_classes WHERE id = ANY($1)").bind(ids).fetch_all(conn).await
 }
 
-pub async fn insert_profile(conn: &mut PgConnection, name: &str, description: Option<&str>) -> sqlx::Result<Uuid> {
-    sqlx::query_scalar("INSERT INTO permission_profiles (name, description) VALUES ($1, $2) RETURNING id")
-        .bind(name)
-        .bind(description)
-        .fetch_one(conn)
-        .await
+pub async fn insert_profile(
+    conn: &mut PgConnection,
+    name: &str,
+    description: Option<&str>,
+    require_mfa: bool,
+) -> sqlx::Result<Uuid> {
+    sqlx::query_scalar(
+        "INSERT INTO permission_profiles (name, description, require_mfa) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(name)
+    .bind(description)
+    .bind(require_mfa)
+    .fetch_one(conn)
+    .await
 }
 
 pub async fn update_profile(
@@ -365,11 +398,13 @@ pub async fn update_profile(
     id: Uuid,
     name: Option<&str>,
     description: Option<Option<&str>>,
+    require_mfa: Option<bool>,
 ) -> sqlx::Result<()> {
     sqlx::query(
         "UPDATE permission_profiles
          SET name = COALESCE($2, name),
              description = CASE WHEN $3 THEN $4 ELSE description END,
+             require_mfa = COALESCE($5, require_mfa),
              updated_at = now()
          WHERE id = $1",
     )
@@ -377,6 +412,7 @@ pub async fn update_profile(
     .bind(name)
     .bind(description.is_some())
     .bind(description.flatten())
+    .bind(require_mfa)
     .execute(conn)
     .await?;
     Ok(())

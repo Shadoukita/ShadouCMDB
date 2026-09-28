@@ -20,11 +20,14 @@ use serde_json::{Map, Value};
 use crate::http::error::{FieldError, FieldLocation};
 
 /// Custom messages for the patterns the API uses, instead of echoing the regex.
-fn pattern_message(pattern: &str) -> Option<&'static str> {
+pub fn pattern_message(pattern: &str) -> Option<&'static str> {
     Some(match pattern {
         super::schemas::KEY_PATTERN => "Must be lower_snake_case: a letter, then letters, digits or _ (max 63)",
         super::schemas::HOSTNAME_PATTERN => "Letters, digits, \".\", \"_\" and \"-\", starting with a letter or digit",
         super::schemas::NOT_BLANK_PATTERN => "Must not be blank",
+        super::schemas::IDENT_PATTERN => {
+            "Letters, digits, \".\", \"_\" and \"-\", starting with a letter or digit (max 64)"
+        }
         super::schemas::USERNAME_PATTERN => {
             "Letters, digits, \".\", \"_\", \"@\" and \"-\", starting with a letter or digit (max 64)"
         }

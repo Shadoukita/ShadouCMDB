@@ -39,6 +39,10 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   audit_log: "Audit log",
   areas: "Area",
   schema_changes: "Schema change",
+  api_tokens: "API token",
+  identity_providers: "Identity provider",
+  lookup_lists: "Lookup list",
+  lookup_list_values: "Lookup list value",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));
 const ACTION_SET: Record<Action, true> = {
@@ -52,6 +56,12 @@ const ACTION_SET: Record<Action, true> = {
   logout: true,
   "session.revoke": true,
   "audit.purge": true,
+  "token.use": true,
+  "mfa.enrol": true,
+  "mfa.disable": true,
+  "mfa.failure": true,
+  "mfa.recovery_code_used": true,
+  "mfa.recovery_codes": true,
 };
 const ACTIONS = Object.keys(ACTION_SET) as Action[];
 const entityLabel = (t: string) => ENTITY_TYPES.find((e) => e.value === t)?.label ?? t;
@@ -101,6 +111,11 @@ function recordName(e: AuditEntry): string {
       const scope = str(snap.scope) ?? "?";
       const window = str(snap.olderThan);
       return window ? `Pruned ${scope} entries older than ${window}` : `Pruned ${scope} entries`;
+    }
+    if (e.action === "token.use") {
+      // A request made with an API token: which token, what it called, and whether it was let in.
+      const token = str(snap.tokenName) ?? str(snap.tokenPrefix) ?? "(token)";
+      return `${token}: ${str(snap.method) ?? "?"} ${str(snap.path) ?? "?"} (${str(snap.outcome) ?? "?"})`;
     }
     if (e.entityType === "sessions") {
       // Sign-in events: the (attempted) username and the client address. Both are

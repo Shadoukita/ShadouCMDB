@@ -1,4 +1,4 @@
-//! `shadoucmdb audit-verify`: checks the audit_log hash chain (migration 0010).
+//! `shadoucmdb audit-verify`: checks the audit_log hash chain (migration 0018).
 //!
 //! Prints the chain head (sequence number and hash). Compare it with the
 //! `rowHash` of the same `chainSeq` in the SIEM (`AUDIT_EXPORT`): someone who

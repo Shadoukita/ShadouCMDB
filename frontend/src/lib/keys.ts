@@ -1,9 +1,16 @@
 /** Keys of data model rows: lower case, digits and underscores, starting with a letter, at most 63 characters (the API's rule). */
 export const KEY_PATTERN = /^[a-z][a-z0-9_]{0,62}$/;
 
-/** Suggests a key from a display name ("Load balancer (L7)" → "load_balancer_l7"). */
+const GERMAN: Record<string, string> = { ä: "ae", ö: "oe", ü: "ue", Ä: "ae", Ö: "oe", Ü: "ue", ß: "ss", ẞ: "ss" };
+
+/**
+ * Suggests a key from a display name ("Load balancer (L7)" → "load_balancer_l7",
+ * "Größe" → "groesse"), the way the API derives technical names. The API's
+ * answer (GET /technical-names) is authoritative; this is the instant guess.
+ */
 export function suggestKey(name: string): string {
   const key = name
+    .replace(/[äöüÄÖÜßẞ]/g, (c) => GERMAN[c])
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()

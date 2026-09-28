@@ -87,7 +87,7 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
       aria-controls="global-search-list"
       :aria-activedescendant="active >= 0 ? `gs-${active}` : undefined"
       autocomplete="off"
-      placeholder="Search CIs by name, hostname, IP, serial, attribute…  ( / )"
+      placeholder="Search CIs by label, ident, IP, attribute…  ( / )"
       :value="text"
       @input="onInput"
       @focus="onFocus"
@@ -106,7 +106,7 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
         @mousedown.prevent="go(`/cis/${h.item.id}`)"
         @mouseenter="active = i"
       >
-        <strong>{{ h.item.name }}</strong>
+        <strong>{{ h.item.label }}</strong>
         <span class="muted">{{ h.item.class.name }}</span>
         <span v-if="h.matches[0]" class="muted">
           {{ h.matches[0].label }}: <span class="mono">{{ h.matches[0].value }}</span>

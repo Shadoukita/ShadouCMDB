@@ -35,6 +35,18 @@ export function toApiValue(def: Pick<AttributeShape, "dataType">, value: FormVal
   }
 }
 
+/**
+ * The current local date ("date") or date and time (anything else) as a form value.
+ * Double-clicking a date or datetime input fills it in with this.
+ */
+export function nowFormValue(dataType: "date" | "datetime"): FormValue {
+  const v = isoToLocalInput(new Date().toISOString());
+  return dataType === "date" ? v.slice(0, 10) : v;
+}
+
+/** Tooltip of date and datetime inputs. */
+export const NOW_HINT = "Double-click to set the current date and time";
+
 function isoToLocalInput(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;

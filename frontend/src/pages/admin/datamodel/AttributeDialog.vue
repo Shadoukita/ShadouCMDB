@@ -11,21 +11,28 @@ import {
   type AttributeUpdateBody,
   type DataType,
 } from "../../../api/datamodel";
-import { useCiClasses, type CiClass } from "../../../api/queries";
+import { useCiClasses, useClassAttributes, type CiClass } from "../../../api/queries";
 import AttributeInput from "../../../components/AttributeInput.vue";
 import FormDialog from "../../../components/FormDialog.vue";
+import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
+import TechnicalNameField from "../../../components/TechnicalNameField.vue";
 import { toApiValue, toFormValue, type AttributeShape } from "../../../lib/attributeValues";
 import { DATA_TYPES, validationKind } from "../../../lib/dataTypes";
-import { keyError, suggestKey } from "../../../lib/keys";
+import { keyError } from "../../../lib/keys";
+import { useSchemaChangeFlow } from "../../../lib/schemaChange";
 import { flattenTree } from "../../../lib/tree";
 import FormErrorBanner from "../../form/FormErrorBanner.vue";
 import FormField from "../../form/FormField.vue";
 
 /**
- * Add or edit one attribute definition. Key, data type, referenced class and
- * lookup list are fixed after creation (stored values depend on them); every
- * other setting can change. The default value is entered with the same input the
- * CI form uses for that type.
+ * Add or edit one attribute definition: a typed column of the class's table.
+ * The technical name (the column), referenced class and lookup list are fixed
+ * after creation. The data type can change between the plain types; the server
+ * dry-runs the conversion of every stored value and refuses the change if one
+ * would not convert. Every save is previewed as DDL first. The default value is
+ * entered with the same input the CI form uses for that type. A lookup attribute
+ * on a list with a parent list names its parent field: the attribute (on this
+ * class or an ancestor) bound to the parent list, whose value narrows its choices.
  */
 const props = defineProps<{
   open: boolean;
@@ -39,17 +46,19 @@ const emit = defineEmits<{ close: []; saved: [message: string] }>();
 
 const classes = useCiClasses();
 const lists = useLookupLists();
+const classAttrs = useClassAttributes(() => props.cls.id);
 const create = useCreateAttribute();
 const update = usePatch<AttributeDefinition>("attribute-definitions");
-const busy = computed(() => create.isPending.value || update.isPending.value);
+const flow = useSchemaChangeFlow();
+const busy = computed(() => create.isPending.value || update.isPending.value || flow.state.loading);
 const isNew = computed(() => !props.def);
 
 const label = ref("");
 const key = ref("");
-const keyTouched = ref(false);
 const dataType = ref<DataType>("text");
 const referenceClassId = ref("");
 const lookupListId = ref("");
+const parentAttributeId = ref("");
 const isRequired = ref(false);
 const groupName = ref("");
 const helpText = ref("");
@@ -78,10 +87,10 @@ function seed() {
   const v = (d?.validation ?? {}) as Validation;
   label.value = d?.label ?? "";
   key.value = d?.key ?? "";
-  keyTouched.value = !!d;
   dataType.value = (d?.dataType as DataType) ?? "text";
   referenceClassId.value = d?.referenceClassId ?? "";
   lookupListId.value = d?.lookupListId ?? "";
+  parentAttributeId.value = d?.parentAttributeId ?? "";
   isRequired.value = d?.isRequired ?? false;
   groupName.value = d ? (d.groupName ?? "") : (props.defaultSection ?? "");
   helpText.value = d?.helpText ?? "";
@@ -103,13 +112,17 @@ watch(
   ([open]) => open && seed(),
   { immediate: true },
 );
-watch(label, (l) => {
-  if (isNew.value && !keyTouched.value) key.value = suggestKey(l);
+// A default belongs to one type; changing the type clears it.
+watch(dataType, (t) => {
+  const d = props.def;
+  defaultValue.value = d && t === d.dataType ? toFormValue(d, d.defaultValue) : "";
 });
-// A default belongs to one type; changing the type (only possible before creation) clears it.
-watch(dataType, () => {
-  if (isNew.value) defaultValue.value = "";
-});
+
+/** Types a stored column can be converted between; reference and lookup columns are foreign keys and stay what they are. */
+const CONVERTIBLE = new Set<DataType>(["text", "number", "integer", "boolean", "enum", "date", "datetime", "ip", "cidr"]);
+const typeLocked = computed(() => !isNew.value && !CONVERTIBLE.has(props.def!.dataType as DataType));
+const typeOptions = computed(() => (isNew.value ? DATA_TYPES : DATA_TYPES.filter((t) => (typeLocked.value ? t.key === dataType.value : CONVERTIBLE.has(t.key as DataType)))));
+const typeChanged = computed(() => !isNew.value && dataType.value !== props.def?.dataType);
 
 const enumValues = computed(() =>
   enumText.value
@@ -130,6 +143,24 @@ const concreteClasses = computed(() => flattenTree(classes.data.value ?? []));
 const typeHint = computed(() => DATA_TYPES.find((t) => t.key === dataType.value)?.hint || undefined);
 const refClassName = computed(() => classes.data.value?.find((c) => c.id === referenceClassId.value)?.name);
 const listName = computed(() => lists.data.value?.find((l) => l.id === lookupListId.value)?.name);
+/** The parent list of the chosen list, if it depends on one. */
+const parentList = computed(() => {
+  const pid = lists.data.value?.find((l) => l.id === lookupListId.value)?.parentListId;
+  return pid ? lists.data.value?.find((l) => l.id === pid) : undefined;
+});
+/** Lookup attributes of this class and its ancestors bound to the parent list. */
+const parentCandidates = computed(() =>
+  parentList.value
+    ? (classAttrs.data.value ?? []).filter((a) => a.dataType === "lookup" && a.lookupListId === parentList.value!.id && a.id !== props.def?.id)
+    : [],
+);
+// A new attribute on a dependent list starts with its parent field when there is only one candidate.
+watch([lookupListId, parentCandidates], () => {
+  if (!isNew.value) return;
+  if (!parentCandidates.value.some((a) => a.id === parentAttributeId.value)) {
+    parentAttributeId.value = parentCandidates.value.length === 1 ? parentCandidates.value[0].id : "";
+  }
+});
 
 const apiErrors = computed(() => (error.value instanceof ApiError ? error.value.fieldErrors() : {}));
 /** Errors for a field and its sub-paths (enumValues.2, validation.min). */
@@ -139,7 +170,7 @@ function errorFor(field: string): string | undefined {
     .map(([, m]) => m);
   return messages.length ? messages.join("; ") : undefined;
 }
-const PLACED = ["label", "key", "dataType", "referenceClassId", "lookupListId", "enumValues", "validation", "groupName", "helpText", "description", "defaultValue", "isRequired"];
+const PLACED = ["label", "key", "dataType", "referenceClassId", "lookupListId", "parentAttributeId", "enumValues", "validation", "groupName", "helpText", "description", "defaultValue", "isRequired"];
 const unplaced = computed(() =>
   error.value instanceof ApiError ? error.value.details.filter((d) => !PLACED.some((f) => d.field === f || d.field.startsWith(`${f}.`))) : [],
 );
@@ -195,8 +226,7 @@ async function submit() {
     ...(dataType.value === "enum" ? { enumValues: enumValues.value } : {}),
   };
   const dv = dataType.value === "reference" ? null : (toApiValue(draft.value, defaultValue.value) as string | number | boolean | null);
-  try {
-    if (isNew.value) {
+  if (isNew.value) {
       const body: AttributeCreateBody = {
         ...common,
         classId: props.cls.id,
@@ -205,19 +235,44 @@ async function submit() {
         sortOrder: props.nextSortOrder,
         ...(dataType.value === "reference" ? { referenceClassId: referenceClassId.value } : {}),
         ...(dataType.value === "lookup" ? { lookupListId: lookupListId.value } : {}),
+        ...(dataType.value === "lookup" && parentList.value && parentAttributeId.value ? { parentAttributeId: parentAttributeId.value } : {}),
         ...(dv !== null ? { defaultValue: dv } : {}),
       };
-      const created = await create.mutateAsync(body);
-      emit("saved", `Added attribute ${created.label}. It shows on ${props.cls.name} forms now.`);
-    } else {
-      const body: AttributeUpdateBody = { ...common, ...(dataType.value === "reference" ? {} : { defaultValue: dv }) };
-      const saved = await update.mutateAsync({ id: props.def!.id, body });
-      emit("saved", `Saved attribute ${saved.label}.`);
-    }
-    emit("close");
-  } catch (e) {
-    error.value = e;
+    const outcome = await flow.run({
+      title: `Add attribute “${body.label}” to ${props.cls.name}`,
+      intro: `Adds the column “${body.key}” to the table ${props.cls.tableName}.`,
+      preview: { operation: "createField", body },
+      apply: () => create.mutateAsync(body),
+      applyLabel: "Add attribute",
+      alwaysShow: true,
+    });
+    if (outcome.status === "applied") {
+      emit("saved", `Added attribute ${(outcome.result as AttributeDefinition).label}. It shows on ${props.cls.name} forms now.`);
+      emit("close");
+    } else if (outcome.status === "refused") error.value = outcome.error;
+    return;
   }
+  const d = props.def!;
+  const body: AttributeUpdateBody = {
+    ...common,
+    ...(typeChanged.value ? { dataType: dataType.value } : {}),
+    ...(dataType.value === "reference" ? {} : { defaultValue: dv }),
+    ...(dataType.value === "lookup" && (parentAttributeId.value || null) !== d.parentAttributeId ? { parentAttributeId: parentAttributeId.value || null } : {}),
+  };
+  const outcome = await flow.run({
+    title: `Save attribute “${body.label}”`,
+    intro: typeChanged.value
+      ? `Converts the column “${d.key}” from ${d.dataType} to ${dataType.value}. Every stored value was converted in a dry run; the change is refused if any would not convert.`
+      : undefined,
+    preview: { operation: "updateField", id: d.id, body },
+    apply: () => update.mutateAsync({ id: d.id, body }),
+    applyLabel: "Save attribute",
+    alwaysShow: typeChanged.value || (isRequired.value && !d.isRequired),
+  });
+  if (outcome.status === "applied") {
+    emit("saved", `Saved attribute ${(outcome.result as AttributeDefinition).label}.`);
+    emit("close");
+  } else if (outcome.status === "refused") error.value = outcome.error;
 }
 </script>
 
@@ -225,7 +280,7 @@ async function submit() {
   <FormDialog
     :open="open"
     :title="isNew ? `New attribute on ${cls.name}` : `Edit attribute “${def?.label}”`"
-    :submit-label="isNew ? 'Add attribute' : 'Save attribute'"
+    :submit-label="isNew ? 'Preview and add…' : 'Save attribute'"
     :busy="busy"
     wide
     @submit="submit"
@@ -236,22 +291,32 @@ async function submit() {
       <FormField id="ad-label" v-slot="p" label="Label" required :error="errorFor('label')">
         <input :id="p.id" v-model="label" type="text" maxlength="200" autofocus :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
       </FormField>
-      <FormField id="ad-key" v-slot="p" label="Key" :required="isNew" :error="errorFor('key')" :hint="isNew ? 'Cannot change later' : 'Fixed after creation'">
-        <input
-          :id="p.id"
-          v-model="key"
-          type="text"
-          class="mono"
-          spellcheck="false"
-          :readonly="!isNew"
-          :aria-invalid="p.invalid || undefined"
-          :aria-describedby="p.describedBy"
-          @input="keyTouched = true"
-        />
-      </FormField>
-      <FormField id="ad-type" v-slot="p" label="Data type" :required="isNew" :error="errorFor('dataType')" :hint="isNew ? typeHint : 'Fixed after creation'">
-        <select :id="p.id" v-model="dataType" :disabled="!isNew" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
-          <option v-for="t in DATA_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
+      <TechnicalNameField
+        id="ad-key"
+        v-model="key"
+        kind="field"
+        :name="label"
+        :editable="isNew"
+        :class-id="cls.id"
+        :location="def ? `${cls.tableName}.${def.key}` : undefined"
+        :error="errorFor('key')"
+      />
+      <FormField
+        id="ad-type"
+        v-slot="p"
+        label="Data type"
+        required
+        :error="errorFor('dataType')"
+        :hint="
+          typeLocked
+            ? 'Reference and lookup columns cannot change type'
+            : typeChanged
+              ? 'Stored values are converted; refused if any would not convert'
+              : typeHint
+        "
+      >
+        <select :id="p.id" v-model="dataType" :disabled="typeLocked" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
+          <option v-for="t in typeOptions" :key="t.key" :value="t.key">{{ t.label }}</option>
         </select>
       </FormField>
       <FormField v-if="dataType === 'reference'" id="ad-ref-class" v-slot="p" label="Refers to class" :required="isNew" :error="errorFor('referenceClassId')" hint="Its subclasses are allowed too">
@@ -267,7 +332,26 @@ async function submit() {
           <option v-for="l in lists.data.value ?? []" :key="l.id" :value="l.id">{{ l.name }}{{ l.isActive ? "" : " (archived)" }}</option>
         </select>
         <input v-else :id="p.id" type="text" readonly :value="listName ?? lookupListId" :aria-describedby="p.describedBy" />
-        <span v-if="isNew" class="hint"><RouterLink to="/admin/lookups/lists">Manage lookup lists</RouterLink></span>
+        <span v-if="isNew" class="hint"><RouterLink to="/admin/dropdowns">Manage dropdowns</RouterLink></span>
+      </FormField>
+      <FormField
+        v-if="dataType === 'lookup' && parentList"
+        id="ad-parent-attr"
+        v-slot="p"
+        :label="`Parent field (${parentList.name})`"
+        :error="errorFor('parentAttributeId')"
+        :hint="
+          parentCandidates.length
+            ? `CI forms offer only the ${listName ?? 'values'} of the ${parentList.name} chosen in this field`
+            : `No attribute of ${cls.name} or its parents uses the list ${parentList.name}: add one first. Without a parent field every value can be chosen.`
+        "
+      >
+        <select :id="p.id" v-model="parentAttributeId" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
+          <option value="">— none: every value can be chosen —</option>
+          <option v-for="a in parentCandidates" :key="a.id" :value="a.id">
+            {{ a.label }}{{ a.inherited ? ` (from ${a.definedOn.name})` : "" }}{{ a.isActive ? "" : " (retired)" }}
+          </option>
+        </select>
       </FormField>
       <FormField id="ad-section" v-slot="p" label="Form section" :error="errorFor('groupName')" hint="Attributes with the same section are shown together">
         <input :id="p.id" v-model="groupName" type="text" list="ad-sections" maxlength="100" placeholder="e.g. Hardware" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
@@ -281,6 +365,7 @@ async function submit() {
           <input id="ad-required" v-model="isRequired" type="checkbox" />
           Every CI of this class must have a value
         </label>
+        <span v-if="!isNew && isRequired && !def?.isRequired" class="hint">Refused while a CI of this class has no value</span>
         <span v-if="errorFor('isRequired')" class="error">{{ errorFor("isRequired") }}</span>
       </div>
       <FormField
@@ -332,4 +417,5 @@ async function submit() {
       </FormField>
     </div>
   </FormDialog>
+  <SchemaChangeDialog :flow="flow" />
 </template>

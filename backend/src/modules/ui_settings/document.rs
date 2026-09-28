@@ -13,7 +13,7 @@
 //! reports it as an [`Issue`], and the stored document keeps it in case the
 //! class comes back.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -26,22 +26,11 @@ use crate::http::error::{FieldError, FieldLocation};
 
 /// CI fields that are not attributes; attributes are `attributes.<key>`.
 #[cfg(test)]
-pub const BUILTIN_FIELDS: &[&str] = &[
-    "name",
-    "class",
-    "status",
-    "environment",
-    "owner",
-    "location",
-    "hostname",
-    "ipAddress",
-    "serialNumber",
-    "notes",
-    "createdAt",
-    "updatedAt",
-];
+pub const BUILTIN_FIELDS: &[&str] =
+    &["label", "ident", "class", "validFrom", "validUntil", "active", "createdAt", "updatedAt"];
 
-pub const FIELD_PATTERN: &str = "^(name|class|status|environment|owner|location|hostname|ipAddress|serialNumber|notes|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$";
+pub const FIELD_PATTERN: &str =
+    "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$";
 
 const ATTRIBUTE_PREFIX: &str = "attributes.";
 
@@ -61,14 +50,17 @@ fn key_list(description: &str, max: usize) -> Schema {
 fn class_keys_schema() -> Schema {
     key_list("CI class keys", 500)
 }
-fn status_keys_schema() -> Schema {
-    key_list("Status keys", 100)
-}
-fn environment_keys_schema() -> Schema {
-    key_list("Environment keys", 100)
-}
-fn location_keys_schema() -> Schema {
-    key_list("Location keys", 500)
+fn lookup_filters_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::Object)
+        .property_names(Some(string().pattern(Some(KEY_PATTERN))))
+        .additional_properties(Some(key_list("Value keys of the list", 500)))
+        .max_properties(Some(50))
+        .description(Some(
+            "Lookup list key -> value keys: CIs holding one of the values in a lookup attribute of that list, for \
+             every list given (e.g. {\"status\": [\"in_service\"], \"environment\": [\"production\"]})",
+        ))
+        .into()
 }
 
 fn field_list(description: &str) -> Schema {
@@ -82,18 +74,18 @@ fn field_list(description: &str) -> Schema {
 
 fn columns_schema() -> Schema {
     field_list(
-        "Columns in display order: built-in fields (name, class, status, environment, owner, location, hostname, \
-         ipAddress, serialNumber, notes, createdAt, updatedAt) or attributes.<key>",
+        "Columns in display order: built-in fields (label, ident, class, validFrom, validUntil, active, createdAt, \
+         updatedAt) or attributes.<key>",
     )
 }
 fn panel_fields_schema() -> Schema {
     field_list("Fields in display order (built-in fields or attributes.<key>)")
 }
 fn hidden_fields_schema() -> Schema {
-    field_list("Fields not shown on the detail page or the form (name cannot be hidden)")
+    field_list("Fields not shown on the detail page or the form")
 }
 fn read_only_fields_schema() -> Schema {
-    field_list("Fields shown but not editable on the form (name cannot be read-only)")
+    field_list("Fields shown but not editable on the form")
 }
 
 fn label_schema() -> Schema {
@@ -252,8 +244,8 @@ pub struct UiNavigation {
 #[serde(rename_all = "snake_case")]
 pub enum UiWidgetType {
     CountByClass,
-    CountByStatus,
-    CountByEnvironment,
+    /// CIs per value of a lookup list (`lookupListKey`), e.g. per status
+    CountByLookup,
     RecentChanges,
     /// A saved inventory search (`search`), showing its first `limit` CIs and the total
     SavedSearch,
@@ -280,7 +272,7 @@ pub enum UiSortDirection {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiListSort {
-    #[schema(pattern = "^(name|hostname|ipAddress|serialNumber|className|statusName|createdAt|updatedAt)$")]
+    #[schema(pattern = "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt)$")]
     pub field: String,
     #[serde(default)]
     #[schema(inline)]
@@ -294,12 +286,9 @@ pub struct UiListFilters {
     /// Search text
     #[schema(max_length = 200)]
     pub q: Option<String>,
-    #[schema(schema_with = status_keys_schema)]
-    pub status_keys: Vec<String>,
-    #[schema(schema_with = environment_keys_schema)]
-    pub environment_keys: Vec<String>,
-    #[schema(schema_with = location_keys_schema)]
-    pub location_keys: Vec<String>,
+    #[schema(schema_with = lookup_filters_schema)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub lookups: BTreeMap<String, Vec<String>>,
 }
 
 /// A stored inventory search
@@ -339,6 +328,10 @@ pub struct UiWidget {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schema(schema_with = class_keys_schema)]
     pub class_keys: Vec<String>,
+    /// count_by_lookup: the lookup list whose values are counted (required for that type)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, pattern = "^[a-z][a-z0-9_]{0,62}$")]
+    pub lookup_list_key: Option<String>,
     /// saved_search: the search (required for that type)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
@@ -377,11 +370,74 @@ pub struct UiListView {
     pub page_size: Option<i64>,
 }
 
-/// A panel (card) on the detail page and the form
+/// Grid columns of a section that does not say (and of converted v1 panels).
+pub const DEFAULT_COLUMNS: u8 = 3;
+/// Core fields of every CI: a layout can move them but never hide them.
+pub const CORE_FIELDS: &[&str] = &["ident", "validFrom", "validUntil"];
+
+fn default_columns() -> u8 {
+    DEFAULT_COLUMNS
+}
+fn default_width() -> u8 {
+    1
+}
+
+fn layout_field_schema() -> Schema {
+    string().pattern(Some(FIELD_PATTERN)).description(Some("A built-in field or attributes.<key>")).into()
+}
+
+/// A field on a section's grid. Fields fill the grid row by row in the order given.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiLayoutField {
+    #[schema(schema_with = layout_field_schema)]
+    pub field: String,
+    /// Grid columns the field spans, at most the section's `columns`
+    #[serde(default = "default_width")]
+    #[schema(minimum = 1, maximum = 4, default = 1)]
+    pub width: u8,
+}
+
+/// A section (card) of a tab: a heading and a grid of fields
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiLayoutSection {
+    /// Unique within the layout (across its tabs)
+    #[schema(schema_with = key_schema)]
+    pub key: String,
+    #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
+    pub label: String,
+    /// Grid columns on a wide screen; narrow screens use fewer
+    #[serde(default = "default_columns")]
+    #[schema(minimum = 1, maximum = 4, default = 3)]
+    pub columns: u8,
+    #[serde(default)]
+    #[schema(max_items = 200)]
+    pub fields: Vec<UiLayoutField>,
+    /// Start collapsed on the detail page
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+/// A tab of the detail page and the form
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiLayoutTab {
+    /// Unique among the layout's tabs
+    #[schema(schema_with = key_schema)]
+    pub key: String,
+    #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
+    pub label: String,
+    #[serde(default)]
+    #[schema(max_items = 50)]
+    pub sections: Vec<UiLayoutSection>,
+}
+
+/// A panel of the layout format before tabs (v1). Accepted on input and converted to a section of one
+/// "General" tab; never returned.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiLayoutPanel {
-    /// Unique within the layout
     #[schema(schema_with = key_schema)]
     pub key: String,
     #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
@@ -389,27 +445,82 @@ pub struct UiLayoutPanel {
     #[schema(schema_with = panel_fields_schema)]
     #[serde(default)]
     pub fields: Vec<String>,
-    /// Start collapsed on the detail page
     #[serde(default)]
     pub collapsed: bool,
 }
 
-/// Detail page and form layout of one class. Fields not placed in a panel
-/// follow in a trailing panel, grouped by attribute group as before.
+/// Detail page and form layout of one class (layout format v2): tabs of
+/// sections, each a grid of fields with a width. Fields the tabs do not place
+/// (and that are not hidden) follow at the end of the first tab, grouped by
+/// attribute group; so do attributes added to the class later.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "ClassLayoutInput")]
 pub struct UiClassLayout {
     #[schema(schema_with = key_schema)]
     pub class_key: String,
     #[serde(default)]
-    #[schema(max_items = 50)]
-    pub panels: Vec<UiLayoutPanel>,
+    #[schema(max_items = 20)]
+    pub tabs: Vec<UiLayoutTab>,
     #[schema(schema_with = hidden_fields_schema)]
     #[serde(default)]
     pub hidden_fields: Vec<String>,
     #[schema(schema_with = read_only_fields_schema)]
     #[serde(default)]
     pub read_only_fields: Vec<String>,
+    /// Layout format v1, still accepted (older exports, API clients and saved versions): converted to
+    /// one "General" tab with a section per panel and never returned. Send `tabs` instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(max_items = 50, deprecated, write_only)]
+    pub panels: Vec<UiLayoutPanel>,
+}
+
+/// What `UiClassLayout` is read from: either format, converted to v2.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClassLayoutInput {
+    class_key: String,
+    #[serde(default)]
+    tabs: Vec<UiLayoutTab>,
+    #[serde(default)]
+    hidden_fields: Vec<String>,
+    #[serde(default)]
+    read_only_fields: Vec<String>,
+    #[serde(default)]
+    panels: Vec<UiLayoutPanel>,
+}
+
+impl TryFrom<ClassLayoutInput> for UiClassLayout {
+    type Error = String;
+
+    fn try_from(l: ClassLayoutInput) -> Result<Self, String> {
+        if !l.panels.is_empty() && !l.tabs.is_empty() {
+            return Err("custom|Send tabs, or panels in the older layout format, not both".into());
+        }
+        let tabs = if l.panels.is_empty() { l.tabs } else { convert_panels(l.panels) };
+        Ok(UiClassLayout {
+            class_key: l.class_key,
+            tabs,
+            hidden_fields: l.hidden_fields,
+            read_only_fields: l.read_only_fields,
+            panels: Vec::new(),
+        })
+    }
+}
+
+/// Layout format v1 -> v2: the panels become the sections of one "General" tab, each field one column
+/// wide on a grid of [`DEFAULT_COLUMNS`]. Migration 0017 does the same to the stored settings.
+pub fn convert_panels(panels: Vec<UiLayoutPanel>) -> Vec<UiLayoutTab> {
+    let sections = panels
+        .into_iter()
+        .map(|p| UiLayoutSection {
+            key: p.key,
+            label: p.label,
+            columns: DEFAULT_COLUMNS,
+            fields: p.fields.into_iter().map(|field| UiLayoutField { field, width: 1 }).collect(),
+            collapsed: p.collapsed,
+        })
+        .collect();
+    vec![UiLayoutTab { key: "general".into(), label: "General".into(), sections }]
 }
 
 /// Every UI setting. All sections are optional; `{}` is the default UI.
@@ -539,6 +650,15 @@ impl UiSettingsDocument {
                         "Only allowed for recent_changes and saved_search widgets",
                     ));
                 }
+                match (w.kind, &w.lookup_list_key) {
+                    (UiWidgetType::CountByLookup, None) => {
+                        e.push(custom(at(format!("{p}.lookupListKey")), "Required for count_by_lookup widgets"))
+                    }
+                    (UiWidgetType::CountByLookup, _) | (_, None) => {}
+                    (_, Some(_)) => {
+                        e.push(custom(at(format!("{p}.lookupListKey")), "Only allowed for count_by_lookup widgets"))
+                    }
+                }
                 if !w.class_keys.is_empty() && w.kind != UiWidgetType::CountByClass {
                     e.push(custom(
                         at(format!("{p}.classKeys")),
@@ -561,23 +681,39 @@ impl UiSettingsDocument {
             if !seen.insert(l.class_key.as_str()) {
                 e.push(custom(at(format!("{p}.classKey")), "One layout per class"));
             }
-            let mut panels = HashSet::new();
+            let mut tabs = HashSet::new();
+            let mut sections = HashSet::new();
             let mut placed = HashSet::new();
-            for (j, panel) in l.panels.iter().enumerate() {
-                if !panels.insert(panel.key.as_str()) {
-                    e.push(custom(at(format!("{p}.panels.{j}.key")), "Panel keys must be unique in a layout"));
+            for (t, tab) in l.tabs.iter().enumerate() {
+                let pt = format!("{p}.tabs.{t}");
+                if !tabs.insert(tab.key.as_str()) {
+                    e.push(custom(at(format!("{pt}.key")), "Tab keys must be unique in a layout"));
                 }
-                for (k, f) in panel.fields.iter().enumerate() {
-                    if !placed.insert(f.as_str()) {
-                        e.push(custom(at(format!("{p}.panels.{j}.fields.{k}")), "A field can be in one panel only"));
+                for (j, s) in tab.sections.iter().enumerate() {
+                    let ps = format!("{pt}.sections.{j}");
+                    if !sections.insert(s.key.as_str()) {
+                        e.push(custom(at(format!("{ps}.key")), "Section keys must be unique in a layout"));
+                    }
+                    for (k, f) in s.fields.iter().enumerate() {
+                        if !placed.insert(f.field.as_str()) {
+                            e.push(custom(at(format!("{ps}.fields.{k}.field")), "A field can be placed once only"));
+                        }
+                        if f.width > s.columns {
+                            e.push(custom(
+                                at(format!("{ps}.fields.{k}.width")),
+                                format!("At most the section's {} column(s)", s.columns),
+                            ));
+                        }
                     }
                 }
             }
-            if let Some(k) = l.hidden_fields.iter().position(|f| f == "name") {
-                e.push(custom(at(format!("{p}.hiddenFields.{k}")), "The name field cannot be hidden"));
-            }
-            if let Some(k) = l.read_only_fields.iter().position(|f| f == "name") {
-                e.push(custom(at(format!("{p}.readOnlyFields.{k}")), "The name field cannot be read-only"));
+            for (k, f) in l.hidden_fields.iter().enumerate() {
+                if CORE_FIELDS.contains(&f.as_str()) {
+                    e.push(custom(
+                        at(format!("{p}.hiddenFields.{k}")),
+                        "Ident, valid from and valid until belong to every CI: move them, but they cannot be hidden",
+                    ));
+                }
             }
         }
         e
@@ -595,11 +731,14 @@ pub enum IssueCode {
     UnknownClass,
     /// The attribute is not defined on the class or its ancestors; the field is ignored
     UnknownAttribute,
-    UnknownStatus,
-    UnknownEnvironment,
-    UnknownLocation,
+    /// The lookup list does not exist; the filter or widget setting is ignored
+    UnknownLookupList,
+    /// The value is not in the lookup list; it is ignored
+    UnknownLookupValue,
     /// A required attribute is hidden or read-only on the form: CIs of the class cannot be created in the UI (kept, only flagged)
     RequiredFieldNotEditable,
+    /// A core field (ident, validFrom, validUntil) is hidden, e.g. in a restored older version; it is shown anyway
+    CoreFieldHidden,
 }
 
 /// A reference the effective settings ignore, or a setting worth a second look
@@ -640,50 +779,39 @@ impl Resolver<'_> {
             .collect()
     }
 
-    fn lookups(
-        &mut self,
-        path: &str,
-        keys: &[String],
-        known: fn(&Model) -> &HashSet<String>,
-        code: IssueCode,
-        what: &str,
-    ) -> Vec<String> {
-        let mut out = Vec::new();
-        for (i, k) in keys.iter().enumerate() {
-            if known(self.model).contains(k) {
-                out.push(k.clone());
-            } else {
-                self.flag(format!("{path}.{i}"), code, format!("{what} \"{k}\" does not exist"));
-            }
+    fn list_ok(&mut self, path: String, key: &str) -> bool {
+        if self.model.lookups.contains_key(key) {
+            return true;
         }
-        out
+        self.flag(path, IssueCode::UnknownLookupList, format!("Lookup list \"{key}\" does not exist"));
+        false
     }
 
+    /// Keeps the lists and values that exist.
     fn filters(&mut self, path: &str, f: &UiListFilters) -> UiListFilters {
-        UiListFilters {
-            q: f.q.clone(),
-            status_keys: self.lookups(
-                &format!("{path}.statusKeys"),
-                &f.status_keys,
-                |m| &m.statuses,
-                IssueCode::UnknownStatus,
-                "Status",
-            ),
-            environment_keys: self.lookups(
-                &format!("{path}.environmentKeys"),
-                &f.environment_keys,
-                |m| &m.environments,
-                IssueCode::UnknownEnvironment,
-                "Environment",
-            ),
-            location_keys: self.lookups(
-                &format!("{path}.locationKeys"),
-                &f.location_keys,
-                |m| &m.locations,
-                IssueCode::UnknownLocation,
-                "Location",
-            ),
+        let mut lookups = BTreeMap::new();
+        for (list, values) in &f.lookups {
+            let p = format!("{path}.lookups.{list}");
+            if !self.list_ok(p.clone(), list) {
+                continue;
+            }
+            let mut kept = Vec::new();
+            for (i, v) in values.iter().enumerate() {
+                if self.model.lookups[list].contains(v) {
+                    kept.push(v.clone());
+                } else {
+                    self.flag(
+                        format!("{p}.{i}"),
+                        IssueCode::UnknownLookupValue,
+                        format!("\"{v}\" is not a value of lookup list \"{list}\""),
+                    );
+                }
+            }
+            if !kept.is_empty() {
+                lookups.insert(list.clone(), kept);
+            }
         }
+        UiListFilters { q: f.q.clone(), lookups }
     }
 
     /// Keeps built-in fields and attributes of the class.
@@ -739,6 +867,9 @@ pub fn resolve(doc: &UiSettingsDocument, model: &Model) -> (UiSettingsDocument, 
             let p = format!("dashboard.widgets.{i}");
             let mut w = w.clone();
             w.class_keys = r.classes(&format!("{p}.classKeys"), &w.class_keys);
+            if let Some(list) = &w.lookup_list_key {
+                r.list_ok(format!("{p}.lookupListKey"), list);
+            }
             if let Some(s) = &w.search {
                 let class_keys = r.classes(&format!("{p}.search.classKeys"), &s.class_keys);
                 let filters = r.filters(&format!("{p}.search.filters"), &s.filters);
@@ -768,9 +899,24 @@ pub fn resolve(doc: &UiSettingsDocument, model: &Model) -> (UiSettingsDocument, 
             continue;
         }
         let mut l = l.clone();
-        for (j, panel) in l.panels.iter_mut().enumerate() {
-            panel.fields = r.fields(&format!("{p}.panels.{j}.fields"), &l.class_key, &panel.fields);
+        for (t, tab) in l.tabs.iter_mut().enumerate() {
+            for (j, s) in tab.sections.iter_mut().enumerate() {
+                let ps = format!("{p}.tabs.{t}.sections.{j}.fields");
+                let names: Vec<String> = s.fields.iter().map(|f| f.field.clone()).collect();
+                let kept: HashSet<String> = r.fields(&ps, &l.class_key, &names).into_iter().collect();
+                s.fields.retain(|f| kept.contains(&f.field));
+            }
         }
+        for (k, f) in l.hidden_fields.iter().enumerate() {
+            if CORE_FIELDS.contains(&f.as_str()) {
+                r.flag(
+                    format!("{p}.hiddenFields.{k}"),
+                    IssueCode::CoreFieldHidden,
+                    format!("\"{f}\" belongs to every CI and cannot be hidden; it is shown"),
+                );
+            }
+        }
+        l.hidden_fields.retain(|f| !CORE_FIELDS.contains(&f.as_str()));
         l.hidden_fields = r.fields(&format!("{p}.hiddenFields"), &l.class_key, &l.hidden_fields);
         l.read_only_fields = r.fields(&format!("{p}.readOnlyFields"), &l.class_key, &l.read_only_fields);
         // Positions refer to the stored document, like every other issue path.
@@ -815,8 +961,8 @@ mod tests {
         let mut m = Model::default();
         m.classes.insert("server".into(), HashMap::from([("cpu_cores".into(), false), ("serial".into(), true)]));
         m.classes.insert("application".into(), HashMap::new());
-        m.statuses.insert("in_service".into());
-        m.environments.insert("production".into());
+        m.lookups.insert("status".into(), ["in_service".to_owned()].into());
+        m.lookups.insert("environment".into(), ["production".to_owned()].into());
         m
     }
 
@@ -856,12 +1002,18 @@ mod tests {
         let d = doc(json!({
             "dashboard": {"widgets": [
                 {"id": "a", "type": "saved_search"},
-                {"id": "a", "type": "count_by_status", "limit": 5},
+                {"id": "a", "type": "count_by_lookup", "limit": 5},
+                {"id": "b", "type": "count_by_class", "lookupListKey": "status"},
             ]},
-            "layouts": [{"classKey": "server", "panels": [
-                {"key": "p", "label": "P", "fields": ["name", "hostname"]},
-                {"key": "p", "label": "Q", "fields": ["hostname"]},
-            ], "hiddenFields": ["name"]}],
+            "layouts": [{"classKey": "server", "tabs": [
+                {"key": "main", "label": "Main", "sections": [
+                    {"key": "p", "label": "P", "columns": 2, "fields": [
+                        {"field": "label"}, {"field": "attributes.hostname", "width": 3}]},
+                ]},
+                {"key": "main", "label": "Other", "sections": [
+                    {"key": "p", "label": "Q", "fields": [{"field": "attributes.hostname"}]},
+                ]},
+            ], "hiddenFields": ["ident", "attributes.notes"]}],
         }));
         let fields: Vec<String> = d.check().into_iter().map(|e| e.field).collect();
         assert_eq!(
@@ -870,11 +1022,80 @@ mod tests {
                 "dashboard.widgets.0.search",
                 "dashboard.widgets.1.id",
                 "dashboard.widgets.1.limit",
-                "layouts.0.panels.1.key",
-                "layouts.0.panels.1.fields.0",
+                "dashboard.widgets.1.lookupListKey",
+                "dashboard.widgets.2.lookupListKey",
+                "layouts.0.tabs.0.sections.0.fields.1.width",
+                "layouts.0.tabs.1.key",
+                "layouts.0.tabs.1.sections.0.key",
+                "layouts.0.tabs.1.sections.0.fields.0.field",
                 "layouts.0.hiddenFields.0",
             ]
         );
+    }
+
+    #[test]
+    fn layout_defaults_fill_in_columns_and_widths() {
+        let d = doc(json!({"layouts": [{"classKey": "server", "tabs": [
+            {"key": "t", "label": "T", "sections": [{"key": "s", "label": "S", "fields": [{"field": "ident"}]}]},
+        ]}]}));
+        let s = &d.layouts[0].tabs[0].sections[0];
+        assert_eq!((s.columns, s.fields[0].width, s.collapsed), (DEFAULT_COLUMNS, 1, false));
+        assert!(d.check().is_empty());
+    }
+
+    #[test]
+    fn v1_panels_become_sections_of_one_general_tab() {
+        let d = doc(json!({"layouts": [{"classKey": "server",
+            "panels": [
+                {"key": "hw", "label": "Hardware", "fields": ["attributes.cpu_cores", "validFrom"], "collapsed": true},
+                {"key": "empty", "label": "Empty"},
+            ],
+            "hiddenFields": ["attributes.serial"], "readOnlyFields": ["ident"]}]}));
+        let v2 = doc(json!({"layouts": [{"classKey": "server",
+            "tabs": [{"key": "general", "label": "General", "sections": [
+                {"key": "hw", "label": "Hardware", "columns": 3, "collapsed": true,
+                 "fields": [{"field": "attributes.cpu_cores", "width": 1}, {"field": "validFrom", "width": 1}]},
+                {"key": "empty", "label": "Empty", "columns": 3, "fields": []},
+            ]}],
+            "hiddenFields": ["attributes.serial"], "readOnlyFields": ["ident"]}]}));
+        assert_eq!(d, v2);
+        assert!(d.check().is_empty());
+        // Never written back in the old format.
+        let out = serde_json::to_value(&d).unwrap();
+        assert!(out["layouts"][0].get("panels").is_none(), "{out}");
+        assert_eq!(
+            out["layouts"][0]["tabs"][0]["sections"][0]["fields"][0],
+            json!({"field": "attributes.cpu_cores", "width": 1})
+        );
+    }
+
+    #[test]
+    fn a_layout_is_in_one_format_only() {
+        let err = serde_json::from_value::<UiSettingsDocument>(json!({"layouts": [{"classKey": "server",
+            "panels": [{"key": "p", "label": "P"}],
+            "tabs": [{"key": "t", "label": "T"}]}]}))
+        .unwrap_err();
+        assert!(err.to_string().contains("not both"), "{err}");
+    }
+
+    #[test]
+    fn hidden_core_fields_and_unknown_placed_attributes_are_ignored() {
+        let d = doc(json!({"layouts": [{"classKey": "server",
+            "tabs": [{"key": "t", "label": "T", "sections": [{"key": "s", "label": "S", "fields": [
+                {"field": "attributes.gone"}, {"field": "attributes.cpu_cores", "width": 2}]}]}],
+            "hiddenFields": ["validUntil"]}]}));
+        let (effective, issues) = resolve(&d, &model());
+        let got: Vec<(&str, IssueCode)> = issues.iter().map(|i| (i.path.as_str(), i.code)).collect();
+        assert_eq!(
+            got,
+            [
+                ("layouts.0.tabs.0.sections.0.fields.0", IssueCode::UnknownAttribute),
+                ("layouts.0.hiddenFields.0", IssueCode::CoreFieldHidden),
+            ]
+        );
+        let l = &effective.layouts[0];
+        assert_eq!(l.tabs[0].sections[0].fields, [UiLayoutField { field: "attributes.cpu_cores".into(), width: 2 }]);
+        assert!(l.hidden_fields.is_empty());
     }
 
     #[test]
@@ -884,11 +1105,14 @@ mod tests {
                 {"type": "class", "classKey": "retired"},
                 {"type": "section", "key": "s", "label": "S", "items": [{"classKey": "server"}, {"classKey": "gone"}]},
             ]},
-            "dashboard": {"widgets": [{"id": "w", "type": "saved_search", "search": {
-                "classKeys": ["server", "gone"], "filters": {"statusKeys": ["in_service", "old"]}}}]},
+            "dashboard": {"widgets": [
+                {"id": "w", "type": "saved_search", "search": {
+                    "classKeys": ["server", "gone"], "filters": {"lookups": {"status": ["in_service", "old"], "owner": ["x"]}}}},
+                {"id": "c", "type": "count_by_lookup", "lookupListKey": "gone"},
+            ]},
             "listViews": [
-                {"classKey": "server", "columns": ["name", "attributes.cpu_cores", "attributes.ram"]},
-                {"classKey": "gone", "columns": ["name"]},
+                {"classKey": "server", "columns": ["label", "attributes.cpu_cores", "attributes.ram"]},
+                {"classKey": "gone", "columns": ["label"]},
             ],
             "layouts": [{"classKey": "server", "hiddenFields": ["attributes.serial", "attributes.nope"]}],
         }));
@@ -901,7 +1125,9 @@ mod tests {
                 ("navigation.entries.0.classKey", IssueCode::UnknownClass),
                 ("navigation.entries.1.items.1.classKey", IssueCode::UnknownClass),
                 ("dashboard.widgets.0.search.classKeys.1", IssueCode::UnknownClass),
-                ("dashboard.widgets.0.search.filters.statusKeys.1", IssueCode::UnknownStatus),
+                ("dashboard.widgets.0.search.filters.lookups.owner", IssueCode::UnknownLookupList),
+                ("dashboard.widgets.0.search.filters.lookups.status.1", IssueCode::UnknownLookupValue),
+                ("dashboard.widgets.1.lookupListKey", IssueCode::UnknownLookupList),
                 ("listViews.0.columns.2", IssueCode::UnknownAttribute),
                 ("listViews.1.classKey", IssueCode::UnknownClass),
                 ("layouts.0.hiddenFields.1", IssueCode::UnknownAttribute),
@@ -911,11 +1137,11 @@ mod tests {
         assert_eq!(effective.navigation.entries.len(), 1);
         assert_eq!(effective.navigation.entries[0].items.len(), 1);
         assert_eq!(effective.list_views.len(), 1);
-        assert_eq!(effective.list_views[0].columns, ["name", "attributes.cpu_cores"]);
+        assert_eq!(effective.list_views[0].columns, ["label", "attributes.cpu_cores"]);
         assert_eq!(effective.layouts[0].hidden_fields, ["attributes.serial"]);
         let search = effective.dashboard.widgets.unwrap()[0].search.clone().unwrap();
         assert_eq!(search.class_keys, ["server"]);
-        assert_eq!(search.filters.status_keys, ["in_service"]);
+        assert_eq!(search.filters.lookups, BTreeMap::from([("status".to_owned(), vec!["in_service".to_owned()])]));
     }
 
     #[test]
@@ -927,5 +1153,6 @@ mod tests {
         assert!(re.is_match("attributes.cpu_cores"));
         assert!(!re.is_match("attributes.Bad"));
         assert!(!re.is_match("serial"));
+        assert!(!re.is_match("hostname"), "a class field since SHAA-267");
     }
 }

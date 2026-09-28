@@ -5,11 +5,13 @@ Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_sc
 [`../migrations/0004_data_model_admin.sql`](../migrations/0004_data_model_admin.sql) and
 [`../migrations/0005_ui_settings.sql`](../migrations/0005_ui_settings.sql) and
 [`../migrations/0008_cmdb_schema_and_areas.sql`](../migrations/0008_cmdb_schema_and_areas.sql) and
-[`../migrations/0009_type_tables.sql`](../migrations/0009_type_tables.sql)
+[`../migrations/0009_type_tables.sql`](../migrations/0009_type_tables.sql) and
+[`../migrations/0016_core_ci_model.sql`](../migrations/0016_core_ci_model.sql)
 (`sessions.ip_address` from [`../migrations/0006_auth_audit.sql`](../migrations/0006_auth_audit.sql)).
 Every table below lives in the `cmdb` schema, except the type tables: each area is a schema of its
 own and each type a table in it. `area_schema__type_table` stands for one of them (e.g.
 `bestand.netzwerk`); its columns other than `id` are the type's fields, created by the DDL engine.
+`statuses`, `environments`, `owners` and `locations` are deprecated since 0016: no CI refers to them.
 Update this diagram in the same pull request as any migration that adds, removes or re-links a table.
 Column-level rules and triggers are described in [`docs/data-model.md`](../../docs/data-model.md).
 
@@ -19,6 +21,7 @@ erDiagram
     ci_classes ||--o{ ci_classes : "parent_id"
     ci_classes ||--o{ ci_attribute_definitions : "class_id"
     ci_classes |o--o{ ci_attribute_definitions : "reference_class_id"
+    ci_attribute_definitions |o--o{ ci_classes : "title_attribute_id (labels the CIs)"
     ci_classes ||--o{ configuration_items : "class_id"
     ci_classes ||--o{ relationship_type_rules : "source_class_id"
     ci_classes ||--o{ relationship_type_rules : "target_class_id"
@@ -29,6 +32,9 @@ erDiagram
     configuration_items |o--o{ area_schema__type_table : "reference field (FK)"
     lookup_lists |o--o{ ci_attribute_definitions : "lookup_list_id"
     lookup_lists ||--o{ lookup_list_values : "list_id"
+    lookup_lists |o--o{ lookup_lists : "parent_list_id"
+    lookup_list_values |o--o{ lookup_list_values : "parent_value_id"
+    ci_attribute_definitions |o--o{ ci_attribute_definitions : "parent_attribute_id"
     lookup_list_values |o--o{ area_schema__type_table : "lookup field (FK, RESTRICT)"
 
     relationship_types ||--o{ relationship_type_rules : "relationship_type_id"
@@ -36,10 +42,6 @@ erDiagram
     configuration_items ||--o{ ci_relationships : "source_ci_id"
     configuration_items ||--o{ ci_relationships : "target_ci_id"
 
-    statuses ||--o{ configuration_items : "status_id"
-    environments |o--o{ configuration_items : "environment_id"
-    owners |o--o{ configuration_items : "owner_id"
-    locations |o--o{ configuration_items : "location_id"
     locations |o--o{ locations : "parent_id"
 
     users ||--o{ user_permission_profiles : "user_id"
@@ -68,6 +70,7 @@ erDiagram
         text color
         integer sort_order
         boolean is_active
+        uuid title_attribute_id FK "labels the CIs; SET NULL on purge"
     }
     ci_attribute_definitions {
         uuid id PK
@@ -78,6 +81,7 @@ erDiagram
         jsonb enum_values
         uuid reference_class_id FK
         uuid lookup_list_id FK
+        uuid parent_attribute_id FK "lookup field on the parent list"
         text group_name
         text help_text
         jsonb default_value
@@ -86,11 +90,13 @@ erDiagram
         uuid id PK
         text key UK
         text name
+        uuid parent_list_id FK "no cycles"
         boolean is_active
     }
     lookup_list_values {
         uuid id PK
         uuid list_id FK
+        uuid parent_value_id FK "value of the parent list"
         text key
         text name
         text color
@@ -99,17 +105,13 @@ erDiagram
     configuration_items {
         uuid id PK
         uuid class_id FK
-        text name
-        uuid status_id FK
-        uuid environment_id FK
-        uuid owner_id FK
-        uuid location_id FK
-        text hostname
-        inet ip_address
-        text serial_number
+        text ident UK "CI-7K3M9Q2X; unique regardless of case"
+        timestamptz valid_from
+        timestamptz valid_until "active: valid_from <= now < valid_until"
+        text label "title attribute value or ident (API-maintained)"
         integer version
         timestamptz deleted_at
-        tsvector search_vector
+        tsvector search_vector "label and ident"
     }
     area_schema__type_table {
         uuid id PK,FK "configuration_items.id"
@@ -154,7 +156,7 @@ erDiagram
         timestamptz deleted_at
     }
     statuses {
-        uuid id PK
+        uuid id PK "deprecated since 0016: copied into lookup list status (same ids)"
         text key UK
         boolean is_operational
     }

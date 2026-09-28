@@ -8,13 +8,15 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use anyhow::Context;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SslMode {
     /// Plain TCP.
     Disable,
-    /// Encrypted, server certificate not verified.
+    /// Encrypted, server certificate not verified. Explicit opt-in only.
     Require,
-    /// Encrypted, certificate chain and hostname verified.
+    /// Encrypted, certificate chain and hostname verified. The default.
     VerifyFull,
 }
 
@@ -43,6 +45,18 @@ pub struct DatabaseConfig {
     /// Zero disables the per-statement timeout.
     pub statement_timeout: Duration,
     pub connect_timeout: Duration,
+    /// Set on the schema owner's connection only ([`Config::schema_owner_database`]).
+    pub roles: RoleNames,
+}
+
+/// The API and maintenance database roles, whatever the operator named them:
+/// the users of DATABASE_URL and MAINTENANCE_DATABASE_URL. The schema owner's
+/// sessions carry them as `shadoucmdb.app_role` and `shadoucmdb.maintenance_role`
+/// so migrations grant to, and hand ownership to, the right roles.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoleNames {
+    pub app: Option<String>,
+    pub maintenance: Option<String>,
 }
 
 /// When session cookies get the `Secure` attribute.
@@ -61,6 +75,10 @@ pub struct AuthConfig {
     /// A session ends this long after login, however active.
     pub session_max_age: Duration,
     pub cookie_secure: CookieSecure,
+    /// The address users open the web UI at (`PUBLIC_URL`), without a trailing
+    /// slash. OIDC sign-in builds its redirect URI from it, never from the
+    /// request's Host header; unset, OIDC sign-in is unavailable.
+    pub public_url: Option<String>,
 }
 
 /// Who may read `/openapi.json` and the Swagger UI at `/docs`.
@@ -249,6 +267,23 @@ fn parse_cors_origins(raw: &str) -> Result<Vec<String>, String> {
     Ok(origins)
 }
 
+/// Validates `PUBLIC_URL`: an absolute http(s) URL with no credentials, query
+/// or fragment. A path is allowed (a reverse proxy serving the UI below one).
+fn parse_public_url(raw: &str) -> Result<String, String> {
+    const EXPECTED: &str = "expected the address users open the web UI at, e.g. https://cmdb.example.com";
+    let url = url::Url::parse(raw.trim()).map_err(|_| format!("\"{raw}\" is not a URL; {EXPECTED}"))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        return Err(format!("\"{raw}\" is not an http(s) URL; {EXPECTED}"));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("must not contain a user name or password".to_owned());
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(format!("\"{raw}\" must not have a query or fragment; {EXPECTED}"));
+    }
+    Ok(url.as_str().trim_end_matches('/').to_owned())
+}
+
 /// Validates `CSP_REPORT_URI`. The value is pasted into the
 /// `Content-Security-Policy` and `Reporting-Endpoints` headers, so anything
 /// that could end the URL and start a new directive, header or header-list
@@ -313,12 +348,22 @@ fn parse_audit_sink(raw: &str) -> Result<AuditSink, String> {
 
 impl Config {
     /// The connection for commands that change the schema: MIGRATION_DATABASE_URL
-    /// when set, else the API's.
-    pub fn schema_owner_database(self) -> DatabaseConfig {
-        match &self.migration_url {
+    /// when set, else the API's. It carries the API and maintenance role names.
+    pub fn schema_owner_database(self) -> anyhow::Result<DatabaseConfig> {
+        let roles = RoleNames {
+            app: Some(crate::db::user_name(&self.database).context("DATABASE_URL")?),
+            maintenance: match &self.maintenance_url {
+                Some(url) => {
+                    Some(crate::db::user_name(&self.database.with_url(url)).context("MAINTENANCE_DATABASE_URL")?)
+                }
+                None => None,
+            },
+        };
+        let db = match &self.migration_url {
             Some(url) => self.database.with_url(url),
             None => self.database,
-        }
+        };
+        Ok(DatabaseConfig { roles, ..db })
     }
 
     pub fn from_env() -> anyhow::Result<Config> {
@@ -357,10 +402,10 @@ impl Config {
                 }
             }
         }
-        let ssl = match r.one_of("DATABASE_SSL", &["disable", "require", "verify-full"], "require").as_str() {
+        let ssl = match r.one_of("DATABASE_SSL", &["disable", "require", "verify-full"], "verify-full").as_str() {
             "disable" => SslMode::Disable,
-            "verify-full" => SslMode::VerifyFull,
-            _ => SslMode::Require,
+            "require" => SslMode::Require,
+            _ => SslMode::VerifyFull,
         };
         let ssl_ca_file = r.raw("DATABASE_SSL_CA_FILE").map(PathBuf::from);
         let pool_max = r.int::<u32>("DATABASE_POOL_MAX", 1, 200).unwrap_or(10);
@@ -411,6 +456,9 @@ impl Config {
             facility,
             poll_interval: Duration::from_millis(poll_ms),
         });
+        let public_url = r
+            .raw("PUBLIC_URL")
+            .and_then(|s| parse_public_url(&s).map_err(|e| r.errors.push(format!("PUBLIC_URL: {e}"))).ok());
 
         if !r.errors.is_empty() {
             let detail: Vec<String> = r.errors.iter().map(|e| format!("  - {e}")).collect();
@@ -442,6 +490,7 @@ impl Config {
                 pool_max,
                 statement_timeout: Duration::from_millis(statement_timeout_ms),
                 connect_timeout: Duration::from_millis(connect_timeout_ms),
+                roles: RoleNames::default(),
             },
             migration_url,
             maintenance_url,
@@ -449,6 +498,7 @@ impl Config {
                 session_idle: Duration::from_secs(session_idle_minutes * 60),
                 session_max_age: Duration::from_secs(session_max_age_hours * 3600),
                 cookie_secure,
+                public_url,
             },
             audit: AuditConfig { capture_client_ip, capture_user_agent, export },
         })
@@ -458,6 +508,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_url_is_an_absolute_address_without_trailing_slash() {
+        assert_eq!(parse_public_url("https://cmdb.example.com/").unwrap(), "https://cmdb.example.com");
+        assert_eq!(parse_public_url("https://example.com/cmdb/").unwrap(), "https://example.com/cmdb");
+        assert_eq!(parse_public_url("http://10.0.0.5:8080").unwrap(), "http://10.0.0.5:8080");
+        for bad in ["cmdb.example.com", "/cmdb", "ftp://x", "https://u:p@x", "https://x/?a=1", "https://x/#f"] {
+            assert!(parse_public_url(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn cors_origins_accept_browser_origins() {
@@ -549,6 +609,22 @@ mod tests {
         }
         let cfg = load_with(&[("AUDIT_EXPORT", "stdout"), ("AUDIT_EXPORT_FORMAT", "rfc5424")]).unwrap();
         assert_eq!(cfg.audit.export.unwrap().format, AuditFormat::Rfc5424);
+    }
+
+    #[test]
+    fn database_ssl_defaults_to_verify_full() {
+        assert_eq!(load("").unwrap().database.ssl, SslMode::VerifyFull);
+        for (value, mode) in
+            [("verify-full", SslMode::VerifyFull), ("require", SslMode::Require), ("disable", SslMode::Disable)]
+        {
+            let cfg = Config::from_lookup(&|key| match key {
+                "DATABASE_URL" => Some("postgres://cmdb@db/cmdb".into()),
+                "DATABASE_SSL" => Some(value.into()),
+                _ => None,
+            })
+            .unwrap();
+            assert_eq!(cfg.database.ssl, mode, "{value}");
+        }
     }
 
     #[test]

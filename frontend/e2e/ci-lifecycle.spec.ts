@@ -17,33 +17,41 @@ test("create a Server from its class attributes, with field-level validation", a
   await page.locator("#ci-class").selectOption({ label: "Server" });
   await expect(page).toHaveURL(/\/cis\/new\?classId=/);
 
-  // Attribute groups come from the API (groupName, in sortOrder).
-  const legends = page.locator("fieldset.group legend");
-  await expect(legends.first()).toBeVisible();
-  const groups = await legends.allTextContents();
-  expect(groups).toEqual(expect.arrayContaining(["Hardware", "Compute", "Software", "Network"]));
+  // General comes first: ident, validity, then the attributes without a group (name, hostname…).
+  // The attribute groups follow as sections, from the API (groupName, in sortOrder).
+  const sections = page.locator("form .layout-panel > summary h2");
+  await expect(sections.first()).toHaveText("General");
+  expect(await sections.allTextContents()).toEqual(expect.arrayContaining(["Hardware", "Compute", "Software", "Network"]));
+  expect(await sections.allTextContents()).not.toContain("Other");
+  const general = page.locator("form .layout-panel").first();
+  await expect(general.locator("label").first()).toHaveText("Ident");
+  await expect(general.locator("#attr-name")).toBeVisible();
+  await expect(general.locator("#attr-hostname")).toBeVisible();
   await expect(page.locator("#attr-cpu_cores")).toHaveAttribute("type", "number");
   await expect(page.locator("#attr-purchase_date")).toHaveAttribute("type", "date");
   await expect(page.locator("#attr-os_family")).toHaveJSProperty("tagName", "SELECT");
 
-  // Required fields are flagged before any request.
+  // Name and status are required attributes of the template's classes, flagged before any request.
   await submit(page, "Create Server");
-  await expect(page.locator("#f-name-err")).toHaveText("Required");
-  await expect(page.locator("#f-status-err")).toHaveText("Required");
-  await expect(page.locator("#f-name")).toBeFocused();
+  await expect(page.locator("#attr-name-err")).toHaveText("Required");
+  await expect(page.locator("#attr-status-err")).toHaveText("Required");
+  await expect(page.locator("#attr-name")).toBeFocused();
+  // The ident is generated; only administrators may type one (the e2e user is one).
+  await expect(page.locator("#f-ident")).toBeEnabled();
+  await expect(page.locator("#f-valid-from")).toHaveAttribute("type", "datetime-local");
 
   // API validation errors land next to their field.
-  await page.locator("#f-name").fill(name);
-  await page.locator("#f-status").selectOption({ label: "In service" });
-  await page.locator("#f-hostname").fill("bad host!");
+  await page.locator("#attr-name").fill(name);
+  await page.locator("#attr-status").selectOption({ label: "In service" });
+  await page.locator("#attr-hostname").fill("bad host!");
   await submit(page, "Create Server");
-  await expect(page.locator("#f-hostname-err")).toBeVisible();
-  await expect(page.locator("#f-hostname")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.locator("#attr-hostname-err")).toBeVisible();
+  await expect(page.locator("#attr-hostname")).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByRole("alert").first()).toContainText("Not saved");
   await snap(page, "03-create-validation-core");
 
-  await page.locator("#f-hostname").fill(`${name}.example.internal`);
-  await page.locator("#f-ip").fill("10.99.0.10");
+  await page.locator("#attr-hostname").fill(`${name}.example.internal`);
+  await page.locator("#attr-ip_address").fill("10.99.0.10");
   await page.locator("#attr-cpu_cores").fill("0");
   await submit(page, "Create Server");
   await expect(page.locator("#attr-cpu_cores-err")).toBeVisible();
@@ -56,7 +64,13 @@ test("create a Server from its class attributes, with field-level validation", a
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(name);
   await expect(page.getByRole("status").filter({ hasText: `Created ${name}.` })).toBeVisible();
   ciId = page.url().split("/").pop()!;
-  await expect(page.locator("dl.props").first()).toContainText(`${name}.example.internal`);
+  // General panel first: ident, validity and the ungrouped attributes; class and timestamps last.
+  const generalPanel = page.locator(".layout-panels > details").first();
+  await expect(generalPanel.locator("summary h2")).toHaveText("General");
+  await expect(generalPanel.locator("dt").first()).toHaveText("Ident");
+  await expect(generalPanel).toContainText(/CI-/);
+  await expect(generalPanel).toContainText(`${name}.example.internal`);
+  await expect(page.locator(".layout-panels > details > summary h2").last()).toHaveText("Record");
   await snap(page, "05-created-detail");
 });
 
@@ -78,33 +92,38 @@ test("inventory: search and class filter live in the URL and survive a reload", 
   await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
   await snap(page, "06-inventory-filtered");
 
+  // Global search results count their hits in the singular for one match (GH#46).
+  await page.goto(`/search?q=${name}`);
+  await expect(page.locator(".page-header")).toContainText("1 match");
+  await expect(page.locator(".page-header")).not.toContainText("matches");
+
   // Sort and page size are URL state too, and paging is driven by page.total.
   await page.goto("/cis?limit=25&sort=-updatedAt");
   await expect(page.getByRole("columnheader", { name: /Updated/ })).toHaveAttribute("aria-sort", "descending");
   await expect(page.locator(".pagination")).toContainText(/1–\d+ of \d+/);
   await expect(page.locator(".pagination select")).toHaveValue("25");
-  await page.getByRole("button", { name: /^Name/ }).click();
-  await expect(page).toHaveURL(/sort=name/);
-  await expect(page.getByRole("columnheader", { name: /^Name/ })).toHaveAttribute("aria-sort", "ascending");
+  await page.getByRole("button", { name: /^Label/ }).click();
+  await expect(page).toHaveURL(/sort=label/);
+  await expect(page.getByRole("columnheader", { name: /^Label/ })).toHaveAttribute("aria-sort", "ascending");
 });
 
 test("edit: changes are saved with the version and shown in History", async ({ page }) => {
   await page.goto(`/cis/${ciId}`);
   await page.getByRole("link", { name: "Edit", exact: true }).click();
   await expect(page).toHaveURL(`/cis/${ciId}/edit`);
-  await expect(page.locator("#f-name")).toHaveValue(name);
+  await expect(page.locator("#attr-name")).toHaveValue(name);
   await expect(page.locator("#attr-cpu_cores")).toHaveValue("16");
-  await page.locator("#f-hostname").fill(`${name}-renamed.example.internal`);
+  await page.locator("#attr-hostname").fill(`${name}-renamed.example.internal`);
   await page.locator("#attr-cpu_cores").fill("32");
   await submit(page, "Save changes");
   await expect(page).toHaveURL(`/cis/${ciId}`);
   await expect(page.getByRole("status").filter({ hasText: `Saved ${name}.` })).toBeVisible();
-  await expect(page.locator("dl.props").first()).toContainText(`${name}-renamed.example.internal`);
-  await expect(page.locator("dl.props").nth(1)).toContainText("32");
+  await expect(page.locator(".layout-panels")).toContainText(`${name}-renamed.example.internal`);
+  await expect(page.locator(".layout-panels")).toContainText("32");
 
   await page.getByRole("tab", { name: "History" }).click();
   const diff = page.locator("ul.diff").first();
-  await expect(diff).toContainText("hostname");
+  await expect(diff).toContainText("attributes.hostname");
   await expect(diff).toContainText(`${name}.example.internal`);
   await expect(diff).toContainText("attributes.cpu_cores");
   await expect(diff.locator("li", { hasText: "attributes.cpu_cores" }).locator("del")).toHaveText("16");
@@ -114,12 +133,12 @@ test("edit: changes are saved with the version and shown in History", async ({ p
 
 test("edit: a concurrent change shows the 409 VERSION_CONFLICT banner", async ({ page, request }) => {
   await page.goto(`/cis/${ciId}/edit`);
-  await expect(page.locator("#f-name")).toHaveValue(name);
+  await expect(page.locator("#attr-name")).toHaveValue(name);
   // Someone else saves first.
   const current = await apiGet<{ version: number }>(request, `/configuration-items/${ciId}`);
-  await apiSend(request, "PATCH", `/configuration-items/${ciId}`, { notes: "changed elsewhere", version: current.version });
+  await apiSend(request, "PATCH", `/configuration-items/${ciId}`, { attributes: { notes: "changed elsewhere" }, version: current.version });
 
-  await page.locator("#f-serial").fill("SN-CONFLICT");
+  await page.locator("#attr-serial_number").fill("SN-CONFLICT");
   await submit(page, "Save changes");
   const banner = page.getByRole("alert").filter({ hasText: "Someone else saved this CI while you were editing." });
   await expect(banner).toBeVisible();
@@ -127,7 +146,7 @@ test("edit: a concurrent change shows the 409 VERSION_CONFLICT banner", async ({
   await snap(page, "08-version-conflict");
   await banner.getByRole("link", { name: "Open the current version" }).click();
   await expect(page).toHaveURL(`/cis/${ciId}`);
-  await expect(page.locator("dl.props").first()).toContainText("changed elsewhere");
+  await expect(page.locator(".layout-panels")).toContainText("changed elsewhere");
 });
 
 test("relationships: add in both directions; illegal pairs offer no type", async ({ page }) => {
@@ -139,6 +158,14 @@ test("relationships: add in both directions; illegal pairs offer no type", async
   await page.locator("#rel-type").selectOption({ label: `${name} is located in FRA1 Rack A01` });
   await page.getByRole("button", { name: "Add relationship" }).click();
   await expect(page.getByRole("status").filter({ hasText: `Added: ${name} is located in FRA1 Rack A01` })).toBeVisible();
+
+  // With one relationship the delete confirmation speaks in the singular (GH#46); cancel, nothing is deleted.
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("This relationship will break:");
+  await expect(dialog.getByRole("button", { name: "Delete CI and 1 relationship" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
 
   // Reverse direction: the application runs on this server, so from here it reads "hosts".
   await pickCi(page, "#rel-target", "CRM", "CRM");

@@ -9,6 +9,8 @@ import { bySortOrder, flattenTree } from "../lib/tree";
 
 export type CiSummary = Schemas["ConfigurationItemSummary"];
 export type Ci = Schemas["ConfigurationItem"];
+/** A reference attribute's target. `hidden` means the caller may not view its class: `name` is null. */
+export type AttributeReference = Ci["attributeReferences"][string];
 export type CiClass = Schemas["CiClass"];
 export type EffectiveAttribute = Schemas["EffectiveAttribute"];
 export type Relationship = Schemas["Relationship"];
@@ -251,7 +253,7 @@ export function useClassAttributes(classId: MaybeRefOrGetter<string | undefined>
   });
 }
 
-// ---------- Lookups (pickers and filters) ----------
+// ---------- Older lookups (Administration › Lookups; CIs use lookup list attributes instead) ----------
 
 export type LookupKind = "statuses" | "environments" | "locations" | "owners";
 

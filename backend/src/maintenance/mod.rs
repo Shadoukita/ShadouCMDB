@@ -20,8 +20,9 @@ use sqlx::postgres::PgConnection;
 use crate::config::DatabaseConfig;
 
 /// System tables whose rows are never backed up. Restoring sessions would sign
-/// people back in with tokens from the past; after a restore everyone signs in again.
-pub const EXCLUDED_TABLES: &[&str] = &["sessions"];
+/// people back in with tokens from the past; after a restore everyone signs in
+/// again. Pending second-factor challenges and OIDC sign-ins are sessions-in-waiting.
+pub const EXCLUDED_TABLES: &[&str] = &["sessions", "mfa_challenges", "oidc_login_states"];
 
 /// Schemas of the application's own tables: `cmdb` since migration 0008,
 /// `public` before (and still for the migration bookkeeping table). Areas are
@@ -80,12 +81,14 @@ pub fn ident(name: &str) -> String {
 }
 
 /// A dedicated connection (not a pool) with the session settings that make
-/// the row text round-trip exactly and no statement timeout for long copies.
+/// the row text round-trip exactly and no statement timeout for long copies,
+/// and the role names the migrations it runs grant to.
 pub async fn connect(cfg: &DatabaseConfig) -> anyhow::Result<PgConnection> {
     let mut conn = PgConnection::connect_with(&crate::db::connect_options(cfg)?)
         .await
         .context("could not connect to PostgreSQL")?;
     session_settings(&mut conn).await?;
+    crate::db::set_role_names(&mut conn, &cfg.roles).await?;
     Ok(conn)
 }
 

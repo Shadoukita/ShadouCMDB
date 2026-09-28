@@ -49,16 +49,71 @@ pub struct AppState {
     /// Session settings and the login backoff.
     pub auth: Arc<AuthState>,
     pub capture: ClientCapture,
+    /// Whether every migration of this build is applied (see `schema_gate`).
+    pub schema: Arc<db::SchemaState>,
 }
 
 impl AppState {
     pub fn new(pool: PgPool, auth: AuthConfig) -> Self {
-        AppState { pool, auth: Arc::new(AuthState::new(auth)), capture: ClientCapture { ip: true, user_agent: true } }
+        AppState {
+            pool,
+            auth: Arc::new(AuthState::new(auth)),
+            capture: ClientCapture { ip: true, user_agent: true },
+            schema: Arc::default(),
+        }
     }
 
     pub fn capturing(mut self, audit: &AuditConfig) -> Self {
         self.capture = ClientCapture { ip: audit.capture_client_ip, user_agent: audit.capture_user_agent };
         self
+    }
+}
+
+fn not_migrated(applied: usize, expected: usize) -> String {
+    format!(
+        "The database schema is not migrated ({applied} of {expected} migrations applied). Run `shadoucmdb migrate`, \
+         then retry."
+    )
+}
+
+/// API requests against a database with pending migrations would each fail on
+/// a missing table or column; answer 503 SCHEMA_NOT_MIGRATED instead, before
+/// any handler runs. An unreachable database is answered here too, so the
+/// request does not wait for a connection twice. Any other failure of the
+/// check (e.g. no privileges) lets the request go on to the handler.
+/// `/api/v1/version` needs no database and stays answerable, so an operator
+/// can see which build (and how many migrations) is running before migrating.
+async fn schema_gate(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let path = req.uri().path();
+    if is_api_path(path) && path != "/api/v1/version" {
+        match state.schema.check(&state.pool).await {
+            Ok(db::SchemaCheck::Pending { applied, expected }) => {
+                let message = not_migrated(applied, expected);
+                return AppError::new(error::ErrorCode::SchemaNotMigrated, message).into_response();
+            }
+            Err(err) if api::pg_error::is_connection_error(&err) => return AppError::from(err).into_response(),
+            _ => {}
+        }
+    }
+    next.run(req).await
+}
+
+/// Logged once at startup, without holding it up: the server also starts
+/// (and reports not-ready) while the database is unreachable.
+async fn log_schema_state(state: AppState) {
+    match state.schema.check(&state.pool).await {
+        Ok(db::SchemaCheck::Current) => {}
+        Ok(db::SchemaCheck::Pending { applied, expected }) => tracing::warn!(
+            applied,
+            expected,
+            "database schema is not migrated: run `shadoucmdb migrate`; until then API requests answer 503 \
+             SCHEMA_NOT_MIGRATED"
+        ),
+        Err(err) => tracing::warn!(error = %err, "cannot check the migration state; see /readyz"),
     }
 }
 
@@ -267,6 +322,8 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
         .merge(docs(&state, cfg.api_docs))
         .fallback(fallback)
         .method_not_allowed_fallback(fallback)
+        // Matched routes only: an unknown path is a 404 whatever the database state.
+        .route_layer(axum::middleware::from_fn_with_state(state.clone(), schema_gate))
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(cfg.http.request_timeout, request_timeout))
         .layer(CatchPanicLayer::custom(panic_response))
@@ -299,7 +356,8 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
 /// and closes the pool.
 pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
     let pool = db::lazy_pool(&cfg.database)?;
-    let app = router(AppState::new(pool.clone(), cfg.auth.clone()).capturing(&cfg.audit), &cfg);
+    let state = AppState::new(pool.clone(), cfg.auth.clone()).capturing(&cfg.audit);
+    let app = router(state.clone(), &cfg);
     let exporter = cfg.audit.export.clone().map(|export| crate::audit_export::spawn(pool.clone(), export));
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
@@ -314,6 +372,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         api_docs = cfg.api_docs.as_str(),
         "server listening"
     );
+    tokio::spawn(log_schema_state(state));
 
     accept_loop(listener, app, &cfg.http, shutdown).await;
     if let Some(exporter) = exporter {
@@ -430,7 +489,7 @@ mod tests {
         res.headers().get(name).map(|v| v.to_str().unwrap())
     }
 
-    /// The real router, with a pool that is never connected: the paths used here do not touch the database.
+    /// The real router, with a pool that never connects (API routes answer 503 DATABASE_UNAVAILABLE).
     fn app() -> Router {
         app_reporting_to(None)
     }
@@ -440,11 +499,19 @@ mod tests {
     }
 
     fn app_with(configure: impl FnOnce(&mut Config)) -> Router {
-        let pool = PgPool::connect_lazy("postgres://nobody@127.0.0.1:1/none").unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(200))
+            .connect_lazy("postgres://nobody@127.0.0.1:1/none")
+            .unwrap();
+        app_on(pool, configure)
+    }
+
+    fn app_on(pool: PgPool, configure: impl FnOnce(&mut Config)) -> Router {
         let auth = AuthConfig {
             session_idle: Duration::from_secs(60),
             session_max_age: Duration::from_secs(3600),
             cookie_secure: CookieSecure::Auto,
+            public_url: None,
         };
         let mut cfg = Config {
             api_host: "127.0.0.1".into(),
@@ -468,6 +535,7 @@ mod tests {
                 pool_max: 1,
                 statement_timeout: Duration::ZERO,
                 connect_timeout: Duration::from_secs(1),
+                roles: Default::default(),
             },
             migration_url: None,
             maintenance_url: None,
@@ -476,6 +544,31 @@ mod tests {
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth), &cfg)
+    }
+
+    /// GH#43: `serve` before `migrate` answered every API call with 500 INTERNAL_ERROR.
+    #[tokio::test]
+    async fn api_answers_schema_not_migrated_until_migrate_runs() {
+        let Some(db) = db::scratch::empty("api_answers_schema_not_migrated_until_migrate_runs").await else {
+            return;
+        };
+        let app = app_on(db.pool.clone(), |_| {});
+
+        let res = get(app.clone(), "/api/v1/setup", &[]).await;
+        assert_eq!(res.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "SCHEMA_NOT_MIGRATED");
+        let expected = format!("(0 of {} migrations applied)", db::expected_count());
+        assert!(body["error"]["message"].as_str().unwrap().contains(&expected), "{body}");
+        // Probes and unknown routes stay outside the gate.
+        assert_eq!(get(app.clone(), "/healthz", &[]).await.status(), axum::http::StatusCode::OK);
+        assert_eq!(get(app.clone(), "/api/v1/nope", &[]).await.status(), axum::http::StatusCode::NOT_FOUND);
+
+        // Migrating under a running server takes effect without a restart.
+        db::MIGRATOR.run(&db.pool).await.unwrap();
+        assert_eq!(get(app, "/api/v1/setup", &[]).await.status(), axum::http::StatusCode::OK);
+        db.drop().await;
     }
 
     /// Every `Vary` entry, across however many `Vary` field lines there are.

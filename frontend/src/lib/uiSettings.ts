@@ -8,7 +8,7 @@ import type {
   UiSettingsDocument,
   UiWidgetType,
 } from "../api/uiSettings";
-import { groupAttributes } from "./attributes";
+import { GENERAL_SECTION, groupAttributes } from "./attributes";
 
 /**
  * The UI settings document (Administration › Customization) as the screens
@@ -17,7 +17,7 @@ import { groupAttributes } from "./attributes";
  * by key, never by id.
  */
 
-export const EMPTY_FILTERS: UiListFilters = { q: null, statusKeys: [], environmentKeys: [], locationKeys: [] };
+export const EMPTY_FILTERS: UiListFilters = { q: null, lookups: {} };
 
 export function emptyDocument(): UiSettingsDocument {
   return {
@@ -40,12 +40,12 @@ export function normalizeDocument(doc: Partial<UiSettingsDocument> | undefined):
       widgets:
         d.dashboard?.widgets?.map((w) =>
           w.type === "saved_search"
-            ? { ...w, search: { classKeys: [], includeSubclasses: false, sort: null, ...w.search, filters: { ...EMPTY_FILTERS, ...w.search?.filters } } }
+            ? { ...w, search: { classKeys: [], includeSubclasses: false, sort: null, ...w.search, filters: { ...EMPTY_FILTERS, lookups: {}, ...w.search?.filters } } }
             : w,
         ) ?? null,
     },
-    listViews: (d.listViews ?? []).map((v) => ({ columns: [], defaultSort: null, pageSize: null, ...v, defaultFilters: { ...EMPTY_FILTERS, ...v.defaultFilters } })),
-    layouts: (d.layouts ?? []).map((l) => ({ ...l, panels: l.panels ?? [], hiddenFields: l.hiddenFields ?? [], readOnlyFields: l.readOnlyFields ?? [] })),
+    listViews: (d.listViews ?? []).map((v) => ({ columns: [], defaultSort: null, pageSize: null, ...v, defaultFilters: { ...EMPTY_FILTERS, lookups: {}, ...v.defaultFilters } })),
+    layouts: (d.layouts ?? []).map(normalizeLayout),
   };
 }
 
@@ -56,22 +56,21 @@ export interface BuiltinField {
   label: string;
   /** API sort field for list columns. */
   sort?: UiListSort["field"];
-  /** The CI form's field for it; absent for fields the form does not edit (class, timestamps). */
+  /** The CI form's field for it; absent for fields the form does not edit (label, class, timestamps). */
   form?: string;
 }
 
-/** CI fields every class has, in their built-in order. Attributes are `attributes.<key>`. */
+/**
+ * CI fields every class has, in their built-in order. Attributes are `attributes.<key>`;
+ * name, status, hostname and the like are attributes of the classes that define them.
+ */
 export const BUILTIN_FIELDS: BuiltinField[] = [
-  { key: "name", label: "Name", sort: "name", form: "name" },
+  { key: "label", label: "Label", sort: "label" },
+  { key: "ident", label: "Ident", sort: "ident", form: "ident" },
   { key: "class", label: "Class", sort: "className" },
-  { key: "status", label: "Status", sort: "statusName", form: "statusId" },
-  { key: "environment", label: "Environment", form: "environmentId" },
-  { key: "owner", label: "Owner", form: "ownerId" },
-  { key: "location", label: "Location", form: "locationId" },
-  { key: "hostname", label: "Hostname", sort: "hostname", form: "hostname" },
-  { key: "ipAddress", label: "IP address", sort: "ipAddress", form: "ipAddress" },
-  { key: "serialNumber", label: "Serial number", sort: "serialNumber", form: "serialNumber" },
-  { key: "notes", label: "Notes", form: "notes" },
+  { key: "validFrom", label: "Valid from", sort: "validFrom", form: "validFrom" },
+  { key: "validUntil", label: "Valid until", sort: "validUntil", form: "validUntil" },
+  { key: "active", label: "Active" },
   { key: "createdAt", label: "Created", sort: "createdAt" },
   { key: "updatedAt", label: "Updated", sort: "updatedAt" },
 ];
@@ -84,7 +83,7 @@ export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUIL
 }));
 
 /** The inventory's columns when no list view says otherwise. */
-export const DEFAULT_COLUMNS = ["name", "class", "status", "environment", "owner", "location", "hostname", "ipAddress", "serialNumber", "updatedAt"];
+export const DEFAULT_COLUMNS = ["label", "ident", "class", "active", "updatedAt"];
 
 export const ATTRIBUTE_PREFIX = "attributes.";
 export const attributeKey = (field: string) => (field.startsWith(ATTRIBUTE_PREFIX) ? field.slice(ATTRIBUTE_PREFIX.length) : null);
@@ -113,7 +112,25 @@ export function sortParam(s: UiListSort | null | undefined): string | undefined 
 }
 
 export function hasFilters(f: UiListFilters | undefined): boolean {
-  return !!f && (!!f.q || !!f.statusKeys?.length || !!f.environmentKeys?.length || !!f.locationKeys?.length);
+  return !!f && (!!f.q || Object.values(f.lookups ?? {}).some((keys) => keys.length > 0));
+}
+
+/**
+ * A filter's lookups (list key -> value keys) as the API's `lookupValueId`: the
+ * value ids, comma-separated. Undefined without any; unknown keys are skipped
+ * (the settings API reports them as issues).
+ */
+export function lookupValueIds(
+  lookups: UiListFilters["lookups"],
+  lists: readonly { id: string; key: string }[],
+  values: readonly { id: string; listId: string; key: string }[],
+): string | undefined {
+  const ids: string[] = [];
+  for (const [listKey, keys] of Object.entries(lookups ?? {})) {
+    const list = lists.find((l) => l.key === listKey);
+    if (list) for (const v of values) if (v.listId === list.id && keys.includes(v.key)) ids.push(v.id);
+  }
+  return ids.join(",") || undefined;
 }
 
 // ---------- Navigation ----------
@@ -137,17 +154,43 @@ export interface NavClass {
   color: string | null;
   isActive: boolean;
   isAbstract: boolean;
+  /** The area (menu tab) the class belongs to. */
+  areaId?: string;
 }
 
-/** Classes the menu offers: active ones (abstract ones list their subclasses' CIs). */
-export const menuClasses = <T extends NavClass>(classes: readonly T[]) => classes.filter((c) => c.isActive);
+/** An area: a tab of the main menu that holds its classes. */
+export interface NavArea {
+  id: string;
+  key: string;
+  name: string;
+  icon: string | null;
+  color: string | null;
+  isActive: boolean;
+  sortOrder: number;
+}
+
+/**
+ * Classes the menu offers: active ones (abstract ones list their subclasses' CIs)
+ * whose area is not archived. Without areas (not loaded yet) no class is left out for its area.
+ */
+export function menuClasses<T extends NavClass>(classes: readonly T[], areas: readonly NavArea[] = []): T[] {
+  const archived = new Set(areas.filter((a) => !a.isActive).map((a) => a.id));
+  return classes.filter((c) => c.isActive && !(c.areaId && archived.has(c.areaId)));
+}
+
+/** Classes ordered by their area's tab position (stable: the class order is kept within an area). */
+function byArea<T extends NavClass>(classes: readonly T[], areas: readonly NavArea[]): T[] {
+  const rank = new Map([...areas].sort((a, b) => a.sortOrder - b.sortOrder).map((a, i) => [a.id, i]));
+  const at = (c: T) => (c.areaId && rank.has(c.areaId) ? rank.get(c.areaId)! : rank.size);
+  return classes.map((c, i) => ({ c, i })).sort((x, y) => at(x.c) - at(y.c) || x.i - y.i).map((x) => x.c);
+}
 
 /**
  * The stored entries followed by every page and class they leave out, in the
- * built-in order (pages first, the rest of the classes before the System pages).
- * The editor starts from this, so it always saves the complete menu.
+ * built-in order (pages first, the rest of the classes, by area, before the
+ * System pages). The editor starts from this, so it always saves the complete menu.
  */
-export function completeNavEntries(entries: readonly UiNavEntry[], classes: readonly NavClass[]): UiNavEntry[] {
+export function completeNavEntries(entries: readonly UiNavEntry[], classes: readonly NavClass[], areas: readonly NavArea[] = []): UiNavEntry[] {
   const pages = new Set<UiPage>();
   const listed = new Set<string>();
   for (const e of entries) {
@@ -160,7 +203,7 @@ export function completeNavEntries(entries: readonly UiNavEntry[], classes: read
     if (!pages.has(p.page)) out.push({ type: "page", page: p.page, label: null, hidden: !!p.hiddenByDefault });
   };
   for (const p of PAGES) if (!SYSTEM_PAGES.has(p.page)) addPage(p);
-  for (const c of menuClasses(classes)) {
+  for (const c of byArea(menuClasses(classes, areas), areas)) {
     // New classes show up in the menu; abstract ones only when an administrator adds them.
     if (!listed.has(c.key)) out.push({ type: "class", classKey: c.key, label: null, hidden: c.isAbstract });
   }
@@ -178,12 +221,26 @@ export interface NavLinkItem {
 export interface NavGroup {
   id: string;
   heading: string | null;
+  /** Set for an area's tab: the classes of one area that no section claims. */
+  area?: NavArea;
   items: NavLinkItem[];
 }
 
-/** The sidebar: visible entries grouped under headings. `showPage` applies permissions. */
-export function buildNav(entries: readonly UiNavEntry[], classes: readonly NavClass[], showPage: (p: UiPage) => boolean): NavGroup[] {
-  const byKey = new Map(menuClasses(classes).map((c) => [c.key, c]));
+/**
+ * The sidebar: visible entries grouped under headings. `showPage` applies
+ * permissions. Classes that are not in an administrator's section are grouped
+ * under their area's tab, one tab per area, placed where the area's first class
+ * is in the menu order; classes without a known area fall back to "Browse by class".
+ */
+export function buildNav(
+  entries: readonly UiNavEntry[],
+  classes: readonly NavClass[],
+  showPage: (p: UiPage) => boolean,
+  areas: readonly NavArea[] = [],
+): NavGroup[] {
+  const byKey = new Map(menuClasses(classes, areas).map((c) => [c.key, c]));
+  const areaById = new Map(areas.map((a) => [a.id, a]));
+  const areaGroups = new Map<string, NavGroup>();
   const groups: NavGroup[] = [];
   /** Consecutive pages and loose classes share a group; a section always starts its own. */
   let open: NavGroup | null = null;
@@ -198,7 +255,7 @@ export function buildNav(entries: readonly UiNavEntry[], classes: readonly NavCl
     const c = byKey.get(key);
     return c ? { id: `class:${c.key}`, label: label || c.name, to: `/cis?classId=${c.id}`, cls: c } : null;
   };
-  for (const e of completeNavEntries(entries, classes)) {
+  for (const e of completeNavEntries(entries, classes, areas)) {
     if (e.hidden) continue;
     if (e.type === "page" && e.page) {
       const p = PAGE.get(e.page);
@@ -206,7 +263,17 @@ export function buildNav(entries: readonly UiNavEntry[], classes: readonly NavCl
       push(SYSTEM_PAGES.has(e.page) ? "System" : null, { id: `page:${e.page}`, label: e.label || p.label, to: p.to, page: e.page });
     } else if (e.type === "class" && e.classKey) {
       const item = classItem(e.classKey, e.label);
-      if (item) push("Browse by class", item);
+      const area = item?.cls?.areaId ? areaById.get(item.cls.areaId) : undefined;
+      if (item && area) {
+        let g = areaGroups.get(area.id);
+        if (!g) {
+          g = { id: `area:${area.key}`, heading: area.name, area, items: [] };
+          areaGroups.set(area.id, g);
+          groups.push(g);
+        }
+        g.items.push(item);
+        open = null;
+      } else if (item) push("Browse by class", item);
     } else if (e.type === "section") {
       const items = (e.items ?? []).filter((i) => !i.hidden).map((i) => classItem(i.classKey, i.label)).filter((i): i is NavLinkItem => !!i);
       if (items.length === 0) continue;
@@ -214,6 +281,10 @@ export function buildNav(entries: readonly UiNavEntry[], classes: readonly NavCl
       open = null;
     }
   }
+  // The tabs keep their places in the menu, but follow the areas' order among themselves (Administration › Areas).
+  const slots = groups.flatMap((g, i) => (g.area ? [i] : []));
+  const tabs = slots.map((i) => groups[i]).sort((a, b) => a.area!.sortOrder - b.area!.sortOrder);
+  slots.forEach((slot, i) => (groups[slot] = tabs[i]));
   return groups;
 }
 
@@ -225,8 +296,7 @@ export function pageLabel(page: UiPage): string {
 
 export const WIDGET_TYPES: { type: UiWidgetType; label: string; hint: string }[] = [
   { type: "count_by_class", label: "CIs by class", hint: "Counts per class, optionally only some classes" },
-  { type: "count_by_status", label: "CIs by status", hint: "Counts per status" },
-  { type: "count_by_environment", label: "CIs by environment", hint: "Counts per environment" },
+  { type: "count_by_lookup", label: "CIs by lookup value", hint: "Counts per value of one lookup list, e.g. status" },
   { type: "recent_changes", label: "Recently changed", hint: "The latest changed CIs" },
   { type: "saved_search", label: "Saved search", hint: "CIs matching classes, filters and a sort" },
 ];
@@ -238,50 +308,142 @@ export function layoutFor(doc: UiSettingsDocument | undefined, classKey: string 
   return classKey ? doc?.layouts.find((l) => l.classKey === classKey) : undefined;
 }
 
-export interface ResolvedPanel {
+/** Grid columns of a section that does not say (the API's default). */
+export const GRID_COLUMNS = 3;
+/** The most columns a section's grid has, and the widest a field can be. */
+export const MAX_COLUMNS = 4;
+
+/** Every optional part of a layout filled in (tabs, sections, columns, widths), without the old `panels`. */
+export function normalizeLayout(l: UiClassLayout): UiClassLayout {
+  return {
+    classKey: l.classKey,
+    tabs: (l.tabs ?? []).map((t) => ({
+      key: t.key,
+      label: t.label,
+      sections: (t.sections ?? []).map((s) => ({
+        key: s.key,
+        label: s.label,
+        columns: s.columns ?? GRID_COLUMNS,
+        collapsed: !!s.collapsed,
+        fields: (s.fields ?? []).map((f) => ({ field: f.field, width: f.width ?? 1 })),
+      })),
+    })),
+    hiddenFields: l.hiddenFields ?? [],
+    readOnlyFields: l.readOnlyFields ?? [],
+  };
+}
+
+export interface ResolvedField {
+  field: string;
+  /** Columns spanned, at most the section's columns. */
+  width: number;
+}
+export interface ResolvedSection {
   key: string;
   label: string;
   collapsed: boolean;
-  fields: string[];
+  columns: number;
+  fields: ResolvedField[];
+  /** Placed by the built-in rules, not by the administrator: fields no section of the layout holds. */
+  auto: boolean;
+}
+export interface ResolvedTab {
+  key: string;
+  label: string;
+  sections: ResolvedSection[];
 }
 
+/** An empty layout: what a class without one in Customization gets. */
+export const builtInLayout = (classKey: string): UiClassLayout => ({ classKey, tabs: [], hiddenFields: [], readOnlyFields: [] });
+
+/** Fields shown right after another one wherever that is placed, unless placed themselves (the detail page's "Active"). */
+const COMPANIONS: Record<string, string> = { validUntil: "active" };
+
 /**
- * A class layout as panels of fields: the administrator's panels in order,
- * then everything they do not place — built-in fields in a "General" panel and
- * attributes in their attribute groups. Hidden fields and fields that are not
- * in `builtins` (e.g. timestamps on the form) are left out. Null without a
- * layout, so screens keep their built-in arrangement.
+ * A class layout as tabs of sections: the administrator's tabs, sections and
+ * field widths in order; then, at the end of the first tab, everything they do
+ * not place — a "General" section with the unplaced `core` fields and the
+ * attributes without a group, the other attribute groups, and finally a
+ * "Record" section with the unplaced `record` fields (class, timestamps).
+ * Hidden fields, built-in fields in neither list, and empty sections and tabs
+ * are left out. Without a layout of its own a class gets `builtInLayout`: one
+ * General tab with General, then its attribute groups.
  */
 export function resolveLayout(
-  layout: UiClassLayout | undefined,
+  layout: UiClassLayout,
   attrs: readonly AttributeLike[],
-  builtins: readonly string[],
-): ResolvedPanel[] | null {
-  if (!layout) return null;
+  core: readonly string[],
+  record: readonly string[] = [],
+  keepEmpty = false,
+): ResolvedTab[] {
   const hidden = new Set(layout.hiddenFields ?? []);
   const attrKeys = new Set(attrs.map((a) => a.key));
   const usable = (f: string) => {
-    if (hidden.has(f) && f !== "name") return false;
+    if (hidden.has(f)) return false;
     const a = attributeKey(f);
-    return a === null ? builtins.includes(f) : attrKeys.has(a);
+    return a === null ? core.includes(f) || record.includes(f) : attrKeys.has(a);
   };
   const placed = new Set<string>();
-  const panels: ResolvedPanel[] = [];
-  for (const p of layout.panels ?? []) {
-    const fields = (p.fields ?? []).filter((f) => usable(f) && !placed.has(f));
-    fields.forEach((f) => placed.add(f));
-    panels.push({ key: p.key, label: p.label, collapsed: !!p.collapsed, fields });
-  }
-  const general = builtins.filter((f) => usable(f) && !placed.has(f));
-  if (general.length > 0) panels.push({ key: "_general", label: "General", collapsed: false, fields: general });
-  const rest = attrs.filter((a) => usable(`${ATTRIBUTE_PREFIX}${a.key}`) && !placed.has(`${ATTRIBUTE_PREFIX}${a.key}`));
-  for (const [group, items] of groupAttributes(rest)) {
-    panels.push({ key: `_group:${group}`, label: group, collapsed: false, fields: items.map((a) => `${ATTRIBUTE_PREFIX}${a.key}`) });
-  }
-  return panels.filter((p) => p.fields.length > 0);
+  for (const t of layout.tabs ?? []) for (const s of t.sections ?? []) for (const f of s.fields ?? []) if (usable(f.field)) placed.add(f.field);
+  const companion = (f: string) => {
+    const c = COMPANIONS[f];
+    return c && usable(c) && !placed.has(c) ? c : null;
+  };
+  const taken = new Set<string>();
+  const tabs: ResolvedTab[] = (layout.tabs ?? []).map((t) => ({
+    key: t.key,
+    label: t.label,
+    sections: (t.sections ?? []).map((s) => {
+      const columns = Math.min(Math.max(s.columns ?? GRID_COLUMNS, 1), MAX_COLUMNS);
+      const fields: ResolvedField[] = [];
+      for (const f of s.fields ?? []) {
+        if (!usable(f.field) || taken.has(f.field)) continue;
+        taken.add(f.field);
+        fields.push({ field: f.field, width: Math.min(Math.max(f.width ?? 1, 1), columns) });
+        const c = companion(f.field);
+        if (c && !taken.has(c)) {
+          taken.add(c);
+          fields.push({ field: c, width: 1 });
+        }
+      }
+      return { key: s.key, label: s.label, collapsed: !!s.collapsed, columns, fields, auto: false };
+    }),
+  }));
+  const one = (field: string): ResolvedField => ({ field, width: 1 });
+  const auto = (key: string, label: string, fields: string[]): ResolvedSection => ({
+    key,
+    label,
+    collapsed: false,
+    columns: GRID_COLUMNS,
+    fields: fields.map(one),
+    auto: true,
+  });
+  const general = core.filter((f) => usable(f) && !taken.has(f));
+  const rest = attrs.filter((a) => usable(`${ATTRIBUTE_PREFIX}${a.key}`) && !taken.has(`${ATTRIBUTE_PREFIX}${a.key}`));
+  const groups = groupAttributes(rest).map(([group, items]) => ({ group, fields: items.map((a) => `${ATTRIBUTE_PREFIX}${a.key}`) }));
+  const ungrouped = groups[0]?.group === GENERAL_SECTION ? groups.shift()!.fields : [];
+  const trailing = [
+    auto("_general", GENERAL_SECTION, [...general, ...ungrouped]),
+    ...groups.map((g) => auto(`_group:${g.group}`, g.group, g.fields)),
+    auto("_record", "Record", record.filter((f) => usable(f) && !taken.has(f))),
+  ];
+  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, sections: [] });
+  tabs[0].sections.push(...trailing);
+  if (keepEmpty) return tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => !s.auto || s.fields.length > 0) }));
+  const shown = tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => s.fields.length > 0) })).filter((t) => t.sections.length > 0);
+  return shown.length > 0 ? shown : [{ ...tabs[0], sections: [] }];
 }
 
-/** Built-in fields the detail page shows (the name is the page title). */
-export const DETAIL_BUILTINS = BUILTIN_FIELDS.filter((f) => f.key !== "name").map((f) => f.key);
-/** Built-in fields the CI form edits. */
-export const FORM_BUILTINS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key);
+/**
+ * The CSS classes that put a section's grid and its fields in place: `lg-cols-N`
+ * on the grid, `lg-w-N` on a field (the stylesheet narrows both on small screens).
+ */
+export const gridClass = (columns: number) => `lg-grid lg-cols-${columns}`;
+export const cellClass = (width: number) => `lg-cell lg-w-${width}`;
+
+/** The core fields of every CI, which the form edits: the General section starts with them. */
+export const CORE_FIELDS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key);
+/** Core fields the detail page's General panel shows: the edited ones and whether the CI is active. */
+export const DETAIL_CORE = [...CORE_FIELDS, "active"];
+/** Bookkeeping fields the detail page shows last, in a "Record" panel (the label is the page title). */
+export const DETAIL_RECORD = BUILTIN_FIELDS.filter((f) => f.key !== "label" && !DETAIL_CORE.includes(f.key)).map((f) => f.key);

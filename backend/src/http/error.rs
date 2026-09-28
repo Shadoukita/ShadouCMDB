@@ -37,11 +37,19 @@ pub enum ErrorCode {
     LastAdministrator,
     /// Too many failed password attempts; retry after the Retry-After header
     RateLimited,
+    /// The password was right; send the authenticator or recovery code to POST /api/v1/auth/login/mfa (401)
+    MfaRequired,
+    /// A profile the user holds requires MFA; until it is set up only the MFA set-up routes answer (403)
+    MfaEnrolmentRequired,
+    /// The LDAP directory (or OIDC provider) could not be reached; local accounts still sign in (503)
+    IdentityProviderUnavailable,
     UnsupportedMediaType,
     PayloadTooLarge,
     /// The request was not completed within HTTP_REQUEST_TIMEOUT_SECS
     RequestTimeout,
     DatabaseUnavailable,
+    /// The database has migrations pending; run `shadoucmdb migrate` (503)
+    SchemaNotMigrated,
     InternalError,
 }
 
@@ -49,8 +57,10 @@ impl ErrorCode {
     pub fn status(self) -> StatusCode {
         match self {
             ErrorCode::ValidationError => StatusCode::BAD_REQUEST,
-            ErrorCode::Unauthenticated => StatusCode::UNAUTHORIZED,
-            ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid => StatusCode::FORBIDDEN,
+            ErrorCode::Unauthenticated | ErrorCode::MfaRequired => StatusCode::UNAUTHORIZED,
+            ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid | ErrorCode::MfaEnrolmentRequired => {
+                StatusCode::FORBIDDEN
+            }
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => {
                 StatusCode::CONFLICT
@@ -60,7 +70,9 @@ impl ErrorCode {
             ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorCode::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
-            ErrorCode::DatabaseUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated | ErrorCode::IdentityProviderUnavailable => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             ErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

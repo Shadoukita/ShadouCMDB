@@ -22,8 +22,10 @@ use crate::api::schemas::{self, OwnerKind, description_schema, key_schema, name_
 use crate::auth::permissions::GlobalPermission;
 
 pub const FORMAT: &str = "shadoucmdb.config";
-/// Version 2 adds areas (and the area of each class); version 1 files are still read.
-pub const FORMAT_VERSION: i32 = 2;
+/// Version 2 adds areas (and the area of each class), version 3 dependent
+/// lookup lists (the parent of a list, a value and a field); versions 1 and 2
+/// are still read.
+pub const FORMAT_VERSION: i32 = 3;
 
 fn yes() -> bool {
     true
@@ -112,6 +114,11 @@ pub struct ClassSpec {
     pub sort_order: i32,
     #[serde(default = "yes")]
     pub is_active: bool,
+    /// Key of the field (of the class or an ancestor) whose value labels its CIs; null: labelled by their ident.
+    /// Left out (files from before SHAA-267): unchanged, or the parent's for a new class.
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default, deserialize_with = "schemas::patch", skip_serializing_if = "Option::is_none")]
+    pub title_attribute: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -143,6 +150,11 @@ pub struct AttributeSpec {
     #[schema(schema_with = nullable_key_schema)]
     #[serde(default)]
     pub lookup_list: Option<String>,
+    /// lookup attributes on a list with a parent list: key of the field bound to the parent list, defined on
+    /// this class or an ancestor. Left out in files before version 3: an existing field keeps its parent field.
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default)]
+    pub parent_attribute: Option<String>,
     #[schema(schema_with = crate::modules::classes::validation_schema)]
     #[serde(default)]
     pub validation: Option<ValidationRules>,
@@ -189,8 +201,9 @@ pub struct RelationshipTypeSpec {
     pub is_active: bool,
 }
 
-/// Which classes a relationship type may connect (by keys)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+/// Which classes a relationship type may connect (by keys). Ordered by
+/// (type, source, target), the order export writes them in.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RelationshipRuleSpec {
     #[schema(schema_with = key_schema)]
@@ -341,6 +354,10 @@ pub struct LookupValueSpec {
     pub sort_order: i32,
     #[serde(default = "yes")]
     pub is_active: bool,
+    /// Values of a list with a parent list: key of the value of the parent list it belongs to
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default)]
+    pub parent: Option<String>,
 }
 
 fn values_schema() -> Schema {
@@ -364,6 +381,10 @@ pub struct LookupListSpec {
     pub sort_order: i32,
     #[serde(default = "yes")]
     pub is_active: bool,
+    /// Key of the list this list depends on (in the file or already in the target)
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default)]
+    pub parent: Option<String>,
     #[schema(schema_with = values_schema)]
     #[serde(default)]
     pub values: Vec<LookupValueSpec>,
@@ -486,8 +507,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 2 and reads 1 and 2
-    #[schema(minimum = 1, maximum = 2)]
+    /// File format version; this server writes version 3 and reads 1 to 3
+    #[schema(minimum = 1, maximum = 3)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]

@@ -59,7 +59,9 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   `shadoucmdb_app` automatically (default privileges set by `0007` for `public` and `0008` for
   `cmdb`). A table the API must not change, like `audit_log`, revokes those rights explicitly in
   its migration. After 0009, migrations do not write to area schemas: those belong to
-  `shadoucmdb_app` (see [`docs/deployment.md`](../docs/deployment.md#database-roles)).
+  `shadoucmdb_app` (see [`docs/deployment.md`](../docs/deployment.md#database-roles)). The one
+  exception is 0016, which moves the fixed CI columns into type tables; it runs as the schema owner,
+  a member of `shadoucmdb_app`, so the tables keep their owner.
 - Adding areas, CI types, fields or relationship types is data, not a migration: do it through the
   API or a starter template (`backend/src/modules/templates/`). The DDL engine creates the matching
   schema, table or column; never create or alter type tables by hand.
@@ -79,3 +81,15 @@ counts per attribute, and drops the EAV table; if a count differs, it fails and 
 For an independent check, run [`checks/eav_upgrade_1_before.sql`](checks/eav_upgrade_1_before.sql)
 before the upgrade and [`checks/eav_upgrade_2_after.sql`](checks/eav_upgrade_2_after.sql) after it;
 expect `missing = 0` and `unexpected = 0`. Take a backup first, as for any upgrade.
+
+## Upgrading to the barebone CI core (migration 0016)
+
+Migration 0016 gives every CI an `ident`, a validity period and a derived `label`, and moves the fixed
+columns (`name`, `status_id`, `environment_id`, `owner_id`, `location_id`, `hostname`, `ip_address`,
+`serial_number`, `notes`) into class fields in the type tables. It checks the counts per field and
+drops the columns only if every value arrived; otherwise it fails and nothing changes. A view of your
+own that reads those columns of `cmdb.configuration_items` blocks the migration: drop or rewrite it
+first. For an independent check, run [`checks/core_ci_upgrade_1_before.sql`](checks/core_ci_upgrade_1_before.sql)
+before the upgrade and [`checks/core_ci_upgrade_2_after.sql`](checks/core_ci_upgrade_2_after.sql) after
+it; expect `missing = 0` and `wrong_labels = 0`. See
+[`docs/data-model.md`](../docs/data-model.md#the-ci-core-ident-validity-and-label).

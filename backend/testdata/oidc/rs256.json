@@ -1,0 +1,20 @@
+{
+  "_comment": "RS256 fixture for jose.rs tests. The private key was generated for this file and discarded; only the public key is kept. The token is stored as its three segments (joined with '.' by the test) so secret scanners do not flag a test-only JWT.",
+  "jwks": {
+    "keys": [
+      {
+        "kty": "RSA",
+        "kid": "rsa1",
+        "use": "sig",
+        "alg": "RS256",
+        "n": "mE6saUCIpYbvt-RX941p7FMc_rAY6mYCB4mxmbSQbWuaHIysync_r9SnONP7an-gsKCidVD-SvxUv4gacqTJK75rJNZIqeuSjj8t-2TxQ7Ker9bJTRBky4S9tUASx1hZcmGS0lbxDwWoTwF5K10rgzmx9jWVM-PMvJK_ZEnZVaad5aF4oAMcwkD0q6rmFjh7r9bBihrxeLn-7RWtYTtRY9-C1RndLx-WM7nMNO0LmXEu_DDYTWnkX0fYSFxWSa1QvvFCFcrotRjdKUfNWKsY0LoSFRKbY7DiIdJjgrzVGiPbIw5AOKzDzql9dKZt92YuFQgrAioI4pCTIaaoc-kvrw",
+        "e": "AQAB"
+      }
+    ]
+  },
+  "token_segments": [
+    "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYTEiLCJ0eXAiOiJKV1QifQ",
+    "eyJzdWIiOiJyc2Etc3ViamVjdCIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUudGVzdCJ9",
+    "MlP14tECWMmyDNs1nhiL4GZ7LUaAujCxaWcoC7zQ2zItMb_yoTuGhEEjTo6uKVT5ewlZF5oOsslinXiqnuulSTRLbMeDM1biPsp-Yo2m4YGKwl_RDrstUKAJ0rmbXCPMGLmIma-ISWd_Gj6QJAzBdFxH2sA38yh4Vpcb8_Co75rj7Cb2-5TulVYBbAveSm6OgAW_frKsS5hPKj7qgMQcCKxMCTg4uC2SbI2zhxVsY1R_poa28B8o4cnvKf8XqfPoTjxu20NBV72bs49UbV1l6yJVZX9QpA-XbjcQDELKJnyQq20qO0o2HfJnEixPpGDvOp08v1PqNEGqCVLgpDZM9A"
+  ]
+}

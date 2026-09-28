@@ -8,6 +8,12 @@ schema checks). The binary ships for **Linux x64**, **Linux ARM64** and
 PostgreSQL is always **external**. Configure it through `DATABASE_URL` or the
 `PG*` variables. Every variable is documented in [`.env.example`](../.env.example).
 
+The connection to PostgreSQL verifies the server certificate and host name by default
+(`DATABASE_SSL=verify-full`). If the certificate comes from a private CA or a managed service
+(Amazon RDS, Azure Database for PostgreSQL), set `DATABASE_SSL_CA_FILE` to that CA bundle. The host
+in `PGHOST` or `DATABASE_URL` must match a name in the certificate. `DATABASE_SSL=require` skips
+the certificate check and logs a warning at startup; use it only while you fix the certificate.
+
 ## Commands
 
 ```
@@ -164,13 +170,24 @@ part of the policy.
 ## Database roles
 
 The bootstrap script [`sql/bootstrap/00_create_role_and_database.sql`](../sql/bootstrap/00_create_role_and_database.sql)
-creates three roles. None is a superuser.
+creates three roles. None is a superuser. Generate their passwords with
+`openssl rand -hex 24`: they go into connection URLs, where characters such as `@ : / # % ?`
+must be percent-encoded (`@` becomes `%40`), and hex needs none.
 
 | Role | Used by | Variable | May |
 | --- | --- | --- | --- |
 | `shadoucmdb_owner` | `shadoucmdb migrate`, `restore`, `factory-reset`, `decommission` | `MIGRATION_DATABASE_URL` | Own the database and the `cmdb` system schema; run migrations. Member of `shadoucmdb_app`. |
 | `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log` and `schema_changes`; no `EXECUTE` on the purge. Owns the area schemas (`CREATE` on the database). |
 | `shadoucmdb_maintenance` | `shadoucmdb prune-audit` | `MAINTENANCE_DATABASE_URL` | Execute `cmdb.prune_audit_log()`, nothing else. |
+
+These are the default names; any others work, as does a database not named `shadoucmdb`.
+Pass your names to the bootstrap script with `-v owner_role=… -v app_role=…
+-v maintenance_role=… -v db_name=…` and use them in the connection strings. `migrate` takes
+the API role from the `DATABASE_URL` (or `PGUSER`) user and the maintenance role from the
+`MAINTENANCE_DATABASE_URL` user, prints both, and grants to and hands over to those roles. So
+set all three variables when you run `migrate`; it stops if either role does not exist. When
+the API role is the migrating user itself (a single-role install), there is nothing to grant
+or hand over.
 
 Areas are PostgreSQL schemas whose tables and columns the API changes at run time, when an
 administrator adds an area, type or field (see [data-model.md](data-model.md)). So
@@ -180,7 +197,14 @@ can build the tables of existing types (migration 0009) and hand them over, and 
 reporting views as that role. The membership only runs that way round; the API role gains
 nothing from it. Migration 0008 stops with the `GRANT` to run if the membership is missing,
 e.g. on an install split before this version: run `GRANT shadoucmdb_app TO shadoucmdb_owner;`
-as an administrator, or re-run `10_split_roles.sql`, then `migrate` again.
+(with your role names) as an administrator, or re-run `10_split_roles.sql`, then `migrate` again.
+
+Both bootstrap scripts pin `search_path = cmdb, public` for `shadoucmdb_owner` and
+`shadoucmdb_maintenance`. PostgreSQL's default `"$user", public` would look first in a schema
+named after the role, and creating schemas is what the API role does; the API also refuses area
+keys that start with `shadoucmdb_` or match any existing role. On an install bootstrapped before
+this, run the two `ALTER ROLE … SET search_path = cmdb, public;` lines from
+`00_create_role_and_database.sql` as an administrator.
 
 Only `shadoucmdb_owner` may create objects in schema `public`. PostgreSQL 14 lets every role
 do so by default, which would let the API role plant a function that owner-privileged code
@@ -189,12 +213,17 @@ and cannot revoke it itself (run `REVOKE CREATE ON SCHEMA public FROM PUBLIC` as
 owner). PostgreSQL 15 and later withhold it already.
 
 The owner can change anything, including the audit log's trigger, so keep its connection
-string out of the running server's environment. For example, pass it only to the command
-that needs it (variables already set win over the env file):
+string out of the running server's environment. For example, prompt for the password and
+pass it only to the command that needs it (variables already set win over the env file).
+Use the same host, port and database as `DATABASE_URL`; any `sslmode` in the URL is ignored,
+`DATABASE_SSL` applies.
+Prompting also keeps it out of shell history, the sudo log and `ps`:
 
 ```sh
-MIGRATION_DATABASE_URL='postgres://shadoucmdb_owner:…@db.example.internal/shadoucmdb' \
+read -rsp 'shadoucmdb_owner password: ' PW; echo
+MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$PW@db.example.internal:5432/shadoucmdb" \
   shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+unset PW
 ```
 
 Running `migrate` as `shadoucmdb_app` on a three-role install fails with a hint to set
@@ -211,15 +240,21 @@ purge itself. To split it, once:
 
    ```sh
    psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
-        -v owner_password='<strong password>' -v maintenance_password='<strong password>' \
+        -v owner_password='<password>' -v maintenance_password='<password>' \
         -f sql/bootstrap/10_split_roles.sql
    ```
+
+   If your API role is not named `shadoucmdb_app`, add `-v app_role=<the DATABASE_URL user>`;
+   `-v owner_role=…` and `-v maintenance_role=…` name the two new roles.
 
    It creates `shadoucmdb_owner` and `shadoucmdb_maintenance`, hands the database and every
    object `shadoucmdb_app` owns in it to `shadoucmdb_owner`, and grants `shadoucmdb_app` the
    API's rights. It is safe to re-run, and does not touch other databases on the server.
 3. Set `MIGRATION_DATABASE_URL` and `MAINTENANCE_DATABASE_URL`, keep `DATABASE_URL` on
    `shadoucmdb_app`, start the server and run `shadoucmdb verify`.
+
+CI runs this path from `v0.1.0-rc.1` on every pull request; see
+[operator-setup.md](operator-setup.md#upgrade-paths-tested-in-ci).
 
 ## Audit log retention
 
@@ -248,7 +283,8 @@ Recorded as an audit.purge entry in audit_log.
 - `--older-than` takes days (`180d` or `180`); anything under 30 days is refused, by the
   command and by the database function.
 - `--scope auth` (default): `login.success`, `login.failure`, `login.locked`, `logout` and
-  `session.revoke` rows, plus `sessions` rows that expired more than 30 days ago.
+  `session.revoke` rows, API token `token.use` rows, two-factor `mfa.*` rows, plus `sessions`
+  rows that expired more than 30 days ago (and expired sign-in challenges in `mfa_challenges`).
   `--scope changes`: `create`, `update`, `delete` and `restore` rows, only if you decide to
   cut change history too.
 - The command needs `MAINTENANCE_DATABASE_URL` and refuses to run without it. Each executed
@@ -263,8 +299,8 @@ Recorded as an audit.purge entry in audit_log.
 
 All optional; every variable is in [`.env.example`](../.env.example).
 
-- **Database TLS:** set `DATABASE_SSL=verify-full` (with `DATABASE_SSL_CA_FILE` for a private CA). The
-  default `require` encrypts but does not check the server certificate.
+- **Database TLS:** keep the default `DATABASE_SSL=verify-full` (with `DATABASE_SSL_CA_FILE` for a private
+  CA). `require` encrypts but does not check the server certificate.
 - **API documentation:** `/openapi.json` and `/docs` are off by default (`API_DOCS=off`). Use
   `authenticated` to offer them to signed-in users, `public` for development. The contract is
   committed as `backend/openapi.json` either way.
@@ -371,8 +407,13 @@ A hardened sample unit is in [`deploy/systemd/shadoucmdb.service`](../deploy/sys
 sudo install -m 0755 shadoucmdb /usr/local/bin/shadoucmdb
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin shadoucmdb
 sudo install -d -m 0750 -o root -g shadoucmdb /etc/shadoucmdb
-sudo install -m 0640 -o root -g shadoucmdb .env /etc/shadoucmdb/shadoucmdb.env   # your settings
-sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+sudo install -m 0640 -o root -g shadoucmdb .env /etc/shadoucmdb/shadoucmdb.env   # your settings, as shadoucmdb_app
+# migrate as shadoucmdb_owner, passed to this one command only (see Database roles):
+read -rsp 'shadoucmdb_owner password: ' PW; echo
+export MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$PW@db.example.internal:5432/shadoucmdb"
+sudo --preserve-env=MIGRATION_DATABASE_URL -u shadoucmdb \
+  shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
+unset PW MIGRATION_DATABASE_URL
 sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin   # or use first-run setup in the UI
 sudo cp deploy/systemd/shadoucmdb.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
@@ -383,7 +424,8 @@ journalctl -u shadoucmdb -f
 The unit runs as an unprivileged user and has no capabilities or writable
 paths. To upgrade:
 1. replace the binary;
-2. run `migrate`;
+2. run `migrate` with `MIGRATION_DATABASE_URL` as above (on a single-role install, split the
+   roles first: see [Upgrading a single-role install](#upgrading-a-single-role-install));
 3. `systemctl restart shadoucmdb`.
 
 ## Windows Server (Windows Service)
@@ -395,13 +437,17 @@ $bin  = 'C:\Program Files\ShadouCMDB'
 $data = 'C:\ProgramData\ShadouCMDB'
 New-Item -ItemType Directory -Force $bin, $data | Out-Null
 Copy-Item .\shadoucmdb.exe $bin
-Copy-Item .\.env "$data\shadoucmdb.env"          # your settings (DATABASE_URL or PG*)
+Copy-Item .\.env "$data\shadoucmdb.env"          # your settings (DATABASE_URL or PG*), as shadoucmdb_app
 
 # The service runs as the low-privilege LocalService account: let it read the
 # settings and write its log. Keep the env file away from other users.
 icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'NT AUTHORITY\LocalService:(OI)(CI)M'
 
+# migrate as shadoucmdb_owner, prompted for and set for this session only (see Database roles):
+$pw = [uri]::EscapeDataString((Get-Credential shadoucmdb_owner).GetNetworkCredential().Password)
+$env:MIGRATION_DATABASE_URL = "postgres://shadoucmdb_owner:$pw@db.example.internal:5432/shadoucmdb"
 & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" migrate
+Remove-Item Env:MIGRATION_DATABASE_URL; Remove-Variable pw
 & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
 Start-Service ShadouCMDB
 Invoke-RestMethod http://127.0.0.1:3000/readyz

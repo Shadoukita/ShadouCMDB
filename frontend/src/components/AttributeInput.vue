@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { CiSummary } from "../api/queries";
-import type { AttributeShape, Validation } from "../lib/attributeValues";
+import { nowFormValue, NOW_HINT, type AttributeShape, type Validation } from "../lib/attributeValues";
 import CiPicker from "./CiPicker.vue";
-import LookupValueSelect from "./LookupValueSelect.vue";
+import LookupValueSelect, { type LookupParent } from "./LookupValueSelect.vue";
 
 /**
  * One input per attribute dataType. The value is always a string; see lib/attributeValues for conversion.
  * (Number inputs bind manually because v-model would cast them to numbers.)
+ * Double-clicking a date or datetime input sets it to the current local date and time.
  */
 const props = defineProps<{
   def: AttributeShape;
@@ -15,6 +16,8 @@ const props = defineProps<{
   invalid?: boolean;
   describedBy?: string;
   referenceName?: string;
+  /** For a lookup attribute with a parent field: that field's label and current value. */
+  lookupParent?: LookupParent | null;
 }>();
 const model = defineModel<string>({ required: true });
 const emit = defineEmits<{ referenceName: [name: string] }>();
@@ -24,7 +27,7 @@ const enumValues = computed(() => props.def.enumValues ?? []);
 const aria = computed(() => ({ "aria-invalid": props.invalid || undefined, "aria-describedby": props.describedBy }));
 
 function onReference(ci: CiSummary | null) {
-  if (ci) emit("referenceName", ci.name);
+  if (ci) emit("referenceName", ci.label);
   model.value = ci ? ci.id : "";
 }
 </script>
@@ -51,8 +54,15 @@ function onReference(ci: CiSummary | null) {
     :max="v.max"
     @input="model = ($event.target as HTMLInputElement).value"
   />
-  <input v-else-if="def.dataType === 'date'" :id="id" v-model="model" v-bind="aria" type="date" />
-  <input v-else-if="def.dataType === 'datetime'" :id="id" v-model="model" v-bind="aria" type="datetime-local" />
+  <input
+    v-else-if="def.dataType === 'date' || def.dataType === 'datetime'"
+    :id="id"
+    v-model="model"
+    v-bind="aria"
+    :type="def.dataType === 'date' ? 'date' : 'datetime-local'"
+    :title="NOW_HINT"
+    @dblclick="model = nowFormValue(def.dataType)"
+  />
   <CiPicker
     v-else-if="def.dataType === 'reference'"
     :id="id"
@@ -67,6 +77,7 @@ function onReference(ci: CiSummary | null) {
     :id="id"
     v-model="model"
     :list-id="def.lookupListId"
+    :parent="lookupParent"
     :invalid="invalid"
     :described-by="describedBy"
   />

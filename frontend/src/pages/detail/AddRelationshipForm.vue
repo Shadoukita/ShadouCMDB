@@ -24,11 +24,11 @@ const mayIn = computed(() => !!target.value && session.canOnClass(target.value.c
 
 const options = computed(() => {
   const out: { value: string; label: string }[] = [];
-  const name = target.value?.name;
-  if (mayOut.value) for (const t of outTypes.data.value?.data ?? []) out.push({ value: `${t.id}:out`, label: `${props.ci.name} ${t.forwardLabel} ${name}` });
+  const name = target.value?.label;
+  if (mayOut.value) for (const t of outTypes.data.value?.data ?? []) out.push({ value: `${t.id}:out`, label: `${props.ci.label} ${t.forwardLabel} ${name}` });
   for (const t of mayIn.value ? (inTypes.data.value?.data ?? []) : []) {
     if (!t.isDirectional && out.some((o) => o.value === `${t.id}:out`)) continue;
-    out.push({ value: `${t.id}:in`, label: `${props.ci.name} ${t.isDirectional ? t.reverseLabel : t.forwardLabel} ${name}` });
+    out.push({ value: `${t.id}:in`, label: `${props.ci.label} ${t.isDirectional ? t.reverseLabel : t.forwardLabel} ${name}` });
   }
   return out;
 });
@@ -84,7 +84,7 @@ function submit() {
       <CiPicker
         id="rel-target"
         :exclude-id="ci.id"
-        :selected="target"
+        :selected="target && { id: target.id, name: target.label }"
         :invalid="!!targetError"
         :described-by="targetError ? 'rel-target-err' : undefined"
         @select="onTarget"

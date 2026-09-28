@@ -4,7 +4,7 @@ import { RouterView, useRoute } from "vue-router";
 import EmptyState from "../../components/EmptyState.vue";
 import NavLink from "../../components/NavLink.vue";
 import { useSessionStore } from "../../stores/session";
-import { groupedSections, visibleSections } from "./sections";
+import { groupedSections, sectionAllowed, visibleSections } from "./sections";
 
 /**
  * The Administration area: its own sub-navigation, showing only the sections the
@@ -13,10 +13,11 @@ import { groupedSections, visibleSections } from "./sections";
  */
 const route = useRoute();
 const session = useSessionStore();
-const sections = computed(() => visibleSections(session.can));
-const groups = computed(() => groupedSections(session.can));
+const sections = computed(() => visibleSections(session.adminAccess));
+const groups = computed(() => groupedSections(session.adminAccess));
 const required = computed(() => route.meta.permissions ?? []);
-const allowed = computed(() => required.value.length === 0 || required.value.some(session.can));
+const administratorOnly = computed(() => !!route.meta.administratorOnly);
+const allowed = computed(() => sectionAllowed({ permissions: required.value, administratorOnly: administratorOnly.value }, session.adminAccess));
 </script>
 
 <template>
@@ -34,6 +35,11 @@ const allowed = computed(() => required.value.length === 0 || required.value.som
     </nav>
     <div class="admin-body">
       <RouterView v-if="allowed" />
+      <EmptyState v-else-if="administratorOnly" title="Permission denied">
+        This screen is only for holders of the built-in <strong>Administrator</strong> permission profile. The
+        <code>users.manage</code> permission alone is not enough: identity providers decide who may sign in and with
+        which profiles.
+      </EmptyState>
       <EmptyState v-else title="Permission denied">
         This screen needs the
         <template v-for="(p, i) in required" :key="p"><template v-if="i > 0"> or </template><code>{{ p }}</code></template>

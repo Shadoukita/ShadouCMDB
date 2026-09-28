@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { RouterLink } from "vue-router";
+import { useAreas } from "../../../api/datamodel";
 import { useCiClasses } from "../../../api/queries";
 import type { UiNavEntry, UiSettingsDocument } from "../../../api/uiSettings";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
@@ -12,16 +14,19 @@ import { completeNavEntries, pageLabel } from "../../../lib/uiSettings";
  * Customization › Navigation: the main menu's order, names, sections and
  * hidden entries. The table always shows the complete menu (pages and classes
  * the settings do not mention yet included); the first change stores it whole.
- * The real menu on the left previews the draft.
+ * Classes outside a section appear under their area's tab (Administration ›
+ * Areas); the order here decides their order within the tab. The real menu on
+ * the left previews the draft.
  */
 const props = defineProps<{ doc: UiSettingsDocument }>();
 const classes = useCiClasses();
-const rows = computed(() => completeNavEntries(props.doc.navigation.entries, classes.data.value ?? []));
+const areas = useAreas();
+const rows = computed(() => completeNavEntries(props.doc.navigation.entries, classes.data.value ?? [], areas.data.value ?? []));
 const sections = computed(() => rows.value.filter((e) => e.type === "section"));
 
 /** Applies a change to a copy of the complete menu and stores it. */
 function edit(change: (entries: UiNavEntry[]) => void) {
-  const next = completeNavEntries(props.doc.navigation.entries, classes.data.value ?? []);
+  const next = completeNavEntries(props.doc.navigation.entries, classes.data.value ?? [], areas.data.value ?? []);
   change(next);
   props.doc.navigation.entries = next;
 }
@@ -30,6 +35,11 @@ function className(key: string | undefined): string {
   const c = classes.data.value?.find((k) => k.key === key);
   if (!c) return `${key} (no such class)`;
   return `${c.name}${c.isActive ? "" : " (archived)"}${c.isAbstract ? " (incl. subclasses)" : ""}`;
+}
+function areaName(key: string | undefined): string {
+  const c = classes.data.value?.find((k) => k.key === key);
+  const a = c && areas.data.value?.find((x) => x.id === c.areaId);
+  return a ? `${a.name}${a.isActive ? "" : " (archived)"}` : "";
 }
 function defaultName(e: UiNavEntry): string {
   if (e.type === "page") return pageLabel(e.page!);
@@ -107,6 +117,7 @@ function resetMenu() {
             <tr :class="{ 'nav-section': e.type === 'section' }">
               <td>
                 <span class="badge">{{ kindLabel(e) }}</span> {{ e.type === "section" ? e.label : defaultName(e) }}
+                <span v-if="e.type === 'class' && areaName(e.classKey)" class="muted">· tab {{ areaName(e.classKey) }}</span>
                 <span v-if="e.type === 'section'" class="muted">({{ e.items?.length ?? 0 }} classes)</span>
               </td>
               <td>
@@ -173,8 +184,9 @@ function resetMenu() {
         <button type="button" class="btn" :disabled="doc.navigation.entries.length === 0" @click="resetMenu">Reset to the built-in menu</button>
       </form>
       <p class="hint">
-        Sections group classes under their own heading. Classes created later appear at the end of the menu until you
-        place them. Entries a user may not open (Administration, Audit log) stay hidden from them whatever this says.
+        Classes appear under their area's tab; the tabs themselves are ordered, renamed and archived in
+        <RouterLink to="/admin/areas">Administration › Areas</RouterLink>. A section takes classes out of their tab and
+        groups them under its own heading. Classes created later join their area's tab until you place them. Entries a user may not open (Administration, Audit log) stay hidden from them whatever this says.
       </p>
     </div>
   </section>

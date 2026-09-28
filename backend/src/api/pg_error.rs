@@ -31,15 +31,29 @@ const CONSTRAINT_FIELDS: &[(&str, &str)] = &[
     ("lookup_list_values_list_key_uq", "key"),
     ("lookup_list_values_list_id_fkey", "listId"),
     ("lookup_list_values_list_immutable", "listId"),
-    ("configuration_items_name_not_blank", "name"),
-    ("configuration_items_hostname_format", "hostname"),
+    ("lookup_lists_not_own_parent", "parentListId"),
+    ("lookup_lists_no_cycle", "parentListId"),
+    ("lookup_lists_parent_list_id_fkey", "parentListId"),
+    ("lookup_lists_parent_values", "parentListId"),
+    ("lookup_list_values_not_own_parent", "parentValueId"),
+    ("lookup_list_values_parent_list", "parentValueId"),
+    ("lookup_list_values_parent_required", "parentValueId"),
+    ("lookup_list_values_parent_value_id_fkey", "parentValueId"),
+    ("ci_attribute_definitions_not_own_parent", "parentAttributeId"),
+    ("ci_attribute_definitions_parent_attribute", "parentAttributeId"),
+    ("ci_attribute_definitions_parent_attribute_id_fkey", "parentAttributeId"),
+    ("configuration_items_ident_uq", "ident"),
+    ("configuration_items_ident_format", "ident"),
+    ("configuration_items_validity_order", "validUntil"),
+    ("ci_classes_title_attribute_in_lineage", "titleAttributeId"),
+    ("ci_classes_title_attribute_type", "titleAttributeId"),
+    ("ci_classes_title_attribute_id_fkey", "titleAttributeId"),
     ("configuration_items_class_concrete", "classId"),
     ("configuration_items_class_active", "classId"),
     ("configuration_items_class_change_attributes", "classId"),
     ("ci_relationships_no_self_edge", "targetCiId"),
     ("ci_relationships_endpoint_rule", "relationshipTypeId"),
     ("ci_relationships_type_active", "relationshipTypeId"),
-    ("ci_relationships_live_endpoints", "sourceCiId"),
     ("ci_relationships_live_edge_uq", "targetCiId"),
     ("relationship_type_rules_uq", "targetClassId"),
     ("users_username_uq", "username"),
@@ -90,6 +104,19 @@ fn field_for(pg: &PgDatabaseError) -> String {
     "(root)".to_owned()
 }
 
+/// A unique index reports "Key (a, b)=(x, y) already exists."; say it in words.
+fn unique_message(pg: &PgDatabaseError, field: &str) -> String {
+    match pg.detail() {
+        Some(d) if d.starts_with("Key (") => match pg.constraint() {
+            Some("ci_relationships_live_edge_uq") => "This relationship already exists between these CIs".to_owned(),
+            _ if field == "(root)" => "A record with the same values already exists".to_owned(),
+            _ => format!("Another record already has this {field}"),
+        },
+        Some(d) => humanise(d),
+        None => humanise(pg.message()),
+    }
+}
+
 /// Trigger messages are "table: human text"; drop the table prefix.
 fn humanise(msg: &str) -> String {
     match msg.split_once(": ") {
@@ -115,6 +142,9 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
             return Some(AppError::new(ErrorCode::LastAdministrator, humanise(pg.message())));
         }
         Some("permission_profiles_builtin_protected") => return Some(AppError::conflict(humanise(pg.message()))),
+        Some("configuration_items_validity_order") => {
+            return Some(AppError::field("validUntil", "Must be after validFrom", "custom"));
+        }
         // Technical names of areas, types and fields: a taken name is a naming problem, like a malformed one.
         Some(c @ ("areas_key_unique" | "ci_classes_key_unique" | "ci_attribute_definitions_class_key_uq")) => {
             let what = match c {
@@ -134,14 +164,12 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
     }
     match pg.code() {
         "23505" => {
-            Some(AppError::new(ErrorCode::Conflict, humanise(pg.detail().unwrap_or(pg.message()))).with_details(vec![
-                FieldError {
-                    location: FieldLocation::Body,
-                    field,
-                    message: "Already exists".into(),
-                    code: "unique".into(),
-                },
-            ]))
+            Some(AppError::new(ErrorCode::Conflict, unique_message(pg, &field)).with_details(vec![FieldError {
+                location: FieldLocation::Body,
+                field,
+                message: "Already exists".into(),
+                code: "unique".into(),
+            }]))
         }
         // restrict_violation (ON DELETE RESTRICT) and foreign-key violations
         code @ ("23001" | "23503") => {

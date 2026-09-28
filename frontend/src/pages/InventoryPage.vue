@@ -1,25 +1,27 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter, type LocationQueryRaw } from "vue-router";
-import { useCiClasses, useCiList, useClassAttributes, useLookup, type CiListQuery } from "../api/queries";
+import { useAllLookupListValues, useAreas, useLookupLists } from "../api/datamodel";
+import { useCiClasses, useCiList, useClassAttributes, type CiListQuery } from "../api/queries";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import CiCell from "../components/CiCell.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
-import LookupSelect from "../components/LookupSelect.vue";
 import PaginationBar from "../components/PaginationBar.vue";
 import { useAppSettings } from "../lib/appSettings";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
 import { isInAppNavigation } from "../lib/navigation";
+import { groupByArea } from "../lib/areas";
+import { viewableClasses } from "../lib/permissions";
 import { flattenTree } from "../lib/tree";
-import { attributeKey, BUILTIN, DEFAULT_COLUMNS, fieldLabel, hasFilters, listViewFor, sortParam } from "../lib/uiSettings";
+import { attributeKey, BUILTIN, DEFAULT_COLUMNS, fieldLabel, hasFilters, listViewFor, lookupValueIds, sortParam } from "../lib/uiSettings";
 import { useSessionStore } from "../stores/session";
 
 /**
  * CI inventory. Every filter, the sort and the page live in the URL
- * (/cis?classId=…&statusId=…&q=…&sort=-updatedAt&offset=50), so a view survives
+ * (/cis?classId=…&lookupValueId=…&q=…&sort=-updatedAt&offset=50), so a view survives
  * reload and can be bookmarked or shared. Filtering and paging happen in the API.
  *
  * A class's list view (Administration › Customization › List views) sets its
@@ -28,7 +30,7 @@ import { useSessionStore } from "../stores/session";
  */
 type SortField = NonNullable<CiListQuery["sort"]>;
 
-const FILTER_KEYS = ["q", "classId", "statusId", "environmentId", "ownerId", "locationId", "deleted"] as const;
+const FILTER_KEYS = ["q", "classId", "lookupValueId", "active", "deleted"] as const;
 const DEFAULT_LIMIT = 50;
 
 const route = useRoute();
@@ -45,23 +47,30 @@ const defaultLimit = computed(() => view.value?.pageSize ?? DEFAULT_LIMIT);
 
 const limit = computed(() => clampInt(get("limit"), defaultLimit.value, 1, 200));
 const offset = computed(() => clampInt(get("offset"), 0, 0, Number.MAX_SAFE_INTEGER));
-const sort = computed(() => get("sort") || sortParam(view.value?.defaultSort) || "name");
+const sort = computed(() => get("sort") || sortParam(view.value?.defaultSort) || "label");
 const deleted = computed(() => (get("deleted") === "include" ? "include" : get("deleted") === "only" ? "only" : undefined));
+/** Validity: only active CIs (the API's default), all, or only inactive ones. */
+const active = computed(() => (get("active") === "all" ? "all" : get("active") === "false" ? "false" : undefined));
 
 const query = computed<CiListQuery>(() => ({
   q: get("q") || undefined,
   classId: get("classId") || undefined,
-  statusId: get("statusId") || undefined,
-  environmentId: get("environmentId") || undefined,
-  ownerId: get("ownerId") || undefined,
-  locationId: get("locationId") || undefined,
+  lookupValueId: get("lookupValueId") || undefined,
+  active: active.value,
   deleted: deleted.value,
   sort: sort.value as SortField,
   limit: limit.value,
   offset: offset.value,
 }));
 const list = useCiList(query);
-const classTree = computed(() => flattenTree(classes.data.value ?? []));
+const areas = useAreas();
+const session = useSessionStore();
+// The class filter offers only what the user may view; the API would answer any other class with an empty list.
+const classOptions = computed(() => viewableClasses(classes.data.value ?? [], (id) => session.canOnClass(id, "view")));
+const classDenied = computed(() => !!currentClass.value && !classOptions.value.some((c) => c.id === currentClass.value!.id));
+const classTree = computed(() => flattenTree(classOptions.value));
+const classGroups = computed(() => groupByArea(classTree.value, (n) => n.item.areaId, areas.data.value ?? []));
+const currentArea = computed(() => areas.data.value?.find((a) => a.id === currentClass.value?.areaId));
 
 const columns = computed(() => (view.value?.columns?.length ? view.value.columns : DEFAULT_COLUMNS));
 const attrColumns = computed(() => columns.value.some((c) => attributeKey(c) !== null));
@@ -73,9 +82,8 @@ const columnSort = (field: string) => BUILTIN.get(field)?.sort;
 // Default filters: navigating to a class list (menu, links) with nothing but the class in the URL
 // writes the view's filters into it, so they show in the toolbar and the operator can change them.
 // A reload or Back shows the URL as it is, so a cleared filter stays cleared.
-const statusLookup = useLookup("statuses");
-const envLookup = useLookup("environments");
-const locationLookup = useLookup("locations");
+const lookupLists = useLookupLists();
+const lookupValues = useAllLookupListValues();
 const defaultsFor = ref<string | null>(null);
 watch(
   () => get("classId"),
@@ -85,7 +93,7 @@ watch(
   { immediate: true },
 );
 watch(
-  () => [defaultsFor.value, currentClass.value, settings.query.isFetched.value, view.value, statusLookup.data.value, envLookup.data.value, locationLookup.data.value] as const,
+  () => [defaultsFor.value, currentClass.value, settings.query.isFetched.value, view.value, lookupLists.data.value, lookupValues.data.value] as const,
   ([classId]) => {
     if (!classId || classId !== get("classId") || !currentClass.value || !settings.query.isFetched.value) return;
     const f = view.value?.defaultFilters;
@@ -93,18 +101,13 @@ watch(
       defaultsFor.value = null;
       return;
     }
-    const ids = (keys: string[] | undefined, data: { id: string; key?: string }[] | undefined) =>
-      keys?.length ? data && keys.map((k) => data.find((o) => o.key === k)?.id).filter(Boolean).join(",") : "";
-    const statusId = ids(f!.statusKeys, statusLookup.data.value);
-    const environmentId = ids(f!.environmentKeys, envLookup.data.value);
-    const locationId = ids(f!.locationKeys, locationLookup.data.value);
-    if (statusId === undefined || environmentId === undefined || locationId === undefined) return; // lookups still loading
+    const usesLookups = Object.keys(f!.lookups ?? {}).length > 0;
+    if (usesLookups && (!lookupLists.data.value || !lookupValues.data.value)) return; // lookups still loading
+    const lookupValueId = usesLookups ? lookupValueIds(f!.lookups, lookupLists.data.value!, lookupValues.data.value!) : undefined;
     defaultsFor.value = null;
     const next: LocationQueryRaw = { classId };
     if (f!.q) next.q = f!.q;
-    if (statusId) next.statusId = statusId;
-    if (environmentId) next.environmentId = environmentId;
-    if (locationId) next.locationId = locationId;
+    if (lookupValueId) next.lookupValueId = lookupValueId;
     router.replace({ path: "/cis", query: next });
   },
   { immediate: true },
@@ -136,12 +139,18 @@ watch(
 );
 
 const activeFilters = computed(() => FILTER_KEYS.filter((k) => get(k)));
+/** The lookup values the list is filtered by (from a dashboard link or a list view's default filters), by name. */
+const lookupFilterNames = computed(() =>
+  get("lookupValueId")
+    .split(",")
+    .filter(Boolean)
+    .map((id) => lookupValues.data.value?.find((v) => v.id === id)?.name ?? (lookupValues.isLoading.value ? "…" : "Unknown value")),
+);
 const total = computed(() => list.data.value?.page.total ?? 0);
 const rows = computed(() => list.data.value?.data ?? []);
 const newTo = computed(() =>
   query.value.classId && !currentClass.value?.isAbstract ? `/cis/new?classId=${query.value.classId}` : "/cis/new",
 );
-const session = useSessionStore();
 const canCreate = computed(() =>
   query.value.classId && currentClass.value && !currentClass.value.isAbstract
     ? session.canOnClass(query.value.classId, "create")
@@ -149,7 +158,9 @@ const canCreate = computed(() =>
 );
 const newLabel = computed(() => (currentClass.value && !currentClass.value.isAbstract ? currentClass.value.name : "CI"));
 const crumbs = computed(() =>
-  currentClass.value ? [{ label: "Inventory", to: "/cis" }, { label: currentClass.value.name }] : [{ label: "Inventory" }],
+  currentClass.value
+    ? [{ label: "Inventory", to: "/cis" }, ...(currentArea.value ? [{ label: currentArea.value.name }] : []), { label: currentClass.value.name }]
+    : [{ label: "Inventory" }],
 );
 
 const toggleSort = (field: string) => update({ sort: sort.value === field ? `-${field}` : field }, true);
@@ -204,56 +215,34 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
     <form class="toolbar" role="search" @submit.prevent>
       <div class="field search">
         <label for="f-q">Search</label>
-        <input id="f-q" v-model="qText" type="search" placeholder="Name, hostname, IP, serial, notes…" />
+        <input id="f-q" v-model="qText" type="search" placeholder="Label, ident, attribute values…" />
       </div>
       <div class="field">
         <label for="f-class">Class</label>
         <select id="f-class" :value="get('classId')" @change="update({ classId: ($event.target as HTMLSelectElement).value || undefined })">
           <option value="">All classes</option>
-          <option v-for="n in classTree" :key="n.item.id" :value="n.item.id">
-            {{ "\u00a0\u00a0".repeat(n.depth) }}{{ n.item.name }}{{ n.item.isAbstract ? " (incl. subclasses)" : "" }}{{ n.item.isActive ? "" : " (archived)" }}
-          </option>
+          <option v-if="classDenied && currentClass" :value="currentClass.id">{{ currentClass.name }}</option>
+          <optgroup v-for="g in classGroups" :key="g.area?.id ?? '-'" :label="g.area?.name ?? 'Other'">
+            <option v-for="n in g.items" :key="n.item.id" :value="n.item.id">
+              {{ "\u00a0\u00a0".repeat(n.depth) }}{{ n.item.name }}{{ n.item.isAbstract ? " (incl. subclasses)" : "" }}{{ n.item.isActive ? "" : " (archived)" }}
+            </option>
+          </optgroup>
         </select>
       </div>
-      <div class="field">
-        <label for="f-status">Status</label>
-        <LookupSelect
-          id="f-status"
-          kind="statuses"
-          :model-value="get('statusId')"
-          empty-label="Any status"
-          @update:model-value="(v) => update({ statusId: v || undefined })"
-        />
+      <div v-if="lookupFilterNames.length > 0" class="field">
+        <span class="label">Lookup values</span>
+        <span class="checkbox-row">
+          {{ lookupFilterNames.join(", ") }}
+          <button type="button" class="btn btn-sm" aria-label="Remove the lookup value filter" @click="update({ lookupValueId: undefined })">×</button>
+        </span>
       </div>
       <div class="field">
-        <label for="f-env">Environment</label>
-        <LookupSelect
-          id="f-env"
-          kind="environments"
-          :model-value="get('environmentId')"
-          empty-label="Any environment"
-          @update:model-value="(v) => update({ environmentId: v || undefined })"
-        />
-      </div>
-      <div class="field">
-        <label for="f-owner">Owner</label>
-        <LookupSelect
-          id="f-owner"
-          kind="owners"
-          :model-value="get('ownerId')"
-          empty-label="Any owner"
-          @update:model-value="(v) => update({ ownerId: v || undefined })"
-        />
-      </div>
-      <div class="field">
-        <label for="f-location">Location</label>
-        <LookupSelect
-          id="f-location"
-          kind="locations"
-          :model-value="get('locationId')"
-          empty-label="Any location"
-          @update:model-value="(v) => update({ locationId: v || undefined })"
-        />
+        <label for="f-active">Validity</label>
+        <select id="f-active" :value="active ?? ''" @change="update({ active: ($event.target as HTMLSelectElement).value || undefined })">
+          <option value="">Active only</option>
+          <option value="all">Show inactive</option>
+          <option value="false">Only inactive</option>
+        </select>
       </div>
       <div class="field">
         <label for="f-deleted">Deleted CIs</label>
@@ -271,7 +260,11 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
     </div>
     <LoadingState v-if="list.isLoading.value" label="Loading inventory…" />
 
-    <DataModelEmpty v-if="list.data.value && total === 0 && activeFilters.length === 0 && classes.data.value?.length === 0" />
+    <EmptyState v-if="classDenied" title="Permission denied">
+      None of your permission profiles allows viewing {{ currentClass?.name }} configuration items, so none are listed here.
+      <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
+    </EmptyState>
+    <DataModelEmpty v-else-if="list.data.value && total === 0 && activeFilters.length === 0 && classes.data.value?.length === 0" />
     <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length === 0" title="The inventory is empty">
       Configuration items are the servers, VMs, applications, databases, network devices and locations you track. Create
       one, then relate it to others from its detail page.
@@ -279,7 +272,7 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
         <RouterLink class="btn btn-primary" to="/cis/new">+ Create your first configuration item</RouterLink>
       </template>
     </EmptyState>
-    <EmptyState v-if="list.data.value && total === 0 && activeFilters.length > 0" title="No configuration items match these filters">
+    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length > 0" title="No configuration items match these filters">
       Adjust or clear the filters above.
     </EmptyState>
     <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" title="This page is past the end of the results">

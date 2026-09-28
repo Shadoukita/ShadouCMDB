@@ -64,11 +64,34 @@ export async function classIdByName(request: APIRequestContext, name: string): P
   return cls!.id;
 }
 
+/** A CI by its label (the value of its class's title attribute: its name, for the template's classes). */
 export async function ciIdByName(request: APIRequestContext, name: string): Promise<string> {
-  const list = await apiGet<Page_<{ id: string; name: string }>>(request, `/configuration-items?q=${encodeURIComponent(name)}&limit=50`);
-  const ci = list.data.find((c) => c.name === name);
+  const list = await apiGet<Page_<{ id: string; label: string }>>(request, `/configuration-items?q=${encodeURIComponent(name)}&active=all&limit=50`);
+  const ci = list.data.find((c) => c.label === name);
   expect(ci, `CI ${name}`).toBeTruthy();
   return ci!.id;
+}
+
+/** The id of a lookup list value by list key and value key, e.g. ("status", "in_service"). */
+export async function lookupValueId(request: APIRequestContext, listKey: string, valueKey: string): Promise<string> {
+  const lists = await apiGet<Page_<{ id: string; key: string }>>(request, "/lookup-lists?limit=200");
+  const list = lists.data.find((l) => l.key === listKey);
+  expect(list, `lookup list ${listKey}`).toBeTruthy();
+  const values = await apiGet<Page_<{ id: string; key: string }>>(request, `/lookup-list-values?listId=${list!.id}&limit=200`);
+  const value = values.data.find((v) => v.key === valueKey);
+  expect(value, `lookup value ${listKey}.${valueKey}`).toBeTruthy();
+  return value!.id;
+}
+
+/** Creates a CI through the API with a name and the status "In service" (the template's required attributes), plus `attributes`. */
+export async function createCi(
+  request: APIRequestContext,
+  classId: string,
+  name: string,
+  attributes: Record<string, unknown> = {},
+): Promise<{ id: string; ident: string; label: string; version: number }> {
+  const status = await lookupValueId(request, "status", "in_service");
+  return apiSend(request, "POST", "/configuration-items", { classId, attributes: { name, status, ...attributes } });
 }
 
 /** Picks a CI in a CiPicker combobox by typing and clicking the option whose name matches exactly. */
@@ -76,4 +99,16 @@ export async function pickCi(page: Page, inputSelector: string, search: string, 
   await page.locator(inputSelector).fill(search);
   const option = page.getByRole("option").filter({ has: page.getByText(name, { exact: true }) });
   await option.first().click();
+}
+
+/**
+ * Confirms the open data model change preview (the dialog showing the DDL a change runs) with its
+ * apply button, optionally checking the SQL it shows first.
+ */
+export async function applySchemaChange(page: Page, button: string, expectSql?: string) {
+  const dialog = page.locator("dialog.schema-change[open]");
+  await expect(dialog.getByRole("heading", { name: "What it does" })).toBeVisible();
+  if (expectSql) await expect(dialog.locator(".sc-ddl")).toContainText(expectSql);
+  await dialog.getByRole("button", { name: button, exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 }

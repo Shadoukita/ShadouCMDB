@@ -3,7 +3,9 @@
 use sqlx::postgres::PgConnection;
 
 use super::archive::{self, Header};
-use super::{Table, app_object_count, app_tables, area_schemas, backup, ident, reset, restore, stored_columns};
+use super::{
+    EXCLUDED_TABLES, Table, app_object_count, app_tables, area_schemas, backup, ident, reset, restore, stored_columns,
+};
 use crate::db::{MIGRATOR, scratch};
 
 /// Every stored value of a table, independent of row and column order.
@@ -121,8 +123,11 @@ async fn a_backup_restores_into_another_database_value_for_value() {
 
     let (buf, header) = take_backup(&mut ca).await;
     assert!(header.total_rows() > 20, "demo data is in the backup");
-    assert_eq!(header.excluded_tables, vec!["cmdb.sessions".to_owned()]);
-    assert!(!header.tables.iter().any(|t| t.name == "sessions"));
+    assert_eq!(
+        header.excluded_tables,
+        ["cmdb.mfa_challenges", "cmdb.oidc_login_states", "cmdb.sessions"].map(str::to_owned).to_vec()
+    );
+    assert!(!header.tables.iter().any(|t| EXCLUDED_TABLES.contains(&t.name.as_str())));
     // The system tables, then the type tables of the area.
     assert!(header.tables.iter().any(|t| t.schema == "cmdb" && t.name == "schema_changes" && t.rows > 0));
     let server = header.tables.iter().find(|t| t.schema == "infrastruktur" && t.name == "server").unwrap();

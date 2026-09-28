@@ -42,12 +42,19 @@ function csrfToken(): string | undefined {
 }
 
 /** Paths whose 401 is an answer (wrong password, not signed in yet), not an expired session. */
-const AUTH_PATHS = ["/api/v1/auth/login", "/api/v1/auth/me", "/api/v1/auth/password", "/api/v1/setup"];
+const AUTH_PATHS = ["/api/v1/auth/login", "/api/v1/auth/login/mfa", "/api/v1/auth/me", "/api/v1/auth/password", "/api/v1/setup"];
 let unauthenticatedHandler: (() => void) | undefined;
 
 /** Called when any other request answers 401: the session ended (expired, signed out elsewhere, account disabled). */
 export function onSessionEnded(handler: () => void) {
   unauthenticatedHandler = handler;
+}
+
+let enrolmentRequiredHandler: (() => void) | undefined;
+
+/** Called when a request answers 403 MFA_ENROLMENT_REQUIRED: a profile the user holds now requires two-factor authentication. */
+export function onMfaEnrolmentRequired(handler: () => void) {
+  enrolmentRequiredHandler = handler;
 }
 
 api.use({
@@ -58,13 +65,17 @@ api.use({
     requestEpoch.set(request, sessionEpoch);
     return request;
   },
-  onResponse({ request, response }) {
+  async onResponse({ request, response }) {
     if (
       response.status === 401 &&
       requestEpoch.get(request) === sessionEpoch &&
       !AUTH_PATHS.some((p) => new URL(request.url).pathname.endsWith(p))
     ) {
       unauthenticatedHandler?.();
+    }
+    if (response.status === 403 && requestEpoch.get(request) === sessionEpoch) {
+      const body = (await response.clone().json().catch(() => null)) as Envelope | null;
+      if (body?.error?.code === "MFA_ENROLMENT_REQUIRED") enrolmentRequiredHandler?.();
     }
     return response;
   },

@@ -6,6 +6,11 @@
 --        -v maintenance_password='<strong password 3>' \
 --        -f sql/bootstrap/00_create_role_and_database.sql
 --
+-- The role and database names below are the defaults. To use your own naming
+-- scheme, add any of -v owner_role=... -v app_role=... -v maintenance_role=...
+-- -v db_name=...; the connection strings then name those roles and that
+-- database, and `shadoucmdb migrate` grants to whatever roles they use.
+--
 -- Three roles, none of them superuser:
 --   shadoucmdb_owner        owns the database and the cmdb system schema;
 --                           `shadoucmdb migrate` connects as it
@@ -26,21 +31,43 @@
 -- Installs created with the older single-role version of this script are split
 -- with 10_split_roles.sql.
 
-CREATE ROLE shadoucmdb_owner LOGIN PASSWORD :'owner_password';
-CREATE ROLE shadoucmdb_app LOGIN PASSWORD :'app_password';
-CREATE ROLE shadoucmdb_maintenance LOGIN PASSWORD :'maintenance_password';
-GRANT shadoucmdb_app TO shadoucmdb_owner;
-CREATE DATABASE shadoucmdb OWNER shadoucmdb_owner ENCODING 'UTF8';
-REVOKE ALL ON DATABASE shadoucmdb FROM PUBLIC;
-GRANT CONNECT ON DATABASE shadoucmdb TO shadoucmdb_app, shadoucmdb_maintenance;
-GRANT CREATE ON DATABASE shadoucmdb TO shadoucmdb_app;
+\set ON_ERROR_STOP on
+\if :{?owner_role}
+\else
+  \set owner_role shadoucmdb_owner
+\endif
+\if :{?app_role}
+\else
+  \set app_role shadoucmdb_app
+\endif
+\if :{?maintenance_role}
+\else
+  \set maintenance_role shadoucmdb_maintenance
+\endif
+\if :{?db_name}
+\else
+  \set db_name shadoucmdb
+\endif
 
-\connect shadoucmdb
--- Only shadoucmdb_owner creates objects in public and cmdb. PostgreSQL 14 lets
+CREATE ROLE :"owner_role" LOGIN PASSWORD :'owner_password';
+CREATE ROLE :"app_role" LOGIN PASSWORD :'app_password';
+CREATE ROLE :"maintenance_role" LOGIN PASSWORD :'maintenance_password';
+GRANT :"app_role" TO :"owner_role";
+-- Pin the search_path: the default "$user", public would look first in a
+-- schema named after the role, and schemas are what the API role creates.
+ALTER ROLE :"owner_role" SET search_path = cmdb, public;
+ALTER ROLE :"maintenance_role" SET search_path = cmdb, public;
+CREATE DATABASE :"db_name" OWNER :"owner_role" ENCODING 'UTF8';
+REVOKE ALL ON DATABASE :"db_name" FROM PUBLIC;
+GRANT CONNECT ON DATABASE :"db_name" TO :"app_role", :"maintenance_role";
+GRANT CREATE ON DATABASE :"db_name" TO :"app_role";
+
+\connect :"db_name"
+-- Only the owner role creates objects in public and cmdb. PostgreSQL 14 lets
 -- every role create in schema public, which would let the API role plant a
 -- function that the owner-privileged prune_audit_log() or a migration then
 -- runs (15+ already withholds it; the REVOKE is then a no-op).
-GRANT CREATE ON SCHEMA public TO shadoucmdb_owner;
+GRANT CREATE ON SCHEMA public TO :"owner_role";
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 -- Only needed if your provider does not let the database owner create trusted
 -- extensions; harmless otherwise.

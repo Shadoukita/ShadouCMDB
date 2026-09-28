@@ -37,6 +37,7 @@ pub struct RelationshipTypeRef {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Endpoint {
     pub id: Uuid,
+    /// The CI's label
     pub name: String,
     pub class_key: String,
     pub class_name: String,

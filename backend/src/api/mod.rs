@@ -26,6 +26,8 @@ pub fn routes() -> Vec<Route> {
     [
         modules::health::routes(),
         modules::auth::routes(),
+        modules::mfa::routes(),
+        modules::sso::routes(),
         modules::items::routes(),
         modules::relationships::routes(),
         modules::areas::routes(),
@@ -37,6 +39,8 @@ pub fn routes() -> Vec<Route> {
         modules::audit::routes(),
         modules::users::routes(),
         modules::profiles::routes(),
+        modules::api_tokens::routes(),
+        modules::identity_providers::routes(),
         modules::config_transfer::routes(),
     ]
     .into_iter()

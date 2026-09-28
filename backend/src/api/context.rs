@@ -53,6 +53,7 @@ pub struct Actor {
 pub enum Caller {
     /// No session (public routes only).
     Anonymous,
+    /// A signed-in user, or an API token acting for its owner.
     User(Arc<Principal>),
     /// The CLI, imports and discovery: not subject to permissions.
     System,
@@ -91,6 +92,16 @@ impl RequestContext {
     pub fn user(principal: Arc<Principal>, request_id: String) -> Self {
         let actor = Actor {
             actor_type: ActorType::User,
+            id: Some(principal.user_id.to_string()),
+            name: Some(principal.username.clone()),
+        };
+        RequestContext { caller: Caller::User(principal), actor, request_id, client: ClientInfo::default() }
+    }
+
+    /// A request made with an API token: audited as `api_client` with the owner's id and name.
+    pub fn token(principal: Arc<Principal>, request_id: String) -> Self {
+        let actor = Actor {
+            actor_type: ActorType::ApiClient,
             id: Some(principal.user_id.to_string()),
             name: Some(principal.username.clone()),
         };
@@ -153,6 +164,16 @@ impl RequestContext {
             Caller::Anonymous => Err(unauthenticated()),
             Caller::User(p) if p.permissions.has(permission) => Ok(()),
             Caller::User(_) => Err(forbidden(format!("This requires the {} permission", permission.as_str()))),
+        }
+    }
+
+    /// Only users whose profile is Administrator (`what`: "change a CI's ident").
+    pub fn require_administrator(&self, what: &str) -> Result<(), AppError> {
+        match &self.caller {
+            Caller::System => Ok(()),
+            Caller::Anonymous => Err(unauthenticated()),
+            Caller::User(p) if p.permissions.administrator => Ok(()),
+            Caller::User(_) => Err(forbidden(format!("Only administrators can {what}"))),
         }
     }
 

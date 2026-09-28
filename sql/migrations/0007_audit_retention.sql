@@ -179,20 +179,28 @@ $$;
 -- ---------------------------------------------------------------------------
 -- Grants for the three-role setup
 -- ---------------------------------------------------------------------------
+-- The role names are whatever the operator chose: `shadoucmdb migrate` passes
+-- the users of DATABASE_URL and MAINTENANCE_DATABASE_URL as the session
+-- settings shadoucmdb.app_role and shadoucmdb.maintenance_role. Without them
+-- (psql) the names from sql/bootstrap/ apply.
 DO $$
+DECLARE
+  app_role name := COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app');
+  maintenance_role name :=
+    COALESCE(NULLIF(current_setting('shadoucmdb.maintenance_role', true), ''), 'shadoucmdb_maintenance');
 BEGIN
-  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_maintenance') THEN
-    GRANT EXECUTE ON FUNCTION prune_audit_log(interval, text, boolean, text) TO shadoucmdb_maintenance;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = maintenance_role) AND current_user <> maintenance_role THEN
+    EXECUTE format('GRANT EXECUTE ON FUNCTION prune_audit_log(interval, text, boolean, text) TO %I', maintenance_role);
   END IF;
   -- On a single-role install the API role owns everything; the split script handles it.
-  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_app') AND current_user <> 'shadoucmdb_app' THEN
-    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO shadoucmdb_app;
-    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO shadoucmdb_app;
-    REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM shadoucmdb_app;
-    REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON _sqlx_migrations FROM shadoucmdb_app;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) AND current_user <> app_role THEN
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %I', app_role);
+    EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO %I', app_role);
+    EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM %I', app_role);
+    EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON _sqlx_migrations FROM %I', app_role);
     -- Tables created by later migrations (run as this role) get the same DML grants.
-    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO shadoucmdb_app;
-    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO shadoucmdb_app;
+    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', app_role);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO %I', app_role);
   END IF;
 END;
 $$;

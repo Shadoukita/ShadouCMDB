@@ -1,10 +1,13 @@
-//! Authentication events in `audit_log` (entity type `sessions`).
+//! Authentication events in `audit_log`: sessions (entity type `sessions`),
+//! API token use (entity type `api_tokens`, the token's id) and two-factor
+//! sign-in (`mfa.*`, entity type `users`, the user's id).
 //!
 //! Each row carries the request's id, the client IP (and the TCP peer when it
 //! differs) and user agent (see
 //! [`crate::api::context::ClientInfo`]) and, in `new_value`, the event's
 //! details. Never recorded: the password, the session token or its hash, the
-//! CSRF token.
+//! CSRF token, an API token's secret or its hash, a TOTP secret, an
+//! authenticator or recovery code or its hash.
 //!
 //! A failed sign-in stores the username as typed (truncated) and nothing about
 //! whether it exists, so the audit log is not an enumeration oracle for those
@@ -18,11 +21,15 @@ use serde_json::{Value, json};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
+use super::token::{Refusal, Use};
 use crate::api::context::RequestContext;
+use crate::data::api_tokens::PresentedToken;
 use crate::data::auth::EndedSession;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 
 const ENTITY: &str = "sessions";
+pub const TOKEN_ENTITY: &str = "api_tokens";
+const MFA_ENTITY: &str = "users";
 
 /// Longest attempted username kept (the real ones are at most 64 characters).
 const ATTEMPTED_USERNAME_MAX: usize = 64;
@@ -38,6 +45,8 @@ pub enum RevokeReason {
     PasswordChanged,
     /// A new sign-in in the same browser replaced the session its cookie named.
     Replaced,
+    /// The identity provider the user signs in through was disabled or deleted.
+    ProviderDisabled,
 }
 
 impl RevokeReason {
@@ -48,6 +57,7 @@ impl RevokeReason {
             RevokeReason::PasswordReset => "password_reset",
             RevokeReason::PasswordChanged => "password_changed",
             RevokeReason::Replaced => "replaced",
+            RevokeReason::ProviderDisabled => "provider_disabled",
         }
     }
 }
@@ -56,8 +66,16 @@ impl RevokeReason {
 #[derive(Debug, Clone, Copy)]
 pub enum LoginMethod {
     Password,
+    /// Password, then an authenticator code.
+    Totp,
+    /// Password, then a one-time recovery code.
+    RecoveryCode,
     /// First-run setup signs the new administrator in.
     Setup,
+    /// An OpenID Connect provider vouched for the user.
+    Oidc,
+    /// An LDAP / Active Directory bind with the user's password.
+    Ldap,
 }
 
 fn attempted(username: &str) -> String {
@@ -91,7 +109,18 @@ async fn write(
     entity_id: Uuid,
     new_value: Value,
 ) -> sqlx::Result<()> {
-    let entry = AuditEntry { action, entity_type: ENTITY, entity_id, old_value: None, new_value: Some(new_value) };
+    write_for(conn, ctx, action, ENTITY, entity_id, new_value).await
+}
+
+async fn write_for(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    action: AuditAction,
+    entity_type: &'static str,
+    entity_id: Uuid,
+    new_value: Value,
+) -> sqlx::Result<()> {
+    let entry = AuditEntry { action, entity_type, entity_id, old_value: None, new_value: Some(new_value) };
     crud::write_audit(conn, ctx, vec![entry]).await
 }
 
@@ -106,7 +135,11 @@ pub async fn login_success(
 ) -> sqlx::Result<()> {
     let method = match method {
         LoginMethod::Password => "password",
+        LoginMethod::Totp => "totp",
+        LoginMethod::RecoveryCode => "recovery_code",
         LoginMethod::Setup => "setup",
+        LoginMethod::Oidc => "oidc",
+        LoginMethod::Ldap => "ldap",
     };
     let v = details(ctx, fields(json!({ "userId": user_id, "username": username, "method": method })));
     write(conn, ctx, AuditAction::LoginSuccess, session_id, v).await
@@ -167,4 +200,42 @@ pub async fn revoked(
         write(conn, ctx, AuditAction::SessionRevoke, s.id, details(ctx, f)).await?;
     }
     Ok(())
+}
+
+/// A request was made with this API token; `refusal` is why it was turned away, if it was.
+pub async fn token_use(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    token: &PresentedToken,
+    refusal: Option<Refusal>,
+    used: &Use<'_>,
+) -> sqlx::Result<()> {
+    let v = details(
+        ctx,
+        fields(json!({
+            "tokenName": token.name,
+            "tokenPrefix": token.token_prefix,
+            "userId": token.user_id,
+            "username": token.username,
+            "outcome": refusal.map_or("accepted", Refusal::outcome),
+            "method": used.method.as_str(),
+            "path": used.path,
+            "operationId": used.operation_id,
+        })),
+    );
+    write_for(conn, ctx, AuditAction::TokenUse, TOKEN_ENTITY, token.id, v).await
+}
+
+/// A two-factor event for this user (`mfa.*`): `extra` adds the event's own details.
+pub async fn mfa(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    action: AuditAction,
+    user_id: Uuid,
+    username: &str,
+    extra: Value,
+) -> sqlx::Result<()> {
+    let mut f = fields(json!({ "userId": user_id, "username": username }));
+    f.extend(fields(extra));
+    write_for(conn, ctx, action, MFA_ENTITY, user_id, details(ctx, f)).await
 }

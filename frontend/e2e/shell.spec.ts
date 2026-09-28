@@ -25,11 +25,12 @@ test("global search: '/' focuses it, type-ahead finds by IP, Enter opens results
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await page.keyboard.press("/");
   await expect(page.locator("#global-search")).toBeFocused();
-  await page.keyboard.type("10.20.6.31");
-  await expect(page.getByRole("option", { name: /crm-db/ })).toBeVisible();
+  // crm-app-01 holds this address in its ip_address attribute.
+  await page.keyboard.type("10.20.5.21");
+  await expect(page.getByRole("option", { name: /crm-app-01/ })).toBeVisible();
   await snap(page, "02-global-search-typeahead");
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/search\?q=10\.20\.6\.31/);
-  await expect(page.getByRole("link", { name: "crm-db", exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "10.20.6.31", exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/search\?q=10\.20\.5\.21/);
+  await expect(page.getByRole("link", { name: "crm-app-01", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: /IP address: 10\.20\.5\.21/ })).toBeVisible();
 });

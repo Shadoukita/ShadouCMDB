@@ -1,6 +1,6 @@
 //! `shadoucmdb prune-audit`: apply the audit_log retention window.
 //!
-//! The deletion itself is `cmdb.prune_audit_log()` (migrations 0007, 0008), a SECURITY
+//! The deletion itself is `cmdb.prune_audit_log()` (migrations 0007, 0008, 0010), a SECURITY
 //! DEFINER function that only the maintenance role may execute. It deletes by
 //! age only, refuses windows under 30 days, and records every real run as an
 //! `audit.purge` row. This command connects with MAINTENANCE_DATABASE_URL and
@@ -20,8 +20,8 @@ pub const MIN_DAYS: u32 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Scope {
-    /// Sign-in, sign-out and session events (IP address, user agent), plus
-    /// sessions that expired more than 30 days ago.
+    /// Sign-in, sign-out, session, two-factor and API token use events (IP
+    /// address, user agent), plus sessions that expired more than 30 days ago.
     Auth,
     /// CI and configuration change history (create, update, delete, restore).
     Changes,
@@ -90,7 +90,7 @@ pub async fn run(cfg: &Config, args: PruneAuditArgs) -> anyhow::Result<()> {
     let Some(url) = &cfg.maintenance_url else {
         bail!(
             "MAINTENANCE_DATABASE_URL is not set. prune-audit connects as the maintenance role \
-             (shadoucmdb_maintenance), never as the API's DATABASE_URL user; see docs/deployment.md"
+             (shadoucmdb_maintenance in sql/bootstrap/), never as the API's DATABASE_URL user; see docs/deployment.md"
         );
     };
     let mut db = cfg.database.with_url(url);
@@ -116,8 +116,10 @@ fn explain(e: sqlx::Error) -> anyhow::Error {
     match e.as_database_error().and_then(|d| d.code()).as_deref() {
         Some("42883") => anyhow::anyhow!("prune_audit_log() does not exist; run `shadoucmdb migrate` first"),
         Some("42501") => anyhow::anyhow!(
-            "the MAINTENANCE_DATABASE_URL user may not execute prune_audit_log(); it must connect as \
-             shadoucmdb_maintenance (see docs/deployment.md, \"Database roles\")"
+            "the MAINTENANCE_DATABASE_URL user may not execute prune_audit_log(). `shadoucmdb migrate` grants it \
+             to the MAINTENANCE_DATABASE_URL user it sees; if that role was created or changed later, run \
+             sql/bootstrap/10_split_roles.sql or grant USAGE on schema cmdb and EXECUTE on \
+             cmdb.prune_audit_log(interval, text, boolean, text) to it (see docs/deployment.md, \"Database roles\")"
         ),
         _ => anyhow::Error::new(e).context("prune_audit_log() failed"),
     }
@@ -206,6 +208,7 @@ mod tests {
             "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, new_value, occurred_at) VALUES
                ('system', 'login.failure', 'sessions', gen_random_uuid(), '{\"ipAddress\":\"192.0.2.1\"}', now() - interval '200 days'),
                ('system', 'login.success', 'sessions', gen_random_uuid(), '{\"ipAddress\":\"192.0.2.2\"}', now() - interval '10 days'),
+               ('system', 'token.use', 'api_tokens', gen_random_uuid(), '{\"ipAddress\":\"192.0.2.3\"}', now() - interval '200 days'),
                ('system', 'create', 'configuration_items', gen_random_uuid(), '{}', now() - interval '400 days'),
                ('system', 'create', 'configuration_items', gen_random_uuid(), '{}', now());
              INSERT INTO users (username, display_name, password_hash) VALUES ('p', 'p', '$argon2id$v=19$test');
@@ -244,9 +247,9 @@ mod tests {
         c.execute("COMMIT").await.unwrap();
 
         let dry = prune(&mut c, 180, Scope::Auth, true, Some("tester")).await.unwrap();
-        assert_eq!(dry, vec![("login.failure".into(), 1), ("sessions".into(), 1)]);
+        assert_eq!(dry, vec![("login.failure".into(), 1), ("token.use".into(), 1), ("sessions".into(), 1)]);
         c.execute("RESET ROLE").await.unwrap();
-        assert_eq!(count(&mut c, "true").await, 4, "a dry run deletes nothing and records nothing");
+        assert_eq!(count(&mut c, "true").await, 5, "a dry run deletes nothing and records nothing");
 
         c.execute("SET ROLE shadoucmdb_maintenance").await.unwrap();
         let done = prune(&mut c, 180, Scope::Auth, false, Some("tester")).await.unwrap();
@@ -256,6 +259,7 @@ mod tests {
         c.execute("RESET ROLE").await.unwrap();
 
         assert_eq!(count(&mut c, "action = 'login.failure'").await, 0);
+        assert_eq!(count(&mut c, "action = 'token.use'").await, 0, "token use is an access event");
         assert_eq!(count(&mut c, "action = 'login.success'").await, 1, "inside the window");
         assert_eq!(count(&mut c, "action = 'create'").await, 1, "inside the window");
         let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions").fetch_one(&mut *c).await.unwrap();
@@ -269,7 +273,7 @@ mod tests {
         let login: String = sqlx::query_scalar("SELECT session_user::text").fetch_one(&mut *c).await.unwrap();
         assert_eq!(purges.len(), 2, "one audit.purge row per executed run, none for the dry run");
         assert_eq!(purges[0]["scope"], "auth");
-        assert_eq!(purges[0]["deleted"], serde_json::json!({ "login.failure": 1 }));
+        assert_eq!(purges[0]["deleted"], serde_json::json!({ "login.failure": 1, "token.use": 1 }));
         assert_eq!(purges[0]["sessionsDeleted"], serde_json::json!(1));
         assert_eq!(purges[0]["operator"], "tester");
         assert_eq!(purges[0]["databaseUser"], login.as_str());
@@ -281,6 +285,66 @@ mod tests {
         assert_eq!(sqlstate(&mut c, r).await, "42501", "audit.purge rows are never deleted");
         let r = c.execute("UPDATE audit_log SET actor_name = 'tampered'").await;
         assert_eq!(sqlstate(&mut c, r).await, "42501", "UPDATE is never allowed");
+        c.execute("ROLLBACK").await.unwrap();
+
+        drop(c);
+        db.drop().await;
+    }
+
+    #[tokio::test]
+    async fn the_api_role_cannot_change_the_system_schema() {
+        const TEST: &str = "the_api_role_cannot_change_the_system_schema";
+        if !ensure_roles().await {
+            scratch::database(TEST).await;
+            return;
+        }
+        let Some(db) = scratch::database(TEST).await else { return };
+        let mut c = db.pool.acquire().await.unwrap();
+
+        // After migrate, the API role owns only the area schemas and what is in them. Owning
+        // anything else would let it drop, alter or disable the triggers on a system table.
+        let owned: Vec<String> = sqlx::query_scalar(
+            "WITH r AS (SELECT 'shadoucmdb_app'::regrole AS oid)
+             SELECT kind || ' ' || name FROM (
+               SELECT 'schema', nspname::text, nspname FROM pg_namespace, r WHERE nspowner = r.oid
+               UNION ALL SELECT 'relation', c.oid::regclass::text, n.nspname
+                 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, r WHERE c.relowner = r.oid
+               UNION ALL SELECT 'routine', p.oid::regprocedure::text, n.nspname
+                 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace, r WHERE p.proowner = r.oid
+               UNION ALL SELECT 'type', t.oid::regtype::text, n.nspname
+                 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace, r WHERE t.typowner = r.oid
+               UNION ALL SELECT 'database', datname::text, NULL
+                 FROM pg_database, r WHERE datname = current_database() AND datdba = r.oid
+             ) o(kind, name, nsp)
+             WHERE nsp IS NULL OR nsp::text NOT IN (SELECT key FROM cmdb.areas)
+             ORDER BY 1",
+        )
+        .fetch_all(&mut *c)
+        .await
+        .unwrap();
+        assert!(owned.is_empty(), "owned by shadoucmdb_app outside the area schemas: {owned:?}");
+
+        c.execute("BEGIN; SET LOCAL ROLE shadoucmdb_app").await.unwrap();
+        for stmt in [
+            "DROP TABLE cmdb.audit_log",
+            "ALTER TABLE cmdb.audit_log DISABLE TRIGGER USER",
+            "ALTER TABLE cmdb.audit_log DISABLE TRIGGER audit_log_append_only",
+            "DROP TRIGGER audit_log_no_truncate ON cmdb.audit_log",
+            "CREATE OR REPLACE FUNCTION cmdb.audit_log_append_only() RETURNS trigger
+               LANGUAGE plpgsql AS $$ BEGIN RETURN OLD; END $$",
+            "DROP FUNCTION cmdb.prune_audit_log(interval, text, boolean, text)",
+            "DROP TABLE cmdb.configuration_items",
+            "ALTER TABLE cmdb.users ADD COLUMN x int",
+            "ALTER TABLE cmdb.users OWNER TO shadoucmdb_app",
+            "DROP SCHEMA cmdb CASCADE",
+            "CREATE TABLE cmdb.planted (x int)",
+            "CREATE FUNCTION public.planted() RETURNS int LANGUAGE sql AS 'SELECT 1'",
+            "DROP TABLE public._sqlx_migrations",
+        ] {
+            c.execute("SAVEPOINT sp").await.unwrap();
+            let r = c.execute(sqlx::AssertSqlSafe(stmt)).await;
+            assert_eq!(sqlstate(&mut c, r).await, "42501", "API role: {stmt}");
+        }
         c.execute("ROLLBACK").await.unwrap();
 
         drop(c);

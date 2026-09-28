@@ -73,6 +73,8 @@ const FIELDS = ["username", "displayName", "email", "password", "isActive", "pro
 const fieldErrors = computed(() => ({ ...(error.value instanceof ApiError ? error.value.fieldErrors() : {}), ...local.value }));
 const unplaced = computed(() => (error.value instanceof ApiError ? error.value.details.filter((d) => !FIELDS.includes(d.field.split(".")[0])) : []));
 const isSelf = computed(() => !!id.value && id.value === session.user?.id);
+/** Set for an account created by an identity provider: its name, e-mail and profiles are overwritten at every sign-in. */
+const provider = computed(() => (isNew.value ? null : (user.data.value?.identityProvider ?? null)));
 
 async function submit() {
   error.value = null;
@@ -155,11 +157,16 @@ const notFound = computed(() => {
           <span v-if="user.data.value.isActive" class="badge ok">Active</span>
           <span v-else class="badge off">Disabled</span>
           <span v-if="user.data.value.isAdministrator" class="badge">Administrator</span>
+          <span v-if="user.data.value.mfaEnabled" class="badge ok" title="Signs in with a password and an authenticator code">Two-factor on</span>
+          <span v-if="provider" class="badge" data-testid="user-provider">Signs in with {{ provider.name }}</span>
           <span v-if="isSelf" class="badge">You</span>
         </template>
       </div>
-      <div v-if="user.data.value && !isNew && session.can('audit.view')" class="actions">
-        <RouterLink class="btn" :to="{ path: '/admin/audit', query: { actorId: user.data.value.id } }">Changes by this user</RouterLink>
+      <div v-if="user.data.value && !isNew" class="actions">
+        <RouterLink class="btn" :to="{ path: '/admin/api-tokens', query: { userId: user.data.value.id } }">API tokens of this user</RouterLink>
+        <RouterLink v-if="session.can('audit.view')" class="btn" :to="{ path: '/admin/audit', query: { actorId: user.data.value.id } }">
+          Changes by this user
+        </RouterLink>
       </div>
     </div>
     <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
@@ -170,6 +177,16 @@ const notFound = computed(() => {
         <div class="panel-body stack">
           <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
           <div v-if="saved" class="alert" role="status">{{ saved }}</div>
+          <div v-if="provider" class="alert alert-warn" role="note" data-testid="provider-notice">
+            <strong>This account belongs to {{ provider.name }}.</strong>
+            <div>
+              Its display name, e-mail and permission profiles are overwritten from {{ provider.name }} at the account's
+              next sign-in, so changes made here are temporary. To change its profiles for good, change the group mappings
+              <template v-if="session.isAdministrator">
+                of <RouterLink :to="`/admin/identity-providers/${provider.id}`">{{ provider.name }}</RouterLink></template
+              ><template v-else> of the identity provider (an administrator's task)</template>.
+            </div>
+          </div>
           <div class="form-grid">
             <FormField id="user-username" label="Username" required :error="fieldErrors.username" hint="Used to sign in; letters, digits and . _ @ -">
               <template #default="{ id: fid, invalid, describedBy }">
@@ -220,8 +237,16 @@ const notFound = computed(() => {
             <dl class="props">
               <dt>Last sign-in</dt>
               <dd>{{ user.data.value.lastLoginAt ? formatDateTime(user.data.value.lastLoginAt) : "Never" }}</dd>
-              <dt>Password changed</dt>
-              <dd>{{ formatDateTime(user.data.value.passwordChangedAt) }}</dd>
+              <dt>Two-factor authentication</dt>
+              <dd>{{ user.data.value.mfaEnabled ? "On (authenticator app)" : "Off" }}</dd>
+              <template v-if="provider">
+                <dt>Signs in with</dt>
+                <dd>{{ provider.name }} ({{ provider.kind === "ldap" ? "LDAP / Active Directory" : "OpenID Connect" }})</dd>
+              </template>
+              <template v-else>
+                <dt>Password changed</dt>
+                <dd>{{ formatDateTime(user.data.value.passwordChangedAt) }}</dd>
+              </template>
               <dt>Created</dt>
               <dd>{{ formatDateTime(user.data.value.createdAt) }}</dd>
               <dt>Updated</dt>

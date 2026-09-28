@@ -3,13 +3,14 @@ import { useQueries } from "@tanstack/vue-query";
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { api, unwrap } from "../../api/client";
-import { keys, useCiClasses, useLookup, type CiListQuery, type CiSummary } from "../../api/queries";
+import { useAllLookupListValues, useLookupLists } from "../../api/datamodel";
+import { keys, useCiClasses, type CiListQuery, type CiSummary } from "../../api/queries";
 import type { UiListFilters, UiWidget } from "../../api/uiSettings";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
-import StatusBadge from "../../components/StatusBadge.vue";
+import CiStateBadge from "../../components/CiStateBadge.vue";
 import { formatRelative } from "../../lib/format";
-import { sortParam } from "../../lib/uiSettings";
+import { lookupValueIds, sortParam } from "../../lib/uiSettings";
 
 /**
  * "Recently changed" and saved searches: the first `limit` CIs of a server-side
@@ -20,17 +21,14 @@ import { sortParam } from "../../lib/uiSettings";
 const props = defineProps<{ widget: UiWidget; title: string }>();
 const limit = computed(() => props.widget.limit ?? 10);
 const classes = useCiClasses();
-const statuses = useLookup("statuses");
-const environments = useLookup("environments");
-const locations = useLookup("locations");
+const lookupLists = useLookupLists();
+const lookupValues = useAllLookupListValues();
 
 const search = computed(() => (props.widget.type === "saved_search" ? props.widget.search : undefined));
-const sort = computed(() => (search.value ? sortParam(search.value.sort) ?? "name" : "-updatedAt") as NonNullable<CiListQuery["sort"]>);
+const sort = computed(() => (search.value ? sortParam(search.value.sort) ?? "label" : "-updatedAt") as NonNullable<CiListQuery["sort"]>);
 const ready = computed(
-  () => !search.value || (!!classes.data.value && !!statuses.data.value && !!environments.data.value && !!locations.data.value),
+  () => !search.value || (!!classes.data.value && !!lookupLists.data.value && !!lookupValues.data.value),
 );
-const ids = (keyList: string[] | undefined, data: { id: string; key?: string }[] | undefined) =>
-  keyList?.length ? (data ?? []).filter((o) => o.key && keyList.includes(o.key)).map((o) => o.id).join(",") || undefined : undefined;
 
 const queries = computed<CiListQuery[]>(() => {
   const s = search.value;
@@ -39,9 +37,7 @@ const queries = computed<CiListQuery[]>(() => {
   const f: UiListFilters = s.filters ?? { q: null };
   Object.assign(base, {
     q: f.q || undefined,
-    statusId: ids(f.statusKeys, statuses.data.value),
-    environmentId: ids(f.environmentKeys, environments.data.value),
-    locationId: ids(f.locationKeys, locations.data.value),
+    lookupValueId: lookupValueIds(f.lookups, lookupLists.data.value ?? [], lookupValues.data.value ?? []),
   });
   const classIds = (classes.data.value ?? []).filter((c) => s.classKeys?.includes(c.key)).map((c) => c.id);
   if (classIds.length === 0) return [base];
@@ -64,7 +60,7 @@ const rows = computed<CiSummary[]>(() => {
   if (results.value.length > 1) {
     const field = sort.value.replace(/^-/, "");
     const dir = sort.value.startsWith("-") ? -1 : 1;
-    const val = (c: CiSummary) => String((field === "className" ? c.class.name : field === "statusName" ? c.status.name : c[field as keyof CiSummary]) ?? "");
+    const val = (c: CiSummary) => String((field === "className" ? c.class.name : c[field as keyof CiSummary]) ?? "");
     all.sort((a, b) => dir * val(a).localeCompare(val(b)));
   }
   return all.slice(0, limit.value);
@@ -74,7 +70,7 @@ const viewAll = computed(() => {
   const q = queries.value.length === 1 ? queries.value[0] : null;
   if (!q) return null;
   const out: Record<string, string> = {};
-  for (const k of ["q", "classId", "statusId", "environmentId", "locationId", "sort"] as const) if (q[k]) out[k] = String(q[k]);
+  for (const k of ["q", "classId", "lookupValueId", "sort"] as const) if (q[k]) out[k] = String(q[k]);
   return { path: "/cis", query: out };
 });
 </script>
@@ -92,19 +88,17 @@ const viewAll = computed(() => {
       <table v-if="!loading && rows.length > 0" class="data">
         <thead>
           <tr>
-            <th scope="col">Name</th>
+            <th scope="col">Label</th>
+            <th scope="col">Ident</th>
             <th scope="col">Class</th>
-            <th scope="col">Status</th>
-            <th scope="col">Environment</th>
             <th scope="col">Changed</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="ci in rows" :key="ci.id">
-            <td><RouterLink :to="`/cis/${ci.id}`">{{ ci.name }}</RouterLink></td>
+            <td><RouterLink :to="`/cis/${ci.id}`">{{ ci.label }}</RouterLink> <CiStateBadge :ci="ci" /></td>
+            <td class="mono">{{ ci.ident }}</td>
             <td>{{ ci.class.name }}</td>
-            <td><StatusBadge :status="ci.status" /></td>
-            <td>{{ ci.environment?.name ?? "" }}</td>
             <td :title="ci.updatedAt">{{ formatRelative(ci.updatedAt) }}</td>
           </tr>
         </tbody>

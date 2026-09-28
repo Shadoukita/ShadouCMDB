@@ -4,6 +4,7 @@ use axum::http::{Method, StatusCode};
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use crate::api::pg_error;
 use crate::api::route::{In, Json, NoBody, NoPath, NoQuery, Route, WithStatus, route};
 use crate::db;
 
@@ -43,17 +44,38 @@ pub enum ReadyStatus {
     NotReady,
 }
 
+/// `ok` once the database answered both queries; otherwise why it did not.
 #[derive(Serialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum DatabaseState {
     Ok,
+    /// No connection (network, TLS, timeout)
     Unreachable,
+    /// The server refused the credentials (SQLSTATE class 28)
+    AuthenticationFailed,
+    /// Connected, but the role may not read the schema (SQLSTATE 42501)
+    PermissionDenied,
+    /// Connected, but a query failed otherwise; the log has the error
+    Error,
+}
+
+impl DatabaseState {
+    fn of(err: &sqlx::Error) -> Self {
+        if pg_error::is_connection_error(err) {
+            return DatabaseState::Unreachable;
+        }
+        match err.as_database_error().and_then(|e| e.code()).as_deref() {
+            Some(c) if c.starts_with("28") => DatabaseState::AuthenticationFailed,
+            Some("42501") => DatabaseState::PermissionDenied,
+            _ => DatabaseState::Error,
+        }
+    }
 }
 
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Migrations {
-    /// Absent when the database is unreachable
+    /// Absent unless the database state is `ok`
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     applied: Option<usize>,
@@ -101,7 +123,10 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "Returns 200 with status \"ready\" only when the database answers and every migration in this build is applied; otherwise 503 with the same body shape.",
             )
-            .also_returns(StatusCode::SERVICE_UNAVAILABLE, "Not ready: database unreachable or migrations pending")
+            .also_returns(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Not ready: database unreachable, credentials or privileges refused, or migrations pending",
+            )
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 let expected = db::expected_count();
                 let probe = async {
@@ -122,7 +147,7 @@ pub fn routes() -> Vec<Route> {
                         tracing::warn!(error = %err, "readiness check failed");
                         let body = Readiness {
                             status: ReadyStatus::NotReady,
-                            database: DatabaseState::Unreachable,
+                            database: DatabaseState::of(&err),
                             migrations: Migrations { applied: None, expected, up_to_date: None },
                         };
                         WithStatus(StatusCode::SERVICE_UNAVAILABLE, body)

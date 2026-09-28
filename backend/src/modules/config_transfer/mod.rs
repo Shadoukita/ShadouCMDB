@@ -236,6 +236,13 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
 
     let classes: Vec<CiClass> = crud::select_all(conn, CiClasses::TABLE, CiClasses::COLUMNS, "sort_order, key").await?;
     let class_key: HashMap<Uuid, String> = classes.iter().map(|c| (c.id, c.key.clone())).collect();
+    let field_keys: HashMap<Uuid, String> = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT d.id, d.key FROM cmdb.ci_attribute_definitions d JOIN cmdb.ci_classes c ON c.title_attribute_id = d.id",
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .collect();
     let class_specs: Vec<ClassSpec> = classes
         .iter()
         .map(|c| ClassSpec {
@@ -249,6 +256,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             color: c.color.clone(),
             sort_order: c.sort_order,
             is_active: c.is_active,
+            title_attribute: Some(c.title_attribute_id.and_then(|t| field_keys.get(&t).cloned())),
         })
         .collect();
     let (mut class_specs, cyclic) = parents_first(class_specs, |c| &c.key, |c| c.parent.as_deref());
@@ -276,6 +284,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             description: l.description.clone(),
             sort_order: l.sort_order,
             is_active: l.is_active,
+            parent: l.parent_list_id.and_then(|id| list_key.get(&id).cloned()),
             values: values
                 .iter()
                 .filter(|v| v.list_id == l.id)
@@ -286,13 +295,17 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
                     color: v.color.clone(),
                     sort_order: v.sort_order,
                     is_active: v.is_active,
+                    parent: v.parent_value_id.and_then(|id| value_key.get(&id).cloned()),
                 })
                 .collect(),
         })
         .collect();
+    let (mut list_specs, cyclic) = parents_first(list_specs, |l| &l.key, |l| l.parent.as_deref());
+    list_specs.extend(cyclic);
 
     let attrs: Vec<AttributeDefinition> =
         crud::select_all(conn, AttributeDefinitions::TABLE, AttributeDefinitions::COLUMNS, "sort_order, key").await?;
+    let attr_key: HashMap<Uuid, String> = attrs.iter().map(|a| (a.id, a.key.clone())).collect();
     let mut attr_specs: Vec<AttributeSpec> = attrs
         .iter()
         .filter_map(|a| {
@@ -319,6 +332,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
                 enum_values: a.enum_values.as_ref().map(|v| v.0.clone()),
                 reference_class: a.reference_class_id.and_then(|id| class_key.get(&id).cloned()),
                 lookup_list: a.lookup_list_id.and_then(|id| list_key.get(&id).cloned()),
+                parent_attribute: a.parent_attribute_id.and_then(|id| attr_key.get(&id).cloned()),
                 validation: a
                     .validation
                     .as_ref()
@@ -352,7 +366,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         .collect();
     let rules: Vec<RelationshipRule> =
         crud::select_all(conn, RelationshipRules::TABLE, RelationshipRules::COLUMNS, "created_at, id").await?;
-    let rule_specs: Vec<RelationshipRuleSpec> = rules
+    let mut rule_specs: Vec<RelationshipRuleSpec> = rules
         .iter()
         .filter_map(|r| {
             Some(RelationshipRuleSpec {
@@ -362,6 +376,9 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             })
         })
         .collect();
+    // By keys, not insertion order: a template install or an import writes all
+    // rules in one transaction (same created_at), so the id tiebreak is random.
+    rule_specs.sort();
     ids.rules = rule_specs
         .iter()
         .map(|r| (r.relationship_type.clone(), r.source_class.clone(), r.target_class.clone()))
@@ -636,6 +653,43 @@ fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning
             "The class hierarchy in the file has a cycle",
         );
     }
+    // Lookup lists: parent lists exist, no cycles; parent values are values of the parent list
+    for (i, l) in lk.lists.iter().enumerate() {
+        match &l.parent {
+            Some(p) if p == &l.key => {
+                problem(&mut e, format!("lookups.lists.{i}.parent"), "cycle", "A list cannot be its own parent")
+            }
+            Some(p) if !lists.contains(p) => problem(
+                &mut e,
+                format!("lookups.lists.{i}.parent"),
+                "not_found",
+                format!("Lookup list \"{p}\" does not exist"),
+            ),
+            _ => {}
+        }
+        for (j, v) in l.values.iter().enumerate() {
+            let path = format!("lookups.lists.{i}.values.{j}.parent");
+            match (&l.parent, &v.parent) {
+                (None, Some(_)) => {
+                    problem(&mut e, path, "custom", "Only allowed for values of a list with a parent list")
+                }
+                (Some(pl), Some(k)) if !values.contains(&(pl.clone(), k.clone())) => {
+                    problem(&mut e, path, "not_found", format!("List \"{pl}\" has no value \"{k}\""))
+                }
+                _ => {}
+            }
+        }
+    }
+    let (_, cyclic) = parents_first(lk.lists.iter().collect(), |l| &l.key, |l| l.parent.as_deref());
+    for l in cyclic {
+        let i = lk.lists.iter().position(|x| x.key == l.key).unwrap_or_default();
+        problem(
+            &mut e,
+            format!("lookups.lists.{i}.parent"),
+            "cycle",
+            "The lookup lists in the file depend on each other in a cycle",
+        );
+    }
     let (_, cyclic) = parents_first(lk.locations.iter().collect(), |l| &l.key, |l| l.parent.as_deref());
     for l in cyclic {
         let i = lk.locations.iter().position(|x| x.key == l.key).unwrap_or_default();
@@ -694,6 +748,9 @@ fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning
                 problem(&mut e, format!("{p}.lookupList"), "not_found", format!("Lookup list \"{k}\" does not exist"))
             }
             _ => {}
+        }
+        if !is(AttributeDataType::Lookup) && a.parent_attribute.is_some() {
+            problem(&mut e, format!("{p}.parentAttribute"), "custom", "Only allowed for lookup attributes");
         }
         if is(AttributeDataType::Reference) && a.default_value.as_ref().is_some_and(|v| !v.is_null()) {
             problem(&mut e, format!("{p}.defaultValue"), "custom", "Reference attributes cannot have a default");
@@ -901,6 +958,20 @@ impl Importer<'_> {
         }
     }
 
+    /// Adds a changed field to the row's entry; a row counted as unchanged becomes updated.
+    fn amend(&mut self, section: &str, key: String, change: FieldChange) {
+        if let Some(c) = self.changes.iter_mut().find(|c| c.section == section && c.key == key) {
+            if c.action == ChangeAction::Update {
+                c.fields.push(change);
+            }
+            return;
+        }
+        if let Some(s) = self.summary.iter_mut().find(|s| s.section == section) {
+            s.unchanged -= 1;
+        }
+        self.record(section, key, Some(ChangeAction::Update), vec![change]);
+    }
+
     /// Creates the row, updates the fields that differ, or leaves it alone.
     #[allow(clippy::too_many_arguments)]
     async fn upsert<R: Resource, S: Serialize>(
@@ -946,6 +1017,13 @@ async fn run(
     // One import at a time.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('shadoucmdb:config-import'))").execute(&mut *conn).await?;
     let snap = snapshot(conn).await?;
+    let upgraded;
+    let file = if file.format_version < 3 {
+        upgraded = keep_current_parents(file, &snap.file);
+        &upgraded
+    } else {
+        file
+    };
     let mut warnings = Vec::new();
     let decoded = validate(file, &snap, &mut warnings)?;
     let Snapshot { file: current, ids, .. } = snap;
@@ -1051,16 +1129,21 @@ async fn run(
             im.ids.values.keys().filter(|(l, _)| keys.contains(l)).map(|(l, v)| format!("{l}.{v}")).collect();
         im.section("lookupListValues", not_in_file(here.iter(), &value_keys));
         let old: HashMap<&str, &LookupListSpec> = cur_lk.lists.iter().map(|l| (l.key.as_str(), l)).collect();
-        for (i, l) in lk.lists.iter().enumerate() {
+        let indexed: Vec<(usize, &LookupListSpec)> = lk.lists.iter().enumerate().collect();
+        let (ordered, _) = parents_first(indexed, |(_, l)| &l.key, |(_, l)| l.parent.as_deref());
+        for (i, l) in ordered {
             let bare = |l: &LookupListSpec| LookupListSpec { values: Vec::new(), ..l.clone() };
             let new_bare = bare(l);
             let old_bare = old.get(l.key.as_str()).map(|o| bare(o));
             let existing = old_bare.as_ref().map(|o| (im.ids.lists[&l.key], o));
+            // A new parent list unassigns the values' parent values (LookupLists::after_write).
+            let parent_changed = old_bare.as_ref().is_some_and(|o| o.parent != l.parent);
             let mut c = ColumnSet::default();
             c.opt("name", Some(l.name.clone()))
                 .opt("description", Some(l.description.clone()))
                 .opt("sort_order", Some(l.sort_order))
-                .opt("is_active", Some(l.is_active));
+                .opt("is_active", Some(l.is_active))
+                .opt("parent_list_id", Some(l.parent.as_ref().map(|p| im.ids.lists[p])));
             let mut create = c.clone();
             create.opt("key", Some(l.key.clone()));
             let path = format!("lookups.lists.{i}");
@@ -1075,13 +1158,26 @@ async fn run(
                 .unwrap_or_default();
             for (j, v) in l.values.iter().enumerate() {
                 let vkey = (l.key.clone(), v.key.clone());
-                let existing = old_values.get(v.key.as_str()).map(|o| (im.ids.values[&vkey], *o));
+                let unassigned;
+                let old_value = match old_values.get(v.key.as_str()) {
+                    Some(o) if parent_changed => {
+                        unassigned = LookupValueSpec { parent: None, ..(*o).clone() };
+                        Some(&unassigned)
+                    }
+                    o => o.copied(),
+                };
+                let existing = old_value.map(|o| (im.ids.values[&vkey], o));
+                let parent_value_id = match (&l.parent, &v.parent) {
+                    (Some(pl), Some(k)) => Some(im.ids.values[&(pl.clone(), k.clone())]),
+                    _ => None,
+                };
                 let mut c = ColumnSet::default();
                 c.opt("name", Some(v.name.clone()))
                     .opt("description", Some(v.description.clone()))
                     .opt("color", Some(v.color.clone()))
                     .opt("sort_order", Some(v.sort_order))
-                    .opt("is_active", Some(v.is_active));
+                    .opt("is_active", Some(v.is_active))
+                    .opt("parent_value_id", Some(parent_value_id));
                 let mut create = c.clone();
                 create.opt("list_id", Some(list_id)).opt("key", Some(v.key.clone()));
                 let path = format!("lookups.lists.{i}.values.{j}");
@@ -1121,11 +1217,16 @@ async fn run(
         let (ordered, _) = parents_first(indexed, |(_, c)| &c.key, |(_, c)| c.parent.as_deref());
         for (i, cls) in ordered {
             let existing = old.get(cls.key.as_str()).map(|o| (im.ids.classes[&cls.key], *o));
-            // A class without an area (version 1 files) stays where it is.
+            // A class without an area (version 1 files) stays where it is; one without a
+            // title attribute (files from before SHAA-267) keeps its own.
             let with_area;
-            let cls = match (&cls.area, existing) {
-                (None, Some((_, o))) => {
-                    with_area = ClassSpec { area: o.area.clone(), ..cls.clone() };
+            let cls = match existing {
+                Some((_, o)) if cls.area.is_none() || cls.title_attribute.is_none() => {
+                    with_area = ClassSpec {
+                        area: cls.area.clone().or_else(|| o.area.clone()),
+                        title_attribute: cls.title_attribute.clone().or_else(|| o.title_attribute.clone()),
+                        ..cls.clone()
+                    };
                     &with_area
                 }
                 _ => cls,
@@ -1200,8 +1301,97 @@ async fn run(
                 .opt("lookup_list_id", Some(a.lookup_list.as_ref().map(|k| im.ids.lists[k])));
             let path = format!("dataModel.attributes.{i}");
             let key = format!("{}.{}", a.class, a.key);
-            let id = im.upsert::<AttributeDefinitions, _>("attributes", &path, key, existing, a, create, c).await?;
+            // Parent fields are set in a second pass, once every field of the file exists.
+            let compared =
+                AttributeSpec { parent_attribute: existing.and_then(|(_, o)| o.parent_attribute.clone()), ..a.clone() };
+            let id =
+                im.upsert::<AttributeDefinitions, _>("attributes", &path, key, existing, &compared, create, c).await?;
             im.ids.attributes.insert(akey, id);
+        }
+        for (i, a) in dm.attributes.iter().enumerate() {
+            let id = im.ids.attributes[&(a.class.clone(), a.key.clone())];
+            let path = format!("dataModel.attributes.{i}");
+            let wanted: Option<Uuid> = match &a.parent_attribute {
+                None => None,
+                Some(k) => Some(
+                    sqlx::query_scalar(
+                        "SELECT id FROM ci_attribute_definitions WHERE key = $2 AND ci_class_is_a($1, class_id)",
+                    )
+                    .bind(im.ids.classes[&a.class])
+                    .bind(k)
+                    .fetch_optional(&mut *im.conn)
+                    .await?
+                    .ok_or_else(|| {
+                        at(
+                            &format!("{path}.parentAttribute"),
+                            AppError::new(
+                                ErrorCode::ValidationError,
+                                format!("Field \"{k}\" is not defined on class \"{}\" or an ancestor", a.class),
+                            ),
+                        )
+                    })?,
+                ),
+            };
+            let (now, now_key): (Option<Uuid>, Option<String>) = sqlx::query_as(
+                "SELECT d.parent_attribute_id, p.key FROM ci_attribute_definitions d
+                 LEFT JOIN ci_attribute_definitions p ON p.id = d.parent_attribute_id WHERE d.id = $1",
+            )
+            .bind(id)
+            .fetch_one(&mut *im.conn)
+            .await?;
+            if now == wanted {
+                continue;
+            }
+            let mut c = ColumnSet::default();
+            c.opt("parent_attribute_id", Some(wanted));
+            simple::update_in::<AttributeDefinitions>(im.conn, im.ctx, id, c).await.map_err(|e| at(&path, e))?;
+            let change = FieldChange {
+                field: "parentAttribute".into(),
+                from: now_key.map_or(Value::Null, Value::String),
+                to: a.parent_attribute.clone().map_or(Value::Null, Value::String),
+            };
+            im.amend("attributes", format!("{}.{}", a.class, a.key), change);
+        }
+
+        // Title attributes, now that the fields exist (a class may be titled by an inherited one).
+        for (i, cls) in dm.classes.iter().enumerate() {
+            let Some(title) = &cls.title_attribute else { continue };
+            let class_id = im.ids.classes[&cls.key];
+            let path = format!("dataModel.classes.{i}.titleAttribute");
+            let wanted: Option<Uuid> = match title {
+                None => None,
+                Some(key) => Some(
+                    sqlx::query_scalar(
+                        "SELECT d.id FROM cmdb.ci_class_lineage($1) l
+                         JOIN cmdb.ci_attribute_definitions d ON d.class_id = l.class_id
+                         WHERE d.key = $2 ORDER BY l.depth LIMIT 1",
+                    )
+                    .bind(class_id)
+                    .bind(key)
+                    .fetch_optional(&mut *im.conn)
+                    .await?
+                    .ok_or_else(|| {
+                        at(
+                            &path,
+                            AppError::field(
+                                "titleAttribute",
+                                format!("Class \"{}\" has no field \"{key}\" (own or inherited)", cls.key),
+                                "not_found",
+                            ),
+                        )
+                    })?,
+                ),
+            };
+            let current: Option<Uuid> =
+                sqlx::query_scalar("SELECT title_attribute_id FROM cmdb.ci_classes WHERE id = $1")
+                    .bind(class_id)
+                    .fetch_one(&mut *im.conn)
+                    .await?;
+            if current != wanted {
+                let mut c = ColumnSet::default();
+                c.opt("title_attribute_id", Some(wanted));
+                simple::update_in::<CiClasses>(im.conn, im.ctx, class_id, c).await.map_err(|e| at(&path, e))?;
+            }
         }
 
         let keys: HashSet<String> = dm.relationship_types.iter().map(|t| t.key.clone()).collect();
@@ -1282,6 +1472,7 @@ async fn run(
                         spec.description.as_deref(),
                         &spec.global_permissions,
                         &grants,
+                        false,
                     )
                     .await
                     .map_err(|e| at(&path, e))?;
@@ -1302,6 +1493,7 @@ async fn run(
                         Some(spec.description.as_deref()),
                         Some(&spec.global_permissions),
                         Some(&grants),
+                        None,
                     )
                     .await
                     .map_err(|e| at(&path, e))?;
@@ -1381,6 +1573,32 @@ async fn run(
     })
 }
 
+/// Files before version 3 have no parent lists, parent values or parent
+/// fields: the rows that exist here keep theirs.
+fn keep_current_parents(file: &ConfigFile, current: &ConfigFile) -> ConfigFile {
+    let mut file = file.clone();
+    if let (Some(lk), Some(cur)) = (file.lookups.as_mut(), current.lookups.as_ref()) {
+        let lists: HashMap<&str, &LookupListSpec> = cur.lists.iter().map(|l| (l.key.as_str(), l)).collect();
+        for l in &mut lk.lists {
+            let Some(old) = lists.get(l.key.as_str()) else { continue };
+            l.parent = old.parent.clone();
+            let values: HashMap<&str, &LookupValueSpec> = old.values.iter().map(|v| (v.key.as_str(), v)).collect();
+            for v in &mut l.values {
+                v.parent = values.get(v.key.as_str()).and_then(|o| o.parent.clone());
+            }
+        }
+    }
+    if let (Some(dm), Some(cur)) = (file.data_model.as_mut(), current.data_model.as_ref()) {
+        let attrs: HashMap<(&str, &str), &AttributeSpec> =
+            cur.attributes.iter().map(|a| ((a.class.as_str(), a.key.as_str()), a)).collect();
+        for a in &mut dm.attributes {
+            a.parent_attribute =
+                attrs.get(&(a.class.as_str(), a.key.as_str())).and_then(|o| o.parent_attribute.clone());
+        }
+    }
+    file
+}
+
 fn check_format(file: &ConfigFile) -> Result<(), AppError> {
     if file.format != FORMAT || !(1..=FORMAT_VERSION).contains(&file.format_version) {
         return Err(AppError::field(
@@ -1392,6 +1610,39 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
     Ok(())
 }
 
+/// `config.export_import` lets a file in, not past the permission each section
+/// needs on its own admin API: the data model and lookups (which run DDL) need
+/// `datamodel.manage`, UI settings need `customization.manage`, permission
+/// profiles need `profiles.manage`. Checked for dry runs too, before anything
+/// touches the database. Each profile is still bounded by what the importing
+/// user holds.
+fn check_sections(ctx: &RequestContext, file: &ConfigFile) -> Result<(), AppError> {
+    let data_model = file.data_model.as_ref().is_some_and(|d| {
+        !(d.areas.is_empty()
+            && d.classes.is_empty()
+            && d.attributes.is_empty()
+            && d.relationship_types.is_empty()
+            && d.relationship_rules.is_empty())
+    });
+    let lookups = file.lookups.as_ref().is_some_and(|l| {
+        !(l.statuses.is_empty()
+            && l.environments.is_empty()
+            && l.locations.is_empty()
+            && l.owners.is_empty()
+            && l.lists.is_empty())
+    });
+    if data_model || lookups {
+        ctx.require(GlobalPermission::DatamodelManage)?;
+    }
+    if file.ui_settings.is_some() {
+        ctx.require(GlobalPermission::CustomizationManage)?;
+    }
+    if file.permission_profiles.as_ref().is_some_and(|p| !p.is_empty()) {
+        ctx.require(GlobalPermission::ProfilesManage)?;
+    }
+    Ok(())
+}
+
 pub async fn import(
     pool: &PgPool,
     ctx: &RequestContext,
@@ -1399,6 +1650,7 @@ pub async fn import(
     mode: ImportMode,
 ) -> Result<ImportResult, AppError> {
     check_format(file)?;
+    check_sections(ctx, file)?;
     let mut tx = pool.begin().await?;
     let (result, schema_changes) = engine::collect_previews(run(&mut tx, ctx, file, mode)).await;
     let mut result = result?;
@@ -1450,8 +1702,10 @@ pub fn routes() -> Vec<Route> {
                  and the logo and favicon. All sections are optional. Problems in the file are reported together as \
                  400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making \
                  an attribute required while CIs lack a value) fails with the same error the admin API gives, with \
-                 the file path prefixed. Profiles cannot grant more than the importing user holds (403). Every \
-                 applied change is audited.",
+                 the file path prefixed. A non-empty `dataModel` or `lookups` section also requires \
+                 `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty \
+                 `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot \
+                 grant more than the importing user holds (403). Every applied change is audited.",
             )
             .requires(GlobalPermission::ConfigExportImport)
             .body_limit(IMPORT_BODY_LIMIT)
@@ -1467,6 +1721,111 @@ pub fn routes() -> Vec<Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::permissions::Permissions;
+    use crate::auth::{Credential, Principal};
+    use crate::db::scratch;
+
+    async fn user_ctx(pool: &PgPool, username: &str, global: &[GlobalPermission]) -> RequestContext {
+        let user_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO users (username, display_name, password_hash) VALUES ($1, $1, '$argon2id$v=19$test')
+             RETURNING id",
+        )
+        .bind(username)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let permissions = Permissions { global: global.iter().copied().collect(), ..Default::default() };
+        let principal = Principal {
+            user_id,
+            username: username.into(),
+            credential: Credential::Session {
+                id: Uuid::new_v4(),
+                csrf_token: String::new(),
+                mfa_enrolment_required: false,
+            },
+            permissions,
+        };
+        RequestContext::user(std::sync::Arc::new(principal), "test".into())
+    }
+
+    async fn schema_change_count(pool: &PgPool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM cmdb.schema_changes").fetch_one(pool).await.unwrap()
+    }
+
+    /// GH#59, GH#80: `config.export_import` alone must not run data-model DDL (or
+    /// touch lookups, UI settings or permission profiles) through the import.
+    #[tokio::test]
+    async fn import_sections_need_their_own_permission() {
+        let Some(src) = scratch::database("import_sections_src").await else { return };
+        let Some(dst) = scratch::database("import_sections_dst").await else { return };
+        crate::seed::install_template(&src.pool, "it_infrastructure").await.unwrap();
+        let file = export(&src.pool).await.unwrap();
+        assert!(!file.data_model.as_ref().unwrap().classes.is_empty());
+
+        let before = schema_change_count(&dst.pool).await;
+        let only_import = user_ctx(&dst.pool, "importer", &[GlobalPermission::ConfigExportImport]).await;
+        for mode in [ImportMode::DryRun, ImportMode::Apply] {
+            let err = import(&dst.pool, &only_import, &file, mode).await.unwrap_err();
+            assert_eq!(err.code, ErrorCode::Forbidden, "{mode:?}: {err}");
+            assert!(err.message.contains("datamodel.manage"), "{err}");
+        }
+        let lookups_only = ConfigFile { data_model: None, ui_settings: None, ..file.clone() };
+        let err = import(&dst.pool, &only_import, &lookups_only, ImportMode::Apply).await.unwrap_err();
+        assert!(err.message.contains("datamodel.manage"), "{err}");
+        let ui_only = ConfigFile { data_model: None, lookups: None, ..file.clone() };
+        let err = import(&dst.pool, &only_import, &ui_only, ImportMode::Apply).await.unwrap_err();
+        assert!(err.message.contains("customization.manage"), "{err}");
+        assert_eq!(schema_change_count(&dst.pool).await, before);
+
+        // GH#80: profiles need `profiles.manage`; an empty section needs nothing extra.
+        let no_profiles = ConfigFile { data_model: None, lookups: None, ui_settings: None, ..file.clone() };
+        assert_eq!(no_profiles.permission_profiles.as_deref().map(<[_]>::len), Some(0));
+        import(&dst.pool, &only_import, &no_profiles, ImportMode::DryRun).await.unwrap();
+        let empty_profile = ProfileSpec {
+            name: "Service Desk".into(),
+            description: None,
+            global_permissions: Vec::new(),
+            class_permissions: Vec::new(),
+        };
+        let profiles_only = ConfigFile { permission_profiles: Some(vec![empty_profile]), ..no_profiles };
+        for mode in [ImportMode::DryRun, ImportMode::Apply] {
+            let err = import(&dst.pool, &only_import, &profiles_only, mode).await.unwrap_err();
+            assert_eq!(err.code, ErrorCode::Forbidden, "{mode:?}: {err}");
+            assert!(err.message.contains("profiles.manage"), "{err}");
+        }
+        let profile_count = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM permission_profiles WHERE name = 'Service Desk'")
+                .fetch_one(&dst.pool)
+                .await
+                .unwrap()
+        };
+        assert_eq!(profile_count().await, 0);
+        let profile_admin = user_ctx(
+            &dst.pool,
+            "profile_admin",
+            &[GlobalPermission::ConfigExportImport, GlobalPermission::ProfilesManage],
+        )
+        .await;
+        assert!(import(&dst.pool, &profile_admin, &profiles_only, ImportMode::Apply).await.unwrap().applied);
+        assert_eq!(profile_count().await, 1);
+
+        let full = user_ctx(
+            &dst.pool,
+            "configurator",
+            &[
+                GlobalPermission::ConfigExportImport,
+                GlobalPermission::DatamodelManage,
+                GlobalPermission::CustomizationManage,
+            ],
+        )
+        .await;
+        let res = import(&dst.pool, &full, &file, ImportMode::Apply).await.unwrap();
+        assert!(res.applied);
+        assert!(schema_change_count(&dst.pool).await > before);
+
+        src.drop().await;
+        dst.drop().await;
+    }
 
     #[test]
     fn parents_come_first_and_cycles_are_left_over() {
@@ -1531,5 +1890,147 @@ mod tests {
         let e = at("lookups.statuses.0", AppError::conflict("Duplicate"));
         assert_eq!(e.details.unwrap()[0].field, "lookups.statuses.0");
         assert_eq!(e.code, ErrorCode::Conflict);
+    }
+
+    fn comparable(file: &ConfigFile) -> Value {
+        let mut v = serde_json::to_value(file).unwrap();
+        let o = v.as_object_mut().unwrap();
+        o.remove("exportedAt");
+        o.remove("appVersion");
+        v
+    }
+
+    /// Same configuration, same file: export of a template install equals the
+    /// export of a second database that imported it (GH#23).
+    #[tokio::test]
+    async fn equal_installs_export_identical_files() {
+        const TEST: &str = "equal_installs_export_identical_files";
+        let Some(a) = scratch::database(TEST).await else { return };
+        let Some(b) = scratch::database(TEST).await else {
+            a.drop().await;
+            return;
+        };
+        let ctx = RequestContext::system("test", "test");
+        crate::seed::seed_system_rows(&a.pool).await.unwrap();
+        crate::seed::seed_system_rows(&b.pool).await.unwrap();
+        crate::modules::templates::install_by_key(&a.pool, &ctx, "it_infrastructure").await.unwrap();
+
+        let exported = export(&a.pool).await.unwrap();
+        let rules = &exported.data_model.as_ref().unwrap().relationship_rules;
+        assert!(rules.len() > 1);
+        assert!(rules.windows(2).all(|w| w[0] < w[1]), "rules not in key order: {rules:?}");
+        assert_eq!(comparable(&exported), comparable(&export(&a.pool).await.unwrap()));
+
+        import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
+        let reexported = export(&b.pool).await.unwrap();
+        assert_eq!(
+            serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
+            serde_json::to_string_pretty(&comparable(&reexported)).unwrap()
+        );
+        a.drop().await;
+        b.drop().await;
+    }
+
+    /// SHAA-268: parent lists, parent values and parent fields go through a
+    /// file; files before version 3 leave them as they are.
+    #[tokio::test]
+    async fn dependent_lookup_lists_round_trip() {
+        const TEST: &str = "dependent_lookup_lists_round_trip";
+        let Some(a) = scratch::database(TEST).await else { return };
+        let Some(b) = scratch::database(TEST).await else {
+            a.drop().await;
+            return;
+        };
+        let ctx = RequestContext::system("test", "test");
+        crate::seed::seed_system_rows(&a.pool).await.unwrap();
+        crate::seed::seed_system_rows(&b.pool).await.unwrap();
+        crate::modules::templates::install_by_key(&a.pool, &ctx, "it_infrastructure").await.unwrap();
+        fn body<T: serde::de::DeserializeOwned>(v: Value) -> T {
+            serde_json::from_value(v).unwrap()
+        }
+        let maker =
+            simple::create::<LookupLists>(&a.pool, &ctx, &body(serde_json::json!({ "key": "maker", "name": "Maker" })))
+                .await
+                .unwrap();
+        let model = simple::create::<LookupLists>(
+            &a.pool,
+            &ctx,
+            &body(serde_json::json!({ "key": "model", "name": "Model", "parentListId": maker.id })),
+        )
+        .await
+        .unwrap();
+        let cisco = simple::create::<LookupListValues>(
+            &a.pool,
+            &ctx,
+            &body(serde_json::json!({ "listId": maker.id, "key": "cisco", "name": "Cisco" })),
+        )
+        .await
+        .unwrap();
+        simple::create::<LookupListValues>(
+            &a.pool,
+            &ctx,
+            &body(
+                serde_json::json!({ "listId": model.id, "key": "c9300", "name": "C9300", "parentValueId": cisco.id }),
+            ),
+        )
+        .await
+        .unwrap();
+        let server: Uuid =
+            sqlx::query_scalar("SELECT id FROM ci_classes WHERE key = 'server'").fetch_one(&a.pool).await.unwrap();
+        // The dependent field sorts first, so the import meets it before its parent field.
+        let maker_field = simple::create::<AttributeDefinitions>(
+            &a.pool,
+            &ctx,
+            &body(serde_json::json!({ "classId": server, "key": "vendor_name", "label": "Maker", "dataType": "lookup",
+                "lookupListId": maker.id, "sortOrder": 900 })),
+        )
+        .await
+        .unwrap();
+        simple::create::<AttributeDefinitions>(
+            &a.pool,
+            &ctx,
+            &body(
+                serde_json::json!({ "classId": server, "key": "vendor_model", "label": "Model", "dataType": "lookup",
+                "lookupListId": model.id, "parentAttributeId": maker_field.id, "sortOrder": -900 }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let exported = export(&a.pool).await.unwrap();
+        let lists = &exported.lookups.as_ref().unwrap().lists;
+        let model_spec = lists.iter().find(|l| l.key == "model").unwrap();
+        assert_eq!(model_spec.parent.as_deref(), Some("maker"));
+        assert_eq!(model_spec.values[0].parent.as_deref(), Some("cisco"));
+        let attrs = &exported.data_model.as_ref().unwrap().attributes;
+        let model_attr = attrs.iter().find(|a| a.key == "vendor_model").unwrap();
+        assert_eq!(model_attr.parent_attribute.as_deref(), Some("vendor_name"));
+
+        import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
+        let reexported = export(&b.pool).await.unwrap();
+        assert_eq!(
+            serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
+            serde_json::to_string_pretty(&comparable(&reexported)).unwrap()
+        );
+
+        // Without parents: a version 2 file keeps them, a version 3 file clears them.
+        let mut stripped = exported.clone();
+        for l in &mut stripped.lookups.as_mut().unwrap().lists {
+            l.parent = None;
+            for v in &mut l.values {
+                v.parent = None;
+            }
+        }
+        for a in &mut stripped.data_model.as_mut().unwrap().attributes {
+            a.parent_attribute = None;
+        }
+        let v2 = ConfigFile { format_version: 2, ..stripped.clone() };
+        let result = import(&b.pool, &ctx, &v2, ImportMode::DryRun).await.unwrap();
+        assert!(result.changes.is_empty(), "{:?}", result.changes);
+        let result = import(&b.pool, &ctx, &stripped, ImportMode::DryRun).await.unwrap();
+        let changed: Vec<(&str, &str)> = result.changes.iter().map(|c| (c.section.as_str(), c.key.as_str())).collect();
+        assert_eq!(changed, [("lookupLists", "model")]);
+        a.drop().await;
+        b.drop().await;
     }
 }

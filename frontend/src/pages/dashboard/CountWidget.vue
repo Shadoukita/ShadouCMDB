@@ -1,18 +1,24 @@
 <script setup lang="ts">
 import { useQueries, useQuery } from "@tanstack/vue-query";
 import { computed } from "vue";
-import { ciCountQuery, useCiClasses, useLookup } from "../../api/queries";
+import { useLookupLists, useLookupListValues } from "../../api/datamodel";
+import { ciCountQuery, useCiClasses } from "../../api/queries";
 import type { UiWidget } from "../../api/uiSettings";
 import { useSessionStore } from "../../stores/session";
 import CountTable, { type CountRow } from "./CountTable.vue";
 
-/** Counts per class, status or environment; each count is a server-side limit=1 request. */
+/** Counts per class, or per value of one lookup list; each count is a server-side limit=1 request. */
 const props = defineProps<{ widget: UiWidget; title: string }>();
 const session = useSessionStore();
 const total = useQuery(ciCountQuery({}));
 const classes = useCiClasses();
-const statuses = useLookup("statuses");
-const environments = useLookup("environments");
+const lookupLists = useLookupLists();
+const list = computed(() =>
+  props.widget.type === "count_by_lookup" ? lookupLists.data.value?.find((l) => l.key === props.widget.lookupListKey) : undefined,
+);
+const values = useLookupListValues(() => list.value?.id);
+/** Without a title of its own, a lookup widget is named after its list. */
+const heading = computed(() => props.widget.title || (list.value ? `CIs by ${list.value.name}` : props.title));
 
 interface Row {
   id: string;
@@ -23,35 +29,41 @@ interface Row {
   newLabel?: string;
 }
 const rows = computed<Row[]>(() => {
-  switch (props.widget.type) {
-    case "count_by_class": {
-      const keys = props.widget.classKeys ?? [];
-      const list = (classes.data.value ?? []).filter((c) => !c.isAbstract && (keys.length ? keys.includes(c.key) : true));
-      return list.map((c) => ({
-        id: c.id,
-        label: c.name,
-        query: { classId: c.id },
-        to: `/cis?classId=${c.id}`,
-        ...(c.isActive && session.canOnClass(c.id, "create") ? { newTo: `/cis/new?classId=${c.id}`, newLabel: `New ${c.name}` } : {}),
-      }));
-    }
-    case "count_by_status":
-      return (statuses.data.value ?? []).map((s) => ({ id: s.id, label: s.name, query: { statusId: s.id }, to: `/cis?statusId=${s.id}` }));
-    default:
-      return (environments.data.value ?? []).map((e) => ({ id: e.id, label: e.name, query: { environmentId: e.id }, to: `/cis?environmentId=${e.id}` }));
+  if (props.widget.type !== "count_by_class") {
+    return list.value
+      ? (values.data.value ?? []).map((v) => ({ id: v.id, label: v.name, query: { lookupValueId: v.id }, to: `/cis?lookupValueId=${v.id}` }))
+      : [];
   }
+  const keys = props.widget.classKeys ?? [];
+  // Only classes the user may view: the API leaves the others out of every count, which would read as 0.
+  const visible = (classes.data.value ?? []).filter(
+    (c) => !c.isAbstract && session.canOnClass(c.id, "view") && (keys.length ? keys.includes(c.key) : true),
+  );
+  return visible.map((c) => ({
+    id: c.id,
+    label: c.name,
+    query: { classId: c.id },
+    to: `/cis?classId=${c.id}`,
+    ...(c.isActive && session.canOnClass(c.id, "create") ? { newTo: `/cis/new?classId=${c.id}`, newLabel: `New ${c.name}` } : {}),
+  }));
 });
-const source = computed(() => (props.widget.type === "count_by_class" ? classes : props.widget.type === "count_by_status" ? statuses : environments));
+const loading = computed(() =>
+  props.widget.type === "count_by_class" ? classes.isLoading.value : lookupLists.isLoading.value || values.isLoading.value,
+);
+const sourceError = computed(() => (props.widget.type === "count_by_class" ? classes.error.value : (lookupLists.error.value ?? values.error.value)));
 const counts = useQueries({ queries: computed(() => rows.value.map((r) => ciCountQuery(r.query))) });
 const countRows = computed<CountRow[]>(() => rows.value.map((r, i) => ({ ...r, count: counts.value[i]?.data })));
 </script>
 
 <template>
   <CountTable
-    :title="title"
+    :title="heading"
     :rows="countRows"
     :total="total.data.value ?? 0"
-    :loading="source.isLoading.value"
-    :error="source.error.value ?? counts.find((c) => c.error)?.error"
+    :loading="loading"
+    :error="sourceError ?? counts.find((c) => c.error)?.error"
   />
+  <p v-if="widget.type === 'count_by_lookup' && lookupLists.data.value && !list" class="muted">
+    The lookup list <code>{{ widget.lookupListKey }}</code> does not exist.
+  </p>
 </template>
