@@ -14,7 +14,7 @@ use axum::http::{Method, StatusCode};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool};
-use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
+use utoipa::openapi::schema::{ArrayBuilder, KnownFormat, ObjectBuilder, Schema, SchemaFormat, Type};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
@@ -99,6 +99,8 @@ pub fn username_schema() -> Schema {
 pub fn password_schema() -> Schema {
     ObjectBuilder::new()
         .schema_type(Type::String)
+        // The request validator applies the password policy to this format.
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::Password)))
         .min_length(Some(password::MIN_LENGTH))
         .max_length(Some(password::MAX_LENGTH))
         .description(Some("At least 12 characters"))
