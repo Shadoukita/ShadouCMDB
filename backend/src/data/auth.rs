@@ -280,30 +280,72 @@ pub async fn share_lock_users(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Re
     Ok(())
 }
 
+/// The state of an account a sign-in depends on: a session or second-factor
+/// step is only created while it still matches what the credentials were
+/// checked against (GH#209).
+#[derive(Debug, Clone, Copy)]
+pub struct SignInStamp {
+    pub password_changed_at: DateTime<Utc>,
+    pub is_active: bool,
+}
+
+impl SignInStamp {
+    /// Still active, and (for a password checked here) with that password.
+    pub fn allows(&self, password_changed_at: Option<DateTime<Utc>>) -> bool {
+        self.is_active && password_changed_at.is_none_or(|at| at == self.password_changed_at)
+    }
+}
+
+/// The user's [`SignInStamp`], share-locked until the transaction ends so a
+/// password change, disable or delete waits for it (or it for them).
+pub async fn lock_sign_in(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<SignInStamp>> {
+    let row: Option<(DateTime<Utc>, bool)> =
+        sqlx::query_as("SELECT password_changed_at, is_active FROM users WHERE id = $1 FOR SHARE")
+            .bind(id)
+            .fetch_optional(conn)
+            .await?;
+    Ok(row.map(|(password_changed_at, is_active)| SignInStamp { password_changed_at, is_active }))
+}
+
+/// Records the sign-in and returns the user's [`SignInStamp`] as of now. The
+/// update locks the row until the transaction ends, and waits for a password
+/// change, disable or delete in progress, so what it returns is committed.
+pub async fn record_login(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<SignInStamp>> {
+    let row: Option<(DateTime<Utc>, bool)> =
+        sqlx::query_as("UPDATE users SET last_login_at = now() WHERE id = $1 RETURNING password_changed_at, is_active")
+            .bind(id)
+            .fetch_optional(conn)
+            .await?;
+    Ok(row.map(|(password_changed_at, is_active)| SignInStamp { password_changed_at, is_active }))
+}
+
 pub struct LoginRow {
     pub id: Uuid,
     pub username: String,
     /// None for an account that signs in through an identity provider.
     pub password_hash: Option<String>,
+    /// When the password checked against `password_hash` was set.
+    pub password_changed_at: DateTime<Utc>,
     pub is_active: bool,
     /// The provider the account belongs to, and its kind (`oidc`, `ldap`).
     pub provider: Option<(Uuid, String)>,
 }
 
 pub async fn find_for_login(pool: &PgPool, username: &str) -> sqlx::Result<Option<LoginRow>> {
-    type Row = (Uuid, String, Option<String>, bool, Option<Uuid>, Option<String>);
+    type Row = (Uuid, String, Option<String>, DateTime<Utc>, bool, Option<Uuid>, Option<String>);
     let row: Option<Row> = sqlx::query_as(
-        "SELECT u.id, u.username, u.password_hash, u.is_active, u.identity_provider_id, p.kind
+        "SELECT u.id, u.username, u.password_hash, u.password_changed_at, u.is_active, u.identity_provider_id, p.kind
          FROM users u LEFT JOIN identity_providers p ON p.id = u.identity_provider_id
          WHERE lower(u.username) = lower($1)",
     )
     .bind(username)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(id, username, password_hash, is_active, provider_id, kind)| LoginRow {
+    Ok(row.map(|(id, username, password_hash, password_changed_at, is_active, provider_id, kind)| LoginRow {
         id,
         username,
         password_hash,
+        password_changed_at,
         is_active,
         provider: provider_id.zip(kind),
     }))
@@ -339,11 +381,6 @@ pub async fn password_check(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<O
 /// None: no such user; Some(None): the user signs in through an identity provider.
 pub async fn password_hash(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<Option<String>>> {
     sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1").bind(id).fetch_optional(conn).await
-}
-
-pub async fn record_login(pool: &PgPool, id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("UPDATE users SET last_login_at = now() WHERE id = $1").bind(id).execute(pool).await?;
-    Ok(())
 }
 
 pub struct NewUser<'a> {
