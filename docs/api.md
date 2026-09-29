@@ -62,7 +62,7 @@ Every non-2xx response has this shape:
 | 400 | `VALIDATION_ERROR` | The body, query or path failed validation, including database rule violations such as an illegal relationship class, a class cycle or an abstract class. `details[]` gives each field. |
 | 401 | `UNAUTHENTICATED` | No session, an expired or idle session, a disabled user, an unknown, expired or revoked API token, or (on login) a wrong username, password or authenticator code. |
 | 401 | `MFA_REQUIRED` | Login only: the password was right and the user has two-factor authentication; send the code to `POST /auth/login/mfa`. |
-| 403 | `FORBIDDEN` | Signed in, but a global permission or a class permission is missing; or an API token on a route that needs a session. |
+| 403 | `FORBIDDEN` | Signed in, but a global permission or a class permission is missing; or an API token on a route that needs a session. A field change checked against stored values (a type change, a new enum list) also needs the view right on the field's type and every type below it (`details[].code` `view_required`). |
 | 403 | `CSRF_TOKEN_INVALID` | A write without the session's `X-CSRF-Token` header. |
 | 403 | `MFA_ENROLMENT_REQUIRED` | A profile the user holds requires two-factor authentication and they have not set it up: only sign-out, `/auth/me`, the password change and the `/auth/mfa` set-up routes answer. |
 | 404 | `NOT_FOUND` | The id does not exist, or the route does not exist. |
@@ -392,6 +392,12 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
   stored value would not survive (up to five are named); `isRequired: true` (a `NOT NULL` column) while any
   asset, deleted ones included, has no value; removing enum values that are stored; re-parenting a type whose CIs
   hold values in a table they would leave.
+- **Changes checked against stored values need view on them.** A field's `dataType` change and a new enum list
+  (`enumValues`, or `dataType: enum`) on an existing field are checked against every value its assets store,
+  deleted ones included. Unless the caller may view the field's type and every type below it, they answer `403
+  FORBIDDEN` (`details[].code` `view_required`) before any value is read, in `PATCH` and in the preview alike; a
+  refused preview is audited as `schema_change.refused`. For such callers an `isRequired` refusal does not say how
+  many assets lack a value.
 - Technical names (`key`) are immutable once created, because imports, reports and SQL depend on them; renaming
   changes only the display name.
 

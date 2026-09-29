@@ -298,6 +298,11 @@ pub enum AuditAction {
     #[serde(rename = "mfa.recovery_codes")]
     #[sqlx(rename = "mfa.recovery_codes")]
     MfaRecoveryCodes,
+    /// A data model change refused because the caller lacks a right it needs
+    /// (entity: the area, type or field; details in new_value). Today: previews.
+    #[serde(rename = "schema_change.refused")]
+    #[sqlx(rename = "schema_change.refused")]
+    SchemaChangeRefused,
 }
 
 impl AuditAction {
@@ -319,6 +324,7 @@ impl AuditAction {
             AuditAction::MfaFailure => "mfa.failure",
             AuditAction::MfaRecoveryCodeUsed => "mfa.recovery_code_used",
             AuditAction::MfaRecoveryCodes => "mfa.recovery_codes",
+            AuditAction::SchemaChangeRefused => "schema_change.refused",
         }
     }
 }

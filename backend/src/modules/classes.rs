@@ -2016,26 +2016,56 @@ mod tests {
             (json!({"dataType": "date"}), "type_change_failed"),
         ];
 
-        // Datamodel managers who may not view every type storing the field (here:
-        // the subtype, or neither type) learn how many values fail, not which.
+        // GH#221: datamodel managers who may not view every type storing the field
+        // (here: the subtype, or neither type) are refused before any value is
+        // read, so neither the outcome nor a count tells them what is stored.
         for scope in [vec![secrets.id], vec![]] {
             let caller = manager(&scope);
-            for (change, code) in &changes {
+            for (change, _) in &changes {
                 let preview: PreviewRequest =
                     body(json!({"operation": "updateField", "id": field.id, "body": change.clone()}));
-                let via_preview = refusal(schema_changes::preview(pool, &caller, &preview).await.unwrap_err());
-                let via_patch = refusal(
-                    simple::update::<AttributeDefinitions>(pool, &caller, field.id, &body(change.clone()))
-                        .await
-                        .unwrap_err(),
-                );
-                for (got, message) in [via_preview, via_patch] {
-                    assert_eq!(got, *code, "{message}");
-                    assert!(message.starts_with("2 "), "{message}");
-                    assert!(!message.contains("s3cr3t"), "{scope:?} {change}: {message}");
+                let via_preview = schema_changes::preview(pool, &caller, &preview).await.unwrap_err();
+                let via_patch = simple::update::<AttributeDefinitions>(pool, &caller, field.id, &body(change.clone()))
+                    .await
+                    .unwrap_err();
+                for err in [via_preview, via_patch] {
+                    assert_eq!(err.code, ErrorCode::Forbidden, "{scope:?} {change}: {err:?}");
+                    assert_eq!(err.details.as_ref().expect("details")[0].code, "view_required");
+                    assert!(!err.message.contains("s3cr3t") && !err.message.contains('2'), "{}", err.message);
                 }
             }
         }
+
+        // A correct guess and a wrong one get the same answer.
+        let caller = manager(&[secrets.id]);
+        let guess = |values: &[&str]| {
+            body::<PreviewRequest>(json!({"operation": "updateField", "id": field.id,
+                                          "body": {"dataType": "enum", "enumValues": values}}))
+        };
+        let right =
+            schema_changes::preview(pool, &caller, &guess(&["s3cr3t-alpha", "s3cr3t-vault"])).await.unwrap_err();
+        let wrong = schema_changes::preview(pool, &caller, &guess(&["s3cr3t-alpha", "nope"])).await.unwrap_err();
+        assert_eq!((right.code, &right.message), (wrong.code, &wrong.message));
+        // Only a viewer of both types sees the difference: all stored values listed, so no refusal.
+        let viewer = manager(&[secrets.id, vault.id]);
+        schema_changes::preview(pool, &viewer, &guess(&["s3cr3t-alpha", "s3cr3t-vault"])).await.unwrap();
+
+        // Every refused preview is audited with the caller, the request and the reason.
+        let rows: Vec<(String, Uuid, Value)> = sqlx::query_as(
+            "SELECT actor_name, entity_id, new_value FROM audit_log
+             WHERE action = 'schema_change.refused' AND entity_type = 'ci_attribute_definitions' ORDER BY chain_seq",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 2 * changes.len() + 2, "{rows:?}");
+        let (actor, entity, last) = rows.last().unwrap();
+        assert_eq!((actor.as_str(), *entity), ("modeller", field.id));
+        assert_eq!(
+            *last,
+            json!({"preview": true, "operation": "updateField", "code": "view_required", "field": "dataType",
+                   "body": {"dataType": "enum", "enumValues": ["s3cr3t-alpha", "nope"]}, "message": wrong.message})
+        );
 
         // A caller who may view both types still gets the values to correct.
         let caller = manager(&[secrets.id, vault.id]);
