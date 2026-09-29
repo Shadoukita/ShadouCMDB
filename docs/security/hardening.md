@@ -103,7 +103,10 @@ users ──HTTPS──▶ reverse proxy ──HTTP──▶ shadoucmdb ──TL
   can't be switched off yet (planned: SHAA-77 workstream 3); they reveal the API surface, not data.
   If users reach the server from the internet, block both paths at the proxy.
 - **No outbound internet is needed.** The server only connects to PostgreSQL ([telemetry](telemetry.md)),
-  so deny its outbound traffic apart from the database and your log collector.
+  so deny its outbound traffic apart from the database and your log collector. With enterprise sign-in
+  it also connects to your OIDC providers and LDAP/AD directories: allow those, and set
+  `OIDC_ALLOWED_HOSTS` to the OIDC provider hosts so the server contacts no others, even if a
+  provider's discovery document names them.
 - **Administration from a management network.** Run `migrate`, `create-admin` and database
   maintenance from a jump host in the management zone, not from user workstations.
 

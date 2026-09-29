@@ -121,6 +121,14 @@ Every non-2xx response has this shape:
 | `shadoucmdb_session` | `HttpOnly; SameSite=Lax; Path=/`, `Secure` behind HTTPS | 256-bit random token. The server stores only its SHA-256 in `sessions`. |
 | `shadoucmdb_csrf` | `SameSite=Lax; Path=/`, `Secure` behind HTTPS, readable by the UI | The session's CSRF token (also `csrfToken` in the login and `/auth/me` responses). |
 
+Behind HTTPS (whenever the cookies get `Secure`) they are named `__Host-shadoucmdb_session` and
+`__Host-shadoucmdb_csrf`. A browser keeps a `__Host-` cookie only if it is `Secure`, has `Path=/` and no `Domain`,
+so another host under the same domain cannot plant one ("cookie tossing"). When a request carries both names, the
+server reads only the `__Host-` cookie, whatever the order. A client that reads the CSRF cookie must likewise prefer
+`__Host-shadoucmdb_csrf`, or use `csrfToken` from the response. Sessions opened under the plain names before this
+change keep working over HTTPS for one more release: the first answer to such a session sets the `__Host-` cookies
+and deletes the plain ones.
+
 Every `POST`, `PUT`, `PATCH` and `DELETE` must echo the token in `X-CSRF-Token`, or it is rejected with `403
 CSRF_TOKEN_INVALID` before anything else happens. Login and setup need no token: they accept only
 `application/json`, which a cross-site form cannot send.

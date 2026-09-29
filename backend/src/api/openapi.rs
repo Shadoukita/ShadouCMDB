@@ -79,8 +79,8 @@ const DESCRIPTION: &str = "REST API for ShadouCMDB. This API is the only databas
 - Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`.
 - `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.
 - Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.
-- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie. Every operation except the health probes, login and first-run setup answers 401 `UNAUTHENTICATED` without a live session.
-- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie); without it: 403 `CSRF_TOKEN_INVALID`.
+- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Every operation except the health probes, login and first-run setup answers 401 `UNAUTHENTICATED` without a live session.
+- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie, `__Host-shadoucmdb_csrf` behind HTTPS); without it: 403 `CSRF_TOKEN_INVALID`.
 - Scripts and services use an API token instead (`Authorization: Bearer scmdb_...`, created under `/api/v1/admin/api-tokens`). With that header the cookies are ignored and no CSRF token is needed; an invalid, expired or revoked token is 401. A token may do what both its owner and its permission profile allow. Operations that answer 403 to tokens say so (sign-out, password change, `/auth/me` and token administration need a session). Every request made with a token is recorded in the audit log.
 - Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.
 - Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.
@@ -358,7 +358,7 @@ pub fn document(routes: &[Route]) -> OpenApi {
             SESSION_SCHEME,
             SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::with_description(
                 SESSION_COOKIE,
-                "Session cookie set by POST /api/v1/auth/login (HttpOnly, SameSite=Lax)",
+                "Session cookie set by POST /api/v1/auth/login (HttpOnly, SameSite=Lax); named __Host-shadoucmdb_session, with Secure, behind HTTPS",
             ))),
         )
         .security_scheme(

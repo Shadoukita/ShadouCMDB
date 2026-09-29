@@ -12,6 +12,11 @@
 //! - No redirects are followed and every response is capped at 1 MiB, so a
 //!   misbehaving endpoint cannot make the server fetch elsewhere or buffer
 //!   without bound. `HTTPS_PROXY`/`NO_PROXY` are honoured for the outbound calls.
+//! - With `OIDC_ALLOWED_HOSTS` set ([`AllowedHosts`]), the server contacts no
+//!   other host: the discovery URL, and the `token_endpoint` and `jwks_uri` the
+//!   discovery document names, are all checked before any request. Those are
+//!   the only URLs the server fetches (no userinfo call; the browser, not the
+//!   server, goes to `authorization_endpoint`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -107,14 +112,82 @@ pub fn provider_mfa(claims: &Map<String, Value>, policy: &MfaPolicy) -> bool {
     categories >= 2
 }
 
+/// `OIDC_ALLOWED_HOSTS`: the hosts the server may contact for OIDC. An entry
+/// is a host name or IP address (`[...]` for IPv6), optionally with `:port`;
+/// names compare exactly after lower-casing (no suffix or wildcard matching).
+/// An entry without a port allows any port on that host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowedHosts(Vec<(url::Host<String>, Option<u16>)>);
+
+impl AllowedHosts {
+    /// A comma-separated list; an empty list is refused (unset the variable
+    /// to allow any host).
+    pub fn parse(raw: &str) -> Result<AllowedHosts, String> {
+        let mut hosts = Vec::new();
+        for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            hosts.push(Self::entry(entry).ok_or_else(|| {
+                format!(
+                    "{entry:?} is not a host name or IP address with an optional :port (no scheme, path or wildcard)"
+                )
+            })?);
+        }
+        if hosts.is_empty() {
+            return Err("lists no host; leave it unset to allow any OIDC provider host".into());
+        }
+        Ok(AllowedHosts(hosts))
+    }
+
+    fn entry(entry: &str) -> Option<(url::Host<String>, Option<u16>)> {
+        let lower = entry.to_ascii_lowercase();
+        // Parsed as the authority of a URL, so names compare as reqwest will see them.
+        let url = url::Url::parse(&format!("https://{lower}/")).ok()?;
+        if !url.username().is_empty() || url.password().is_some() || url.path() != "/" || url.query().is_some() {
+            return None;
+        }
+        if lower.contains('*') || lower.contains('/') || lower.ends_with(':') {
+            return None;
+        }
+        // `Url` drops the https default port; keep an explicit `:443`.
+        let port = url.port().or_else(|| lower.ends_with(":443").then_some(443));
+        Some((url.host()?.to_owned(), port))
+    }
+
+    pub fn allows(&self, url: &url::Url) -> bool {
+        let Some(host) = url.host() else { return false };
+        let port = url.port_or_known_default();
+        self.0.iter().any(|(h, p)| h.to_string() == host.to_string() && p.is_none_or(|p| Some(p) == port))
+    }
+
+    /// Refuses `url` unless it is on the list; the error names the URL for
+    /// the server log only ([`OidcError::summary`] does not).
+    fn check(&self, what: &str, url: &str) -> Result<(), OidcError> {
+        match url::Url::parse(url) {
+            Ok(u) if self.allows(&u) => Ok(()),
+            _ => Err(OidcError {
+                detail: format!("{what}: {url} is not on a host in OIDC_ALLOWED_HOSTS"),
+                kind: ErrorKind::HostNotAllowed,
+            }),
+        }
+    }
+}
+
 /// A failure talking to the provider or checking its answer. `Display` gives
 /// the full text, for the server log only; [`OidcError::summary`] is what the
 /// administrator's connection test may show. Never sent to the browser.
 #[derive(Debug, Clone)]
 pub struct OidcError {
     pub detail: String,
+    kind: ErrorKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorKind {
+    /// The provider answered over verified TLS, or its answer is at fault.
+    Answer,
     /// No verified TLS answer came back (connect, TLS or transport failure).
-    unreachable: bool,
+    Unreachable,
+    /// `OIDC_ALLOWED_HOSTS` does not list the host; nothing was sent.
+    HostNotAllowed,
 }
 
 /// What the connection test shows instead of the transport error: the error
@@ -122,19 +195,28 @@ pub struct OidcError {
 pub const UNREACHABLE: &str = "Could not reach the provider over verified TLS (no connection, TLS handshake failed or \
                                no answer); the server log has the details";
 
+/// What the connection test shows for a URL outside `OIDC_ALLOWED_HOSTS`,
+/// without naming the URL or host.
+pub const HOST_NOT_ALLOWED: &str = "The provider uses a host this server may not contact (OIDC_ALLOWED_HOSTS); \
+                                    the server log has the details";
+
 impl OidcError {
     pub fn new(msg: impl Into<String>) -> Self {
-        OidcError { detail: msg.into(), unreachable: false }
+        OidcError { detail: msg.into(), kind: ErrorKind::Answer }
     }
 
     fn unreachable(msg: String) -> Self {
-        OidcError { detail: msg, unreachable: true }
+        OidcError { detail: msg, kind: ErrorKind::Unreachable }
     }
 
     /// The text for the administrator: the detail once the provider answered
-    /// over verified TLS, else [`UNREACHABLE`].
+    /// over verified TLS, else [`UNREACHABLE`] or [`HOST_NOT_ALLOWED`].
     pub fn summary(&self) -> &str {
-        if self.unreachable { UNREACHABLE } else { &self.detail }
+        match self.kind {
+            ErrorKind::Answer => &self.detail,
+            ErrorKind::Unreachable => UNREACHABLE,
+            ErrorKind::HostNotAllowed => HOST_NOT_ALLOWED,
+        }
     }
 }
 
@@ -176,6 +258,8 @@ pub struct Provider {
 #[derive(Default)]
 pub struct Cache {
     entries: Mutex<HashMap<Uuid, (String, Arc<Provider>)>>,
+    /// `OIDC_ALLOWED_HOSTS`; None allows any host.
+    allowed_hosts: Option<AllowedHosts>,
 }
 
 fn fingerprint(s: &Settings, version: &str) -> String {
@@ -183,6 +267,10 @@ fn fingerprint(s: &Settings, version: &str) -> String {
 }
 
 impl Cache {
+    pub fn new(allowed_hosts: Option<AllowedHosts>) -> Self {
+        Cache { entries: Mutex::default(), allowed_hosts }
+    }
+
     /// The provider, discovered on first use and again once the cache entry is
     /// an hour old or the provider row changed (`version`: its updated_at).
     pub async fn provider(&self, id: Uuid, version: &str, s: &Settings) -> Result<Arc<Provider>, OidcError> {
@@ -193,7 +281,7 @@ impl Cache {
         {
             return Ok(p.clone());
         }
-        let provider = Arc::new(discover(s).await?);
+        let provider = Arc::new(discover(s, self.allowed_hosts.as_ref()).await?);
         self.entries.lock().expect("oidc cache").insert(id, (key, provider.clone()));
         Ok(provider)
     }
@@ -281,10 +369,13 @@ pub fn is_loopback(u: &url::Url) -> bool {
     }
 }
 
-async fn discover(s: &Settings) -> Result<Provider, OidcError> {
+async fn discover(s: &Settings, allowed: Option<&AllowedHosts>) -> Result<Provider, OidcError> {
     let http = http_client(s.ca_certificate.as_deref())?;
     let base = s.issuer_url.trim_end_matches('/');
     let url = format!("{base}/.well-known/openid-configuration");
+    if let Some(allowed) = allowed {
+        allowed.check("discovery", &url)?;
+    }
     let discovery: Discovery = get_json(&http, &url, "discovery").await?;
     if discovery.issuer.trim_end_matches('/') != base {
         return Err(err(format!(
@@ -300,6 +391,11 @@ async fn discover(s: &Settings) -> Result<Provider, OidcError> {
         if !endpoint_ok(&discovery.issuer, value) {
             return Err(err(format!("discovery: {name} {value:?} is not an https URL")));
         }
+    }
+    // The document may name any host: every URL the server will fetch is checked.
+    if let Some(allowed) = allowed {
+        allowed.check("discovery: token_endpoint", &discovery.token_endpoint)?;
+        allowed.check("discovery: jwks_uri", &discovery.jwks_uri)?;
     }
     let keys: JwkSet = get_json(&http, &discovery.jwks_uri, "key set").await?;
     let now = Instant::now();
@@ -773,12 +869,123 @@ mod tests {
                 ca_certificate: None,
                 mfa: MfaPolicy::TrustProvider,
             };
-            let e = discover(&s).await.err().expect("nothing to discover");
+            let e = discover(&s, None).await.err().expect("nothing to discover");
             assert_eq!(e.summary(), UNREACHABLE, "{e}");
             assert!(e.to_string().starts_with("discovery: request to "), "{e}");
             texts.push(e.to_string());
         }
         assert_ne!(texts[0], texts[1], "the log keeps the cause");
         assert_eq!(OidcError::new("discovery: x answered HTTP 404").summary(), "discovery: x answered HTTP 404");
+    }
+    #[test]
+    fn allowed_hosts_match_exact_names_and_ports() {
+        let allowed =
+            AllowedHosts::parse(" IdP.Example.test , login.example.test:8443,[2001:DB8::1]:443, 192.0.2.7").unwrap();
+        let ok = |u: &str| allowed.allows(&url::Url::parse(u).unwrap());
+        assert!(ok("https://idp.example.test/.well-known/openid-configuration"));
+        assert!(ok("https://IDP.EXAMPLE.TEST:9000/x"), "no port in the entry: any port");
+        assert!(ok("https://login.example.test:8443/token"));
+        assert!(!ok("https://login.example.test/token"), "the entry's port only");
+        assert!(ok("https://[2001:db8::1]/jwks"), ":443 is the https default");
+        assert!(!ok("https://[2001:db8::1]:8443/jwks"));
+        assert!(ok("https://192.0.2.7/x"));
+        // No suffix, prefix or look-alike matching.
+        assert!(!ok("https://evil.idp.example.test/x"));
+        assert!(!ok("https://idp.example.test.evil.test/x"));
+        assert!(!ok("https://example.test/x"));
+        assert!(!ok("https://idp.example.test@evil.test/x"));
+        assert!(!ok("https://192.0.2.70/x"));
+
+        for bad in
+            ["", " , ", "https://idp.example.test", "*.example.test", "idp.example.test/path", "user@idp", "idp:x"]
+        {
+            assert!(AllowedHosts::parse(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    /// A stand-in provider on 127.0.0.1 whose discovery document names
+    /// endpoints on `localhost` (another host name, same port); counts the
+    /// requests it gets per path.
+    async fn provider_naming(other: &str) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let issuer = format!("http://127.0.0.1:{port}");
+        let other = format!("http://{other}:{port}");
+        let doc = json!({
+            "issuer": issuer,
+            "authorization_endpoint": format!("{issuer}/authorize"),
+            "token_endpoint": format!("{other}/token"),
+            "jwks_uri": format!("{other}/jwks"),
+        });
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let app = axum::Router::new()
+            .route("/.well-known/openid-configuration", axum::routing::get(move || async move { axum::Json(doc) }))
+            .route("/jwks", axum::routing::get(|| async { axum::Json(json!({ "keys": [] })) }))
+            .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| {
+                log.lock().unwrap().push(req.uri().path().to_owned());
+                next.run(req)
+            }));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (issuer, seen)
+    }
+
+    fn settings(issuer: &str) -> Settings {
+        Settings {
+            issuer_url: issuer.into(),
+            client_id: "cmdb".into(),
+            client_secret: None,
+            scopes: "openid".into(),
+            username_claim: "sub".into(),
+            groups_claim: "groups".into(),
+            ca_certificate: None,
+            mfa: MfaPolicy::TrustProvider,
+        }
+    }
+
+    /// GH-192: with OIDC_ALLOWED_HOSTS set, no request goes to a host off the
+    /// list, whether it is the issuer or an endpoint the discovery document names.
+    #[tokio::test]
+    async fn allowed_hosts_cover_every_url_the_server_fetches() {
+        let (issuer, seen) = provider_naming("localhost").await;
+        let port = url::Url::parse(&issuer).unwrap().port().unwrap();
+        let only = |hosts: &str| AllowedHosts::parse(hosts).unwrap();
+
+        // The issuer's host is not listed: nothing is sent at all.
+        let e = discover(&settings(&issuer), Some(&only(&format!("127.0.0.1:{}", port + 1)))).await.err().unwrap();
+        assert_eq!(e.summary(), HOST_NOT_ALLOWED);
+        assert!(e.to_string().contains(&issuer), "the log names the URL: {e}");
+        assert!(seen.lock().unwrap().is_empty());
+
+        // The issuer is listed, but the document points the key set and token
+        // endpoint at another host: refused before the key set is fetched.
+        let e = discover(&settings(&issuer), Some(&only("127.0.0.1"))).await.err().unwrap();
+        assert_eq!(e.summary(), HOST_NOT_ALLOWED);
+        assert!(e.to_string().contains("token_endpoint"), "{e}");
+        assert_eq!(*seen.lock().unwrap(), ["/.well-known/openid-configuration"]);
+        assert!(!HOST_NOT_ALLOWED.contains("localhost") && !HOST_NOT_ALLOWED.contains("127.0.0.1"));
+
+        // Both hosts listed: discovery completes. Unset: any host, as before.
+        discover(&settings(&issuer), Some(&only(&format!("127.0.0.1, localhost:{port}")))).await.unwrap();
+        discover(&settings(&issuer), None).await.unwrap();
+        assert_eq!(seen.lock().unwrap().iter().filter(|p| *p == "/jwks").count(), 2);
+    }
+
+    /// Redirects are not followed, so a listed host cannot send the server on
+    /// to one that is not.
+    #[tokio::test]
+    async fn redirects_are_not_followed() {
+        let (elsewhere, seen) = provider_naming("127.0.0.1").await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let issuer = format!("http://{}", listener.local_addr().unwrap());
+        let target = format!("{elsewhere}/.well-known/openid-configuration");
+        let app = axum::Router::new().route(
+            "/.well-known/openid-configuration",
+            axum::routing::get(move || async move { axum::response::Redirect::temporary(&target) }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let e = discover(&settings(&issuer), Some(&AllowedHosts::parse("127.0.0.1").unwrap())).await.err().unwrap();
+        assert!(e.to_string().contains("answered HTTP 307"), "{e}");
+        assert!(seen.lock().unwrap().is_empty(), "the redirect target was not contacted");
     }
 }
