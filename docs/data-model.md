@@ -343,6 +343,22 @@ Placing a section beside another fits it into the row: it takes the columns the 
 next to a 6), and when the row is full the section it is dropped on gives up half of its width. Every
 drag is one undo step, however far the edge travelled.
 
+**Free tabs in the editor.** **Grid** / **Free** in the bar switches the tab in view (Grid is the
+default). To Free, each section becomes a window where it is on screen, so nothing moves; back to Grid,
+the sections are ordered by position with widths from their windows, as the API converts them (see
+*Free tabs* above). On a free tab:
+
+| To… | With the mouse | From the keyboard (on the window's grip) |
+|---|---|---|
+| Move a window | drag its title bar (its name too: a click renames, a drag moves); a readout shows `x, y · w × h px` | ← → ↑ ↓: 8 px (Shift: 64 px, Alt: 1 px) |
+| Resize a window | drag any edge or corner | Ctrl+→ / Ctrl+←: width, Ctrl+↓ / Ctrl+↑: height |
+| Place without snapping | hold **Alt** while dragging, or **Snap off** in the bar (edges otherwise snap to other windows within 6 px, else to an 8 px grid) | keys never snap |
+| Change the layers | pressing on a window brings it to the front; right-click it, its toolbar or the bar for **Bring to front** / **Bring forward** / **Send backward** / **Send to back** | Ctrl+PageUp / Ctrl+PageDown (with Shift: front / back); Shift+F10 opens the layers menu |
+
+A new section, note or panel, and one moved in from another tab, starts below the lowest window at the
+full width, on top of the stack. Below 820 px of preview width the windows stack as they do on a phone,
+and cannot be moved there. Every drag is one undo step, and each key press or layer change is one.
+
 **Undo** / **Redo** (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y outside text fields), **Desktop** / **Tablet** /
 **Phone** as shortcuts for the preview width, **Reset to built-in layout** (drops the class's own layout from the draft; undoable),
 **Save layout** with an optional note, **Discard** and **Done** (closes the editor's window) are in the
