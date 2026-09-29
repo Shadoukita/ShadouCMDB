@@ -2467,4 +2467,120 @@ mod tests {
         }
         db.drop().await;
     }
+
+    /// GH#261: the audit log's schema change entries show the counts they hold
+    /// only to a reader who may view every type counted, the same rule as the
+    /// history (GH#252); a record from before migration 0028 never shows them
+    /// to a restricted reader.
+    #[tokio::test]
+    async fn audit_entries_of_schema_changes_count_values_only_for_readers_who_may_view_them() {
+        use crate::auth::permissions::{ClassRights, Permissions};
+        use crate::modules::audit::{self, AuditQuery};
+        let Some(db) = scratch::database("audit_entries_of_schema_changes_count_values_only_for_readers").await else {
+            return;
+        };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("gh261-test", "gh261-test");
+        let auditor = |view: &[Uuid]| {
+            let permissions = Permissions {
+                global: [GlobalPermission::AuditView].into(),
+                classes: view.iter().map(|id| (*id, ClassRights { view: true, ..Default::default() })).collect(),
+                ..Default::default()
+            };
+            let principal = crate::auth::Principal {
+                user_id: Uuid::new_v4(),
+                username: "auditor".into(),
+                credential: crate::auth::Credential::Token,
+                permissions,
+            };
+            RequestContext::user(std::sync::Arc::new(principal), "gh261".into())
+        };
+
+        // An unrestricted writer purges the field `code` of Secrets (12 values).
+        let secrets: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Secrets"}))).await.unwrap();
+        let def: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": secrets.id, "key": "code", "label": "Code", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        for _ in 0..12 {
+            let item = body::<CreateItemBody>(json!({"classId": secrets.id, "attributes": {"code": "x"}}));
+            items_service::create(pool, &ctx, &item).await.unwrap();
+        }
+        simple::update::<AttributeDefinitions>(pool, &ctx, def.id, &body(json!({"isActive": false}))).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let purge = purge_attribute_in(&mut tx, &ctx, def.id, "code").await.unwrap().unwrap();
+        tx.commit().await.unwrap();
+
+        // A record from before migration 0028: a count-free variant, no count_classes.
+        let mut conn = pool.acquire().await.unwrap();
+        let legacy: SchemaChange = sqlx::query_as(
+            r#"INSERT INTO cmdb.schema_changes (actor_type, actor_name, summary, statements, impact,
+                                                redacted_summary, redacted_impact)
+               VALUES ('system', 'migration 0009', 'Migration 0009: 7 attribute values moved', '{SELECT 1}',
+                       '[{"statement": null, "kind": "data_moved", "rows": 7, "message": "7 values moved"}]',
+                       'Migration 0009: attribute values moved',
+                       '[{"statement": null, "kind": "data_moved", "rows": null, "message": "The values moved"}]')
+               RETURNING id, occurred_at, actor_type, actor_id, actor_name, request_id, summary, statements, impact"#,
+        )
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+        let entry = AuditEntry {
+            action: AuditAction::Create,
+            entity_type: "schema_changes",
+            entity_id: legacy.id,
+            old_value: None,
+            new_value: Some(crud::json(&legacy)),
+        };
+        crud::write_audit(&mut conn, &ctx, vec![entry]).await.unwrap();
+        drop(conn);
+
+        for (reader, sees_purge, sees_legacy) in
+            [(auditor(&[]), false, false), (auditor(&[secrets.id]), true, false), (ctx.clone(), true, true)]
+        {
+            let query: AuditQuery =
+                body(json!({"limit": 200, "offset": 0, "sort": "-occurredAt", "entityType": "schema_changes"}));
+            let entries = audit::list(pool, &reader, &query).await.unwrap().data;
+            let value = |id: Uuid| {
+                let e = entries.iter().find(|e| e.entity_id == id).expect("audit entry");
+                assert!(!e.redacted);
+                e.new_value.clone().unwrap()
+            };
+
+            let v = value(purge.id);
+            // The summary and messages only: ids and statements may contain digits.
+            let text = std::iter::once(&v["summary"])
+                .chain(v["impact"].as_array().unwrap().iter().map(|i| &i["message"]))
+                .map(|t| t.as_str().unwrap())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            assert_eq!(v["statements"], json!(purge.statements), "statements are kept");
+            let column = v["impact"].as_array().unwrap().iter().find(|i| i["kind"] == "drop_column").unwrap().clone();
+            if sees_purge {
+                assert_eq!(column["rows"], 12, "{column}");
+                assert!(text.contains("12"), "{text}");
+            } else {
+                assert_eq!(column["rows"], Value::Null, "{column}");
+                assert!(!column["message"].as_str().unwrap().contains(char::is_numeric), "{column}");
+                assert!(!text.contains("12"), "{text}");
+            }
+
+            let v = value(legacy.id);
+            if sees_legacy {
+                assert_eq!(v["summary"], "Migration 0009: 7 attribute values moved");
+                assert_eq!(v["impact"][0]["rows"], 7);
+            } else {
+                assert_eq!(v["summary"], "Migration 0009: attribute values moved");
+                assert_eq!(
+                    v["impact"][0],
+                    json!({"statement": null, "kind": "data_moved", "rows": null, "message": "The values moved"})
+                );
+            }
+        }
+        db.drop().await;
+    }
 }
