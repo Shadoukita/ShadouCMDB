@@ -48,6 +48,63 @@ pub struct Settings {
     pub username_claim: String,
     pub groups_claim: String,
     pub ca_certificate: Option<String>,
+    pub mfa: MfaPolicy,
+}
+
+/// Whether a sign-in through the provider must prove a second factor in the
+/// ID token before it counts as MFA for a `requireMfa` profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MfaPolicy {
+    /// The token must prove it ([`provider_mfa`]); with `required_acr` set,
+    /// its `acr` must be one of them, otherwise `amr` decides.
+    Verify { required_acr: Vec<String> },
+    /// The administrator states the provider enforces MFA; nothing is checked.
+    TrustProvider,
+}
+
+impl MfaPolicy {
+    pub const VERIFY: &'static str = "verify";
+    pub const TRUST_PROVIDER: &'static str = "trust_provider";
+
+    /// From the provider row's `mfa_assurance` and `required_acr`. Anything
+    /// but `trust_provider` verifies (fail closed).
+    pub fn from_row(mfa_assurance: Option<&str>, required_acr: Option<&[String]>) -> MfaPolicy {
+        match mfa_assurance {
+            Some(MfaPolicy::TRUST_PROVIDER) => MfaPolicy::TrustProvider,
+            _ => MfaPolicy::Verify { required_acr: required_acr.unwrap_or_default().to_vec() },
+        }
+    }
+
+    pub fn required_acr(&self) -> &[String] {
+        match self {
+            MfaPolicy::Verify { required_acr } => required_acr,
+            MfaPolicy::TrustProvider => &[],
+        }
+    }
+}
+
+/// RFC 8176 `amr` values by authentication factor category; any other value
+/// counts for nothing.
+const KNOWLEDGE: &[&str] = &["pwd", "pin", "kba"];
+const POSSESSION: &[&str] = &["hwk", "swk", "otp", "sc", "sms", "tel", "pop"];
+const INHERENCE: &[&str] = &["fpt", "face", "iris", "retina", "vbm"];
+
+/// Whether the (signature-verified) ID token claims prove a second factor
+/// under `Verify`. With `required_acr`, `acr` must be exactly one of them;
+/// otherwise `amr` must contain `mfa` or cover two factor categories.
+/// Anything missing or malformed is false. `TrustProvider` is never proof.
+pub fn provider_mfa(claims: &Map<String, Value>, policy: &MfaPolicy) -> bool {
+    let MfaPolicy::Verify { required_acr } = policy else { return false };
+    if !required_acr.is_empty() {
+        return claims.get("acr").and_then(Value::as_str).is_some_and(|acr| required_acr.iter().any(|r| r == acr));
+    }
+    let Some(amr) = claims.get("amr").and_then(Value::as_array) else { return false };
+    let Some(values) = amr.iter().map(Value::as_str).collect::<Option<Vec<&str>>>() else { return false };
+    if values.contains(&"mfa") {
+        return true;
+    }
+    let categories = [KNOWLEDGE, POSSESSION, INHERENCE].iter().filter(|c| values.iter().any(|v| c.contains(v))).count();
+    categories >= 2
 }
 
 /// A failure talking to the provider or checking its answer. `Display` gives
@@ -101,6 +158,10 @@ pub struct Discovery {
     pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
     #[serde(default)]
     pub id_token_signing_alg_values_supported: Option<Vec<String>>,
+    #[serde(default)]
+    pub claims_supported: Option<Vec<String>>,
+    #[serde(default)]
+    pub acr_values_supported: Option<Vec<String>>,
 }
 
 /// A provider ready for sign-ins: its discovery document and keys.
@@ -291,6 +352,11 @@ pub fn authorization_url(p: &Provider, s: &Settings, r: &AuthorizationRequest<'_
         .append_pair("nonce", r.nonce)
         .append_pair("code_challenge", &pkce_challenge(r.code_verifier))
         .append_pair("code_challenge_method", "S256");
+    // A request only, so the provider can step up; provider_mfa() enforces it.
+    let acr = s.mfa.required_acr();
+    if !acr.is_empty() {
+        url.query_pairs_mut().append_pair("acr_values", &acr.join(" "));
+    }
     Ok(url.into())
 }
 
@@ -585,6 +651,8 @@ mod tests {
                 jwks_uri: "https://idp.example.test/jwks".into(),
                 token_endpoint_auth_methods_supported: None,
                 id_token_signing_alg_values_supported: None,
+                claims_supported: None,
+                acr_values_supported: None,
             },
             keys: Mutex::new((JwkSet::default(), Instant::now())),
             fetched: Instant::now(),
@@ -597,6 +665,7 @@ mod tests {
             username_claim: "preferred_username".into(),
             groups_claim: "groups".into(),
             ca_certificate: None,
+            mfa: MfaPolicy::Verify { required_acr: Vec::new() },
         };
         let req = AuthorizationRequest {
             redirect_uri: "https://cmdb.example.com/api/v1/auth/oidc/callback",
@@ -614,6 +683,66 @@ mod tests {
         assert_eq!(q["code_challenge"], "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
         assert_eq!(q["code_challenge_method"], "S256");
         assert_eq!(q["redirect_uri"], req.redirect_uri);
+        assert!(!q.contains_key("acr_values"), "nothing asked for without requiredAcr");
+
+        // GH#131 (c): requiredAcr is asked for (the check is provider_mfa's).
+        let gold = Settings { mfa: MfaPolicy::Verify { required_acr: vec!["urn:x:gold".into()] }, ..s.clone() };
+        let raw = authorization_url(&p, &gold, &req).unwrap();
+        assert!(raw.contains("acr_values=urn%3Ax%3Agold"), "{raw}");
+        let two = Settings { mfa: MfaPolicy::Verify { required_acr: vec!["a".into(), "b".into()] }, ..s.clone() };
+        let url = url::Url::parse(&authorization_url(&p, &two, &req).unwrap()).unwrap();
+        assert_eq!(url.query_pairs().find(|(k, _)| k == "acr_values").unwrap().1, "a b");
+        let trust = Settings { mfa: MfaPolicy::TrustProvider, ..s };
+        assert!(!authorization_url(&p, &trust, &req).unwrap().contains("acr_values"));
+    }
+
+    /// GH#131 (g): what counts as proof of a second factor in the ID token.
+    #[test]
+    fn provider_mfa_needs_proof_in_the_token() {
+        let amr = MfaPolicy::Verify { required_acr: Vec::new() };
+        let cases = [
+            (json!({ "amr": ["pwd"] }), false),
+            (json!({ "amr": ["otp"] }), false),
+            (json!({ "amr": ["pwd", "otp"] }), true),
+            (json!({ "amr": ["hwk", "fpt"] }), true),
+            (json!({ "amr": ["pwd", "kba"] }), false),
+            (json!({ "amr": ["pwd", "mfa"] }), true),
+            (json!({ "amr": ["mfa"] }), true),
+            (json!({ "amr": ["MFA"] }), false),
+            (json!({ "amr": ["PWD", "OTP"] }), false),
+            (json!({ "amr": ["pwd", "unknown", "wia"] }), false),
+            (json!({ "amr": ["face", "sms"] }), true),
+            (json!({ "amr": [] }), false),
+            (json!({ "amr": "mfa" }), false),
+            (json!({ "amr": ["pwd", 1] }), false),
+            (json!({ "amr": ["mfa", null] }), false),
+            (json!({ "amr": null }), false),
+            (json!({ "acr": "mfa" }), false),
+            (json!({}), false),
+        ];
+        for (c, expected) in &cases {
+            assert_eq!(provider_mfa(&claims(c.clone()), &amr), *expected, "{c}");
+        }
+
+        let gold = MfaPolicy::Verify { required_acr: vec!["urn:x:gold".into(), "loa3".into()] };
+        let acr_cases = [
+            (json!({ "acr": "urn:x:gold" }), true),
+            (json!({ "acr": "loa3", "amr": ["pwd"] }), true),
+            (json!({ "acr": "urn:x:silver", "amr": ["mfa"] }), false),
+            (json!({ "acr": "URN:X:GOLD" }), false),
+            (json!({ "acr": ["urn:x:gold"] }), false),
+            (json!({ "amr": ["pwd", "otp"] }), false),
+            (json!({}), false),
+        ];
+        for (c, expected) in &acr_cases {
+            assert_eq!(provider_mfa(&claims(c.clone()), &gold), *expected, "acr: {c}");
+        }
+        assert!(!provider_mfa(&claims(json!({ "amr": ["mfa"] })), &MfaPolicy::TrustProvider));
+
+        assert_eq!(MfaPolicy::from_row(Some("trust_provider"), Some(&[])), MfaPolicy::TrustProvider);
+        assert_eq!(MfaPolicy::from_row(Some("verify"), None), amr);
+        assert_eq!(MfaPolicy::from_row(None, None), amr, "fails closed");
+        assert_eq!(MfaPolicy::from_row(Some("bogus"), None), amr, "fails closed");
     }
 
     /// GH#125: a closed port, a port that does not speak TLS and one that
@@ -642,6 +771,7 @@ mod tests {
                 username_claim: "sub".into(),
                 groups_claim: "groups".into(),
                 ca_certificate: None,
+                mfa: MfaPolicy::TrustProvider,
             };
             let e = discover(&s).await.err().expect("nothing to discover");
             assert_eq!(e.summary(), UNREACHABLE, "{e}");

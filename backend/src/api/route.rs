@@ -738,7 +738,7 @@ async fn authorise(
         return auth::token::authenticate(&state.pool, secret, required, rule.session_only, request_id, client, used)
             .await;
     }
-    let Some(principal) = auth::authenticate(&state.pool, &state.auth.config, headers).await? else {
+    let Some(principal) = auth::authenticate(&state.pool, &state.auth.config, headers, &client).await? else {
         return Err(unauthenticated());
     };
     if !rule.safe_method && !auth::csrf_ok(&principal, headers) {

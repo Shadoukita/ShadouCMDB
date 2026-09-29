@@ -21,6 +21,10 @@ pub struct ProviderRow {
     pub scopes: Option<String>,
     pub username_claim: Option<String>,
     pub groups_claim: Option<String>,
+    /// OIDC: `verify` or `trust_provider` (see [`crate::auth::sso::oidc::MfaPolicy`]).
+    pub mfa_assurance: Option<String>,
+    /// OIDC: the acr values that count as MFA under `verify` (empty: amr decides).
+    pub required_acr: Option<Vec<String>>,
     pub ldap_url: Option<String>,
     pub start_tls: Option<bool>,
     pub bind_dn: Option<String>,
@@ -37,7 +41,7 @@ pub struct ProviderRow {
 }
 
 pub const COLUMNS: &str = "id, kind, name, is_enabled, sort_order, ca_certificate,
-    issuer_url, client_id, client_secret, scopes, username_claim, groups_claim,
+    issuer_url, client_id, client_secret, scopes, username_claim, groups_claim, mfa_assurance, required_acr,
     ldap_url, start_tls, bind_dn, bind_password, user_base_dn, user_filter,
     username_attribute, display_name_attribute, email_attribute, group_attribute,
     (SELECT count(*) FROM users u WHERE u.identity_provider_id = identity_providers.id) AS user_count,

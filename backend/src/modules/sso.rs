@@ -26,7 +26,7 @@ use crate::api::context::RequestContext;
 use crate::api::route::{In, Json, NoBody, NoPath, NoQuery, PathInput, QueryInput, Redirect, Route, route};
 use crate::api::schemas::USERNAME_PATTERN;
 use crate::api::validate;
-use crate::auth::events::{self, LoginMethod};
+use crate::auth::events::{self, LoginMethod, ProviderMfa};
 use crate::auth::sso::login_state::LoginState;
 use crate::auth::sso::{ldap, oidc};
 use crate::auth::{AuthState, session};
@@ -56,6 +56,7 @@ pub fn oidc_settings(p: &ProviderRow) -> oidc::Settings {
         username_claim: p.username_claim.clone().unwrap_or_default(),
         groups_claim: p.groups_claim.clone().unwrap_or_default(),
         ca_certificate: p.ca_certificate.clone(),
+        mfa: oidc::MfaPolicy::from_row(p.mfa_assurance.as_deref(), p.required_acr.as_deref()),
     }
 }
 
@@ -113,6 +114,9 @@ pub enum Refusal {
     NotAuthorised,
     /// Recomputing the profiles would leave no active Administrator.
     LastAdministrator,
+    /// A profile the user holds requires MFA, and the provider (set to
+    /// verify) did not prove a second factor in the ID token.
+    MfaNotEnforced,
 }
 
 impl Refusal {
@@ -124,6 +128,7 @@ impl Refusal {
             Refusal::AccountDisabled => "account_disabled",
             Refusal::NotAuthorised => "not_authorised",
             Refusal::LastAdministrator => "last_administrator",
+            Refusal::MfaNotEnforced => "mfa_not_enforced",
         }
     }
 
@@ -139,6 +144,9 @@ impl Refusal {
             Refusal::NotAuthorised => "None of your groups gives access to ShadouCMDB; ask an administrator for access",
             Refusal::LastAdministrator => {
                 "Signing in would remove the last active administrator; ask another administrator to check the group mappings"
+            }
+            Refusal::MfaNotEnforced => {
+                "Your identity provider did not confirm a second factor, which your access to ShadouCMDB requires. Sign in again using multi-factor authentication, or ask an administrator to check the provider's MFA settings."
             }
         }
     }
@@ -271,10 +279,11 @@ pub async fn link_account(
     }
 }
 
-/// Records a refused provider sign-in (`login.failure`, the name as the provider sent it).
-async fn record_refusal(pool: &PgPool, ctx: &RequestContext, attempted: &str) -> Result<(), AppError> {
+/// Records a refused provider sign-in (`login.failure`, the name as the
+/// provider sent it, and why: the `ssoError` code).
+async fn record_refusal(pool: &PgPool, ctx: &RequestContext, attempted: &str, reason: &str) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
-    events::login_failure(&mut tx, ctx, attempted).await?;
+    events::login_failure(&mut tx, ctx, attempted, Some(reason)).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -565,6 +574,61 @@ fn oidc_identity(claims: &Map<String, Value>, s: &oidc::Settings) -> ExternalIde
     }
 }
 
+/// A claim's value for the log: at most 200 characters of its JSON.
+fn logged_claim(claims: &Map<String, Value>, name: &str) -> String {
+    claims.get(name).map(Value::to_string).unwrap_or_else(|| "(none)".into()).chars().take(200).collect()
+}
+
+/// The sign-in after the ID token was verified: weighs the MFA evidence in
+/// `claims` against the provider's policy, links the account, refuses a user
+/// whose profiles require MFA when nothing proved it, and otherwise opens the
+/// session (recording the evidence on it). Returns the session cookies, or the
+/// refusal (already recorded as `login.failure` with its reason).
+pub async fn verified_sign_in(
+    pool: &PgPool,
+    auth: &AuthState,
+    headers: &HeaderMap,
+    ctx: &RequestContext,
+    provider: &ProviderRow,
+    settings: &oidc::Settings,
+    claims: &Map<String, Value>,
+) -> Result<Result<Vec<axum::http::HeaderValue>, Refusal>, AppError> {
+    let evidence = match &settings.mfa {
+        oidc::MfaPolicy::TrustProvider => ProviderMfa::Trusted,
+        policy if oidc::provider_mfa(claims, policy) => ProviderMfa::Verified,
+        oidc::MfaPolicy::Verify { .. } => ProviderMfa::None,
+    };
+    let identity = oidc_identity(claims, settings);
+    let refused = async |refusal: Refusal| -> Result<Result<_, Refusal>, AppError> {
+        record_refusal(pool, ctx, identity.attempted(), refusal.code()).await?;
+        Ok(Err(refusal))
+    };
+    let (user_id, username) = match link_account(pool, provider, &identity, ctx).await? {
+        Ok(account) => account,
+        Err(refusal) => {
+            tracing::warn!(provider = %provider.name, user = %identity.attempted(), reason = refusal.code(), "OIDC sign-in refused");
+            return refused(refusal).await;
+        }
+    };
+    // The profiles were just set from the groups; a later change is the per-request gate's.
+    if evidence == ProviderMfa::None && auth_data::holds_mfa_profile(&mut *pool.acquire().await?, user_id).await? {
+        tracing::warn!(
+            provider = %provider.name,
+            user = %username,
+            acr = %logged_claim(claims, "acr"),
+            amr = %logged_claim(claims, "amr"),
+            "OIDC sign-in refused: a profile requires MFA and the ID token does not prove a second factor"
+        );
+        return refused(Refusal::MfaNotEnforced).await;
+    }
+    let purged = auth_data::purge_sessions(pool, auth.config.session_idle).await?;
+    auth_data::record_login(pool, user_id).await?;
+    tracing::info!(user = %username, provider = %provider.name, ip = ?ctx.client.ip, purged_sessions = purged, provider_mfa = evidence.as_str(), "signed in through OIDC");
+    let (_, cookies) =
+        super::auth::open_session(pool, auth, headers, ctx, user_id, &username, LoginMethod::Oidc(evidence)).await?;
+    Ok(Ok(cookies))
+}
+
 async fn oidc_callback(
     pool: &PgPool,
     auth: &AuthState,
@@ -593,8 +657,9 @@ async fn oidc_callback(
     if let Some(error) = q.get("error") {
         let description: String = q.get("error_description").unwrap_or_default().chars().take(300).collect();
         tracing::warn!(provider = %provider.name, error, description, "OIDC provider did not sign the user in");
-        record_refusal(pool, ctx, &attempted).await?;
-        return Ok(failed(auth, headers, if error == "access_denied" { "cancelled" } else { "failed" }));
+        let code = if error == "access_denied" { "cancelled" } else { "failed" };
+        record_refusal(pool, ctx, &attempted, code).await?;
+        return Ok(failed(auth, headers, code));
     }
     let settings = oidc_settings(&provider);
     let Some(redirect_uri) = redirect_uri(auth) else { return Ok(failed(auth, headers, "not_configured")) };
@@ -618,24 +683,14 @@ async fn oidc_callback(
         Ok(claims) => claims,
         Err(e) => {
             tracing::error!(provider = %provider.name, error = %e, "OIDC sign-in failed");
-            record_refusal(pool, ctx, &attempted).await?;
+            record_refusal(pool, ctx, &attempted, "failed").await?;
             return Ok(failed(auth, headers, "failed"));
         }
     };
-    let identity = oidc_identity(&claims, &settings);
-    let (user_id, username) = match link_account(pool, &provider, &identity, ctx).await? {
-        Ok(account) => account,
-        Err(refusal) => {
-            tracing::warn!(provider = %provider.name, user = %identity.attempted(), reason = refusal.code(), "OIDC sign-in refused");
-            record_refusal(pool, ctx, identity.attempted()).await?;
-            return Ok(failed(auth, headers, refusal.code()));
-        }
+    let mut cookies = match verified_sign_in(pool, auth, headers, ctx, &provider, &settings, &claims).await? {
+        Ok(cookies) => cookies,
+        Err(refusal) => return Ok(failed(auth, headers, refusal.code())),
     };
-    let purged = auth_data::purge_sessions(pool, auth.config.session_idle).await?;
-    auth_data::record_login(pool, user_id).await?;
-    tracing::info!(user = %username, provider = %provider.name, ip = ?ctx.client.ip, purged_sessions = purged, "signed in through OIDC");
-    let mut cookies =
-        super::auth::open_session(pool, auth, headers, ctx, user_id, &username, LoginMethod::Oidc).await?;
     cookies.push(session::clear_oidc_cookie(session::secure_cookies(&auth.config, headers)));
     // Checked when sealed; checked again in case the key ever leaks.
     let return_to = safe_return_to(pending.return_to.as_deref());
@@ -685,7 +740,7 @@ async fn sign_in_options(pool: &PgPool, auth: &AuthState) -> Result<SignInOption
 
 const TAG: &str = "Authentication";
 
-pub const SSO_ERRORS: &str = "`expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`";
+pub const SSO_ERRORS: &str = "`expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`)";
 
 pub fn routes() -> Vec<Route> {
     vec![
@@ -723,6 +778,8 @@ pub fn routes() -> Vec<Route> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -807,8 +864,10 @@ mod tests {
 
     async fn add_provider(pool: &PgPool, issuer: &str) -> Uuid {
         sqlx::query_scalar(
-            "INSERT INTO identity_providers (kind, name, issuer_url, client_id, scopes, username_claim, groups_claim)
-             VALUES ('oidc', 'Test IdP', $1, 'cmdb', 'profile', 'preferred_username', 'groups') RETURNING id",
+            "INSERT INTO identity_providers (kind, name, issuer_url, client_id, scopes, username_claim, groups_claim,
+               mfa_assurance, required_acr)
+             VALUES ('oidc', 'Test IdP', $1, 'cmdb', 'profile', 'preferred_username', 'groups', 'verify', '{}')
+             RETURNING id",
         )
         .bind(issuer)
         .fetch_one(pool)
@@ -959,6 +1018,321 @@ mod tests {
         assert_eq!(auth_state().oidc_state_key(pool).await.unwrap().open(&ka.seal(&s), now), Some(s));
         let keys: i64 = sqlx::query_scalar("SELECT count(*) FROM server_keys").fetch_one(pool).await.unwrap();
         assert_eq!(keys, 1);
+        db.drop().await;
+    }
+
+    // -----------------------------------------------------------------------
+    // GH#131: the second factor of an OIDC sign-in, after the ID token was
+    // verified (no provider needed: verified_sign_in takes the claims)
+    // -----------------------------------------------------------------------
+
+    use crate::modules::api_tokens::tests::{Creds, app, call, code};
+
+    /// Mapped to a profile with requireMfa.
+    const ADMINS: &str = "cmdb-admins";
+    /// Mapped to a profile without it.
+    const READERS: &str = "cmdb-readers";
+
+    struct MfaFixture {
+        provider_id: Uuid,
+    }
+
+    async fn mfa_fixture(pool: &PgPool, assurance: &str, required_acr: &[&str]) -> MfaFixture {
+        let profile = |name: &'static str, require_mfa: bool| async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO permission_profiles (name, require_mfa) VALUES ($1, $2) RETURNING id",
+            )
+            .bind(name)
+            .bind(require_mfa)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        };
+        let (mfa_profile, plain) = (profile("Operators (MFA)", true).await, profile("Readers", false).await);
+        let provider_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO identity_providers (kind, name, issuer_url, client_id, scopes, username_claim, groups_claim,
+               mfa_assurance, required_acr)
+             VALUES ('oidc', 'Company SSO', 'https://sso.example.test', 'cmdb', 'profile', 'preferred_username',
+               'groups', $1, $2) RETURNING id",
+        )
+        .bind(assurance)
+        .bind(required_acr)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let pairs = [(ADMINS.to_owned(), mfa_profile), (READERS.to_owned(), plain)];
+        data::set_mappings(&mut pool.acquire().await.unwrap(), provider_id, &pairs).await.unwrap();
+        MfaFixture { provider_id }
+    }
+
+    /// Verified ID token claims for `name` in `group`, plus `extra` (amr, acr).
+    fn id_token(name: &str, group: &str, extra: Value) -> Map<String, Value> {
+        let mut claims =
+            serde_json::json!({ "sub": format!("sub-{name}"), "preferred_username": name, "groups": [group] })
+                .as_object()
+                .unwrap()
+                .clone();
+        claims.extend(extra.as_object().cloned().unwrap_or_default());
+        claims
+    }
+
+    /// Signs in through the provider as it is stored now; the session's credentials, or the refusal.
+    async fn oidc_sign_in(pool: &PgPool, f: &MfaFixture, claims: &Map<String, Value>) -> Result<Creds, Refusal> {
+        let provider = data::get(&mut pool.acquire().await.unwrap(), f.provider_id, false).await.unwrap().unwrap();
+        let ctx = RequestContext::anonymous(String::new());
+        let settings = oidc_settings(&provider);
+        let cookies = verified_sign_in(pool, &auth_state(), &HeaderMap::new(), &ctx, &provider, &settings, claims)
+            .await
+            .unwrap()?;
+        let token = session::cookie_value(&cookies[0], session::SESSION_COOKIE).unwrap();
+        let csrf = session::cookie_value(&cookies[1], session::CSRF_COOKIE).unwrap();
+        Ok(Creds {
+            cookie: Some(format!("shadoucmdb_session={token}; shadoucmdb_csrf={csrf}")),
+            csrf: Some(csrf),
+            bearer: None,
+        })
+    }
+
+    /// `new_value` of the audit rows with this action, oldest first.
+    async fn audit_rows(pool: &PgPool, action: &str) -> Vec<Value> {
+        sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = $1 ORDER BY id")
+            .bind(action)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    /// (session count, provider_mfa of each session) of the user.
+    async fn sessions_of(pool: &PgPool, name: &str) -> Vec<bool> {
+        sqlx::query_scalar(
+            "SELECT s.provider_mfa FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.username = $1",
+        )
+        .bind(name)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// (a) The vulnerability: a provider set to verify, a token without amr,
+    /// a user whose group maps to a requireMfa profile. Used to open a session.
+    #[tokio::test]
+    async fn verify_refuses_a_require_mfa_user_without_proof() {
+        let Some(db) = scratch::database("verify_refuses_a_require_mfa_user_without_proof").await else { return };
+        let pool = &db.pool;
+        let f = mfa_fixture(pool, "verify", &[]).await;
+        for extra in [serde_json::json!({}), serde_json::json!({ "amr": ["pwd"] }), serde_json::json!({ "amr": "mfa" })]
+        {
+            let refused = oidc_sign_in(pool, &f, &id_token("alice", ADMINS, extra.clone())).await.err();
+            assert_eq!(refused, Some(Refusal::MfaNotEnforced), "{extra}");
+        }
+        assert_eq!(sessions_of(pool, "alice").await, Vec::<bool>::new(), "no session was opened");
+        assert!(audit_rows(pool, "login.success").await.is_empty());
+        let failures = audit_rows(pool, "login.failure").await;
+        assert_eq!(failures.len(), 3);
+        for row in &failures {
+            assert_eq!(
+                (row["reason"].as_str(), row["attemptedUsername"].as_str()),
+                (Some("mfa_not_enforced"), Some("alice")),
+                "{row}"
+            );
+        }
+        assert_eq!(Refusal::MfaNotEnforced.code(), "mfa_not_enforced");
+        assert!(SSO_ERRORS.contains("`mfa_not_enforced`"));
+        db.drop().await;
+    }
+
+    /// (b) Proof in amr opens a session that records it and is not gated.
+    #[tokio::test]
+    async fn verify_accepts_amr_proof_and_records_it_on_the_session() {
+        let Some(db) = scratch::database("verify_accepts_amr_proof_and_records_it_on_the_session").await else {
+            return;
+        };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let f = mfa_fixture(pool, "verify", &[]).await;
+        let creds = oidc_sign_in(pool, &f, &id_token("alice", ADMINS, serde_json::json!({ "amr": ["pwd", "mfa"] })))
+            .await
+            .expect("signed in");
+        assert_eq!(sessions_of(pool, "alice").await, vec![true]);
+        let hash: Vec<u8> = sqlx::query_scalar("SELECT token_hash FROM sessions").fetch_one(pool).await.unwrap();
+        let live =
+            auth_data::resolve_session(pool, &hash, std::time::Duration::from_secs(3600)).await.unwrap().unwrap();
+        assert_eq!((live.mfa_enrolment_required, live.mfa_not_enforced), (false, false));
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &creds, None).await;
+        assert_eq!(
+            (status, &v["mfa"]["required"], &v["mfa"]["enrolmentRequired"]),
+            (200, &json!(false), &json!(false)),
+            "{v}"
+        );
+        let logins = audit_rows(pool, "login.success").await;
+        assert_eq!(
+            (logins.len(), logins[0]["method"].as_str(), logins[0]["providerMfa"].as_str()),
+            (1, Some("oidc"), Some("verified"))
+        );
+        db.drop().await;
+    }
+
+    /// (c) requiredAcr: acr must be one of them; amr no longer counts.
+    #[tokio::test]
+    async fn required_acr_must_match() {
+        let Some(db) = scratch::database("required_acr_must_match").await else { return };
+        let pool = &db.pool;
+        let f = mfa_fixture(pool, "verify", &["urn:x:gold"]).await;
+        let silver = serde_json::json!({ "acr": "urn:x:silver", "amr": ["pwd", "mfa"] });
+        let refused = oidc_sign_in(pool, &f, &id_token("alice", ADMINS, silver)).await.err();
+        assert_eq!(refused, Some(Refusal::MfaNotEnforced));
+        assert!(
+            oidc_sign_in(pool, &f, &id_token("alice", ADMINS, serde_json::json!({ "acr": "urn:x:gold" })))
+                .await
+                .is_ok()
+        );
+        assert_eq!(sessions_of(pool, "alice").await, vec![true]);
+        // The authorization request asks for it (see oidc::tests for the URL itself).
+        let provider = data::get(&mut pool.acquire().await.unwrap(), f.provider_id, false).await.unwrap().unwrap();
+        assert_eq!(oidc_settings(&provider).mfa.required_acr(), ["urn:x:gold".to_owned()]);
+        db.drop().await;
+    }
+
+    /// (d) No proof is fine while no profile requires MFA; once one does, the
+    /// session's next request ends it (401, session.revoke), and a new
+    /// sign-in without proof is refused.
+    #[tokio::test]
+    async fn a_session_that_loses_the_exemption_is_ended() {
+        let Some(db) = scratch::database("a_session_that_loses_the_exemption_is_ended").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let f = mfa_fixture(pool, "verify", &[]).await;
+        let creds = oidc_sign_in(pool, &f, &id_token("rita", READERS, serde_json::json!({}))).await.expect("signed in");
+        assert_eq!(sessions_of(pool, "rita").await, vec![false]);
+        assert_eq!(audit_rows(pool, "login.success").await[0]["providerMfa"], "none");
+        let (status, _, _) = call(&app, "GET", "/api/v1/auth/me", &creds, None).await;
+        assert_eq!(status, 200);
+
+        sqlx::query("UPDATE permission_profiles SET require_mfa = true WHERE name = 'Readers'")
+            .execute(pool)
+            .await
+            .unwrap();
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &creds, None).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "not MFA_ENROLMENT_REQUIRED: {v}");
+        assert!(sessions_of(pool, "rita").await.is_empty(), "the session row is gone");
+        let revoked = audit_rows(pool, "session.revoke").await;
+        assert_eq!(
+            (revoked.len(), revoked[0]["reason"].as_str(), revoked[0]["username"].as_str()),
+            (1, Some("mfa_not_enforced"), Some("rita"))
+        );
+        let (status, _, _) = call(&app, "GET", "/api/v1/auth/me", &creds, None).await;
+        assert_eq!(status, 401);
+        assert_eq!(audit_rows(pool, "session.revoke").await.len(), 1, "ended once");
+
+        let refused = oidc_sign_in(pool, &f, &id_token("rita", READERS, serde_json::json!({}))).await.err();
+        assert_eq!(refused, Some(Refusal::MfaNotEnforced));
+        assert!(
+            oidc_sign_in(pool, &f, &id_token("rita", READERS, serde_json::json!({ "amr": ["otp", "pwd"] })))
+                .await
+                .is_ok()
+        );
+        db.drop().await;
+    }
+
+    /// (e) Trust: today's behaviour, recorded as trusted; switching the
+    /// provider to verify ends the session on its next request.
+    #[tokio::test]
+    async fn trusted_sessions_end_when_the_provider_switches_to_verify() {
+        let Some(db) = scratch::database("trusted_sessions_end_when_the_provider_switches_to_verify").await else {
+            return;
+        };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let f = mfa_fixture(pool, "trust_provider", &[]).await;
+        let creds = oidc_sign_in(pool, &f, &id_token("tom", ADMINS, serde_json::json!({}))).await.expect("trusted");
+        assert_eq!(sessions_of(pool, "tom").await, vec![false], "trust is read from the provider, not the session");
+        assert_eq!(audit_rows(pool, "login.success").await[0]["providerMfa"], "trusted");
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &creds, None).await;
+        assert_eq!((status, &v["mfa"]["required"]), (200, &json!(false)), "{v}");
+
+        sqlx::query("UPDATE identity_providers SET mfa_assurance = 'verify' WHERE id = $1")
+            .bind(f.provider_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        let (status, _, _) = call(&app, "GET", "/api/v1/auth/me", &creds, None).await;
+        assert_eq!(status, 401);
+        assert!(sessions_of(pool, "tom").await.is_empty());
+        assert_eq!(audit_rows(pool, "session.revoke").await[0]["reason"], "mfa_not_enforced");
+        db.drop().await;
+    }
+
+    /// (f) The API: verify by default, requiredAcr only with verify, nothing
+    /// of it on a directory; changes are audited.
+    #[tokio::test]
+    async fn provider_mfa_settings_through_the_api() {
+        let Some(db) = scratch::database("provider_mfa_settings_through_the_api").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (admin, _) = crate::modules::mfa::tests::setup(&app).await;
+        const PATH: &str = "/api/v1/admin/identity-providers";
+        let oidc = |name: &str, extra: Value| {
+            let mut o = json!({ "issuerUrl": "https://sso.example.test", "clientId": "cmdb" });
+            o.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+            json!({ "kind": "oidc", "name": name, "oidc": o })
+        };
+        let (status, v, _) = call(&app, "POST", PATH, &admin, Some(oidc("Default", json!({})))).await;
+        assert_eq!(
+            (status, &v["oidc"]["mfaAssurance"], &v["oidc"]["requiredAcr"]),
+            (201, &json!("verify"), &json!([])),
+            "{v}"
+        );
+        let id = v["id"].as_str().unwrap().to_owned();
+
+        let bad = oidc("Bad", json!({ "mfaAssurance": "trustProvider", "requiredAcr": ["gold"] }));
+        let (status, v, _) = call(&app, "POST", PATH, &admin, Some(bad)).await;
+        assert_eq!((status, v["error"]["details"][0]["field"].as_str()), (400, Some("oidc.requiredAcr")), "{v}");
+        for acr in [
+            json!(["has space"]),
+            json!([""]),
+            json!(["x".repeat(201)]),
+            json!((0..11).map(|i| format!("a{i}")).collect::<Vec<_>>()),
+        ] {
+            let (status, v, _) =
+                call(&app, "POST", PATH, &admin, Some(oidc("Bad", json!({ "requiredAcr": acr.clone() })))).await;
+            assert_eq!(status, 400, "{acr}: {v}");
+        }
+        let ldap = json!({ "kind": "ldap", "name": "AD", "ldap": { "url": "ldaps://dc.example.test", "userBaseDn": "DC=x", "mfaAssurance": "verify" } });
+        let (status, v, _) = call(&app, "POST", PATH, &admin, Some(ldap)).await;
+        assert_eq!(status, 400, "{v}");
+
+        let by_id = format!("{PATH}/{id}");
+        let patch = json!({ "oidc": { "requiredAcr": ["gold", "gold", "platinum"] } });
+        let (status, v, _) = call(&app, "PATCH", &by_id, &admin, Some(patch)).await;
+        assert_eq!((status, &v["oidc"]["requiredAcr"]), (200, &json!(["gold", "platinum"])), "{v}");
+        let (status, v, _) = call(
+            &app,
+            "PATCH",
+            &by_id,
+            &admin,
+            Some(json!({ "oidc": { "mfaAssurance": "trustProvider", "requiredAcr": ["gold"] } })),
+        )
+        .await;
+        assert_eq!(status, 400, "{v}");
+        // Switching to trust alone drops the acr values.
+        let (status, v, _) =
+            call(&app, "PATCH", &by_id, &admin, Some(json!({ "oidc": { "mfaAssurance": "trustProvider" } }))).await;
+        assert_eq!(
+            (status, &v["oidc"]["mfaAssurance"], &v["oidc"]["requiredAcr"]),
+            (200, &json!("trustProvider"), &json!([])),
+            "{v}"
+        );
+        let updates: Vec<(Value, Value)> = sqlx::query_as(
+            "SELECT old_value, new_value FROM audit_log WHERE entity_type = 'identity_providers' AND action = 'update' ORDER BY id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let (old, new) = updates.last().unwrap();
+        assert_eq!(
+            (&old["oidc"]["mfaAssurance"], &new["oidc"]["mfaAssurance"]),
+            (&json!("verify"), &json!("trustProvider"))
+        );
+        assert_eq!(
+            (&old["oidc"]["requiredAcr"], &new["oidc"]["requiredAcr"]),
+            (&json!(["gold", "platinum"]), &json!([]))
+        );
         db.drop().await;
     }
 }

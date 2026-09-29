@@ -62,6 +62,53 @@ impl ProviderKind {
     }
 }
 
+/// Whether the exemption of OIDC accounts from `requireMfa` needs proof in the ID token
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MfaAssurance {
+    /// The ID token must prove a second factor (`amr`, or `acr` in `requiredAcr`); otherwise users whose profiles require MFA are refused
+    Verify,
+    /// The provider is trusted to enforce MFA for this client; the ID token is not checked
+    TrustProvider,
+}
+
+impl MfaAssurance {
+    fn as_db(self) -> &'static str {
+        match self {
+            MfaAssurance::Verify => oidc::MfaPolicy::VERIFY,
+            MfaAssurance::TrustProvider => oidc::MfaPolicy::TRUST_PROVIDER,
+        }
+    }
+
+    fn from_db(v: Option<&str>) -> MfaAssurance {
+        if v == Some(oidc::MfaPolicy::TRUST_PROVIDER) { MfaAssurance::TrustProvider } else { MfaAssurance::Verify }
+    }
+}
+
+fn mfa_assurance_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["verify", "trustProvider"]))
+        .description(Some(
+            "verify: the ID token must prove a second factor, or users whose profiles require MFA are refused. \
+             trustProvider: the provider is trusted to enforce MFA; the token is not checked.",
+        ))
+        .into()
+}
+
+const MAX_REQUIRED_ACR: usize = 10;
+
+fn required_acr_schema() -> Schema {
+    ArrayBuilder::new()
+        .items(ObjectBuilder::new().schema_type(Type::String).pattern(Some(r"^[!-~]{1,200}$")))
+        .max_items(Some(MAX_REQUIRED_ACR))
+        .description(Some(
+            "Only with mfaAssurance verify: the ID token's acr must be one of these (case-sensitive), and they are \
+             sent as acr_values. Empty: amr decides. Printable ASCII without spaces, 1 to 200 characters each.",
+        ))
+        .into()
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
@@ -78,6 +125,10 @@ pub struct OidcConfig {
     /// Register this at the provider; null until PUBLIC_URL is set
     #[schema(required = true)]
     pub redirect_uri: Option<String>,
+    #[schema(inline)]
+    pub mfa_assurance: MfaAssurance,
+    /// With verify: acr values that prove MFA (empty: amr decides)
+    pub required_acr: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -227,6 +278,13 @@ pub struct OidcInput {
     #[schema(schema_with = claim_schema)]
     #[serde(default)]
     groups_claim: Option<String>,
+    /// Default verify
+    #[schema(schema_with = mfa_assurance_schema)]
+    #[serde(default)]
+    mfa_assurance: Option<MfaAssurance>,
+    #[schema(schema_with = required_acr_schema)]
+    #[serde(default)]
+    required_acr: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -356,6 +414,12 @@ pub struct OidcPatch {
     #[schema(schema_with = claim_schema)]
     #[serde(default)]
     groups_claim: Option<String>,
+    #[schema(schema_with = mfa_assurance_schema)]
+    #[serde(default)]
+    mfa_assurance: Option<MfaAssurance>,
+    #[schema(schema_with = required_acr_schema)]
+    #[serde(default)]
+    required_acr: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -489,6 +553,8 @@ struct Draft {
     scopes: Option<String>,
     username_claim: Option<String>,
     groups_claim: Option<String>,
+    mfa_assurance: Option<String>,
+    required_acr: Option<Vec<String>>,
     ldap_url: Option<String>,
     start_tls: Option<bool>,
     bind_dn: Option<String>,
@@ -515,6 +581,8 @@ impl Draft {
             scopes: r.scopes.clone(),
             username_claim: r.username_claim.clone(),
             groups_claim: r.groups_claim.clone(),
+            mfa_assurance: r.mfa_assurance.clone(),
+            required_acr: r.required_acr.clone(),
             ldap_url: r.ldap_url.clone(),
             start_tls: r.start_tls,
             bind_dn: r.bind_dn.clone(),
@@ -541,6 +609,8 @@ impl Draft {
             scopes: None,
             username_claim: None,
             groups_claim: None,
+            mfa_assurance: None,
+            required_acr: None,
             ldap_url: None,
             start_tls: None,
             bind_dn: None,
@@ -559,6 +629,9 @@ impl Draft {
             d.scopes = Some(o.scopes.clone().unwrap_or_else(|| "profile email".into()));
             d.username_claim = Some(o.username_claim.clone().unwrap_or_else(|| "preferred_username".into()));
             d.groups_claim = Some(o.groups_claim.clone().unwrap_or_else(|| "groups".into()));
+            // Secure default: the token must prove MFA.
+            d.mfa_assurance = Some(o.mfa_assurance.unwrap_or(MfaAssurance::Verify).as_db().to_owned());
+            d.required_acr = Some(distinct(o.required_acr.as_deref().unwrap_or_default()));
         }
         if let Some(l) = &b.ldap {
             d.start_tls = Some(l.start_tls.unwrap_or_else(|| !l.url.to_ascii_lowercase().starts_with("ldaps://")));
@@ -603,6 +676,16 @@ impl Draft {
                 set(&mut self.scopes, &o.scopes);
                 set(&mut self.username_claim, &o.username_claim);
                 set(&mut self.groups_claim, &o.groups_claim);
+                if let Some(m) = o.mfa_assurance {
+                    self.mfa_assurance = Some(m.as_db().to_owned());
+                    // Trust takes no acr values: switching to it drops them unless they are sent too.
+                    if m == MfaAssurance::TrustProvider && o.required_acr.is_none() {
+                        self.required_acr = Some(Vec::new());
+                    }
+                }
+                if let Some(acr) = &o.required_acr {
+                    self.required_acr = Some(distinct(acr));
+                }
             }
         }
         if let Some(l) = &b.ldap {
@@ -662,6 +745,15 @@ impl Draft {
                 if self.bind_dn.is_some() { "A bind DN needs its password" } else { "A bind password needs a bind DN" };
             errors.push(body_error("ldap.bindPassword", message, "required"));
         }
+        if self.mfa_assurance.as_deref() == Some(oidc::MfaPolicy::TRUST_PROVIDER)
+            && self.required_acr.as_ref().is_some_and(|a| !a.is_empty())
+        {
+            errors.push(body_error(
+                "oidc.requiredAcr",
+                "Only with mfaAssurance verify: a trusted provider's token is not checked",
+                "not_allowed",
+            ));
+        }
         if let Some(filter) = &self.user_filter
             && (!filter.contains("{username}") || !filter.starts_with('(') || !filter.ends_with(')'))
         {
@@ -675,10 +767,46 @@ impl Draft {
     }
 }
 
+/// The values in order, each once.
+fn distinct(values: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values.iter().filter(|v| seen.insert(v.as_str())).cloned().collect()
+}
+
 fn set(target: &mut Option<String>, value: &Option<String>) {
     if let Some(v) = value {
         *target = Some(v.clone());
     }
+}
+
+/// What the discovery document suggests about the MFA check (warnings only:
+/// discovery need not list every claim or acr value the provider sends).
+fn mfa_warnings(policy: &oidc::MfaPolicy, d: &oidc::Discovery) -> Vec<String> {
+    let oidc::MfaPolicy::Verify { required_acr } = policy else {
+        return vec![
+            "MFA: trusted, not verified. ShadouCMDB does not check that the provider used a second factor".into(),
+        ];
+    };
+    let mut out = Vec::new();
+    if required_acr.is_empty() {
+        if let Some(claims) = &d.claims_supported
+            && !claims.iter().any(|c| c == "amr")
+        {
+            out.push(
+                "Warning: the provider does not list amr in claims_supported. Without amr in the ID token, users \
+                 whose profiles require MFA are refused; set requiredAcr, or check the provider's token settings"
+                    .into(),
+            );
+        }
+    } else if let Some(supported) = &d.acr_values_supported {
+        for acr in required_acr.iter().filter(|a| !supported.contains(a)) {
+            out.push(format!(
+                "Warning: requiredAcr value {acr:?} is not in the provider's acr_values_supported ({})",
+                supported.join(", ")
+            ));
+        }
+    }
+    out
 }
 
 /// https, or http to a loopback address; no credentials, query or fragment.
@@ -737,6 +865,8 @@ fn dto(auth: &AuthState, r: ProviderRow, mappings: &[data::MappingRow]) -> Ident
         username_claim: r.username_claim.clone().unwrap_or_default(),
         groups_claim: r.groups_claim.clone().unwrap_or_default(),
         redirect_uri: sso::redirect_uri(auth),
+        mfa_assurance: MfaAssurance::from_db(r.mfa_assurance.as_deref()),
+        required_acr: r.required_acr.clone().unwrap_or_default(),
     });
     let ldap = (kind == ProviderKind::Ldap).then(|| LdapConfig {
         url: r.ldap_url.clone().unwrap_or_default(),
@@ -824,8 +954,10 @@ async fn write(conn: &mut PgConnection, id: Option<Uuid>, d: &Draft) -> Result<U
             "INSERT INTO identity_providers (kind, name, is_enabled, sort_order, ca_certificate,
                issuer_url, client_id, client_secret, scopes, username_claim, groups_claim,
                ldap_url, start_tls, bind_dn, bind_password, user_base_dn, user_filter,
-               username_attribute, display_name_attribute, email_attribute, group_attribute)
-             VALUES ($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+               username_attribute, display_name_attribute, email_attribute, group_attribute,
+               mfa_assurance, required_acr)
+             VALUES ($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+               $23, $24)
              RETURNING id"
         }
         Some(_) => {
@@ -833,7 +965,7 @@ async fn write(conn: &mut PgConnection, id: Option<Uuid>, d: &Draft) -> Result<U
                issuer_url = $7, client_id = $8, client_secret = $9, scopes = $10, username_claim = $11,
                groups_claim = $12, ldap_url = $13, start_tls = $14, bind_dn = $15, bind_password = $16,
                user_base_dn = $17, user_filter = $18, username_attribute = $19, display_name_attribute = $20,
-               email_attribute = $21, group_attribute = $22
+               email_attribute = $21, group_attribute = $22, mfa_assurance = $23, required_acr = $24
              WHERE id = $1 RETURNING id"
         }
     };
@@ -860,6 +992,8 @@ async fn write(conn: &mut PgConnection, id: Option<Uuid>, d: &Draft) -> Result<U
         .bind(&d.display_name_attribute)
         .bind(&d.email_attribute)
         .bind(&d.group_attribute)
+        .bind(&d.mfa_assurance)
+        .bind(&d.required_acr)
         .fetch_one(conn)
         .await?)
 }
@@ -985,6 +1119,7 @@ async fn test(
                 if let Some(algs) = &p.discovery.id_token_signing_alg_values_supported {
                     details.push(format!("ID token algorithms: {}", algs.join(", ")));
                 }
+                details.extend(mfa_warnings(&settings.mfa, &p.discovery));
                 match sso::redirect_uri(auth) {
                     Some(uri) => details.push(format!("Redirect URI to register at the provider: {uri}")),
                     None => {
@@ -1097,7 +1232,7 @@ pub fn routes() -> Vec<Route> {
             .tag(ROUTE_TAG)
             .summary("Add an OIDC provider or an LDAP/AD directory")
             .description(format!(
-                "{ADMIN_ONLY} OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused."
+                "{ADMIN_ONLY} OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. `oidc.mfaAssurance` defaults to `verify`: users whose profiles require MFA must then prove a second factor in the ID token (`amr`, or `acr` in `requiredAcr`) or are refused. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused."
             ))
             .status(StatusCode::CREATED)
             .requires(manage)
@@ -1110,7 +1245,7 @@ pub fn routes() -> Vec<Route> {
             .tag(ROUTE_TAG)
             .summary("Change an identity provider (partial); groupMappings replaces all mappings")
             .description(format!(
-                "{ADMIN_ONLY} The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts."
+                "{ADMIN_ONLY} The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts. `oidc.mfaAssurance: trustProvider` without `oidc.requiredAcr` also empties `requiredAcr` (400 when both are sent with values). Switching to `verify` ends, on their next request, the sessions whose sign-in did not prove MFA for users whose profiles require it."
             ))
             .requires(manage)
             .session_only()
@@ -1133,7 +1268,7 @@ pub fn routes() -> Vec<Route> {
             .tag(ROUTE_TAG)
             .summary("Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)")
             .description(format!(
-                "{ADMIN_ONLY} Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to."
+                "{ADMIN_ONLY} Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to. For OIDC, `details` also warns when the MFA check is unlikely to work: `verify` without `requiredAcr` while the discovery document's `claims_supported` omits `amr`, or a `requiredAcr` value missing from `acr_values_supported`."
             ))
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
@@ -1157,6 +1292,31 @@ mod tests {
         assert!(issuer_problem("https://idp.example.com/?x=1").is_some());
         assert!(issuer_problem("ftp://idp.example.com").is_some());
         assert!(issuer_problem("idp.example.com").is_some());
+    }
+
+    #[test]
+    fn mfa_warnings_come_from_discovery() {
+        let discovery = |claims: Option<&[&str]>, acr: Option<&[&str]>| oidc::Discovery {
+            issuer: "https://idp.example.test".into(),
+            authorization_endpoint: "https://idp.example.test/authorize".into(),
+            token_endpoint: "https://idp.example.test/token".into(),
+            jwks_uri: "https://idp.example.test/jwks".into(),
+            token_endpoint_auth_methods_supported: None,
+            id_token_signing_alg_values_supported: None,
+            claims_supported: claims.map(|c| c.iter().map(|s| s.to_string()).collect()),
+            acr_values_supported: acr.map(|c| c.iter().map(|s| s.to_string()).collect()),
+        };
+        let amr = oidc::MfaPolicy::Verify { required_acr: Vec::new() };
+        assert_eq!(mfa_warnings(&amr, &discovery(Some(&["sub", "amr"]), None)), Vec::<String>::new());
+        assert_eq!(mfa_warnings(&amr, &discovery(None, None)), Vec::<String>::new(), "no list, no guess");
+        let w = mfa_warnings(&amr, &discovery(Some(&["sub", "email"]), None));
+        assert!(w.len() == 1 && w[0].contains("amr"), "{w:?}");
+
+        let acr = oidc::MfaPolicy::Verify { required_acr: vec!["gold".into(), "silver".into()] };
+        let w = mfa_warnings(&acr, &discovery(Some(&["sub"]), Some(&["gold", "bronze"])));
+        assert!(w.len() == 1 && w[0].contains("\"silver\""), "{w:?}");
+        assert_eq!(mfa_warnings(&acr, &discovery(None, None)), Vec::<String>::new());
+        assert!(mfa_warnings(&oidc::MfaPolicy::TrustProvider, &discovery(None, None))[0].contains("not verified"));
     }
 
     #[test]

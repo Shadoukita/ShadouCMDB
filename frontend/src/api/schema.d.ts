@@ -312,7 +312,7 @@ export interface paths {
         };
         /**
          * Start signing in with an OIDC provider (browser navigation; redirects to the provider)
-         * @description Redirects (302) to the provider's authorization endpoint with the authorization code flow, PKCE (S256), `state` and `nonce`, and sets the `shadoucmdb_oidc` cookie (HttpOnly, 10 min). On a problem it redirects to `/login?ssoError=<code>` instead: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`.
+         * @description Redirects (302) to the provider's authorization endpoint with the authorization code flow, PKCE (S256), `state` and `nonce`, and sets the `shadoucmdb_oidc` cookie (HttpOnly, 10 min). On a problem it redirects to `/login?ssoError=<code>` instead: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`).
          */
         get: operations["startOidcSignIn"];
         put?: never;
@@ -332,7 +332,7 @@ export interface paths {
         };
         /**
          * The redirect URI to register at OIDC providers: finishes the sign-in
-         * @description `{PUBLIC_URL}/api/v1/auth/oidc/callback`. Needs the `shadoucmdb_oidc` cookie set by the start route in the same browser. Exchanges the code, checks the ID token, creates or updates the account and sets its profiles from the group mappings, then sets the session cookies (like POST /api/v1/auth/login) and redirects (302) to `returnTo`. On a problem it redirects to `/login?ssoError=<code>`: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`.
+         * @description `{PUBLIC_URL}/api/v1/auth/oidc/callback`. Needs the `shadoucmdb_oidc` cookie set by the start route in the same browser. Exchanges the code, checks the ID token, creates or updates the account and sets its profiles from the group mappings, then sets the session cookies (like POST /api/v1/auth/login) and redirects (302) to `returnTo`. On a problem it redirects to `/login?ssoError=<code>`: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`).
          */
         get: operations["completeOidcSignIn"];
         put?: never;
@@ -1838,7 +1838,7 @@ export interface paths {
         put?: never;
         /**
          * Add an OIDC provider or an LDAP/AD directory
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. `oidc.mfaAssurance` defaults to `verify`: users whose profiles require MFA must then prove a second factor in the ID token (`amr`, or `acr` in `requiredAcr`) or are refused. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createIdentityProvider"];
         delete?: never;
@@ -1870,7 +1870,7 @@ export interface paths {
         head?: never;
         /**
          * Change an identity provider (partial); groupMappings replaces all mappings
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts. `oidc.mfaAssurance: trustProvider` without `oidc.requiredAcr` also empties `requiredAcr` (400 when both are sent with values). Switching to `verify` ends, on their next request, the sessions whose sign-in did not prove MFA for users whose profiles require it. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updateIdentityProvider"];
         trace?: never;
@@ -1886,7 +1886,7 @@ export interface paths {
         put?: never;
         /**
          * Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to. For OIDC, `details` also warns when the MFA check is unlikely to work: `verify` without `requiredAcr` while the discovery document's `claims_supported` omits `amr`, or a `requiredAcr` value missing from `acr_values_supported`.
          */
         post: operations["testIdentityProvider"];
         delete?: never;
@@ -2838,6 +2838,13 @@ export interface components {
             groupsClaim: string;
             /** @description Register this at the provider; null until PUBLIC_URL is set */
             redirectUri: string | null;
+            /**
+             * @description Whether the exemption of OIDC accounts from `requireMfa` needs proof in the ID token
+             * @enum {string}
+             */
+            mfaAssurance: "verify" | "trustProvider";
+            /** @description With verify: acr values that prove MFA (empty: amr decides) */
+            requiredAcr: string[];
         };
         Owner: {
             /** Format: uuid */
@@ -14641,6 +14648,13 @@ export interface operations {
                         scopes?: string;
                         usernameClaim?: string;
                         groupsClaim?: string;
+                        /**
+                         * @description verify: the ID token must prove a second factor, or users whose profiles require MFA are refused. trustProvider: the provider is trusted to enforce MFA; the token is not checked.
+                         * @enum {string}
+                         */
+                        mfaAssurance?: "verify" | "trustProvider";
+                        /** @description Only with mfaAssurance verify: the ID token's acr must be one of these (case-sensitive), and they are sent as acr_values. Empty: amr decides. Printable ASCII without spaces, 1 to 200 characters each. */
+                        requiredAcr?: string[];
                     } | null;
                     /** @description Required for kind ldap */
                     ldap?: {
@@ -14925,6 +14939,13 @@ export interface operations {
                         scopes?: string;
                         usernameClaim?: string;
                         groupsClaim?: string;
+                        /**
+                         * @description verify: the ID token must prove a second factor, or users whose profiles require MFA are refused. trustProvider: the provider is trusted to enforce MFA; the token is not checked.
+                         * @enum {string}
+                         */
+                        mfaAssurance?: "verify" | "trustProvider";
+                        /** @description Only with mfaAssurance verify: the ID token's acr must be one of these (case-sensitive), and they are sent as acr_values. Empty: amr decides. Printable ASCII without spaces, 1 to 200 characters each. */
+                        requiredAcr?: string[];
                     } | null;
                     /** @description Only for kind ldap; fields left out are kept */
                     ldap?: {

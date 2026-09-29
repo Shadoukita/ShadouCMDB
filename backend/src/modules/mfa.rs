@@ -129,8 +129,9 @@ impl Check for MfaReauthentication {}
 // Service
 // ---------------------------------------------------------------------------
 
-pub async fn status(conn: &mut PgConnection, user_id: Uuid) -> Result<MfaStatus, AppError> {
-    Ok(data::status(conn, user_id).await?.into())
+/// `session`: the caller's session (an OIDC sign-in may have proven MFA).
+pub async fn status(conn: &mut PgConnection, user_id: Uuid, session: Option<Uuid>) -> Result<MfaStatus, AppError> {
+    Ok(data::status(conn, user_id, session).await?.into())
 }
 
 /// Checks `input` against the user's authenticator (a 6-digit code, each
@@ -161,7 +162,7 @@ pub async fn audit_recovery_code_used(
     username: &str,
     stage: &str,
 ) -> Result<(), AppError> {
-    let left = data::status(conn, user_id).await?.recovery_codes_remaining;
+    let left = data::status(conn, user_id, None).await?.recovery_codes_remaining;
     let extra = json!({ "stage": stage, "recoveryCodesRemaining": left });
     events::mfa(conn, ctx, AuditAction::MfaRecoveryCodeUsed, user_id, username, extra).await?;
     Ok(())
@@ -349,7 +350,7 @@ pub fn routes() -> Vec<Route> {
             .before_mfa_enrolment()
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 let me = me(&api.ctx)?;
-                Ok(Json(status(&mut *api.pool.acquire().await?, me.user_id).await?))
+                Ok(Json(status(&mut *api.pool.acquire().await?, me.user_id, me.session_id()).await?))
             }),
         route(Method::POST, "/api/v1/auth/mfa/totp", "startTotpEnrolment")
             .tag(TAG)
@@ -442,7 +443,7 @@ pub(crate) mod tests {
         Creds { cookie: Some(cookie.join("; ")), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None }
     }
 
-    async fn setup(app: &Router) -> (Creds, Value) {
+    pub(crate) async fn setup(app: &Router) -> (Creds, Value) {
         let body = json!({ "username": "owner", "displayName": "Owner", "password": PASSWORD });
         let (status, me, headers) = call(app, "POST", "/api/v1/setup", &Creds::default(), Some(body)).await;
         assert_eq!(status, 201, "{me}");
@@ -736,9 +737,9 @@ pub(crate) mod tests {
                '(uid={username})', 'uid', 'cn', 'mail', 'memberOf') RETURNING id"
         } else {
             "INSERT INTO identity_providers (kind, name, is_enabled, issuer_url, client_id, scopes, username_claim,
-               groups_claim)
+               groups_claim, mfa_assurance, required_acr)
              VALUES ('oidc', 'Company SSO ' || gen_random_uuid(), $1, 'https://sso.example.test', 'cmdb', 'openid',
-               'preferred_username', 'groups') RETURNING id"
+               'preferred_username', 'groups', 'trust_provider', '{}') RETURNING id"
         };
         let q = sqlx::query_scalar(sql).bind(enabled);
         let q = if kind == "ldap" { q.bind(ldap_url) } else { q };
@@ -789,7 +790,7 @@ pub(crate) mod tests {
             cookie_secure: crate::config::CookieSecure::Never,
             public_url: None,
         });
-        let cookies =
+        let (_, cookies) =
             super::super::auth::open_session(pool, &auth, &HeaderMap::new(), &system, user_id, name, LoginMethod::Ldap)
                 .await
                 .unwrap();
@@ -800,8 +801,9 @@ pub(crate) mod tests {
     }
 
     /// GH#120: requireMfa covers local and directory (LDAP) accounts; OIDC
-    /// accounts are left to their provider. The per-request gate and
-    /// /auth/me agree for all three.
+    /// accounts of a provider trusted to enforce MFA are left to it (GH#131
+    /// covers verifying providers). The per-request gate and /auth/me agree
+    /// for all three.
     #[tokio::test]
     async fn require_mfa_covers_directory_accounts_but_not_oidc() {
         let Some(db) = scratch::database("require_mfa_covers_directory_accounts_but_not_oidc").await else { return };
