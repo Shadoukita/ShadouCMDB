@@ -7,7 +7,9 @@ use uuid::Uuid;
 
 pub const TABLE: &str = "identity_providers";
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+/// `Debug` shows `client_secret` and `bind_password` only as set or unset
+/// (and the PEM of `ca_certificate`, which is no secret, only as set).
+#[derive(Clone, sqlx::FromRow)]
 pub struct ProviderRow {
     pub id: Uuid,
     pub kind: String,
@@ -38,6 +40,71 @@ pub struct ProviderRow {
     pub user_count: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for ProviderRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Destructured so a new field has to be placed here, redacted or not.
+        let ProviderRow {
+            id,
+            kind,
+            name,
+            is_enabled,
+            sort_order,
+            ca_certificate,
+            issuer_url,
+            client_id,
+            client_secret,
+            scopes,
+            username_claim,
+            groups_claim,
+            mfa_assurance,
+            required_acr,
+            ldap_url,
+            start_tls,
+            bind_dn,
+            bind_password,
+            user_base_dn,
+            user_filter,
+            username_attribute,
+            display_name_attribute,
+            email_attribute,
+            group_attribute,
+            user_count,
+            created_at,
+            updated_at,
+        } = self;
+        let redacted = |secret: &Option<String>| secret.as_ref().map(|_| "<redacted>");
+        f.debug_struct("ProviderRow")
+            .field("id", id)
+            .field("kind", kind)
+            .field("name", name)
+            .field("is_enabled", is_enabled)
+            .field("sort_order", sort_order)
+            .field("ca_certificate", &ca_certificate.as_ref().map(|_| "<set>"))
+            .field("issuer_url", issuer_url)
+            .field("client_id", client_id)
+            .field("client_secret", &redacted(client_secret))
+            .field("scopes", scopes)
+            .field("username_claim", username_claim)
+            .field("groups_claim", groups_claim)
+            .field("mfa_assurance", mfa_assurance)
+            .field("required_acr", required_acr)
+            .field("ldap_url", ldap_url)
+            .field("start_tls", start_tls)
+            .field("bind_dn", bind_dn)
+            .field("bind_password", &redacted(bind_password))
+            .field("user_base_dn", user_base_dn)
+            .field("user_filter", user_filter)
+            .field("username_attribute", username_attribute)
+            .field("display_name_attribute", display_name_attribute)
+            .field("email_attribute", email_attribute)
+            .field("group_attribute", group_attribute)
+            .field("user_count", user_count)
+            .field("created_at", created_at)
+            .field("updated_at", updated_at)
+            .finish()
+    }
 }
 
 pub const COLUMNS: &str = "id, kind, name, is_enabled, sort_order, ca_certificate,

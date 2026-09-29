@@ -30,7 +30,9 @@ impl SslMode {
     }
 }
 
-#[derive(Debug, Clone)]
+/// `Debug` shows `url` and `password` only as set or unset: a connection
+/// string carries the password, and a stray `{:?}` must not log it.
+#[derive(Clone)]
 pub struct DatabaseConfig {
     /// Full connection string; takes precedence over the discrete PG* values.
     pub url: Option<String>,
@@ -160,7 +162,8 @@ impl Default for AuditConfig {
 const DEFAULT_SESSION_IDLE_MINUTES: u64 = 12 * 60;
 const DEFAULT_SESSION_MAX_AGE_HOURS: u64 = 7 * 24;
 
-#[derive(Debug, Clone)]
+/// `Debug` redacts the connection strings (see [`DatabaseConfig`]).
+#[derive(Clone)]
 pub struct Config {
     pub api_host: String,
     pub api_port: u16,
@@ -177,6 +180,76 @@ pub struct Config {
     pub maintenance_url: Option<String>,
     pub auth: AuthConfig,
     pub audit: AuditConfig,
+}
+
+/// A secret as it appears in `Debug` output: whether it is set, never its value.
+fn redacted(secret: &Option<String>) -> Option<&'static str> {
+    secret.as_ref().map(|_| "<redacted>")
+}
+
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Destructured so a new field has to be placed here, redacted or not.
+        let DatabaseConfig {
+            url,
+            host,
+            port,
+            database,
+            user,
+            password,
+            ssl,
+            ssl_ca_file,
+            pool_max,
+            statement_timeout,
+            connect_timeout,
+            roles,
+        } = self;
+        f.debug_struct("DatabaseConfig")
+            .field("url", &redacted(url))
+            .field("host", host)
+            .field("port", port)
+            .field("database", database)
+            .field("user", user)
+            .field("password", &redacted(password))
+            .field("ssl", ssl)
+            .field("ssl_ca_file", ssl_ca_file)
+            .field("pool_max", pool_max)
+            .field("statement_timeout", statement_timeout)
+            .field("connect_timeout", connect_timeout)
+            .field("roles", roles)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Config {
+            api_host,
+            api_port,
+            cors_origins,
+            csp_report_uri,
+            api_docs,
+            http,
+            database,
+            migration_url,
+            maintenance_url,
+            auth,
+            audit,
+        } = self;
+        f.debug_struct("Config")
+            .field("api_host", api_host)
+            .field("api_port", api_port)
+            .field("cors_origins", cors_origins)
+            .field("csp_report_uri", csp_report_uri)
+            .field("api_docs", api_docs)
+            .field("http", http)
+            .field("database", database)
+            .field("migration_url", &redacted(migration_url))
+            .field("maintenance_url", &redacted(maintenance_url))
+            .field("auth", auth)
+            .field("audit", audit)
+            .finish()
+    }
 }
 
 impl DatabaseConfig {
@@ -564,6 +637,23 @@ mod tests {
             "DATABASE_URL" => Some("postgres://cmdb@db/cmdb".into()),
             _ => vars.iter().find(|(k, _)| *k == key).map(|(_, v)| (*v).to_owned()),
         })
+    }
+
+    #[test]
+    fn debug_output_redacts_database_secrets() {
+        let cfg = Config::from_lookup(&|key| match key {
+            "DATABASE_URL" => Some("postgres://cmdb:url-secret@db/cmdb".into()),
+            "MIGRATION_DATABASE_URL" => Some("postgres://owner:migration-secret@db/cmdb".into()),
+            "MAINTENANCE_DATABASE_URL" => Some("postgres://maint:maintenance-secret@db/cmdb".into()),
+            "PGPASSWORD" => Some("pg-secret".into()),
+            _ => None,
+        })
+        .unwrap();
+        let shown = format!("{cfg:?} {:#?}", cfg.database);
+        for secret in ["url-secret", "migration-secret", "maintenance-secret", "pg-secret"] {
+            assert!(!shown.contains(secret), "{secret} in {shown}");
+        }
+        assert!(shown.contains("<redacted>"));
     }
 
     #[test]
