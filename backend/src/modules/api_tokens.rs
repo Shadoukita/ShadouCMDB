@@ -1263,16 +1263,16 @@ pub(crate) mod tests {
         assert_eq!(status, 201, "{created}");
         let tok = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
 
-        // Reading and the connection test (it changes nothing) stay open to the token.
+        // Reading stays open to the token.
         let (status, v, _) = call(&app, "GET", "/api/v1/admin/identity-providers", &tok, None).await;
         assert_eq!(status, 200, "{v}");
         let (status, v, _) = call(&app, "GET", &idp_path, &tok, None).await;
         assert_eq!(status, 200, "{v}");
-        let (status, v, _) = call(&app, "POST", &format!("{idp_path}/test"), &tok, Some(json!({}))).await;
-        assert_eq!((status, v["ok"].as_bool()), (200, Some(false)), "{v}");
 
-        // Every provider write is refused.
+        // Every provider write is refused, and so is the connection test: it makes the server
+        // connect out with the stored secret (GitHub #192).
         let writes = [
+            ("POST", format!("{idp_path}/test"), Some(json!({}))),
             (
                 "POST",
                 "/api/v1/admin/identity-providers".to_owned(),
@@ -1314,7 +1314,7 @@ pub(crate) mod tests {
             [
                 "accepted",
                 "accepted",
-                "accepted",
+                "session_only",
                 "session_only",
                 "session_only",
                 "session_only",
@@ -1323,7 +1323,9 @@ pub(crate) mod tests {
             ]
         );
 
-        // A session still administers providers.
+        // A session still administers and tests providers.
+        let (status, v, _) = call(&app, "POST", &format!("{idp_path}/test"), &session, Some(json!({}))).await;
+        assert_eq!((status, v["ok"].as_bool()), (200, Some(false)), "{v}");
         let remap =
             json!({ "groupMappings": [{ "group": "cn=cmdb-owners,dc=example,dc=com", "profileId": administrators }] });
         let (status, v, _) = call(&app, "PATCH", &idp_path, &session, Some(remap)).await;
