@@ -1394,14 +1394,15 @@ mod tests {
         db.drop().await;
     }
 
-    /// A local account `name` (password "`name` correct horse"), with an
-    /// authenticator when `secret` is given.
-    async fn account(pool: &PgPool, name: &str, secret: Option<&[u8]>) -> Uuid {
+    /// A local account `name` and its password, generated per run as
+    /// `OWNER_PASSWORD` is, with an authenticator when `secret` is given.
+    async fn account(pool: &PgPool, name: &str, secret: Option<&[u8]>) -> (Uuid, String) {
+        let password = format!("{name} passphrase {}", Uuid::new_v4());
         let input = UserCreate {
             username: name.into(),
             display_name: name.into(),
             email: None,
-            password: format!("{name} correct horse").into(),
+            password: password.clone().into(),
             is_active: Some(true),
             profile_ids: vec![],
         };
@@ -1412,7 +1413,7 @@ mod tests {
             mfa_data::put_pending_totp(&mut conn, id, &sealed).await.unwrap();
             mfa_data::confirm_totp(&mut conn, id, 1).await.unwrap();
         }
-        id
+        (id, password)
     }
 
     /// An administrator's password reset (`disable`: disabling) of `user`,
@@ -1439,7 +1440,7 @@ mod tests {
         if disable {
             sqlx::query("UPDATE users SET is_active = false WHERE id = $1").bind(user).execute(&mut *tx).await.unwrap();
         } else {
-            let hash = password::hash("the new password after the reset").await.unwrap();
+            let hash = password::hash(&format!("reset {}", Uuid::new_v4())).await.unwrap();
             data::set_password(&mut tx, user, &hash).await.unwrap();
         }
         mfa_data::delete_challenges_of_user(&mut tx, user).await.unwrap();
@@ -1476,9 +1477,8 @@ mod tests {
         for (name, mfa, disable) in
             [("reset", false, false), ("disabled", false, true), ("resetmfa", true, false), ("disabledmfa", true, true)]
         {
-            let user = account(pool, name, mfa.then_some(secret.as_slice())).await;
+            let (user, password) = account(pool, name, mfa.then_some(secret.as_slice())).await;
             let tx = locked_user(pool, user).await;
-            let password = format!("{name} correct horse");
             let ctx = anon();
             let (answer, ()) = tokio::join!(
                 login(pool, &auth, &headers, &ctx, login_body(name, &password)),
@@ -1514,8 +1514,7 @@ mod tests {
         setup(pool, &auth, &HeaderMap::new(), &anon(), body("owner")).await.unwrap();
         let secret = crate::auth::totp::new_secret();
         for (name, disable) in [("reset", false), ("disabled", true)] {
-            let user = account(pool, name, Some(&secret)).await;
-            let password = format!("{name} correct horse");
+            let (user, password) = account(pool, name, Some(&secret)).await;
             let answer = login(pool, &auth, &HeaderMap::new(), &anon(), login_body(name, &password)).await.unwrap();
             let Either::Right(ErrorWithCookies(_, cookies)) = answer else { panic!("{name}: no second factor asked") };
             let token = session::cookie_value(&cookies[0], session::MFA_COOKIE).unwrap();
@@ -1537,10 +1536,10 @@ mod tests {
 
         // The window after the second factor's transaction: the stamp it
         // was checked with no longer matches the row.
-        let user = account(pool, "late", None).await;
+        let (user, _) = account(pool, "late", None).await;
         let mut conn = pool.acquire().await.unwrap();
         let checked = data::get_user(&mut conn, user, false).await.unwrap().unwrap();
-        let hash = password::hash("the new password after the reset").await.unwrap();
+        let hash = password::hash(&format!("reset {}", Uuid::new_v4())).await.unwrap();
         data::set_password(&mut conn, user, &hash).await.unwrap();
         drop(conn);
         let method = LoginMethod::Totp;
