@@ -677,8 +677,15 @@ pub(crate) mod tests {
         assert_eq!(status, 204);
         let (status, v, _) = call(&app, "DELETE", &by_id, &session, None).await;
         assert_eq!(status, 204, "revoking twice is a no-op: {v}");
-        let (status, v, _) = call(&app, "GET", "/api/v1/audit-log", &tok, None).await;
+        // GH#179: the path is recorded before it is validated, so it is kept bounded;
+        // replaying the token adds no row within the minute.
+        let long = format!("/api/v1/configuration-items/{}", "x".repeat(65_000));
+        let (status, v, _) = call(&app, "GET", &long, &tok, None).await;
         assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
+        for _ in 0..3 {
+            let (status, _, _) = call(&app, "GET", "/api/v1/audit-log", &tok, None).await;
+            assert_eq!(status, 401);
+        }
         let (_, got, _) = call(&app, "GET", &by_id, &session, None).await;
         assert_eq!((got["status"].as_str(), got["revokedBy"].as_str()), (Some("revoked"), Some("owner")));
 
@@ -718,6 +725,11 @@ pub(crate) mod tests {
                 ("token.use", "api_client", "revoked"),
             ]
         );
+        let refused = &rows[7].3;
+        let kept = refused["path"].as_str().unwrap();
+        assert_eq!(kept.chars().count(), crate::auth::events::TOKEN_PATH_MAX + 1, "{kept:.80}");
+        assert!(kept.starts_with("/api/v1/configuration-items/xxx") && kept.ends_with('…'));
+        assert_eq!((refused["pathLength"].as_u64(), refused.get("unrecordedRefusals")), (Some(65_028), None));
         let used = &rows[1].3;
         assert_eq!((used["method"].as_str(), used["path"].as_str()), (Some("GET"), Some("/api/v1/audit-log")));
         assert_eq!(

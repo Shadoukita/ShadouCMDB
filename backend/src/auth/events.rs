@@ -33,6 +33,9 @@ const MFA_ENTITY: &str = "users";
 
 /// Longest attempted username kept (the real ones are at most 64 characters).
 const ATTEMPTED_USERNAME_MAX: usize = 64;
+/// Longest request path kept in `token.use`: the path is recorded before it is
+/// validated, and a row must stay small enough to export (GH#179).
+pub const TOKEN_PATH_MAX: usize = 512;
 
 /// Why the API ended a session.
 #[derive(Debug, Clone, Copy)]
@@ -106,6 +109,14 @@ pub enum LoginMethod {
 
 fn attempted(username: &str) -> String {
     username.chars().take(ATTEMPTED_USERNAME_MAX).collect()
+}
+
+/// The first [`TOKEN_PATH_MAX`] characters of `path`, `…` marking a cut.
+fn bounded_path(path: &str) -> String {
+    match path.char_indices().nth(TOKEN_PATH_MAX) {
+        Some((cut, _)) => format!("{}…", &path[..cut]),
+        None => path.to_owned(),
+    }
 }
 
 /// `{...details, ipAddress, userAgent}` of the request being handled, plus
@@ -245,27 +256,33 @@ pub async fn revoked(
 }
 
 /// A request was made with this API token; `refusal` is why it was turned away, if it was.
+/// `unrecorded`: refused uses like this one left out since the last row (see
+/// [`super::token`]).
 pub async fn token_use(
     conn: &mut PgConnection,
     ctx: &RequestContext,
     token: &PresentedToken,
     refusal: Option<Refusal>,
     used: &Use<'_>,
+    unrecorded: u64,
 ) -> sqlx::Result<()> {
-    let v = details(
-        ctx,
-        fields(json!({
+    let mut f = fields(json!({
             "tokenName": token.name,
             "tokenPrefix": token.token_prefix,
             "userId": token.user_id,
             "username": token.username,
             "outcome": refusal.map_or("accepted", Refusal::outcome),
             "method": used.method.as_str(),
-            "path": used.path,
+            "path": bounded_path(used.path),
             "operationId": used.operation_id,
-        })),
-    );
-    write_for(conn, ctx, AuditAction::TokenUse, TOKEN_ENTITY, token.id, v).await
+    }));
+    if used.path.chars().nth(TOKEN_PATH_MAX).is_some() {
+        f.insert("pathLength".into(), json!(used.path.chars().count()));
+    }
+    if unrecorded > 0 {
+        f.insert("unrecordedRefusals".into(), json!(unrecorded));
+    }
+    write_for(conn, ctx, AuditAction::TokenUse, TOKEN_ENTITY, token.id, details(ctx, f)).await
 }
 
 /// A two-factor event for this user (`mfa.*`): `extra` adds the event's own details.
@@ -280,4 +297,20 @@ pub async fn mfa(
     let mut f = fields(json!({ "userId": user_id, "username": username }));
     f.extend(fields(extra));
     write_for(conn, ctx, action, MFA_ENTITY, user_id, details(ctx, f)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_use_paths_are_bounded() {
+        assert_eq!(bounded_path("/api/v1/audit-log"), "/api/v1/audit-log");
+        let exact = "a".repeat(TOKEN_PATH_MAX);
+        assert_eq!(bounded_path(&exact), exact);
+        let long = format!("/{}", "é".repeat(65_000));
+        let kept = bounded_path(&long);
+        assert_eq!(kept.chars().count(), TOKEN_PATH_MAX + 1);
+        assert!(kept.ends_with("é…"), "cut on a character boundary, marked");
+    }
 }
