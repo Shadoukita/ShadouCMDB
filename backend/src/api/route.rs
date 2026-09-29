@@ -657,11 +657,13 @@ impl RouteBuilder {
                 let run = async move {
                     // AUDIT_CAPTURE_*: what is not captured is never stored (sessions, audit_log) or logged.
                     let capture = state.capture;
-                    let peer_ip = peer.map(|Extension(ConnectInfo(a))| a.ip()).filter(|_| capture.ip);
+                    let peer = peer.map(|Extension(ConnectInfo(a))| a.ip());
+                    let peer_ip = peer.filter(|_| capture.ip);
                     let client = ClientInfo {
                         ip: auth::session::client_ip(&headers, peer_ip).filter(|_| capture.ip),
                         peer_ip,
                         user_agent: auth::session::user_agent(&headers).filter(|_| capture.user_agent),
+                        net: auth::throttle::Net::of(auth::session::client_ip(&headers, peer)),
                     };
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
                     let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };
