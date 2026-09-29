@@ -343,35 +343,29 @@ pub async fn revoke(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
 
 /// Revokes every token of the user that still works, in the transaction that
 /// sets their password: a token minted with a stolen password must not
-/// outlive the reset. Each gets an update row; returns how many were revoked.
+/// outlive the reset. With `created_for_others` (an administrator's reset),
+/// also every working token the user created for another owner: the account
+/// may have been compromised, and such a token would otherwise outlive the
+/// reset (GH#145). Each gets an update row; returns how many were revoked.
+///
+/// Call it before anything else in the transaction writes to the audit log:
+/// every audit insert takes the chain head, and taking it before these token
+/// rows lets two resets wait on each other (GH#166).
 pub async fn revoke_all_of_user(
     conn: &mut PgConnection,
     ctx: &RequestContext,
     user_id: Uuid,
+    created_for_others: bool,
 ) -> Result<usize, AppError> {
-    let rows = data::active_of_user(conn, user_id).await?;
-    revoke_rows(conn, ctx, rows, "API token revoked with the password change").await
-}
-
-/// Revokes every working token the user created for another owner, in the
-/// transaction of an administrator's reset of their password: the account may
-/// have been compromised, and a token it minted for someone else would
-/// otherwise outlive the reset (GH#145). Each gets an update row; returns how
-/// many were revoked.
-pub async fn revoke_created_for_others(
-    conn: &mut PgConnection,
-    ctx: &RequestContext,
-    creator_id: Uuid,
-) -> Result<usize, AppError> {
-    let rows = data::active_created_for_others(conn, creator_id).await?;
-    revoke_rows(conn, ctx, rows, "API token revoked with its creator's password reset").await
+    let rows = data::active_of_user(conn, user_id, created_for_others).await?;
+    revoke_rows(conn, ctx, user_id, rows).await
 }
 
 async fn revoke_rows(
     conn: &mut PgConnection,
     ctx: &RequestContext,
+    user_id: Uuid,
     rows: Vec<TokenRow>,
-    message: &str,
 ) -> Result<usize, AppError> {
     let by = ctx.actor.name.clone().unwrap_or_else(|| ctx.actor.actor_type.as_str().to_owned());
     let mut entries = Vec::new();
@@ -379,6 +373,11 @@ async fn revoke_rows(
         let before = ApiToken::from(row);
         data::revoke(conn, before.id, &by).await?;
         let after = load(conn, before.id, false).await?;
+        let message = if after.user_id == user_id {
+            "API token revoked with the password change"
+        } else {
+            "API token revoked with its creator's password reset"
+        };
         tracing::info!(token = %after.token_prefix, owner = %after.username, "{message}");
         entries.push(AuditEntry {
             action: AuditAction::Update,
@@ -1091,7 +1090,7 @@ pub(crate) mod tests {
         crate::data::auth::get_user(&mut reset, alice_id, true).await.unwrap();
         crate::data::auth::delete_user_sessions(&mut reset, alice_id, None).await.unwrap();
         let ctx = crate::api::context::RequestContext::system("admin", "reset");
-        super::revoke_all_of_user(&mut reset, &ctx, alice_id).await.unwrap();
+        super::revoke_all_of_user(&mut reset, &ctx, alice_id, true).await.unwrap();
 
         // Her session passed authentication before the reset commits.
         let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
@@ -1121,6 +1120,88 @@ pub(crate) mod tests {
         assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
         let tokens: i64 = sqlx::query_scalar("SELECT count(*) FROM api_tokens").fetch_one(pool).await.unwrap();
         assert_eq!(tokens, 0);
+
+        db.drop().await;
+    }
+
+    /// Two administrators reset the passwords of two users who minted tokens
+    /// for each other, at the same time and with no session open (sessions
+    /// would serialise the resets on the audit chain head): both succeed and
+    /// every token is revoked. The token rows were locked in two statements,
+    /// in opposite orders, and one reset failed with a deadlock (GH#166).
+    #[tokio::test]
+    async fn concurrent_resets_of_users_who_minted_tokens_for_each_other_both_succeed() {
+        let Some(db) = scratch::database("concurrent_resets_of_users_who_minted_tokens_for_each_other").await else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let mut ids = Vec::new();
+        for name in ["alice", "bob", "second"] {
+            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+                "profileIds": [administrators] });
+            let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            ids.push(v["id"].as_str().unwrap().parse::<uuid::Uuid>().unwrap());
+        }
+        let (alice_id, bob_id) = (ids[0], ids[1]);
+        let login = json!({ "username": "second", "password": "second first password" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+        assert_eq!(status, 200, "{me}");
+        let second = session_of(&me, &headers);
+
+        for round in 0..10 {
+            // Alice's token for Bob and Bob's for Alice, written directly so
+            // that neither has a session open.
+            let mut conn = pool.acquire().await.unwrap();
+            for (owner, creator) in [(bob_id, alice_id), (alice_id, bob_id)] {
+                let name = format!("round {round} for {owner}");
+                let hash = crate::auth::session::token_hash(&crate::auth::token::new_secret());
+                crate::data::api_tokens::insert(
+                    &mut conn,
+                    &crate::data::api_tokens::NewToken {
+                        name: &name,
+                        user_id: owner,
+                        profile_id: administrators,
+                        token_hash: &hash,
+                        token_prefix: &name[..8],
+                        expires_at: chrono::Utc::now() + chrono::Duration::days(1),
+                        created_by: None,
+                        created_by_user_id: Some(creator),
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            drop(conn);
+
+            let reset = |session: Creds, id: uuid::Uuid| {
+                let app = app.clone();
+                let body = json!({ "password": format!("password of round {round}") });
+                tokio::spawn(async move {
+                    call(&app, "PUT", &format!("/api/v1/admin/users/{id}/password"), &session, Some(body)).await
+                })
+            };
+            let (a, b) = (reset(admin.clone(), alice_id), reset(second.clone(), bob_id));
+            for (status, v, _) in [a.await.unwrap(), b.await.unwrap()] {
+                assert_eq!(status, 200, "round {round}: {v}");
+            }
+            let working: i64 = sqlx::query_scalar("SELECT count(*) FROM api_tokens WHERE revoked_at IS NULL")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            assert_eq!(working, 0, "round {round}");
+        }
 
         db.drop().await;
     }

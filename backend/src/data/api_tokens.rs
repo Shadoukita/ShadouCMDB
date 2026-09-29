@@ -151,25 +151,23 @@ pub async fn revoke(conn: &mut PgConnection, id: Uuid, by: &str) -> sqlx::Result
     Ok(())
 }
 
-/// The user's tokens that still authenticate (neither revoked nor expired), locked.
-pub async fn active_of_user(conn: &mut PgConnection, user_id: Uuid) -> sqlx::Result<Vec<TokenRow>> {
-    sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {COLUMNS} FROM {FROM} WHERE t.user_id = $1 AND t.revoked_at IS NULL AND t.expires_at > now()
-         ORDER BY t.created_at, t.id FOR UPDATE OF t"
-    )))
-    .bind(user_id)
-    .fetch_all(conn)
-    .await
-}
-
-/// Tokens the user created for other owners that still authenticate, locked.
-pub async fn active_created_for_others(conn: &mut PgConnection, creator_id: Uuid) -> sqlx::Result<Vec<TokenRow>> {
+/// The tokens that still authenticate (neither revoked nor expired) and are
+/// the user's own or, with `created_for_others`, that the user created for
+/// another owner, locked. One statement locking in id order: two resets of
+/// users who minted tokens for each other take the same rows in the same
+/// order, and cannot deadlock (GH#166).
+pub async fn active_of_user(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    created_for_others: bool,
+) -> sqlx::Result<Vec<TokenRow>> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {COLUMNS} FROM {FROM}
-         WHERE t.created_by_user_id = $1 AND t.user_id <> $1 AND t.revoked_at IS NULL AND t.expires_at > now()
-         ORDER BY t.created_at, t.id FOR UPDATE OF t"
+         WHERE (t.user_id = $1 OR ($2 AND t.created_by_user_id = $1)) AND t.revoked_at IS NULL AND t.expires_at > now()
+         ORDER BY t.id FOR UPDATE OF t"
     )))
-    .bind(creator_id)
+    .bind(user_id)
+    .bind(created_for_others)
     .fetch_all(conn)
     .await
 }
