@@ -528,8 +528,9 @@ pub(crate) mod tests {
             maintenance_url: None,
             auth: auth.clone(),
             audit: Default::default(),
+            encryption: Default::default(),
         };
-        router(AppState::new(pool, auth), &cfg)
+        router(AppState::new(pool, auth, crate::secrets::Keyring::for_tests()), &cfg)
     }
 
     #[derive(Default, Clone)]

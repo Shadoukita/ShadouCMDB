@@ -18,7 +18,7 @@ use sqlx::postgres::PgConnection;
 
 use super::archive::{self, Header, Reader, TableEntry};
 use super::{TYPE_TABLES_SINCE, Table, app_tables, ident, stored_columns};
-use crate::config::DatabaseConfig;
+use crate::config::{DatabaseConfig, EncryptionConfig};
 use crate::db::MIGRATOR;
 
 #[derive(Debug, Args)]
@@ -51,7 +51,7 @@ pub struct Report {
     pub warnings: Vec<String>,
 }
 
-pub async fn run(cfg: &DatabaseConfig, args: RestoreArgs) -> anyhow::Result<()> {
+pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: RestoreArgs) -> anyhow::Result<()> {
     println!("Checking {} ...", args.file.display());
     let header = archive::verify_file(&args.file)?;
     println!(
@@ -65,6 +65,10 @@ pub async fn run(cfg: &DatabaseConfig, args: RestoreArgs) -> anyhow::Result<()> 
     );
     check_compatible(&header)?;
     println!("File is intact (SHA-256 and row counts match) and fits this release");
+    // The restore itself needs no key (the ciphertext is copied as it is); the server does.
+    if let Some(warning) = key_warning(&header, encryption) {
+        println!("  warning: {warning}");
+    }
 
     let mut conn = super::connect(cfg).await?;
     let (database, place) = super::describe(&mut conn).await?;
@@ -101,6 +105,26 @@ pub async fn run(cfg: &DatabaseConfig, args: RestoreArgs) -> anyhow::Result<()> 
         println!("{} user(s) restored; sessions are not part of a backup, so everyone signs in again", report.users);
     }
     Ok(())
+}
+
+/// When the backup holds secrets encrypted with keys the configuration does not have.
+pub fn key_warning(header: &Header, encryption: &EncryptionConfig) -> Option<String> {
+    use crate::secrets::sealed::{KeyCount, SealedTable, restore_warning};
+    use crate::secrets::{KeyId, configured_key_ids};
+    let counts: Vec<KeyCount> = header
+        .encryption_keys
+        .iter()
+        .filter_map(|k| {
+            let table = SealedTable::from_name(&k.table)?;
+            let key_id = KeyId(u32::from_str_radix(&k.key_id, 16).ok()? as i32);
+            Some(KeyCount { table, key_id, rows: k.rows as i64 })
+        })
+        .collect();
+    let configured = match configured_key_ids(encryption) {
+        Ok(c) => c,
+        Err(e) => return Some(format!("{e:#}; the server will not start until this is fixed")),
+    };
+    restore_warning(&counts, configured)
 }
 
 /// The backup's migrations must be ones this binary ships, with the same SQL.

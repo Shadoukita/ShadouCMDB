@@ -1,0 +1,220 @@
+//! The commands around the encryption key: `generate-encryption-key`,
+//! `mfa reset-undecryptable` (the audited way out when a key is lost), and
+//! the key report `verify` and `migrate` print.
+
+use std::io::Write;
+use std::path::PathBuf;
+
+use anyhow::{Context, bail};
+use clap::{Args, Subcommand};
+use serde_json::json;
+use sqlx::PgConnection;
+
+use super::sealed::{self, KeyCount};
+use super::{KeyId, configured_key_ids, encode_key, key_id, new_key};
+use crate::api::context::RequestContext;
+use crate::auth::events;
+use crate::config::{Config, EncryptionConfig};
+use crate::data::crud::AuditAction;
+use crate::data::mfa as mfa_data;
+use crate::{db, maintenance};
+
+#[derive(Debug, Args)]
+pub struct GenerateKeyArgs {
+    /// Write the key to this file. It must not exist yet: a key is never overwritten.
+    #[arg(long, value_name = "PATH")]
+    pub out: PathBuf,
+}
+
+/// Writes a new random key to a new file (mode 0600 on Unix). Offline.
+pub fn generate_key(args: GenerateKeyArgs) -> anyhow::Result<()> {
+    let key = new_key();
+    // The env file needs the full path: a service does not start in this directory.
+    let path = &std::path::absolute(&args.out).unwrap_or_else(|_| args.out.clone());
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            anyhow::anyhow!("{} already exists; a key file is never overwritten, choose another path", path.display())
+        } else {
+            anyhow::Error::new(e).context(format!("cannot create {}", path.display()))
+        }
+    })?;
+    let mut content = encode_key(&key).into_bytes();
+    let written = file.write_all(&content).and_then(|()| file.sync_all());
+    super::wipe(&mut content);
+    written.with_context(|| format!("cannot write {}", path.display()))?;
+    println!("Wrote a new encryption key to {} (key {}).", path.display(), key_id(&key));
+    println!();
+    println!("Next steps:");
+    println!("  1. Set ENCRYPTION_KEY_FILE={} in the env file of the service.", path.display());
+    #[cfg(unix)]
+    println!("  2. Let only the service account read it, e.g. chown root:shadoucmdb and chmod 640.");
+    #[cfg(not(unix))]
+    println!(
+        "  2. Restrict the file's ACL, e.g. icacls \"{}\" /inheritance:r /grant:r \"Administrators:F\" \"SYSTEM:F\" \
+         \"NT AUTHORITY\\LocalService:R\"",
+        path.display()
+    );
+    println!("  3. Keep a copy apart from the database backups (password vault or escrow): without it, restored");
+    println!("     backups have no usable two-factor enrolments. See docs/security/hardening.md#encryption-key.");
+    Ok(())
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MfaCommand {
+    /// Turn off two-factor sign-in for users whose authenticator secret is
+    /// encrypted with a key that is not configured (the key is lost), so they
+    /// can set it up again. Audited; asks for confirmation.
+    ResetUndecryptable(ResetUndecryptableArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ResetUndecryptableArgs {
+    /// List the users concerned and change nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+    #[command(flatten)]
+    pub confirm: maintenance::ConfirmArgs,
+}
+
+pub async fn mfa(cfg: &Config, cmd: MfaCommand) -> anyhow::Result<()> {
+    match cmd {
+        MfaCommand::ResetUndecryptable(args) => reset_undecryptable(cfg, args).await,
+    }
+}
+
+async fn reset_undecryptable(cfg: &Config, args: ResetUndecryptableArgs) -> anyhow::Result<()> {
+    // Only the ids are needed: the rows are deleted, not decrypted.
+    let configured = configured_key_ids(&cfg.encryption)?;
+    let known: Vec<KeyId> = configured.map(|(a, p)| [Some(a), p].into_iter().flatten().collect()).unwrap_or_default();
+    let pool = db::connect(&cfg.database).await?;
+    let result = async {
+        if db::applied_count(&pool).await? != db::expected_count() {
+            bail!("the database is not fully migrated; run `shadoucmdb migrate` first");
+        }
+        let mut tx = pool.begin().await?;
+        let users = sealed::undecryptable_totp(&mut tx, &known).await?;
+        match configured {
+            None => println!(
+                "No key is configured (ENCRYPTION_KEY_FILE is not set): every encrypted authenticator secret counts \
+                 as undecryptable."
+            ),
+            Some((a, None)) => println!("Configured key: {a}."),
+            Some((a, Some(p))) => println!("Configured keys: {a} (previous key {p})."),
+        }
+        if users.is_empty() {
+            println!("No authenticator secret is encrypted with another key; nothing to do.");
+            return Ok(());
+        }
+        println!("Authenticator secrets encrypted with a key that is not configured ({}):", users.len());
+        for u in &users {
+            let state = if u.confirmed { "two-factor sign-in on" } else { "set-up not finished" };
+            println!("  {:<32} key {}  {state}", u.username, u.key_id);
+        }
+        if args.dry_run {
+            println!("Dry run: nothing was changed.");
+            return Ok(());
+        }
+        let (database, place) = maintenance::describe(&mut tx).await?;
+        let action = format!("turn off two-factor sign-in for {} of", users_n(users.len()));
+        maintenance::confirm(&action, &database, &place, args.confirm.yes)?;
+        let actor = match crate::prune::operator() {
+            Some(op) => format!("cli: mfa reset-undecryptable ({op})"),
+            None => "cli: mfa reset-undecryptable".to_owned(),
+        };
+        reset_users(&mut tx, &RequestContext::system(actor, "cli"), &users).await?;
+        tx.commit().await?;
+        println!(
+            "Turned off two-factor sign-in for {}. They set it up again at their next sign-in (at once where a \
+             profile requires it).",
+            users_n(users.len())
+        );
+        anyhow::Ok(())
+    }
+    .await;
+    pool.close().await;
+    result
+}
+
+fn users_n(n: usize) -> String {
+    format!("{n} {}", if n == 1 { "user" } else { "users" })
+}
+
+/// Deletes the users' authenticator, recovery codes and pending sign-ins, with
+/// one `mfa.disable` event each (`reason: key_lost`).
+pub(crate) async fn reset_users(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    users: &[sealed::Undecryptable],
+) -> sqlx::Result<()> {
+    for u in users {
+        mfa_data::delete_mfa(conn, u.user_id).await?;
+        let extra = json!({ "reason": "key_lost", "keyId": u.key_id.to_string() });
+        events::mfa(conn, ctx, AuditAction::MfaDisable, u.user_id, &u.username, extra).await?;
+    }
+    Ok(())
+}
+
+/// The encrypted secrets per table and key, against the configured key: for
+/// `verify` and `migrate`, so a missing or wrong key shows before `serve`
+/// refuses to start. Warns only: neither command needs the key.
+pub async fn report(conn: &mut PgConnection, cfg: &EncryptionConfig) -> anyhow::Result<()> {
+    let counts = sealed::key_counts(conn).await?;
+    let unencrypted = sealed::unencrypted_counts(conn).await?;
+    println!("Encrypted secrets (ENCRYPTION_KEY_FILE):");
+    let configured = match configured_key_ids(cfg) {
+        Ok(Some((a, p))) => {
+            match p {
+                Some(p) => println!("  configured key {a}, previous key {p}"),
+                None => println!("  configured key {a}"),
+            }
+            Some((a, p))
+        }
+        Ok(None) => {
+            println!(
+                "  WARNING: ENCRYPTION_KEY_FILE is not set. `serve` does not start without it. Create a key with \
+                 \"shadoucmdb generate-encryption-key --out <path>\" and set ENCRYPTION_KEY_FILE before restarting \
+                 the service; see docs/security/hardening.md#encryption-key."
+            );
+            None
+        }
+        Err(e) => {
+            println!("  WARNING: {e:#}. `serve` does not start until this is fixed.");
+            None
+        }
+    };
+    print_counts(&counts, &unencrypted, configured.map(|(a, _)| a));
+    if let Some(message) = configured.and_then(|(a, p)| sealed::refusal(&counts, a, p)) {
+        println!("  WARNING: {message}");
+    }
+    Ok(())
+}
+
+fn print_counts(counts: &[KeyCount], unencrypted: &[(sealed::SealedTable, i64)], active: Option<KeyId>) {
+    for &(table, n) in unencrypted {
+        let mut line = format!("  {:<12} ", table.name());
+        let by_key: Vec<String> = counts
+            .iter()
+            .filter(|c| c.table == table)
+            .map(|c| {
+                let note = if Some(c.key_id) == active { " (configured)" } else { "" };
+                format!("{} under key {}{note}", c.rows, c.key_id)
+            })
+            .collect();
+        let mut parts = by_key;
+        if n > 0 {
+            parts.push(format!("{n} not encrypted yet (`serve` encrypts them at start-up)"));
+        }
+        if parts.is_empty() {
+            parts.push("no rows".to_owned());
+        }
+        line.push_str(&parts.join(", "));
+        println!("{line}");
+    }
+}

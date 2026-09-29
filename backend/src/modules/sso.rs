@@ -854,12 +854,15 @@ mod tests {
     }
 
     fn auth_state() -> AuthState {
-        AuthState::new(AuthConfig {
-            session_idle: std::time::Duration::from_secs(3600),
-            session_max_age: std::time::Duration::from_secs(3600),
-            cookie_secure: CookieSecure::Never,
-            public_url: Some(PUBLIC_URL.into()),
-        })
+        AuthState::new(
+            AuthConfig {
+                session_idle: std::time::Duration::from_secs(3600),
+                session_max_age: std::time::Duration::from_secs(3600),
+                cookie_secure: CookieSecure::Never,
+                public_url: Some(PUBLIC_URL.into()),
+            },
+            crate::secrets::Keyring::for_tests(),
+        )
     }
 
     async fn add_provider(pool: &PgPool, issuer: &str) -> Uuid {

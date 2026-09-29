@@ -82,7 +82,7 @@ pub async fn prune(
 }
 
 /// Who ran the command, as the operating system says; recorded next to the database user.
-fn operator() -> Option<String> {
+pub(crate) fn operator() -> Option<String> {
     std::env::var("USER").or_else(|_| std::env::var("USERNAME")).ok().filter(|u| !u.is_empty())
 }
 

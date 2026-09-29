@@ -25,6 +25,7 @@ use crate::data::auth as auth_data;
 use crate::data::crud::AuditAction;
 use crate::data::mfa as data;
 use crate::http::error::{AppError, ErrorCode};
+use crate::secrets::{Keyring, Secret, sealed};
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -134,24 +135,63 @@ pub async fn status(conn: &mut PgConnection, user_id: Uuid, session: Option<Uuid
     Ok(data::status(conn, user_id, session).await?.into())
 }
 
+/// Outcome of [`verify_second_factor`].
+pub enum Verdict {
+    Accepted(LoginMethod),
+    /// A wrong or reused code.
+    Wrong,
+    /// The stored authenticator secret did not decrypt (altered, or copied from
+    /// another row). Fails closed; recovery codes still work, and an
+    /// administrator can reset the user's MFA.
+    Undecryptable,
+}
+
+impl Verdict {
+    /// `reason` of the `mfa.failure` event, when there is more to say than "wrong code".
+    pub fn failure_reason(&self) -> Option<&'static str> {
+        matches!(self, Verdict::Undecryptable).then_some("secret_undecryptable")
+    }
+}
+
+/// The user's authenticator secret, decrypted. Logs an undecryptable one (no secret in the log).
+fn open_secret(keyring: &Keyring, user_id: Uuid, t: &data::Totp) -> Option<Secret> {
+    match sealed::open_totp_secret(keyring, user_id, t.key_id, &t.secret) {
+        Ok(secret) => Some(secret),
+        Err(err) => {
+            tracing::error!(
+                user_id = %user_id,
+                error = ?err,
+                "the user's authenticator secret does not decrypt; their authenticator codes are refused until an \
+                 administrator resets their two-factor authentication"
+            );
+            None
+        }
+    }
+}
+
 /// Checks `input` against the user's authenticator (a 6-digit code, each
 /// usable once) or their unused recovery codes (used up by this call). In the
-/// caller's transaction; None if it matches neither.
+/// caller's transaction.
 pub async fn verify_second_factor(
     conn: &mut PgConnection,
+    keyring: &Keyring,
     user_id: Uuid,
     input: &str,
-) -> Result<Option<LoginMethod>, AppError> {
+) -> Result<Verdict, AppError> {
     if totp::looks_like_code(input) {
-        let Some(t) = data::get_totp(conn, user_id, true).await?.filter(|t| t.confirmed) else { return Ok(None) };
-        let Some(step) = totp::verify(&t.secret, input, totp::current_step(), t.last_used_step) else {
-            return Ok(None);
+        let Some(t) = data::get_totp(conn, user_id, true).await?.filter(|t| t.confirmed) else {
+            return Ok(Verdict::Wrong);
         };
-        return Ok(data::use_step(conn, user_id, step).await?.then_some(LoginMethod::Totp));
+        let Some(secret) = open_secret(keyring, user_id, &t) else { return Ok(Verdict::Undecryptable) };
+        let Some(step) = totp::verify(&secret, input, totp::current_step(), t.last_used_step) else {
+            return Ok(Verdict::Wrong);
+        };
+        let used = data::use_step(conn, user_id, step).await?;
+        return Ok(if used { Verdict::Accepted(LoginMethod::Totp) } else { Verdict::Wrong });
     }
-    let Some(canonical) = totp::normalise_recovery_code(input) else { return Ok(None) };
+    let Some(canonical) = totp::normalise_recovery_code(input) else { return Ok(Verdict::Wrong) };
     let used = data::use_recovery_code(conn, user_id, &totp::recovery_code_hash(&canonical)).await?;
-    Ok(used.then_some(LoginMethod::RecoveryCode))
+    Ok(if used { Verdict::Accepted(LoginMethod::RecoveryCode) } else { Verdict::Wrong })
 }
 
 /// Writes `mfa.recovery_code_used` with the number of codes left.
@@ -206,7 +246,7 @@ async fn enrol(
         return Err(already_enabled());
     }
     let secret = totp::new_secret();
-    data::put_pending_totp(&mut tx, me.user_id, &secret).await?;
+    data::put_pending_totp(&mut tx, me.user_id, &sealed::seal_totp_secret(&auth.keyring, me.user_id, &secret)).await?;
     tx.commit().await?;
     Ok(TotpEnrolment {
         secret: totp::base32(&secret),
@@ -218,7 +258,12 @@ async fn enrol(
 }
 
 /// A code from the app proves it holds the secret: MFA is on from now on.
-async fn confirm(pool: &PgPool, ctx: &RequestContext, b: TotpConfirmation) -> Result<RecoveryCodes, AppError> {
+async fn confirm(
+    pool: &PgPool,
+    auth: &AuthState,
+    ctx: &RequestContext,
+    b: TotpConfirmation,
+) -> Result<RecoveryCodes, AppError> {
     let me = me(ctx)?;
     let mut tx = pool.begin().await?;
     let Some(t) = data::get_totp(&mut tx, me.user_id, true).await? else {
@@ -227,7 +272,12 @@ async fn confirm(pool: &PgPool, ctx: &RequestContext, b: TotpConfirmation) -> Re
     if t.confirmed {
         return Err(already_enabled());
     }
-    let Some(step) = totp::verify(&t.secret, &b.code, totp::current_step(), None) else {
+    let Some(secret) = open_secret(&auth.keyring, me.user_id, &t) else {
+        return Err(AppError::conflict(
+            "The set-up in progress cannot be read; start the set-up again (POST /api/v1/auth/mfa/totp)",
+        ));
+    };
+    let Some(step) = totp::verify(&secret, &b.code, totp::current_step(), None) else {
         return Err(AppError::field(
             "code",
             "The code does not match; check the app's clock and enter the current code",
@@ -251,6 +301,7 @@ async fn confirm(pool: &PgPool, ctx: &RequestContext, b: TotpConfirmation) -> Re
 /// never holds two pooled connections at once (GH#177).
 async fn reauthenticate(
     pool: &PgPool,
+    auth: &AuthState,
     ctx: &RequestContext,
     mut tx: Transaction<'static, Postgres>,
     attempt: Attempt<'_>,
@@ -258,18 +309,21 @@ async fn reauthenticate(
     stage: &str,
 ) -> Result<Transaction<'static, Postgres>, AppError> {
     let me = me(ctx)?;
-    match verify_second_factor(&mut tx, me.user_id, &b.code).await? {
-        Some(method) => {
+    match verify_second_factor(&mut tx, &auth.keyring, me.user_id, &b.code).await? {
+        Verdict::Accepted(method) => {
             attempt.success();
             if matches!(method, LoginMethod::RecoveryCode) {
                 audit_recovery_code_used(&mut tx, ctx, me.user_id, &me.username, stage).await?;
             }
             Ok(tx)
         }
-        None => {
+        refused => {
             tx.rollback().await?;
             let locked = attempt.failure();
-            let extra = json!({ "stage": stage, "lockedForSeconds": locked.map(|d| d.as_secs().max(1)) });
+            let mut extra = json!({ "stage": stage, "lockedForSeconds": locked.map(|d| d.as_secs().max(1)) });
+            if let Some(reason) = refused.failure_reason() {
+                extra["reason"] = reason.into();
+            }
             let mut own = pool.begin().await?;
             events::mfa(&mut own, ctx, AuditAction::MfaFailure, me.user_id, &me.username, extra).await?;
             own.commit().await?;
@@ -290,7 +344,7 @@ async fn disable(
     let mut tx = pool.begin().await?;
     let Some(t) = data::get_totp(&mut tx, me.user_id, true).await? else { return Err(not_enabled()) };
     let mut tx = if t.confirmed {
-        reauthenticate(pool, ctx, tx, attempt, &b, "disable").await?
+        reauthenticate(pool, auth, ctx, tx, attempt, &b, "disable").await?
     } else {
         attempt.success();
         tx
@@ -316,7 +370,7 @@ async fn regenerate(
     if !data::get_totp(&mut tx, me.user_id, true).await?.is_some_and(|t| t.confirmed) {
         return Err(not_enabled());
     }
-    let mut tx = reauthenticate(pool, ctx, tx, attempt, &b, "recovery_codes").await?;
+    let mut tx = reauthenticate(pool, auth, ctx, tx, attempt, &b, "recovery_codes").await?;
     let codes = new_recovery_codes(&mut tx, me.user_id).await?;
     let extra = json!({ "recoveryCodes": codes.codes.len() });
     events::mfa(&mut tx, ctx, AuditAction::MfaRecoveryCodes, me.user_id, &me.username, extra).await?;
@@ -380,7 +434,7 @@ pub fn routes() -> Vec<Route> {
             .before_mfa_enrolment()
             .errors(&[ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<TotpConfirmation>>| async move {
-                Ok(Json(confirm(&api.pool, &api.ctx, b).await?))
+                Ok(Json(confirm(&api.pool, &api.auth, &api.ctx, b).await?))
             }),
         route(Method::DELETE, "/api/v1/auth/mfa/totp", "disableTotp")
             .tag(TAG)
@@ -466,12 +520,25 @@ pub(crate) mod tests {
         totp::current_step()
     }
 
+    /// The seed of the only `user_totp` row, decrypted. GH#189: what is stored is
+    /// not the seed but its ciphertext (48 bytes) under the test key.
+    pub(crate) async fn stored_seed(pool: &PgPool) -> Vec<u8> {
+        let (user_id, stored, key_id): (Uuid, Vec<u8>, Option<i32>) =
+            sqlx::query_as("SELECT user_id, secret, key_id FROM user_totp").fetch_one(pool).await.unwrap();
+        let ring = crate::secrets::Keyring::for_tests();
+        assert_eq!((stored.len(), key_id), (48, Some(ring.active_id().0)), "sealed under the active key");
+        let seed = sealed::open_totp_secret(&ring, user_id, key_id, &stored).expect("opens").to_vec();
+        assert_eq!(seed.len(), 20);
+        assert!(!stored.windows(seed.len()).any(|w| w == seed), "the seed is not stored in the clear");
+        seed
+    }
+
     /// Sets up an authenticator through the API; returns its secret and the recovery codes.
     async fn enrol(app: &Router, pool: &PgPool, session: &Creds, step: i64) -> (Vec<u8>, Vec<String>) {
         let (status, v, _) =
             call(app, "POST", "/api/v1/auth/mfa/totp", session, Some(json!({ "currentPassword": PASSWORD }))).await;
         assert_eq!(status, 201, "{v}");
-        let secret: Vec<u8> = sqlx::query_scalar("SELECT secret FROM user_totp").fetch_one(pool).await.unwrap();
+        let secret = stored_seed(pool).await;
         assert_eq!(v["secret"].as_str(), Some(totp::base32(&secret).as_str()));
         let body = json!({ "code": totp::code_at(&secret, step - 1) });
         let (status, v, _) = call(app, "POST", "/api/v1/auth/mfa/totp/confirm", session, Some(body)).await;
@@ -519,7 +586,7 @@ pub(crate) mod tests {
         let (status, _, _) =
             call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(json!({ "currentPassword": PASSWORD }))).await;
         assert_eq!(status, 201);
-        let secret: Vec<u8> = sqlx::query_scalar("SELECT secret FROM user_totp").fetch_one(pool).await.unwrap();
+        let secret = stored_seed(pool).await;
         let far = json!({ "code": totp::code_at(&secret, step + 10) });
         let (status, v, _) = call(&app, "POST", "/api/v1/auth/mfa/totp/confirm", &session, Some(far)).await;
         assert_eq!((status, v["error"]["details"][0]["code"].as_str()), (400, Some("invalid_code")));
@@ -789,12 +856,15 @@ pub(crate) mod tests {
                 id
             }
         };
-        let auth = AuthState::new(crate::config::AuthConfig {
-            session_idle: std::time::Duration::from_secs(3600),
-            session_max_age: std::time::Duration::from_secs(3600),
-            cookie_secure: crate::config::CookieSecure::Never,
-            public_url: None,
-        });
+        let auth = AuthState::new(
+            crate::config::AuthConfig {
+                session_idle: std::time::Duration::from_secs(3600),
+                session_max_age: std::time::Duration::from_secs(3600),
+                cookie_secure: crate::config::CookieSecure::Never,
+                public_url: None,
+            },
+            crate::secrets::Keyring::for_tests(),
+        );
         let (_, cookies) =
             super::super::auth::open_session(pool, &auth, &HeaderMap::new(), &system, user_id, name, LoginMethod::Ldap)
                 .await

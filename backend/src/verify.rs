@@ -697,10 +697,12 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
     }
 }
 
-pub async fn run(cfg: &DatabaseConfig) -> anyhow::Result<()> {
+pub async fn run(cfg: &DatabaseConfig, encryption: &crate::config::EncryptionConfig) -> anyhow::Result<()> {
     let mut conn = PgConnection::connect_with(&crate::db::connect_options(cfg)?)
         .await
         .context("could not connect to PostgreSQL")?;
+    crate::secrets::cli::report(&mut conn, encryption).await?;
+    println!();
     let mut failed = 0;
     conn.execute("BEGIN").await?;
     // The checks build on the IT infrastructure data model. A bare install gets

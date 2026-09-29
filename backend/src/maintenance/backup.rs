@@ -14,7 +14,9 @@ use futures_util::TryStreamExt;
 use sqlx::Connection;
 use sqlx::postgres::PgConnection;
 
-use super::archive::{self, FORMAT, FORMAT_VERSION, Header, MigrationEntry, SequenceEntry, TableEntry};
+use super::archive::{
+    self, EncryptionKeyEntry, FORMAT, FORMAT_VERSION, Header, MigrationEntry, SequenceEntry, TableEntry,
+};
 use super::{Table, app_schemas, app_tables, ident, stored_columns};
 use crate::config::DatabaseConfig;
 
@@ -75,6 +77,20 @@ pub async fn run(cfg: &DatabaseConfig, args: BackupArgs) -> anyhow::Result<()> {
     println!(
         "The file contains password hashes and personal data (audit log): store it encrypted and access-controlled."
     );
+    let keys: Vec<String> = header
+        .encryption_keys
+        .iter()
+        .map(|k| k.key_id.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if !keys.is_empty() {
+        println!(
+            "Authenticator secrets in it are encrypted with key {}, which is not in the file: keep that key (and its \
+             copy in escrow) as long as you keep this backup.",
+            keys.join(", ")
+        );
+    }
     Ok(())
 }
 
@@ -130,6 +146,11 @@ pub async fn write<W: Write>(conn: &mut PgConnection, out: W) -> anyhow::Result<
     .bind(&schemas)
     .fetch_all(&mut *tx)
     .await?;
+    let encryption_keys = crate::secrets::sealed::key_counts(&mut tx)
+        .await?
+        .into_iter()
+        .map(|c| EncryptionKeyEntry { key_id: c.key_id.to_string(), table: c.table.name().into(), rows: c.rows as u64 })
+        .collect();
 
     let header = Header {
         format: FORMAT.into(),
@@ -148,6 +169,7 @@ pub async fn write<W: Write>(conn: &mut PgConnection, out: W) -> anyhow::Result<
             .map(|(schema, name, last_value)| SequenceEntry { schema, name, last_value })
             .collect(),
         excluded_tables: excluded,
+        encryption_keys,
     };
 
     let mut w = archive::Writer::new(out, &header)?;
