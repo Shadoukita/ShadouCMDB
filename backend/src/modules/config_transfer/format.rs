@@ -5,6 +5,13 @@
 //! key, profile name), never by id, so a file moves between installs. Users,
 //! passwords, sessions, CIs and relationships are never part of it.
 //!
+//! Identity providers are not part of it either. If they ever are, their
+//! secrets stay out: a provider carries `clientSecretSet` / `bindPasswordSet`
+//! only, an import creates it disabled, and an administrator enters the secret
+//! again. Never export the ciphertext: it is bound to the source provider's id
+//! and to the source install's encryption key, so it would be useless and
+//! misleading (GH#199, SHAA-490 §A7).
+//!
 //! Every section is optional: a file with only `uiSettings` imports only the
 //! UI settings. Within a section, fields that a hand-written file leaves out
 //! take the same defaults as the create endpoints.

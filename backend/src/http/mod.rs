@@ -195,7 +195,7 @@ async fn schema_gate(
                     }
                     // Retried on the next request; rows not encrypted yet still open.
                     Err(PrepareError::Database(err)) => {
-                        tracing::warn!(error = %err, "cannot encrypt the stored authenticator secrets yet")
+                        tracing::warn!(error = %err, "cannot encrypt the stored secrets yet")
                     }
                 }
             }
@@ -502,7 +502,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
             Err(PrepareError::Refused(message)) => anyhow::bail!(message),
             Err(PrepareError::Database(err)) => tracing::warn!(
                 error = %err,
-                "cannot encrypt the stored authenticator secrets yet; retried on the first API request"
+                "cannot encrypt the stored secrets yet; retried on the first API request"
             ),
         }
     }

@@ -35,6 +35,8 @@ use crate::data::auth as auth_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::identity_providers::{self as data, ProviderRow};
 use crate::http::error::{AppError, ErrorCode};
+use crate::secrets::Keyring;
+use crate::secrets::sealed::{self, ProviderSecret, StoredSecret};
 
 pub const OIDC: &str = "oidc";
 pub const LDAP: &str = "ldap";
@@ -48,25 +50,58 @@ const DISPLAY_NAME_MAX: usize = 200;
 // Provider settings
 // ---------------------------------------------------------------------------
 
-pub fn oidc_settings(p: &ProviderRow) -> oidc::Settings {
-    oidc::Settings {
+/// The provider's stored secret did not decrypt: altered, copied from another
+/// provider, or under a key that is not configured. Sign-in through the
+/// provider fails closed until an administrator enters the secret again. The
+/// error is logged (provider id and name, never a secret) where it is found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SecretUndecryptable;
+
+impl SecretUndecryptable {
+    /// For the connection test.
+    pub const MESSAGE: &str = "The stored secret of this provider cannot be decrypted. Enter it again.";
+}
+
+/// Decrypts one of the provider's secrets.
+fn open_secret(
+    p: &ProviderRow,
+    keyring: &Keyring,
+    column: ProviderSecret,
+    stored: Option<&StoredSecret>,
+) -> Result<Option<Secret>, SecretUndecryptable> {
+    let Some(stored) = stored else { return Ok(None) };
+    sealed::open_provider_secret(keyring, p.id, column, stored).map(Some).map_err(|e| {
+        tracing::error!(
+            provider_id = %p.id,
+            provider = %p.name,
+            reason = ?e,
+            "the stored {} of this identity provider cannot be decrypted; sign-in through it fails until an \
+             administrator enters it again",
+            column.label()
+        );
+        SecretUndecryptable
+    })
+}
+
+pub fn oidc_settings(p: &ProviderRow, keyring: &Keyring) -> Result<oidc::Settings, SecretUndecryptable> {
+    Ok(oidc::Settings {
         issuer_url: p.issuer_url.clone().unwrap_or_default(),
         client_id: p.client_id.clone().unwrap_or_default(),
-        client_secret: p.client_secret.clone().map(Secret::from),
+        client_secret: open_secret(p, keyring, ProviderSecret::ClientSecret, p.secrets.client_secret.as_ref())?,
         scopes: p.scopes.clone().unwrap_or_default(),
         username_claim: p.username_claim.clone().unwrap_or_default(),
         groups_claim: p.groups_claim.clone().unwrap_or_default(),
         ca_certificate: p.ca_certificate.clone(),
         mfa: oidc::MfaPolicy::from_row(p.mfa_assurance.as_deref(), p.required_acr.as_deref()),
-    }
+    })
 }
 
-pub fn ldap_settings(p: &ProviderRow) -> ldap::Settings {
-    ldap::Settings {
+pub fn ldap_settings(p: &ProviderRow, keyring: &Keyring) -> Result<ldap::Settings, SecretUndecryptable> {
+    Ok(ldap::Settings {
         url: p.ldap_url.clone().unwrap_or_default(),
         start_tls: p.start_tls.unwrap_or(true),
         bind_dn: p.bind_dn.clone(),
-        bind_password: p.bind_password.clone().map(Secret::from),
+        bind_password: open_secret(p, keyring, ProviderSecret::BindPassword, p.secrets.bind_password.as_ref())?,
         user_base_dn: p.user_base_dn.clone().unwrap_or_default(),
         user_filter: p.user_filter.clone().unwrap_or_default(),
         username_attribute: p.username_attribute.clone().unwrap_or_default(),
@@ -74,12 +109,17 @@ pub fn ldap_settings(p: &ProviderRow) -> ldap::Settings {
         email_attribute: p.email_attribute.clone().unwrap_or_default(),
         group_attribute: p.group_attribute.clone().unwrap_or_default(),
         ca_certificate: p.ca_certificate.clone(),
-    }
+    })
 }
 
 /// The redirect URI to register at the provider, when `PUBLIC_URL` is set.
 pub fn redirect_uri(auth: &AuthState) -> Option<String> {
-    auth.config.public_url.as_ref().map(|base| format!("{base}{CALLBACK_PATH}"))
+    redirect_uri_for(auth.config.public_url.as_deref())
+}
+
+/// [`redirect_uri`] for a `PUBLIC_URL` (for the CLI, which has no `AuthState`).
+pub fn redirect_uri_for(public_url: Option<&str>) -> Option<String> {
+    public_url.map(|base| format!("{base}{CALLBACK_PATH}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +362,7 @@ fn directory_identity(user: ldap::DirectoryUser) -> ExternalIdentity {
 /// fall through to the next, which might hold a different person of that name).
 pub async fn directory_sign_in(
     pool: &PgPool,
+    keyring: &Keyring,
     ctx: &RequestContext,
     username: &str,
     password: &str,
@@ -337,7 +378,11 @@ pub async fn directory_sign_in(
     drop(conn);
     let mut unavailable = false;
     for provider in directories {
-        let outcome = ldap::authenticate(&ldap_settings(&provider), username, password).await;
+        let Ok(settings) = ldap_settings(&provider, keyring) else {
+            unavailable = true;
+            continue;
+        };
+        let outcome = ldap::authenticate(&settings, username, password).await;
         match outcome {
             Ok(ldap::Outcome::NotFound) => continue,
             Ok(ldap::Outcome::WrongPassword) => return Ok(DirectoryAnswer::NoMatch),
@@ -382,6 +427,7 @@ pub enum Reauth {
 /// account is linked to. Changes nothing: no profile sync, no account creation.
 pub async fn directory_reauthenticate(
     pool: &PgPool,
+    keyring: &Keyring,
     provider_id: Uuid,
     username: &str,
     external_id: &str,
@@ -389,7 +435,8 @@ pub async fn directory_reauthenticate(
 ) -> Result<Reauth, AppError> {
     let provider = data::get(&mut *pool.acquire().await?, provider_id, false).await?;
     let Some(provider) = provider.filter(|p| p.is_enabled && p.kind == LDAP) else { return Ok(Reauth::Disabled) };
-    match ldap::reauthenticate(&ldap_settings(&provider), username, external_id, password).await {
+    let Ok(settings) = ldap_settings(&provider, keyring) else { return Ok(Reauth::Unavailable) };
+    match ldap::reauthenticate(&settings, username, external_id, password).await {
         Ok(ldap::Outcome::SignedIn(_)) => Ok(Reauth::Accepted),
         Ok(ldap::Outcome::Ambiguous(n)) => {
             tracing::warn!(provider = %provider.name, entries = n, "LDAP user filter matched several entries; password confirmation refused");
@@ -527,7 +574,9 @@ async fn oidc_start(
         tracing::warn!(provider = %provider.name, "OIDC sign-in needs PUBLIC_URL (the address users open the web UI at)");
         return Ok(failed(auth, headers, "not_configured"));
     };
-    let settings = oidc_settings(&provider);
+    let Ok(settings) = oidc_settings(&provider, &auth.keyring) else {
+        return Ok(failed(auth, headers, "unavailable"));
+    };
     let discovered = match auth.oidc.provider(provider.id, &provider.updated_at.to_rfc3339(), &settings).await {
         Ok(p) => p,
         Err(e) => {
@@ -662,7 +711,9 @@ async fn oidc_callback(
         record_refusal(pool, ctx, &attempted, code).await?;
         return Ok(failed(auth, headers, code));
     }
-    let settings = oidc_settings(&provider);
+    let Ok(settings) = oidc_settings(&provider, &auth.keyring) else {
+        return Ok(failed(auth, headers, "unavailable"));
+    };
     let Some(redirect_uri) = redirect_uri(auth) else { return Ok(failed(auth, headers, "not_configured")) };
     let verified = async {
         let discovered = auth.oidc.provider(provider.id, &provider.updated_at.to_rfc3339(), &settings).await?;
@@ -822,36 +873,54 @@ mod tests {
     const PUBLIC_URL: &str = "https://cmdb.example.test";
 
     /// An OIDC provider on a loopback port: discovery and an empty key set,
-    /// and a token endpoint that counts its calls and refuses every code.
+    /// and a token endpoint that counts its calls, keeps what the client
+    /// authenticated with, and refuses every code.
     struct Idp {
         issuer: String,
         token_calls: Arc<AtomicUsize>,
+        token_requests: Arc<std::sync::Mutex<Vec<TokenRequest>>>,
     }
 
+    /// What the token endpoint received: the Authorization header and the form body.
+    type TokenRequest = (Option<String>, String);
+
     async fn idp() -> Idp {
+        idp_with(None).await
+    }
+
+    /// `auth_methods`: the discovery document's `token_endpoint_auth_methods_supported`.
+    async fn idp_with(auth_methods: Option<&[&str]>) -> Idp {
         use axum::routing::{get, post};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let issuer = format!("http://{}", listener.local_addr().unwrap());
         let token_calls = Arc::new(AtomicUsize::new(0));
-        let discovery = serde_json::json!({
+        let token_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut discovery = serde_json::json!({
             "issuer": issuer,
             "authorization_endpoint": format!("{issuer}/authorize"),
             "token_endpoint": format!("{issuer}/token"),
             "jwks_uri": format!("{issuer}/jwks"),
         });
-        let calls = token_calls.clone();
+        if let Some(methods) = auth_methods {
+            discovery["token_endpoint_auth_methods_supported"] = serde_json::json!(methods);
+        }
+        let (calls, requests) = (token_calls.clone(), token_requests.clone());
         let app = axum::Router::new()
             .route("/.well-known/openid-configuration", get(move || async move { axum::Json(discovery) }))
             .route("/jwks", get(|| async { axum::Json(serde_json::json!({ "keys": [] })) }))
             .route(
                 "/token",
-                post(move || async move {
+                post(move |headers: HeaderMap, body: String| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
+                    let authorization = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .map(|v| v.to_str().unwrap_or_default().to_owned());
+                    requests.lock().unwrap().push((authorization, body));
                     (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({ "error": "invalid_grant" })))
                 }),
             );
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Idp { issuer, token_calls }
+        Idp { issuer, token_calls, token_requests }
     }
 
     fn auth_state() -> AuthState {
@@ -1001,6 +1070,68 @@ mod tests {
         db.drop().await;
     }
 
+    /// GH#199: the client secret is stored encrypted and still reaches the
+    /// token endpoint in clear, with client_secret_basic and with
+    /// client_secret_post. A stored secret that does not decrypt stops the
+    /// sign-in before anything is sent to the provider.
+    #[tokio::test]
+    async fn the_code_exchange_presents_the_encrypted_client_secret() {
+        use crate::secrets::sealed::seal_provider_secret;
+        let Some(db) = scratch::database("the_code_exchange_presents_the_encrypted_client_secret").await else {
+            return;
+        };
+        let (pool, auth) = (&db.pool, auth_state());
+        const SECRET: &str = "s3cret value/with+symbols";
+        for methods in [None, Some(&["client_secret_post"][..])] {
+            let idp = idp_with(methods).await;
+            let id = add_provider(pool, &idp.issuer).await;
+            let sealed = seal_provider_secret(&auth.keyring, id, ProviderSecret::ClientSecret, SECRET);
+            sqlx::query("UPDATE identity_providers SET client_secret_enc = $1, secrets_key_id = $2 WHERE id = $3")
+                .bind(&sealed.bytes)
+                .bind(sealed.key_id.0)
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap();
+            let r = start(pool, &auth, id, "/").await;
+            let (cookie, state) = (cookie_set(&r).unwrap(), param(&r.location, "state").unwrap());
+            let r = callback(pool, &auth, &cookie, &state).await;
+            assert_eq!(r.location, format!("{PUBLIC_URL}/login?ssoError=failed"), "this provider refuses every code");
+            let (authorization, body) = idp.token_requests.lock().unwrap().pop().unwrap();
+            let form: std::collections::HashMap<String, String> =
+                url::form_urlencoded::parse(body.as_bytes()).into_owned().collect();
+            if methods.is_none() {
+                // RFC 6749 §2.3.1: both parts form-encoded, then base64.
+                let expected = base64::engine::general_purpose::STANDARD.encode("cmdb:s3cret+value%2Fwith%2Bsymbols");
+                assert_eq!(authorization, Some(format!("Basic {expected}")));
+                assert_eq!(form.get("client_secret"), None);
+            } else {
+                assert_eq!(authorization, None);
+                assert_eq!(form.get("client_secret").map(String::as_str), Some(SECRET));
+            }
+
+            // Altered in the database (or copied from another provider): fail closed.
+            let r = start(pool, &auth, id, "/").await;
+            let (cookie, state) = (cookie_set(&r).unwrap(), param(&r.location, "state").unwrap());
+            sqlx::query(
+                "UPDATE identity_providers SET client_secret_enc = set_byte(client_secret_enc, 20,
+                   get_byte(client_secret_enc, 20) # 1) WHERE id = $1",
+            )
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+            let calls = idp.token_calls.load(Ordering::SeqCst);
+            let r = callback(pool, &auth, &cookie, &state).await;
+            assert_eq!(r.location, format!("{PUBLIC_URL}/login?ssoError=unavailable"));
+            let r = start(pool, &auth, id, "/").await;
+            assert_eq!(r.location, format!("{PUBLIC_URL}/login?ssoError=unavailable"));
+            assert_eq!(idp.token_calls.load(Ordering::SeqCst), calls, "nothing was sent to the provider");
+            sqlx::query("DELETE FROM identity_providers WHERE id = $1").bind(id).execute(pool).await.unwrap();
+        }
+        db.drop().await;
+    }
+
     /// Replicas behind a load balancer: whichever starts the sign-in, any of
     /// them completes it.
     #[tokio::test]
@@ -1087,7 +1218,7 @@ mod tests {
     async fn oidc_sign_in(pool: &PgPool, f: &MfaFixture, claims: &Map<String, Value>) -> Result<Creds, Refusal> {
         let provider = data::get(&mut pool.acquire().await.unwrap(), f.provider_id, false).await.unwrap().unwrap();
         let ctx = RequestContext::anonymous(String::new());
-        let settings = oidc_settings(&provider);
+        let settings = oidc_settings(&provider, &crate::secrets::Keyring::for_tests()).unwrap();
         let cookies = verified_sign_in(pool, &auth_state(), &HeaderMap::new(), &ctx, &provider, &settings, claims)
             .await
             .unwrap()?;
@@ -1195,7 +1326,10 @@ mod tests {
         assert_eq!(sessions_of(pool, "alice").await, vec![true]);
         // The authorization request asks for it (see oidc::tests for the URL itself).
         let provider = data::get(&mut pool.acquire().await.unwrap(), f.provider_id, false).await.unwrap().unwrap();
-        assert_eq!(oidc_settings(&provider).mfa.required_acr(), ["urn:x:gold".to_owned()]);
+        assert_eq!(
+            oidc_settings(&provider, &crate::secrets::Keyring::for_tests()).unwrap().mfa.required_acr(),
+            ["urn:x:gold".to_owned()]
+        );
         db.drop().await;
     }
 

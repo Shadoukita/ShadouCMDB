@@ -9,7 +9,9 @@
 //!
 //! Secrets (the OIDC client secret, the directory's bind password) are
 //! write-only: responses say whether one is set, never what it is, and the
-//! audit rows carry the same representation.
+//! audit rows carry the same representation. They are stored encrypted with
+//! the encryption key (GH#199): every write seals the row's secret under the
+//! active key with a fresh nonce, including a secret a patch leaves out.
 //!
 //! Disabling or deleting a provider ends the sessions of its accounts. A
 //! provider that still has accounts cannot be deleted: disable it (its
@@ -38,6 +40,8 @@ use crate::data::auth as auth_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::identity_providers::{self as data, ProviderRow, TABLE};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
+use crate::secrets::Keyring;
+use crate::secrets::sealed::{self, ProviderSecret, StoredSecret};
 
 const MAX_MAPPINGS: usize = 500;
 
@@ -550,7 +554,7 @@ struct Draft {
     ca_certificate: Option<String>,
     issuer_url: Option<String>,
     client_id: Option<String>,
-    client_secret: Option<String>,
+    client_secret: Option<DraftSecret>,
     scopes: Option<String>,
     username_claim: Option<String>,
     groups_claim: Option<String>,
@@ -559,7 +563,7 @@ struct Draft {
     ldap_url: Option<String>,
     start_tls: Option<bool>,
     bind_dn: Option<String>,
-    bind_password: Option<String>,
+    bind_password: Option<DraftSecret>,
     user_base_dn: Option<String>,
     user_filter: Option<String>,
     username_attribute: Option<String>,
@@ -568,13 +572,45 @@ struct Draft {
     group_attribute: Option<String>,
 }
 
+/// A secret of a provider as it will be written.
+enum DraftSecret {
+    /// Entered in this request, or the stored one decrypted: sealed under the
+    /// active key with a fresh nonce.
+    Clear(Secret),
+    /// Stored and left out of the patch, but it does not decrypt: written back
+    /// as it is. Sign-in through the provider keeps failing until an
+    /// administrator enters the secret again.
+    Undecryptable(StoredSecret),
+}
+
 /// A secret from a request body as stored: an empty string is no secret.
-fn non_empty_secret(secret: Option<&Secret>) -> Option<String> {
-    secret.map(Secret::expose).filter(|s| !s.is_empty()).map(str::to_owned)
+fn non_empty_secret(secret: Option<&Secret>) -> Option<DraftSecret> {
+    secret.filter(|s| !s.is_empty()).cloned().map(DraftSecret::Clear)
+}
+
+/// A stored secret, decrypted so that it is sealed again with the row.
+fn kept_secret(r: &ProviderRow, keyring: &Keyring, column: ProviderSecret) -> Option<DraftSecret> {
+    let stored = match column {
+        ProviderSecret::ClientSecret => r.secrets.client_secret.as_ref(),
+        ProviderSecret::BindPassword => r.secrets.bind_password.as_ref(),
+    }?;
+    Some(match sealed::open_provider_secret(keyring, r.id, column, stored) {
+        Ok(secret) => DraftSecret::Clear(secret),
+        Err(e) => {
+            tracing::warn!(
+                provider_id = %r.id,
+                provider = %r.name,
+                reason = ?e,
+                "the stored {} of this identity provider cannot be decrypted; kept as it is",
+                column.label()
+            );
+            DraftSecret::Undecryptable(stored.clone())
+        }
+    })
 }
 
 impl Draft {
-    fn from_row(r: &ProviderRow) -> Draft {
+    fn from_row(r: &ProviderRow, keyring: &Keyring) -> Draft {
         Draft {
             kind: r.kind.clone(),
             name: r.name.clone(),
@@ -583,7 +619,7 @@ impl Draft {
             ca_certificate: r.ca_certificate.clone(),
             issuer_url: r.issuer_url.clone(),
             client_id: r.client_id.clone(),
-            client_secret: r.client_secret.clone(),
+            client_secret: kept_secret(r, keyring, ProviderSecret::ClientSecret),
             scopes: r.scopes.clone(),
             username_claim: r.username_claim.clone(),
             groups_claim: r.groups_claim.clone(),
@@ -592,7 +628,7 @@ impl Draft {
             ldap_url: r.ldap_url.clone(),
             start_tls: r.start_tls,
             bind_dn: r.bind_dn.clone(),
-            bind_password: r.bind_password.clone(),
+            bind_password: kept_secret(r, keyring, ProviderSecret::BindPassword),
             user_base_dn: r.user_base_dn.clone(),
             user_filter: r.user_filter.clone(),
             username_attribute: r.username_attribute.clone(),
@@ -861,16 +897,16 @@ fn administrator_only(ctx: &RequestContext) -> Result<(), AppError> {
     }
 }
 
-fn dto(auth: &AuthState, r: ProviderRow, mappings: &[data::MappingRow]) -> IdentityProvider {
+fn dto(redirect_uri: &Option<String>, r: ProviderRow, mappings: &[data::MappingRow]) -> IdentityProvider {
     let kind = if r.kind == LDAP { ProviderKind::Ldap } else { ProviderKind::Oidc };
     let oidc = (kind == ProviderKind::Oidc).then(|| OidcConfig {
         issuer_url: r.issuer_url.clone().unwrap_or_default(),
         client_id: r.client_id.clone().unwrap_or_default(),
-        client_secret_set: r.client_secret.is_some(),
+        client_secret_set: r.secrets.client_secret.is_some(),
         scopes: r.scopes.clone().unwrap_or_default(),
         username_claim: r.username_claim.clone().unwrap_or_default(),
         groups_claim: r.groups_claim.clone().unwrap_or_default(),
-        redirect_uri: sso::redirect_uri(auth),
+        redirect_uri: redirect_uri.clone(),
         mfa_assurance: MfaAssurance::from_db(r.mfa_assurance.as_deref()),
         required_acr: r.required_acr.clone().unwrap_or_default(),
     });
@@ -878,7 +914,7 @@ fn dto(auth: &AuthState, r: ProviderRow, mappings: &[data::MappingRow]) -> Ident
         url: r.ldap_url.clone().unwrap_or_default(),
         start_tls: r.start_tls.unwrap_or(true),
         bind_dn: r.bind_dn.clone(),
-        bind_password_set: r.bind_password.is_some(),
+        bind_password_set: r.secrets.bind_password.is_some(),
         user_base_dn: r.user_base_dn.clone().unwrap_or_default(),
         user_filter: r.user_filter.clone().unwrap_or_default(),
         username_attribute: r.username_attribute.clone().unwrap_or_default(),
@@ -916,9 +952,18 @@ async fn load(
     id: Uuid,
     for_update: bool,
 ) -> Result<IdentityProvider, AppError> {
+    load_view(conn, &sso::redirect_uri(auth), id, for_update).await
+}
+
+async fn load_view(
+    conn: &mut PgConnection,
+    redirect_uri: &Option<String>,
+    id: Uuid,
+    for_update: bool,
+) -> Result<IdentityProvider, AppError> {
     let row = data::get(conn, id, for_update).await?.ok_or_else(|| AppError::missing("Identity provider", id))?;
     let mappings = data::mappings(conn, &[id]).await?;
-    Ok(dto(auth, row, &mappings))
+    Ok(dto(redirect_uri, row, &mappings))
 }
 
 pub async fn list(pool: &PgPool, auth: &AuthState, ctx: &RequestContext) -> Result<Vec<IdentityProvider>, AppError> {
@@ -927,7 +972,8 @@ pub async fn list(pool: &PgPool, auth: &AuthState, ctx: &RequestContext) -> Resu
     let rows = data::list(&mut conn).await?;
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
     let mappings = data::mappings(&mut conn, &ids).await?;
-    Ok(rows.into_iter().map(|r| dto(auth, r, &mappings)).collect())
+    let redirect_uri = sso::redirect_uri(auth);
+    Ok(rows.into_iter().map(|r| dto(&redirect_uri, r, &mappings)).collect())
 }
 
 async fn check_mappings(
@@ -954,29 +1000,54 @@ async fn check_mappings(
     if errors.is_empty() { Ok(pairs) } else { Err(AppError::validation(errors)) }
 }
 
-async fn write(conn: &mut PgConnection, id: Option<Uuid>, d: &Draft) -> Result<Uuid, AppError> {
+/// The stored form of a draft secret: the ciphertext and its key id.
+fn seal(keyring: &Keyring, id: Uuid, column: ProviderSecret, secret: Option<&DraftSecret>) -> Option<(Vec<u8>, i32)> {
+    match secret? {
+        DraftSecret::Clear(s) => {
+            let sealed = sealed::seal_provider_secret(keyring, id, column, s.expose());
+            Some((sealed.bytes, sealed.key_id.0))
+        }
+        DraftSecret::Undecryptable(StoredSecret::Encrypted { key_id, bytes }) => Some((bytes.clone(), key_id.0)),
+        DraftSecret::Undecryptable(StoredSecret::Plain(s)) => {
+            let sealed = sealed::seal_provider_secret(keyring, id, column, s);
+            Some((sealed.bytes, sealed.key_id.0))
+        }
+    }
+}
+
+/// Inserts (`id` None) or updates the provider. The secrets are sealed with
+/// the provider id in the associated data, so a new provider's id is chosen
+/// here rather than by the database. The plaintext columns of 0014 are always
+/// written NULL.
+async fn write(conn: &mut PgConnection, keyring: &Keyring, id: Option<Uuid>, d: &Draft) -> Result<Uuid, AppError> {
     let sql = match id {
         None => {
-            "INSERT INTO identity_providers (kind, name, is_enabled, sort_order, ca_certificate,
-               issuer_url, client_id, client_secret, scopes, username_claim, groups_claim,
-               ldap_url, start_tls, bind_dn, bind_password, user_base_dn, user_filter,
+            "INSERT INTO identity_providers (id, kind, name, is_enabled, sort_order, ca_certificate,
+               issuer_url, client_id, client_secret_enc, scopes, username_claim, groups_claim,
+               ldap_url, start_tls, bind_dn, bind_password_enc, user_base_dn, user_filter,
                username_attribute, display_name_attribute, email_attribute, group_attribute,
-               mfa_assurance, required_acr)
-             VALUES ($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-               $23, $24)
+               mfa_assurance, required_acr, secrets_key_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
+               $22, $23, $24, $25)
              RETURNING id"
         }
         Some(_) => {
             "UPDATE identity_providers SET kind = $2, name = $3, is_enabled = $4, sort_order = $5, ca_certificate = $6,
-               issuer_url = $7, client_id = $8, client_secret = $9, scopes = $10, username_claim = $11,
-               groups_claim = $12, ldap_url = $13, start_tls = $14, bind_dn = $15, bind_password = $16,
+               issuer_url = $7, client_id = $8, client_secret_enc = $9, scopes = $10, username_claim = $11,
+               groups_claim = $12, ldap_url = $13, start_tls = $14, bind_dn = $15, bind_password_enc = $16,
                user_base_dn = $17, user_filter = $18, username_attribute = $19, display_name_attribute = $20,
-               email_attribute = $21, group_attribute = $22, mfa_assurance = $23, required_acr = $24
+               email_attribute = $21, group_attribute = $22, mfa_assurance = $23, required_acr = $24,
+               secrets_key_id = $25, client_secret = NULL, bind_password = NULL
              WHERE id = $1 RETURNING id"
         }
     };
+    let row_id = id.unwrap_or_else(Uuid::new_v4);
+    let client_secret = seal(keyring, row_id, ProviderSecret::ClientSecret, d.client_secret.as_ref());
+    let bind_password = seal(keyring, row_id, ProviderSecret::BindPassword, d.bind_password.as_ref());
+    // Only one secret applies to a kind, so the row has one key id.
+    let key_id = client_secret.as_ref().or(bind_password.as_ref()).map(|(_, k)| *k);
     Ok(sqlx::query_scalar(sql)
-        .bind(id)
+        .bind(row_id)
         .bind(&d.kind)
         .bind(&d.name)
         .bind(d.is_enabled)
@@ -984,14 +1055,14 @@ async fn write(conn: &mut PgConnection, id: Option<Uuid>, d: &Draft) -> Result<U
         .bind(&d.ca_certificate)
         .bind(&d.issuer_url)
         .bind(&d.client_id)
-        .bind(&d.client_secret)
+        .bind(client_secret.map(|(bytes, _)| bytes))
         .bind(&d.scopes)
         .bind(&d.username_claim)
         .bind(&d.groups_claim)
         .bind(&d.ldap_url)
         .bind(d.start_tls)
         .bind(&d.bind_dn)
-        .bind(&d.bind_password)
+        .bind(bind_password.map(|(bytes, _)| bytes))
         .bind(&d.user_base_dn)
         .bind(&d.user_filter)
         .bind(&d.username_attribute)
@@ -1000,6 +1071,7 @@ async fn write(conn: &mut PgConnection, id: Option<Uuid>, d: &Draft) -> Result<U
         .bind(&d.group_attribute)
         .bind(&d.mfa_assurance)
         .bind(&d.required_acr)
+        .bind(key_id)
         .fetch_one(conn)
         .await?)
 }
@@ -1039,7 +1111,7 @@ pub async fn create(
     }
     let mut tx = pool.begin().await?;
     let pairs = check_mappings(&mut tx, &b.group_mappings).await?;
-    let id = write(&mut tx, None, &draft).await?;
+    let id = write(&mut tx, &auth.keyring, None, &draft).await?;
     data::set_mappings(&mut tx, id, &pairs).await?;
     let created = load(&mut tx, auth, id, false).await?;
     crud::write_audit(&mut tx, ctx, vec![audit(AuditAction::Create, id, None, Some(&created))]).await?;
@@ -1058,13 +1130,13 @@ pub async fn update(
     let mut tx = pool.begin().await?;
     let row = data::get(&mut tx, id, true).await?.ok_or_else(|| AppError::missing("Identity provider", id))?;
     let before = load(&mut tx, auth, id, false).await?;
-    let mut draft = Draft::from_row(&row);
+    let mut draft = Draft::from_row(&row, &auth.keyring);
     let mut problems = draft.apply(b);
     problems.extend(draft.problems());
     if !problems.is_empty() {
         return Err(AppError::validation(problems));
     }
-    write(&mut tx, Some(id), &draft).await?;
+    write(&mut tx, &auth.keyring, Some(id), &draft).await?;
     if let Some(mappings) = &b.group_mappings {
         let pairs = check_mappings(&mut tx, mappings).await?;
         data::set_mappings(&mut tx, id, &pairs).await?;
@@ -1078,6 +1150,49 @@ pub async fn update(
     tx.commit().await?;
     auth.oidc.forget(id);
     Ok(after)
+}
+
+/// `shadoucmdb identity-providers reset-undecryptable`: gives up the secrets
+/// of providers encrypted with a lost key. Each provider is disabled (the
+/// sessions of its accounts end, as when an administrator disables it) and
+/// its secret cleared, with `bind_dn` for a directory (a bind DN needs its
+/// password). One `update` audit row each, in the API view, with `reason:
+/// key_lost` and the lost `keyId`, so the old bind DN stays on record.
+pub(crate) async fn reset_undecryptable(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    public_url: Option<&str>,
+    providers: &[sealed::UndecryptableProvider],
+) -> Result<(), AppError> {
+    let redirect_uri = sso::redirect_uri_for(public_url);
+    for p in providers {
+        let before = load_view(conn, &redirect_uri, p.id, true).await?;
+        sqlx::query(
+            "UPDATE identity_providers SET is_enabled = false, client_secret = NULL, bind_password = NULL,
+               client_secret_enc = NULL, bind_password_enc = NULL, secrets_key_id = NULL,
+               bind_dn = CASE WHEN kind = 'ldap' THEN NULL ELSE bind_dn END
+             WHERE id = $1",
+        )
+        .bind(p.id)
+        .execute(&mut *conn)
+        .await?;
+        if p.is_enabled {
+            end_sessions(conn, ctx, p.id).await?;
+        }
+        let after = load_view(conn, &redirect_uri, p.id, false).await?;
+        let mut new_value = crud::json(&after);
+        new_value["reason"] = "key_lost".into();
+        new_value["keyId"] = p.key_id.to_string().into();
+        let entry = AuditEntry {
+            action: AuditAction::Update,
+            entity_type: TABLE,
+            entity_id: p.id,
+            old_value: Some(crud::json(&before)),
+            new_value: Some(new_value),
+        };
+        crud::write_audit(conn, ctx, vec![entry]).await?;
+    }
+    Ok(())
 }
 
 pub async fn remove(pool: &PgPool, auth: &AuthState, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
@@ -1100,6 +1215,10 @@ pub async fn remove(pool: &PgPool, auth: &AuthState, ctx: &RequestContext, id: U
     Ok(())
 }
 
+fn undecryptable_test() -> ConnectionTest {
+    ConnectionTest { ok: false, message: sso::SecretUndecryptable::MESSAGE.into(), details: Vec::new(), user: None }
+}
+
 async fn test(
     pool: &PgPool,
     auth: &AuthState,
@@ -1113,7 +1232,7 @@ async fn test(
     drop(conn);
     if row.kind == OIDC {
         auth.oidc.forget(id);
-        let settings = sso::oidc_settings(&row);
+        let Ok(settings) = sso::oidc_settings(&row, &auth.keyring) else { return Ok(undecryptable_test()) };
         return Ok(match auth.oidc.provider(id, &row.updated_at.to_rfc3339(), &settings).await {
             Ok(p) => {
                 let mut details = vec![
@@ -1146,7 +1265,7 @@ async fn test(
             }
         });
     }
-    let settings = sso::ldap_settings(&row);
+    let Ok(settings) = sso::ldap_settings(&row, &auth.keyring) else { return Ok(undecryptable_test()) };
     Ok(match ldap::probe(&settings, b.username.as_deref()).await {
         Ok(None) => ConnectionTest {
             ok: true,
@@ -1274,7 +1393,7 @@ pub fn routes() -> Vec<Route> {
             .tag(ROUTE_TAG)
             .summary("Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)")
             .description(format!(
-                "{ADMIN_ONLY} Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to. For OIDC, `details` also warns when the MFA check is unlikely to work: `verify` without `requiredAcr` while the discovery document's `claims_supported` omits `amr`, or a `requiredAcr` value missing from `acr_values_supported`."
+                "{ADMIN_ONLY} Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. When the stored secret cannot be decrypted (altered in the database, or encrypted with a key that is not configured), `ok` is false and the message asks to enter the secret again; nothing is sent to the provider. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to. For OIDC, `details` also warns when the MFA check is unlikely to work: `verify` without `requiredAcr` while the discovery document's `claims_supported` omits `amr`, or a `requiredAcr` value missing from `acr_values_supported`."
             ))
             .requires(manage)
             .session_only()
@@ -1340,6 +1459,162 @@ mod tests {
         assert_eq!(ldap_url_problem("ldaps://", false).map(|p| p.0), Some("ldap.url"));
     }
 
+    /// GH#199: through the real router, the secrets end up encrypted in the
+    /// table (the plaintext columns stay NULL), a patch that leaves a secret
+    /// out keeps a working secret under a new nonce, and neither a response
+    /// nor an audit row contains one. A secret altered in the database fails
+    /// the connection test and survives unrelated patches as it is.
+    #[tokio::test]
+    async fn the_admin_api_stores_provider_secrets_encrypted() {
+        use axum::http::header;
+        use serde_json::{Value, json};
+
+        use crate::db::scratch;
+        use crate::modules::api_tokens::tests::{Creds, app, call};
+
+        let Some(db) = scratch::database("the_admin_api_stores_provider_secrets_encrypted").await else { return };
+        let (pool, app) = (&db.pool, app(db.pool.clone()));
+        let ring = Keyring::for_tests();
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery",
+            "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let admin = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+
+        const S1: &str = "first client secret";
+        const S2: &str = "bind password";
+        const S3: &str = "second client secret";
+        let (status, oidc, _) = call(
+            &app,
+            "POST",
+            BASE,
+            &admin,
+            Some(json!({
+                "kind": "oidc", "name": "Entra ID",
+                "oidc": { "issuerUrl": "https://idp.example.test", "clientId": "cmdb", "clientSecret": S1 },
+            })),
+        )
+        .await;
+        assert_eq!((status, oidc["oidc"]["clientSecretSet"].as_bool()), (201, Some(true)), "{oidc}");
+        let (status, ldap, _) = call(
+            &app,
+            "POST",
+            BASE,
+            &admin,
+            Some(json!({
+                "kind": "ldap", "name": "Corporate AD",
+                "ldap": { "url": "ldaps://127.0.0.1:9", "userBaseDn": "dc=example,dc=com",
+                          "bindDn": "cn=svc,dc=example,dc=com", "bindPassword": S2 },
+            })),
+        )
+        .await;
+        assert_eq!((status, ldap["ldap"]["bindPasswordSet"].as_bool()), (201, Some(true)), "{ldap}");
+        let oidc_id: Uuid = oidc["id"].as_str().unwrap().parse().unwrap();
+        let ldap_id: Uuid = ldap["id"].as_str().unwrap().parse().unwrap();
+        let by_id = |id: Uuid| format!("{BASE}/{id}");
+
+        type Stored = (Option<String>, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>, Option<i32>);
+        let stored = async |id: Uuid| -> Stored {
+            sqlx::query_as(
+                "SELECT client_secret, bind_password, client_secret_enc, bind_password_enc, secrets_key_id
+                 FROM identity_providers WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        };
+        let opens = |id: Uuid, column: ProviderSecret, bytes: &[u8]| {
+            let s = StoredSecret::Encrypted { key_id: ring.active_id(), bytes: bytes.to_vec() };
+            sealed::open_provider_secret(&ring, id, column, &s).map(|s| s.expose().to_owned()).ok()
+        };
+        let active = Some(ring.active_id().0);
+        let (cs, bp, cs_enc, bp_enc, key) = stored(oidc_id).await;
+        let first = cs_enc.unwrap();
+        assert_eq!((cs, bp, bp_enc, key), (None, None, None, active));
+        assert_eq!(opens(oidc_id, ProviderSecret::ClientSecret, &first).as_deref(), Some(S1));
+        let (cs, bp, cs_enc, bp_enc, key) = stored(ldap_id).await;
+        assert_eq!((cs, bp, cs_enc, key), (None, None, None, active));
+        assert_eq!(opens(ldap_id, ProviderSecret::BindPassword, &bp_enc.unwrap()).as_deref(), Some(S2));
+
+        // Left out: kept, sealed again with a fresh nonce.
+        let (status, v, _) =
+            call(&app, "PATCH", &by_id(oidc_id), &admin, Some(json!({ "name": "Entra ID (prod)" }))).await;
+        assert_eq!((status, v["oidc"]["clientSecretSet"].as_bool()), (200, Some(true)), "{v}");
+        let kept = stored(oidc_id).await.2.unwrap();
+        assert_ne!(kept, first, "a new nonce");
+        assert_eq!(opens(oidc_id, ProviderSecret::ClientSecret, &kept).as_deref(), Some(S1));
+        let (status, _, _) =
+            call(&app, "PATCH", &by_id(ldap_id), &admin, Some(json!({ "ldap": { "userBaseDn": "dc=corp" } }))).await;
+        assert_eq!(status, 200);
+        let settings = sso::ldap_settings(
+            &data::get(&mut pool.acquire().await.unwrap(), ldap_id, false).await.unwrap().unwrap(),
+            &ring,
+        )
+        .unwrap();
+        assert_eq!(settings.bind_password.as_deref(), Some(S2));
+        // Replaced, then removed.
+        let (status, _, _) =
+            call(&app, "PATCH", &by_id(oidc_id), &admin, Some(json!({ "oidc": { "clientSecret": S3 } }))).await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            opens(oidc_id, ProviderSecret::ClientSecret, &stored(oidc_id).await.2.unwrap()).as_deref(),
+            Some(S3)
+        );
+        let (status, v, _) =
+            call(&app, "PATCH", &by_id(oidc_id), &admin, Some(json!({ "oidc": { "clientSecret": null } }))).await;
+        assert_eq!((status, v["oidc"]["clientSecretSet"].as_bool()), (200, Some(false)));
+        assert_eq!(stored(oidc_id).await, (None, None, None, None, None), "a public client needs no key id");
+
+        // Nothing readable returns a secret; the audit rows carry the API view.
+        let (status, listed, _) = call(&app, "GET", BASE, &admin, None).await;
+        assert_eq!(status, 200);
+        let audit: Vec<Value> =
+            sqlx::query_scalar("SELECT jsonb_build_array(old_value, new_value) FROM audit_log WHERE entity_type = $1")
+                .bind(TABLE)
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(audit.len(), 6);
+        for text in std::iter::once(listed.to_string()).chain(audit.iter().map(Value::to_string)) {
+            for secret in [S1, S2, S3] {
+                assert!(!text.contains(secret), "{text}");
+            }
+        }
+
+        // Altered in the database: the test says so, an unrelated patch keeps the bytes, a new secret fixes it.
+        sqlx::query(
+            "UPDATE identity_providers SET bind_password_enc = set_byte(bind_password_enc, 20,
+               get_byte(bind_password_enc, 20) # 1) WHERE id = $1",
+        )
+        .bind(ldap_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        let test_path = format!("{BASE}/{ldap_id}/test");
+        let (status, v, _) = call(&app, "POST", &test_path, &admin, Some(json!({}))).await;
+        assert_eq!(
+            (status, v["ok"].as_bool(), v["message"].as_str()),
+            (200, Some(false), Some(sso::SecretUndecryptable::MESSAGE))
+        );
+        let tampered = stored(ldap_id).await.3;
+        let (status, _, _) = call(&app, "PATCH", &by_id(ldap_id), &admin, Some(json!({ "sortOrder": 5 }))).await;
+        assert_eq!(status, 200);
+        assert_eq!(stored(ldap_id).await.3, tampered, "kept as it is");
+        let (status, _, _) =
+            call(&app, "PATCH", &by_id(ldap_id), &admin, Some(json!({ "ldap": { "bindPassword": S2 } }))).await;
+        assert_eq!(status, 200);
+        let (_, v, _) = call(&app, "POST", &test_path, &admin, Some(json!({}))).await;
+        assert_ne!(v["message"].as_str(), Some(sso::SecretUndecryptable::MESSAGE), "{v}");
+        db.drop().await;
+    }
+
     /// GitHub #192: `{:?}` of a request body, a stored provider or the
     /// settings built from it never shows a client secret or bind password.
     #[test]
@@ -1371,11 +1646,17 @@ mod tests {
         .unwrap();
         hidden(format!("{update:?}"));
 
-        let mut draft = Draft::from_create(&oidc_create);
-        draft.bind_password = non_empty_secret(ldap_create.ldap.as_ref().unwrap().bind_password.as_ref());
-        assert_eq!(draft.client_secret.as_deref(), Some(OIDC_SECRET));
+        let draft = Draft::from_create(&oidc_create);
+        assert!(matches!(&draft.client_secret, Some(DraftSecret::Clear(s)) if s.expose() == OIDC_SECRET));
+        // Both secrets on one row only to exercise both settings builders.
+        let ring = Keyring::random();
+        let id = Uuid::new_v4();
+        let sealed_as = |column, secret| {
+            let s = sealed::seal_provider_secret(&ring, id, column, secret);
+            StoredSecret::Encrypted { key_id: s.key_id, bytes: s.bytes }
+        };
         let row = ProviderRow {
-            id: Uuid::nil(),
+            id,
             kind: draft.kind,
             name: draft.name,
             is_enabled: draft.is_enabled,
@@ -1383,7 +1664,6 @@ mod tests {
             ca_certificate: None,
             issuer_url: draft.issuer_url,
             client_id: draft.client_id,
-            client_secret: draft.client_secret,
             scopes: draft.scopes,
             username_claim: draft.username_claim,
             groups_claim: draft.groups_claim,
@@ -1392,23 +1672,35 @@ mod tests {
             ldap_url: Some("ldaps://dc1.example.com".into()),
             start_tls: Some(false),
             bind_dn: Some("cn=svc,dc=example,dc=com".into()),
-            bind_password: draft.bind_password,
             user_base_dn: None,
             user_filter: None,
             username_attribute: None,
             display_name_attribute: None,
             email_attribute: None,
             group_attribute: None,
+            secrets: data::ProviderSecrets {
+                client_secret: Some(sealed_as(ProviderSecret::ClientSecret, OIDC_SECRET)),
+                bind_password: Some(StoredSecret::Plain(LDAP_SECRET.into())),
+            },
             user_count: 0,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
-        hidden(format!("{row:?}"));
-        let oidc_settings = crate::modules::sso::oidc_settings(&row);
+        let debug = format!("{row:?}");
+        hidden(debug.replace("Sealed(<redacted>)", "<redacted>"));
+        assert_eq!(debug.matches("Sealed(<redacted>)").count(), 2, "{debug}");
+        let oidc_settings = crate::modules::sso::oidc_settings(&row, &ring).unwrap();
         assert_eq!(oidc_settings.client_secret.as_deref(), Some(OIDC_SECRET));
         hidden(format!("{oidc_settings:?}"));
-        let ldap_settings = crate::modules::sso::ldap_settings(&row);
+        let ldap_settings = crate::modules::sso::ldap_settings(&row, &ring).unwrap();
         assert_eq!(ldap_settings.bind_password.as_deref(), Some(LDAP_SECRET));
         hidden(format!("{ldap_settings:?}"));
+        // Under another key, or with a flipped byte, the settings are not built at all.
+        assert!(crate::modules::sso::oidc_settings(&row, &Keyring::random()).is_err());
+        let mut tampered = row.clone();
+        if let Some(StoredSecret::Encrypted { bytes, .. }) = &mut tampered.secrets.client_secret {
+            bytes[20] ^= 1;
+        }
+        assert!(crate::modules::sso::oidc_settings(&tampered, &ring).is_err());
     }
 }

@@ -83,6 +83,26 @@ async fn populate(pool: &sqlx::PgPool) {
         .execute(pool)
         .await
         .unwrap();
+    // An OIDC provider with an encrypted client secret (GH#199), restored as the same bytes.
+    let provider = uuid::Uuid::new_v4();
+    let sealed = crate::secrets::sealed::seal_provider_secret(
+        &crate::secrets::Keyring::for_tests(),
+        provider,
+        crate::secrets::sealed::ProviderSecret::ClientSecret,
+        "backup-client-secret",
+    );
+    sqlx::query(
+        "INSERT INTO identity_providers (id, kind, name, issuer_url, client_id, client_secret_enc, secrets_key_id,
+           scopes, username_claim, groups_claim, mfa_assurance, required_acr)
+         VALUES ($1, 'oidc', 'Entra ID', 'https://idp.example.test', 'cmdb', $2, $3, 'profile', 'preferred_username',
+           'groups', 'verify', '{}')",
+    )
+    .bind(provider)
+    .bind(&sealed.bytes)
+    .bind(sealed.key_id.0)
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO ui_assets (kind, content_type, data, sha256)
          VALUES ('favicon', 'image/x-icon', '\\x00ff0a0d22'::bytea, encode(sha256('\\x00ff0a0d22'::bytea), 'hex'))",
@@ -144,12 +164,20 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     let key = crate::secrets::Keyring::for_tests().active_id();
     assert_eq!(
         header.encryption_keys,
-        vec![archive::EncryptionKeyEntry { key_id: key.to_string(), table: "user_totp".into(), rows: 1 }]
+        vec![
+            archive::EncryptionKeyEntry { key_id: key.to_string(), table: "user_totp".into(), rows: 1 },
+            archive::EncryptionKeyEntry { key_id: key.to_string(), table: "identity_providers".into(), rows: 1 },
+        ]
     );
     let none = crate::config::EncryptionConfig::default();
     let warning = restore::key_warning(&header, &none).unwrap();
     assert!(
-        warning.starts_with(&format!("This backup holds 1 authenticator secret encrypted with key {key}.")),
+        warning.starts_with(&format!(
+            "This backup holds 1 authenticator secret and 1 identity provider secret encrypted with key {key}. No \
+             key is configured (ENCRYPTION_KEY_FILE is not set). The server will not start until that key is \
+             configured, or until \"shadoucmdb mfa reset-undecryptable\" and \"shadoucmdb identity-providers \
+             reset-undecryptable\" have been run"
+        )),
         "{warning}"
     );
     // The system tables, then the type tables of the area.

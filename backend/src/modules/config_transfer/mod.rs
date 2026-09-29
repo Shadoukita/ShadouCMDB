@@ -1988,6 +1988,73 @@ mod tests {
         b.drop().await;
     }
 
+    /// GH#199 (SHAA-490 §A7): identity providers are not part of a
+    /// configuration file, so neither their secrets nor the ciphertexts of
+    /// them can leave through an export.
+    #[tokio::test]
+    async fn an_export_carries_no_identity_provider_secret() {
+        use crate::secrets::sealed::{ProviderSecret, seal_provider_secret};
+        let Some(db) = scratch::database("an_export_carries_no_identity_provider_secret").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("test", "test");
+        crate::seed::seed_system_rows(pool).await.unwrap();
+        crate::modules::templates::install_by_key(pool, &ctx, "it_infrastructure").await.unwrap();
+        const CLIENT_SECRET: &str = "export-client-secret";
+        const BIND_PASSWORD: &str = "export-bind-password";
+        let ring = crate::secrets::Keyring::for_tests();
+        let (oidc, ldap) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let cs = seal_provider_secret(&ring, oidc, ProviderSecret::ClientSecret, CLIENT_SECRET);
+        let bp = seal_provider_secret(&ring, ldap, ProviderSecret::BindPassword, BIND_PASSWORD);
+        sqlx::query(
+            "INSERT INTO identity_providers (id, kind, name, issuer_url, client_id, client_secret_enc, secrets_key_id,
+               scopes, username_claim, groups_claim, mfa_assurance, required_acr)
+             VALUES ($1, 'oidc', 'Entra ID', 'https://idp.example.test', 'cmdb', $2, $3, 'profile',
+               'preferred_username', 'groups', 'verify', '{}')",
+        )
+        .bind(oidc)
+        .bind(&cs.bytes)
+        .bind(cs.key_id.0)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO identity_providers (id, kind, name, ldap_url, start_tls, bind_dn, bind_password_enc,
+               secrets_key_id, user_base_dn, user_filter, username_attribute, display_name_attribute,
+               email_attribute, group_attribute)
+             VALUES ($1, 'ldap', 'Corporate AD', 'ldaps://dc1.example.test', false, 'cn=svc', $2, $3,
+               'dc=example,dc=com', '(uid={username})', 'uid', 'cn', 'mail', 'memberOf')",
+        )
+        .bind(ldap)
+        .bind(&bp.bytes)
+        .bind(bp.key_id.0)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let file = serde_json::to_string(&export(pool, &ctx).await.unwrap()).unwrap();
+        assert!(file.contains("\"dataModel\""), "the export has content");
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        use base64::Engine;
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        for needle in [
+            CLIENT_SECRET.to_owned(),
+            BIND_PASSWORD.to_owned(),
+            "clientSecret".into(),
+            "bindPassword".into(),
+            "client_secret".into(),
+            "bind_password".into(),
+            "Entra ID".into(),
+            "Corporate AD".into(),
+            hex(&cs.bytes),
+            hex(&bp.bytes),
+            b64(&cs.bytes),
+            b64(&bp.bytes),
+        ] {
+            assert!(!file.contains(&needle), "the export contains {needle:?}");
+        }
+        db.drop().await;
+    }
+
     /// SHAA-268: parent lists, parent values and parent fields go through a
     /// file; files before version 3 leave them as they are.
     #[tokio::test]

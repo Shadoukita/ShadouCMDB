@@ -453,7 +453,7 @@ async fn directory_login(
     b: &LoginBody,
     linked: Option<Uuid>,
 ) -> Result<LoginAnswer, AppError> {
-    match sso::directory_sign_in(pool, ctx, &b.username, &b.password, linked).await? {
+    match sso::directory_sign_in(pool, &auth.keyring, ctx, &b.username, &b.password, linked).await? {
         sso::DirectoryAnswer::SignedIn { user_id, username } => {
             password_accepted(pool, auth, headers, ctx, attempt, user_id, &username, LoginMethod::Ldap).await
         }
@@ -631,7 +631,16 @@ pub(crate) async fn confirm_current_password_attempt<'a>(
     let right = match account.as_ref().map(|a| (a, a.provider.as_ref())) {
         Some((a, Some((provider_id, kind)))) if kind == sso::LDAP => {
             let external_id = a.external_id.as_deref().unwrap_or_default();
-            match sso::directory_reauthenticate(pool, *provider_id, &a.username, external_id, current_password).await? {
+            match sso::directory_reauthenticate(
+                pool,
+                &auth.keyring,
+                *provider_id,
+                &a.username,
+                external_id,
+                current_password,
+            )
+            .await?
+            {
                 sso::Reauth::Accepted => true,
                 sso::Reauth::Wrong => false,
                 sso::Reauth::Disabled => {

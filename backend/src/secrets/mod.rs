@@ -1,5 +1,7 @@
-//! Secrets the server must be able to read back (TOTP seeds), encrypted at
-//! rest under a key kept outside the database (GH#189, design SHAA-484).
+//! Secrets the server must be able to read back (TOTP seeds, the OIDC client
+//! secrets and LDAP bind passwords of identity providers), encrypted at rest
+//! under a key kept outside the database (GH#189, design SHAA-484; GH#199,
+//! design SHAA-490).
 //!
 //! The master key is 32 random bytes, base64 in the file named by
 //! `ENCRYPTION_KEY_FILE`. It never touches the database or a backup. Each
@@ -16,6 +18,8 @@
 pub mod cli;
 #[cfg(test)]
 mod db_tests;
+#[cfg(test)]
+mod provider_db_tests;
 pub mod sealed;
 
 use std::fmt;
@@ -40,14 +44,17 @@ const KEY_ID_INFO: &[u8] = b"shadoucmdb/key-id/v1";
 pub enum Purpose {
     /// `user_totp.secret`
     TotpSecret,
+    /// `identity_providers.client_secret_enc` and `.bind_password_enc`
+    IdentityProviderSecret,
 }
 
 impl Purpose {
-    const ALL: [Purpose; 1] = [Purpose::TotpSecret];
+    const ALL: [Purpose; 2] = [Purpose::TotpSecret, Purpose::IdentityProviderSecret];
 
     fn info(self) -> &'static [u8] {
         match self {
             Purpose::TotpSecret => b"shadoucmdb/totp-secret/v1",
+            Purpose::IdentityProviderSecret => b"shadoucmdb/identity-provider-secret/v1",
         }
     }
 }
@@ -263,8 +270,8 @@ pub fn configured_key_ids(cfg: &EncryptionConfig) -> anyhow::Result<Option<(KeyI
 /// Why `serve` does not start without a key, and how to make one.
 pub fn missing_key_message() -> String {
     format!(
-        "ENCRYPTION_KEY_FILE is not set. Since version {}, ShadouCMDB encrypts authenticator secrets with a key kept \
-         outside the database. Create one with \"shadoucmdb generate-encryption-key --out <path>\", set \
+        "ENCRYPTION_KEY_FILE is not set. Since version {}, ShadouCMDB encrypts authenticator secrets and identity \
+         provider secrets with a key kept outside the database. Create one with \"shadoucmdb generate-encryption-key --out <path>\", set \
          ENCRYPTION_KEY_FILE in the env file, and back the key up separately from database backups. See \
          docs/security/hardening.md#encryption-key.",
         env!("CARGO_PKG_VERSION")
@@ -379,6 +386,19 @@ mod tests {
             other.open(Purpose::TotpSecret, sealed.key_id, AD, &sealed.bytes).err(),
             Some(OpenError::UnknownKey(sealed.key_id))
         );
+    }
+
+    #[test]
+    fn a_ciphertext_of_one_purpose_does_not_open_as_another() {
+        let ring = Keyring::random();
+        let totp = ring.seal(Purpose::TotpSecret, AD, b"secret");
+        assert_eq!(
+            ring.open(Purpose::IdentityProviderSecret, totp.key_id, AD, &totp.bytes).err(),
+            Some(OpenError::Invalid)
+        );
+        let idp = ring.seal(Purpose::IdentityProviderSecret, AD, b"secret");
+        assert_eq!(ring.open(Purpose::TotpSecret, idp.key_id, AD, &idp.bytes).err(), Some(OpenError::Invalid));
+        assert_eq!(&*ring.open(Purpose::IdentityProviderSecret, idp.key_id, AD, &idp.bytes).unwrap(), b"secret");
     }
 
     #[test]
