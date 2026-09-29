@@ -155,6 +155,11 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             "Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the \
              change would lose or break stored data); details name the field and the reason",
         ),
+        ErrorCode::SecretRequired => (
+            422,
+            "The stored secret must be entered again (code SECRET_REQUIRED): the patch changes the server address or \
+             bind DN it would be sent to; details name the secret's field (code secret_required). Nothing was changed",
+        ),
         ErrorCode::RateLimited => {
             (429, "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header")
         }
