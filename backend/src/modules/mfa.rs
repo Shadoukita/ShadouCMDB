@@ -1056,7 +1056,7 @@ pub(crate) mod tests {
         assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(2)), "{v}");
         let mut conn = pool.acquire().await.unwrap();
         assert_eq!(crate::data::api_tokens::count_refused_for_mfa(&mut conn).await.unwrap(), (1, 1));
-        let notice = crate::data::api_tokens::refused_for_mfa_notice(&mut conn).await.unwrap().unwrap();
+        let notice = crate::data::api_tokens::second_factor_refusal_notice(&mut conn).await.unwrap().unwrap();
         assert!(notice.starts_with("1 API token of 1 account is refused"), "{notice}");
         drop(conn);
 

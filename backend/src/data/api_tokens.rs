@@ -201,7 +201,7 @@ pub async fn refused_for_mfa_if_created(
 
 /// What `shadoucmdb migrate` and `verify` print when working tokens are
 /// refused for MFA (GH#200); None when there are none.
-pub async fn refused_for_mfa_notice(conn: &mut PgConnection) -> sqlx::Result<Option<String>> {
+pub async fn second_factor_refusal_notice(conn: &mut PgConnection) -> sqlx::Result<Option<String>> {
     let (tokens, owners) = count_refused_for_mfa(conn).await?;
     Ok((tokens > 0).then(|| {
         format!(

@@ -311,7 +311,7 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
         }
         None => false,
     };
-    if let Some(notice) = crate::data::api_tokens::refused_for_mfa_notice(&mut *pool.acquire().await?).await? {
+    if let Some(notice) = crate::data::api_tokens::second_factor_refusal_notice(&mut *pool.acquire().await?).await? {
         println!("Warning: {notice}");
     }
     println!(
