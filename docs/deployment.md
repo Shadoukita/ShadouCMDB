@@ -66,7 +66,8 @@ shadoucmdb verify          # optional, writes nothing
 shadoucmdb serve           # http://<host>:3000/readyz
 ```
 
-Then open the web UI and create the first administrator, or run `create-admin` (below).
+Then open the web UI and create the first administrator with the setup token from the server log,
+or run `create-admin` (below).
 
 ## The first administrator
 
@@ -75,13 +76,43 @@ installation there are no users yet, and there are two ways to create the first 
 
 - **In the browser:** while no user exists, the UI offers first-run setup
   (`GET /api/v1/setup` reports `setupRequired: true`; `POST /api/v1/setup` creates the
-  account and signs it in). It only works while the user table is empty.
+  account and signs it in). It only works while the user table is empty, and it asks for the
+  **setup token** (see below).
 - **On the command line**, from any machine that can reach the database:
 
   ```sh
   shadoucmdb create-admin --username admin --display-name "Jane Admin"          # prompts twice for the password
   printf '%s\n' "$ADMIN_PASSWORD" | shadoucmdb create-admin --username admin --password-stdin   # scripts
   ```
+
+### The setup token
+
+> **Warning:** until the first administrator exists, first-run setup is the only thing standing
+> between a new installation and whoever reaches it first. Prefer `create-admin`, or keep the server
+> unreachable for others until setup is done. The setup token makes sure that only someone who can
+> read the server's log or its files can complete setup.
+
+When `serve` starts on a database without users, it generates a one-time setup token and writes it:
+
+- to the log, as a `WARN` line `no user exists yet: complete first-run setup ...` with the token in
+  its `setup_token` field (`journalctl -u shadoucmdb`, `docker logs`, or the `--log-file`);
+- to the **setup token file**, readable only by the service account (mode 0600 on Linux):
+  `SETUP_TOKEN_FILE` when set, otherwise `setup-token` next to the env file (`--env-file`, or the
+  `.env` the server found). With neither, as in a container configured through the environment, the
+  token is only in the log. If the file cannot be written, the log says so and the token is still logged.
+
+Enter the token on the first-run page. It stops working as soon as the first administrator exists,
+and the file is deleted. A wrong or missing token answers 403 and is logged with the client address.
+The token lives only in the running process: after a restart a new one is generated and the file
+rewritten. An installation that already has users never generates one.
+
+For unattended installs, or several API processes behind a load balancer (each would generate its
+own token), set `SETUP_TOKEN` to a random value of at least 32 characters (for example
+`openssl rand -hex 32`) and pass it in the setup request; then nothing is generated or written.
+Remove it from the environment once setup is done. The sample systemd unit sets
+`SETUP_TOKEN_FILE=/var/lib/shadoucmdb/setup-token`, because it makes `/etc` read-only for the service.
+
+`create-admin` needs no token: it has database access, which is stronger than the token.
 
 `create-admin` works at any time, not only on an empty database: it is also the way back in
 if every administrator is locked out or has forgotten their password (create a second
