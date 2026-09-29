@@ -19,6 +19,10 @@ pub struct PresentedToken {
     pub username: String,
     pub user_active: bool,
     pub profile_id: Option<Uuid>,
+    /// Who minted it; null for the CLI, a deleted creator or an unknown one
+    pub created_by_user_id: Option<Uuid>,
+    /// Whether that creator's account is enabled (false when there is none)
+    pub creator_active: bool,
     pub revoked: bool,
     pub expired: bool,
 }
@@ -26,8 +30,9 @@ pub struct PresentedToken {
 pub async fn find_by_hash(pool: &PgPool, token_hash: &[u8]) -> sqlx::Result<Option<PresentedToken>> {
     sqlx::query_as(
         "SELECT t.id, t.name, t.token_prefix, u.id AS user_id, u.username, u.is_active AS user_active, t.profile_id,
+                t.created_by_user_id, coalesce(c.is_active, false) AS creator_active,
                 t.revoked_at IS NOT NULL AS revoked, t.expires_at <= now() AS expired
-         FROM api_tokens t JOIN users u ON u.id = t.user_id
+         FROM api_tokens t JOIN users u ON u.id = t.user_id LEFT JOIN users c ON c.id = t.created_by_user_id
          WHERE t.token_hash = $1",
     )
     .bind(token_hash)

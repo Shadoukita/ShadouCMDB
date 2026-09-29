@@ -16356,7 +16356,7 @@
           "API tokens"
         ],
         "summary": "Create an API token; the response carries its secret, shown this once",
-        "description": "Requires `users.manage`. The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not. 400 when the owner is disabled or the owner or profile does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `users.manage`. The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant, and for a token you create for another owner also only those you hold at the time of use. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner, or for another owner the profile, holds permissions you do not. 400 when the owner is disabled or the owner or profile does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "createApiToken",
         "parameters": [],
         "requestBody": {
@@ -16385,7 +16385,7 @@
                   "profileId": {
                     "type": "string",
                     "format": "uuid",
-                    "description": "The scope: the token may do what both this profile and its owner allow"
+                    "description": "The scope: the token may do what both this profile and its owner allow\n(and, for another owner, you: you must hold the profile's permissions)"
                   },
                   "expiresAt": {
                     "type": "string",
