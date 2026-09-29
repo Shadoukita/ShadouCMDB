@@ -238,7 +238,10 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   The check also holds for sessions already open: when a profile starts to require MFA, a group
   mapping changes, or a provider is switched from trust to verify, an OIDC session whose sign-in
   did not prove MFA is ended on its next request (`session.revoke`, `reason: mfa_not_enforced`)
-  and the user signs in again. Each `login.success` row of an OIDC sign-in carries `providerMfa`
+  and the user signs in again. Whether a sign-in proved MFA is judged once, against the provider's
+  settings at that moment: adding or changing `requiredAcr` later does not end sessions that proved
+  MFA through `amr`. To apply a stricter setting to everyone at once, disable and re-enable the
+  provider after the change, which ends the sessions of its accounts. Each `login.success` row of an OIDC sign-in carries `providerMfa`
   (`verified`, `trusted` or `none`). The provider's connection test warns when the discovery
   document suggests the check cannot pass. Per provider:
   - **Microsoft Entra ID:** `amr` contains `mfa` when Conditional Access required MFA for the
