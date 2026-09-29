@@ -672,10 +672,10 @@ pub async fn verified_sign_in(
         return refused(Refusal::MfaNotEnforced).await;
     }
     let purged = auth_data::purge_sessions(pool, auth.config.session_idle).await?;
-    auth_data::record_login(pool, user_id).await?;
-    tracing::info!(user = %username, provider = %provider.name, ip = ?ctx.client.ip, purged_sessions = purged, provider_mfa = evidence.as_str(), "signed in through OIDC");
     let (_, cookies) =
-        super::auth::open_session(pool, auth, headers, ctx, user_id, &username, LoginMethod::Oidc(evidence)).await?;
+        super::auth::open_session(pool, auth, headers, ctx, user_id, &username, LoginMethod::Oidc(evidence), None)
+            .await?;
+    tracing::info!(user = %username, provider = %provider.name, ip = ?ctx.client.ip, purged_sessions = purged, provider_mfa = evidence.as_str(), "signed in through OIDC");
     Ok(Ok(cookies))
 }
 

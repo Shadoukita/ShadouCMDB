@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use anyhow::{Context, bail};
 use clap::{Args, Subcommand};
 use serde_json::json;
-use sqlx::PgConnection;
+use sqlx::{PgConnection, PgPool};
 
 use super::sealed::{self, KeyCount};
 use super::{KeyId, configured_key_ids, encode_key, key_id, new_key};
@@ -72,7 +72,8 @@ pub fn generate_key(args: GenerateKeyArgs) -> anyhow::Result<()> {
 pub enum MfaCommand {
     /// Turn off two-factor sign-in for users whose authenticator secret is
     /// encrypted with a key that is not configured (the key is lost), so they
-    /// can set it up again. Audited; asks for confirmation.
+    /// can set it up again. Audited; asks for confirmation. Refuses to run
+    /// without ENCRYPTION_KEY_FILE unless --no-key is given.
     ResetUndecryptable(ResetUndecryptableArgs),
 }
 
@@ -81,8 +82,34 @@ pub struct ResetUndecryptableArgs {
     /// List the users concerned and change nothing.
     #[arg(long)]
     pub dry_run: bool,
+    /// The key is lost and no ENCRYPTION_KEY_FILE is set: treat every
+    /// encrypted secret as undecryptable. Without it the command refuses to
+    /// run when ENCRYPTION_KEY_FILE is not set, so that a shell missing the
+    /// service's environment does not reset everyone.
+    #[arg(long)]
+    pub no_key: bool,
     #[command(flatten)]
     pub confirm: maintenance::ConfirmArgs,
+}
+
+/// The configured key ids, the ones whose secrets are kept. Without a key,
+/// only `--no-key` lets every encrypted secret count as undecryptable
+/// (GH#223): `--yes` alone is not enough.
+fn known_keys(configured: Option<(KeyId, Option<KeyId>)>, no_key: bool, secrets: &str) -> anyhow::Result<Vec<KeyId>> {
+    match configured {
+        None if !no_key => bail!(
+            "ENCRYPTION_KEY_FILE is not set, so every encrypted {secrets} would count as undecryptable. Nothing was \
+             changed. Run the command with the service's environment (e.g. --env-file <the service's env file>); \
+             only if the key is lost and none is configured, pass --no-key. See \
+             docs/security/hardening.md#encryption-key."
+        ),
+        Some(_) if no_key => bail!(
+            "--no-key was given, but ENCRYPTION_KEY_FILE is set. Nothing was changed. Leave out --no-key to keep the \
+             secrets under the configured key, or unset ENCRYPTION_KEY_FILE if the key is lost."
+        ),
+        None => Ok(Vec::new()),
+        Some((a, p)) => Ok([Some(a), p].into_iter().flatten().collect()),
+    }
 }
 
 pub async fn mfa(cfg: &Config, cmd: MfaCommand) -> anyhow::Result<()> {
@@ -94,54 +121,59 @@ pub async fn mfa(cfg: &Config, cmd: MfaCommand) -> anyhow::Result<()> {
 async fn reset_undecryptable(cfg: &Config, args: ResetUndecryptableArgs) -> anyhow::Result<()> {
     // Only the ids are needed: the rows are deleted, not decrypted.
     let configured = configured_key_ids(&cfg.encryption)?;
-    let known: Vec<KeyId> = configured.map(|(a, p)| [Some(a), p].into_iter().flatten().collect()).unwrap_or_default();
+    known_keys(configured, args.no_key, "authenticator secret")?;
     let pool = db::connect(&cfg.database).await?;
-    let result = async {
-        if db::applied_count(&pool).await? != db::expected_count() {
-            bail!("the database is not fully migrated; run `shadoucmdb migrate` first");
-        }
-        let mut tx = pool.begin().await?;
-        let users = sealed::undecryptable_totp(&mut tx, &known).await?;
-        match configured {
-            None => println!(
-                "No key is configured (ENCRYPTION_KEY_FILE is not set): every encrypted authenticator secret counts \
-                 as undecryptable."
-            ),
-            Some((a, None)) => println!("Configured key: {a}."),
-            Some((a, Some(p))) => println!("Configured keys: {a} (previous key {p})."),
-        }
-        if users.is_empty() {
-            println!("No authenticator secret is encrypted with another key; nothing to do.");
-            return Ok(());
-        }
-        println!("Authenticator secrets encrypted with a key that is not configured ({}):", users.len());
-        for u in &users {
-            let state = if u.confirmed { "two-factor sign-in on" } else { "set-up not finished" };
-            println!("  {:<32} key {}  {state}", u.username, u.key_id);
-        }
-        if args.dry_run {
-            println!("Dry run: nothing was changed.");
-            return Ok(());
-        }
-        let (database, place) = maintenance::describe(&mut tx).await?;
-        let action = format!("turn off two-factor sign-in for {} of", users_n(users.len()));
-        maintenance::confirm(&action, &database, &place, args.confirm.yes)?;
-        let actor = match crate::prune::operator() {
-            Some(op) => format!("cli: mfa reset-undecryptable ({op})"),
-            None => "cli: mfa reset-undecryptable".to_owned(),
-        };
-        reset_users(&mut tx, &RequestContext::system(actor, "cli"), &users).await?;
-        tx.commit().await?;
-        println!(
-            "Turned off two-factor sign-in for {}. They set it up again at their next sign-in (at once where a \
-             profile requires it).",
-            users_n(users.len())
-        );
-        anyhow::Ok(())
-    }
-    .await;
+    let result = reset_mfa(&pool, configured, &args).await;
     pool.close().await;
     result
+}
+
+pub(crate) async fn reset_mfa(
+    pool: &PgPool,
+    configured: Option<(KeyId, Option<KeyId>)>,
+    args: &ResetUndecryptableArgs,
+) -> anyhow::Result<()> {
+    let known = known_keys(configured, args.no_key, "authenticator secret")?;
+    if db::applied_count(pool).await? != db::expected_count() {
+        bail!("the database is not fully migrated; run `shadoucmdb migrate` first");
+    }
+    let mut tx = pool.begin().await?;
+    let users = sealed::undecryptable_totp(&mut tx, &known).await?;
+    match configured {
+        None => {
+            println!("No key is configured (--no-key): every encrypted authenticator secret counts as undecryptable.")
+        }
+        Some((a, None)) => println!("Configured key: {a}."),
+        Some((a, Some(p))) => println!("Configured keys: {a} (previous key {p})."),
+    }
+    if users.is_empty() {
+        println!("No authenticator secret is encrypted with another key; nothing to do.");
+        return Ok(());
+    }
+    println!("Authenticator secrets encrypted with a key that is not configured ({}):", users.len());
+    for u in &users {
+        let state = if u.confirmed { "two-factor sign-in on" } else { "set-up not finished" };
+        println!("  {:<32} key {}  {state}", u.username, u.key_id);
+    }
+    if args.dry_run {
+        println!("Dry run: nothing was changed.");
+        return Ok(());
+    }
+    let (database, place) = maintenance::describe(&mut tx).await?;
+    let action = format!("turn off two-factor sign-in for {} of", users_n(users.len()));
+    maintenance::confirm(&action, &database, &place, args.confirm.yes)?;
+    let actor = match crate::prune::operator() {
+        Some(op) => format!("cli: mfa reset-undecryptable ({op})"),
+        None => "cli: mfa reset-undecryptable".to_owned(),
+    };
+    reset_users(&mut tx, &RequestContext::system(actor, "cli"), &users).await?;
+    tx.commit().await?;
+    println!(
+        "Turned off two-factor sign-in for {}. They set it up again at their next sign-in (at once where a \
+         profile requires it).",
+        users_n(users.len())
+    );
+    Ok(())
 }
 
 fn users_n(n: usize) -> String {
@@ -169,7 +201,8 @@ pub enum IdentityProvidersCommand {
     /// bind password) is encrypted with a key that is not configured (the key
     /// is lost) and clear that secret, so the server can start. Sign-in
     /// through them stops until an administrator enters the secret again and
-    /// enables them. Audited; asks for confirmation.
+    /// enables them. Audited; asks for confirmation. Refuses to run without
+    /// ENCRYPTION_KEY_FILE unless --no-key is given.
     ResetUndecryptable(ResetUndecryptableArgs),
 }
 
@@ -182,71 +215,69 @@ pub async fn identity_providers(cfg: &Config, cmd: IdentityProvidersCommand) -> 
 async fn reset_providers(cfg: &Config, args: ResetUndecryptableArgs) -> anyhow::Result<()> {
     // Only the ids are needed: the secrets are cleared, not decrypted.
     let configured = configured_key_ids(&cfg.encryption)?;
-    let known: Vec<KeyId> = configured.map(|(a, p)| [Some(a), p].into_iter().flatten().collect()).unwrap_or_default();
+    known_keys(configured, args.no_key, "identity provider secret")?;
     let pool = db::connect(&cfg.database).await?;
-    let result = async {
-        if db::applied_count(&pool).await? != db::expected_count() {
-            bail!("the database is not fully migrated; run `shadoucmdb migrate` first");
-        }
-        let mut tx = pool.begin().await?;
-        let providers = sealed::undecryptable_providers(&mut tx, &known).await?;
-        match configured {
-            None => println!(
-                "No key is configured (ENCRYPTION_KEY_FILE is not set): every encrypted identity provider secret \
-                 counts as undecryptable."
-            ),
-            Some((a, None)) => println!("Configured key: {a}."),
-            Some((a, Some(p))) => println!("Configured keys: {a} (previous key {p})."),
-        }
-        if providers.is_empty() {
-            println!("No identity provider secret is encrypted with another key; nothing to do.");
-            return Ok(());
-        }
-        println!(
-            "Identity providers whose secret is encrypted with a key that is not configured ({}):",
-            providers.len()
-        );
-        for p in &providers {
-            let (kind, field) = if p.kind == "ldap" { ("LDAP", "bind password") } else { ("OIDC", "client secret") };
-            let state = if p.is_enabled { "enabled" } else { "disabled" };
-            println!("  {:<32} {kind:<4}  key {}  {state}, {field}", p.name, p.key_id);
-        }
-        if args.dry_run {
-            println!("Dry run: nothing was changed.");
-            return Ok(());
-        }
-        println!(
-            "Each is disabled and its secret cleared (an LDAP directory also loses its bind DN; the old one stays in \
-             the audit trail). Sign-in through them stops, and the sessions of their accounts end, until an \
-             administrator enters the secret again under Administration > Sign-in and enables the provider."
-        );
-        let (database, place) = maintenance::describe(&mut tx).await?;
-        let action = format!("disable {} and clear their secrets in", providers_n(providers.len()));
-        maintenance::confirm(&action, &database, &place, args.confirm.yes)?;
-        let actor = match crate::prune::operator() {
-            Some(op) => format!("cli: identity-providers reset-undecryptable ({op})"),
-            None => "cli: identity-providers reset-undecryptable".to_owned(),
-        };
-        let ctx = RequestContext::system(actor, "cli");
-        crate::modules::identity_providers::reset_undecryptable(
-            &mut tx,
-            &ctx,
-            cfg.auth.public_url.as_deref(),
-            &providers,
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e.message))?;
-        tx.commit().await?;
-        println!(
-            "Disabled {} and cleared their secrets. Enter each secret again and enable the provider under \
-             Administration > Sign-in.",
-            providers_n(providers.len())
-        );
-        anyhow::Ok(())
-    }
-    .await;
+    let result = reset_idps(&pool, cfg.auth.public_url.as_deref(), configured, &args).await;
     pool.close().await;
     result
+}
+
+pub(crate) async fn reset_idps(
+    pool: &PgPool,
+    public_url: Option<&str>,
+    configured: Option<(KeyId, Option<KeyId>)>,
+    args: &ResetUndecryptableArgs,
+) -> anyhow::Result<()> {
+    let known = known_keys(configured, args.no_key, "identity provider secret")?;
+    if db::applied_count(pool).await? != db::expected_count() {
+        bail!("the database is not fully migrated; run `shadoucmdb migrate` first");
+    }
+    let mut tx = pool.begin().await?;
+    let providers = sealed::undecryptable_providers(&mut tx, &known).await?;
+    match configured {
+        None => println!(
+            "No key is configured (--no-key): every encrypted identity provider secret counts as undecryptable."
+        ),
+        Some((a, None)) => println!("Configured key: {a}."),
+        Some((a, Some(p))) => println!("Configured keys: {a} (previous key {p})."),
+    }
+    if providers.is_empty() {
+        println!("No identity provider secret is encrypted with another key; nothing to do.");
+        return Ok(());
+    }
+    println!("Identity providers whose secret is encrypted with a key that is not configured ({}):", providers.len());
+    for p in &providers {
+        let (kind, field) = if p.kind == "ldap" { ("LDAP", "bind password") } else { ("OIDC", "client secret") };
+        let state = if p.is_enabled { "enabled" } else { "disabled" };
+        println!("  {:<32} {kind:<4}  key {}  {state}, {field}", p.name, p.key_id);
+    }
+    if args.dry_run {
+        println!("Dry run: nothing was changed.");
+        return Ok(());
+    }
+    println!(
+        "Each is disabled and its secret cleared (an LDAP directory also loses its bind DN; the old one stays in \
+         the audit trail). Sign-in through them stops, and the sessions of their accounts end, until an \
+         administrator enters the secret again under Administration > Sign-in and enables the provider."
+    );
+    let (database, place) = maintenance::describe(&mut tx).await?;
+    let action = format!("disable {} and clear their secrets in", providers_n(providers.len()));
+    maintenance::confirm(&action, &database, &place, args.confirm.yes)?;
+    let actor = match crate::prune::operator() {
+        Some(op) => format!("cli: identity-providers reset-undecryptable ({op})"),
+        None => "cli: identity-providers reset-undecryptable".to_owned(),
+    };
+    let ctx = RequestContext::system(actor, "cli");
+    crate::modules::identity_providers::reset_undecryptable(&mut tx, &ctx, public_url, &providers)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e.message))?;
+    tx.commit().await?;
+    println!(
+        "Disabled {} and cleared their secrets. Enter each secret again and enable the provider under \
+         Administration > Sign-in.",
+        providers_n(providers.len())
+    );
+    Ok(())
 }
 
 fn providers_n(n: usize) -> String {

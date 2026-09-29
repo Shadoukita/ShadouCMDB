@@ -50,7 +50,7 @@ export interface paths {
         };
         /**
          * Readiness: database reachable and all migrations applied
-         * @description Returns 200 with status "ready" only when the database answers and every migration in this build is applied; otherwise 503 with the same body shape.
+         * @description Returns 200 with status "ready" only when the database answers and every migration in this build is applied; otherwise 503 with the same body shape. The result is reused for up to 1 s, and concurrent requests share one database check.
          */
         get: operations["getReadiness"];
         put?: never;
