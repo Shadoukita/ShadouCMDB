@@ -46,6 +46,12 @@ the database credentials can.
   settings), log files and the binary. Keep a copy of the env file in your
   secrets store. It is configuration, not data, and it must not sit next to the
   backups.
+- **Not the encryption key** (`ENCRYPTION_KEY_FILE`). The users' authenticator
+  secrets are in the backup encrypted, together with the id of the key they are
+  encrypted with; the key itself is never in the database or a backup. The
+  backup's header lists the key ids (`encryption_keys`), and `backup` prints
+  them. Keep the key, and after a rotation the previous key, as long as you keep
+  backups that need it ([encryption key](security/hardening.md#encryption-key)).
 
 ### Consistency checks
 
@@ -72,8 +78,9 @@ the database credentials can.
 
 A backup holds password hashes (argon2id) and personal data: names, email
 addresses, and the IP addresses and user agents in the audit log. It also holds
-secrets the server stores unencrypted: every user's authenticator (TOTP)
-secret, the OIDC client secret and the directory bind password (see
+the OIDC client secret and the directory bind password, which the server stores
+unencrypted, and every user's authenticator (TOTP) secret, encrypted with a key
+that is not in the backup (see
 [secrets at rest](security/hardening.md#secrets-and-configuration)). Treat it
 like the database itself.
 
@@ -180,6 +187,24 @@ ShadouCMDB release.
 4. **Start the server.** `GET /readyz` reports the migration state. Users sign in
    with the passwords they had when the backup was taken.
 
+**The encryption key.** `restore` itself needs no key: it copies the encrypted
+authenticator secrets as they are. The server does. When the backup holds
+secrets under a key that is not configured (a restore onto another host, or a
+backup taken before a key rotation), `restore` and `--dry-run` warn:
+
+```
+  warning: This backup holds 42 authenticator secrets encrypted with key 3f9a01c2. The configured key is 8be4d177. The server will not start until that key is configured, or until "shadoucmdb mfa reset-undecryptable" has been run; the key is never part of a backup.
+```
+
+`serve` then refuses to start until you either configure that key (from your
+escrow copy; `ENCRYPTION_KEY_PREVIOUS_FILE` if the current key should stay the
+active one, and the server re-encrypts them at start-up) or run
+`shadoucmdb mfa reset-undecryptable`, which turns off two-factor sign-in for the
+users concerned (audited as `mfa.disable` with `reason: key_lost`; they set it
+up again). Restoring a staging copy without the production key is a legitimate
+test: the reset is the deliberate step that makes it usable. Enrolments are never
+dropped silently.
+
 The area schemas and type tables are rebuilt as they were, owned by the same
 role: the API role on a three-role install, so administrators can keep editing
 types. Restoring is not a schema change, so `cmdb.schema_changes` holds exactly
@@ -197,6 +222,9 @@ In Docker, add `-it` so the confirmation can be typed, or pass `--yes`:
   migrations then run on top, exactly as an upgrade would. For example, a backup
   from before migration 0009 gets its type tables built and its attribute values
   moved into them.
+- **A backup from before encryption** (without `encryption_keys` in its header)
+  holds the authenticator secrets unencrypted; the server encrypts them at its
+  first start after the restore.
 - **A backup from a newer release** is refused ("migration NNNN which this
   binary does not know"). Restore it with that release or a later one.
 - A backup whose migration SQL differs from this binary's (a modified build) is
@@ -279,6 +307,7 @@ provider's media sanitisation, not on `DELETE`.
 | `no terminal to confirm on` | A script or container without `-it`: pass `--yes`. |
 | `failed the consistency check` | The file is damaged, truncated or was changed. Use another backup. |
 | `which this binary does not know` | The backup is from a newer release. Restore it with that release. |
+| `This backup holds N authenticator secrets encrypted with key …` | The configured `ENCRYPTION_KEY_FILE` is not the key of the backup. Configure that key before starting the server, or run `shadoucmdb mfa reset-undecryptable`. See [Restoring](#restoring). |
 | `could not run: DROP ...: must be owner` | Someone created objects in the schema as another role. Drop them as that role, or as the database owner, and retry. On a three-role install, set `MIGRATION_DATABASE_URL`. |
 | `columns of AREA.TYPE differ between the backup (...) and the data model in the backup (...)` | Someone added or removed a column of a type table by hand, outside ShadouCMDB. Restore with a backup taken before that, or ask for help: the extra column's data is in the file. |
 

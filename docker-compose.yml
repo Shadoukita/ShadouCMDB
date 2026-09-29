@@ -4,6 +4,8 @@
 # PGHOST/DATABASE_URL at any reachable PostgreSQL 14+.
 #
 #   cp .env.example .env                        # then edit the connection settings
+#   openssl rand -base64 32 > encryption.key && chmod 600 encryption.key && sudo chown 65532:65532 encryption.key
+#                                               # the key `serve` needs (docs/security/hardening.md#encryption-key)
 #   docker compose run --rm migrate             # apply migrations
 #   docker compose run --rm seed                # check system rows (the data model starts empty)
 #   docker compose run --rm seed seed --template it_infrastructure   # starter data model
@@ -29,6 +31,12 @@ services:
     <<: *shadoucmdb
     ports:
       - "${API_PORT:-3000}:${API_PORT:-3000}"
+    # The key that encrypts the authenticator secrets, mounted as a file; it
+    # overrides any ENCRYPTION_KEY_FILE in .env.
+    secrets:
+      - encryption_key
+    environment:
+      ENCRYPTION_KEY_FILE: /run/secrets/encryption_key
 
   migrate:
     <<: *shadoucmdb
@@ -39,3 +47,7 @@ services:
     <<: *shadoucmdb
     command: ["seed"]
     profiles: ["tools"]
+
+secrets:
+  encryption_key:
+    file: ./encryption.key

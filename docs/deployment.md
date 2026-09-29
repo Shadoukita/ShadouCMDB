@@ -37,6 +37,11 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
   factory-reset [--yes]     Delete everything and return to first-run setup
   decommission [--yes]      Remove every ShadouCMDB table, row and setting before retiring the database
                             (backup, restore and reset: see docs/backup-and-reset.md)
+  generate-encryption-key --out F
+                            Write a new key for ENCRYPTION_KEY_FILE (offline; never overwrites F)
+  mfa reset-undecryptable [--dry-run] [--yes]
+                            Turn off two-factor sign-in for users whose authenticator secret is
+                            encrypted with a key that is lost (audited; see docs/security/hardening.md)
   openapi [--out F|--check F]  Print the OpenAPI document, write it, or fail if F is stale
   service install|uninstall|run   Windows Service management (Windows only)
 ```
@@ -54,12 +59,19 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
   [Database roles](#database-roles).
 - `serve` does **not** migrate on start. Run `migrate` as an explicit step when
   you install or upgrade.
+- `serve` does not start without `ENCRYPTION_KEY_FILE`, the key that encrypts the
+  users' authenticator secrets ([encryption key](security/hardening.md#encryption-key)).
+  Before it listens, it encrypts secrets written before encryption existed, re-encrypts
+  those under `ENCRYPTION_KEY_PREVIOUS_FILE` after a rotation, and refuses to start when
+  the database holds secrets under a key that is not configured. `migrate` and `verify`
+  report the key state, so a missing or wrong key shows before the restart.
 - `SIGTERM` or Ctrl+C (Linux), or a service Stop (Windows), triggers a graceful
   shutdown: the listener closes, in-flight requests finish, then the pool closes.
 
 Typical first run against a new database:
 
 ```sh
+shadoucmdb generate-encryption-key --out /etc/shadoucmdb/encryption.key   # then ENCRYPTION_KEY_FILE=that path
 shadoucmdb migrate
 shadoucmdb seed            # bare data model; --template it_infrastructure or --demo for a starter set
 shadoucmdb verify          # optional, writes nothing
@@ -416,6 +428,10 @@ sudo install -m 0755 shadoucmdb /usr/local/bin/shadoucmdb
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin shadoucmdb
 sudo install -d -m 0750 -o root -g shadoucmdb /etc/shadoucmdb
 sudo install -m 0640 -o root -g shadoucmdb .env /etc/shadoucmdb/shadoucmdb.env   # your settings, as shadoucmdb_app
+# the encryption key, readable by the service's group only; the env file has
+# ENCRYPTION_KEY_FILE=/etc/shadoucmdb/encryption.key. Keep a copy apart from the backups.
+sudo shadoucmdb generate-encryption-key --out /etc/shadoucmdb/encryption.key
+sudo chown root:shadoucmdb /etc/shadoucmdb/encryption.key && sudo chmod 0640 /etc/shadoucmdb/encryption.key
 # migrate as shadoucmdb_owner, passed to this one command only (see Database roles):
 read -rsp 'shadoucmdb_owner password: ' PW; echo
 export MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$PW@db.example.internal:5432/shadoucmdb"
@@ -431,7 +447,8 @@ journalctl -u shadoucmdb -f
 
 The unit runs as an unprivileged user and has no capabilities or writable
 paths. To upgrade:
-1. replace the binary;
+1. replace the binary; when upgrading from a release without `ENCRYPTION_KEY_FILE`, create the
+   key as above first (the server encrypts the existing authenticator secrets at its next start);
 2. run `migrate` with `MIGRATION_DATABASE_URL` as above (on a single-role install, split the
    roles first: see [Upgrading a single-role install](#upgrading-a-single-role-install));
 3. `systemctl restart shadoucmdb`.
@@ -450,6 +467,12 @@ Copy-Item .\.env "$data\shadoucmdb.env"          # your settings (DATABASE_URL o
 # The service runs as the low-privilege LocalService account: let it read the
 # settings and write its log. Keep the env file away from other users.
 icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'NT AUTHORITY\LocalService:(OI)(CI)M'
+
+# The encryption key: read-only for the service, outside the Modify grant above.
+# The env file has ENCRYPTION_KEY_FILE=C:\ProgramData\ShadouCMDB\encryption.key.
+# Keep a copy apart from the database backups.
+& "$bin\shadoucmdb.exe" generate-encryption-key --out "$data\encryption.key"
+icacls "$data\encryption.key" /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' 'NT AUTHORITY\LocalService:R'
 
 # migrate as shadoucmdb_owner, prompted for and set for this session only (see Database roles):
 $pw = [uri]::EscapeDataString((Get-Credential shadoucmdb_owner).GetNetworkCredential().Password)
@@ -478,7 +501,8 @@ run by hand.
 
 To upgrade:
 1. `Stop-Service ShadouCMDB`;
-2. replace the exe;
+2. replace the exe; when upgrading from a release without `ENCRYPTION_KEY_FILE`, create the key
+   as above first;
 3. run `migrate`;
 4. `Start-Service ShadouCMDB`.
 
@@ -499,8 +523,21 @@ docker build -t shadoucmdb .                                                 # c
 docker run --rm --env-file .env shadoucmdb migrate
 docker run --rm --env-file .env shadoucmdb seed
 docker run --rm -it --env-file .env shadoucmdb create-admin --username admin   # or use first-run setup in the UI
-docker run -d --name shadoucmdb --env-file .env -p 3000:3000 shadoucmdb    # CMD is `serve`
+docker run -d --name shadoucmdb --env-file .env -p 3000:3000 \
+  -v "$PWD/encryption.key:/run/secrets/encryption_key:ro" -e ENCRYPTION_KEY_FILE=/run/secrets/encryption_key \
+  shadoucmdb                                                                 # CMD is `serve`
 ```
+
+`serve` needs the [encryption key](security/hardening.md#encryption-key) as a file. Create it
+on the host and give it to the container's user (uid 65532), readable by nobody else:
+
+```sh
+openssl rand -base64 32 > encryption.key && chmod 600 encryption.key && sudo chown 65532:65532 encryption.key
+```
+
+Under Kubernetes, mount it from a Secret (`defaultMode: 0400`, `fsGroup`/`runAsUser` 65532) or
+through the CSI secrets-store driver or a Vault Agent template, and point `ENCRYPTION_KEY_FILE` at
+the mounted path. Keep a copy apart from the database backups.
 
 Released images (`ghcr.io/shadoukita/shadoucmdb:<version>`) are built differently:
 [`deploy/docker/Dockerfile.release`](../deploy/docker/Dockerfile.release) copies the

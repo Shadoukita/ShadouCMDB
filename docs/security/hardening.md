@@ -12,6 +12,7 @@ covers installation; this page covers what to change and why.
 - [ ] `DATABASE_SSL=verify-full` ([database TLS](#database-tls))
 - [ ] A dedicated, non-superuser database role; no other application shares it ([roles](#database-roles))
 - [ ] The env file readable only by the service account ([secrets](#secrets-and-configuration))
+- [ ] The encryption key readable only by the service account, with a copy held apart from the database backups ([encryption key](#encryption-key))
 - [ ] First administrator created by you, before the server is reachable by others ([first run](#first-run))
 - [ ] With single sign-on: `PUBLIC_URL` on https, a read-only directory account, and a local break-glass administrator with MFA ([enterprise sign-in](#enterprise-sign-in))
 - [ ] Encrypted, tested backups ([backup](#backup-and-restore))
@@ -187,23 +188,108 @@ protect its password accordingly.
   Kubernetes Secrets with encryption at rest, Vault) rather than baking it into an image.
 - Never put the password in `DATABASE_URL` on a command line; it shows up in `ps` and shell
   history. Use the env file.
-- **Secrets at rest.** The server has to read some secrets back, so the database stores them
-  unencrypted: the authenticator (TOTP) secret of every user with two-factor sign-in, the OIDC
-  client secret and the directory bind password. They are never returned by the API or written
-  to the audit log, but anyone who can read the database or a backup of it can compute every
-  user's current sign-in code and use the provider credentials. The second factor then only
-  protects against someone who has a password but not the data. Until these secrets are
-  encrypted with a key kept outside the database
-  ([#189](https://github.com/Shadoukita/ShadouCMDB/issues/189)):
-  - Restrict read access to the database to the application and schema-owner roles
-    ([roles](#database-roles)), and keep ad hoc reporting accounts off the `cmdb` schema.
-  - Treat every backup as a copy of these secrets ([backup](#backup-and-restore)).
-  - If the database or a backup leaks, reset two-factor sign-in for every user who has it
-    (`DELETE /api/v1/admin/users/{id}/mfa`, or **Reset two-factor** under the user's account actions) so they enrol
-    a new authenticator, and rotate the OIDC client secret and the bind password at the
-    provider. Password resets alone are not enough.
+- **Secrets at rest.** The server has to read some secrets back. None of them is returned by the
+  API or written to the audit log.
+  - The **authenticator (TOTP) secret** of every user with two-factor sign-in is encrypted
+    (AES-256-GCM) with the [encryption key](#encryption-key), which is kept outside the database.
+    Each secret is bound to its user: copied onto another account, it does not decrypt. Someone
+    with only the database or only a backup cannot compute sign-in codes; someone with the
+    database **and** the key file can.
+  - The **OIDC client secret** and the **directory bind password** are still stored unencrypted
+    ([#199](https://github.com/Shadoukita/ShadouCMDB/issues/199)). Anyone who can read the
+    database or a backup can use them. Restrict read access to the database to the application
+    and schema-owner roles ([roles](#database-roles)), keep ad hoc reporting accounts off the
+    `cmdb` schema, and treat every backup as a copy of these credentials
+    ([backup](#backup-and-restore)). If the database or a backup leaks, rotate both at the
+    provider.
 - Leave `CORS_ORIGINS` empty unless you serve the UI from another origin.
 - Keep `LOG_LEVEL` at `info` in production. `trace` logs every SQL statement.
+
+## Encryption key
+
+`ENCRYPTION_KEY_FILE` names a file holding the key that encrypts the users' authenticator secrets:
+the base64 of 32 random bytes. `serve` does not start without it. The key never enters the database,
+the logs or a backup, and the commands that only move data (`migrate`, `backup`, `restore`,
+`factory-reset`, `decommission`, `create-admin`) do not need it. `migrate` and `verify` print which
+key the database's secrets are encrypted with and warn when the configured key does not match.
+
+**Create it** once per installation, offline:
+
+```sh
+shadoucmdb generate-encryption-key --out /etc/shadoucmdb/encryption.key
+```
+
+The command never overwrites a file, creates it with mode `0600` on Linux and prints the key id, a
+fingerprint that identifies the key without revealing it (e.g. `8be4d177`). `openssl rand -base64 32`
+produces an equivalent key. The key file may end with a newline or CRLF or start with a UTF-8 byte
+order mark; anything but the base64 of exactly 32 bytes stops the server with
+`ENCRYPTION_KEY_FILE: expected the base64 of 32 bytes`.
+
+**Restrict it** to the service account:
+
+- **Linux:** `chown root:shadoucmdb` and `chmod 0640` (or `0600` owned by the service account). The
+  server refuses to start when the file is readable by everyone or writable by its group or
+  others.
+- **Windows:** keep it out of the inherited Modify grant on `C:\ProgramData\ShadouCMDB`:
+  `icacls encryption.key /inheritance:r /grant:r "Administrators:F" "SYSTEM:F" "NT AUTHORITY\LocalService:R"`.
+  Windows has no programmatic check.
+- **Docker, Kubernetes, secret stores:** mount it as a file (Docker secret, Kubernetes Secret volume,
+  CSI secrets-store driver, Vault Agent template) and point `ENCRYPTION_KEY_FILE` at it. With
+  systemd (250 or later), `LoadCredentialEncrypted=encryption.key:…` keeps it TPM-sealed at rest; add
+  `Environment=ENCRYPTION_KEY_FILE=%d/encryption.key` in a drop-in for the unit (it takes precedence
+  over the env file).
+
+**Keep a copy apart from the database backups**: in a password vault or escrow with different
+custody, and in your disaster-recovery runbook. Losing the key loses no CMDB data, only the
+two-factor enrolments: the server refuses to start until the key is configured again or
+`shadoucmdb mfa reset-undecryptable` has turned off two-factor sign-in for the users concerned
+(they set it up again). Include the key in the quarterly restore test.
+
+**Rotate** it when someone who had access to it leaves, or on your key-rotation schedule:
+
+1. `shadoucmdb generate-encryption-key --out /etc/shadoucmdb/encryption-2027.key`
+2. In the env file: `ENCRYPTION_KEY_PREVIOUS_FILE=<the old path>`, `ENCRYPTION_KEY_FILE=<the new path>`.
+3. Restart. With several instances, stop all of them first: an instance still on the old key cannot
+   read the secrets the others have re-encrypted. At start-up the server re-encrypts every secret
+   under the new key (logged as `Encrypted N authenticator secrets (key …): … from previous key …`).
+4. Check with `shadoucmdb verify` that every secret is under the new key, then remove
+   `ENCRYPTION_KEY_PREVIOUS_FILE` and restart.
+5. **Keep the old key as long as you keep backups taken before the rotation**: their secrets are
+   encrypted with it. Destroy it only after those backups have expired.
+
+Rotation protects later backups and limits what a leaked key file alone is worth. It does not help
+once the database **and** the key have leaked: then every authenticator secret is known.
+
+**If the database or a backup leaks together with the key** (e.g. the application server was
+compromised): treat it as an incident. Reset two-factor sign-in for every user who has it
+(`DELETE /api/v1/admin/users/{id}/mfa`, or **Reset two-factor** under the user's account actions) so
+they enrol a new authenticator, rotate the key as above, and rotate the OIDC client secret and the
+bind password at the provider. Password resets alone are not enough. A leak of the database or a
+backup **without** the key exposes no authenticator secret, but still the password hashes and the
+provider credentials ([secrets at rest](#secrets-and-configuration)).
+
+**Lost key.** When the database holds secrets under a key that is not configured, `serve` exits
+with a message naming both key ids. Configure the right key (from escrow), or give up those
+enrolments:
+
+```sh
+shadoucmdb mfa reset-undecryptable --dry-run   # lists the users concerned
+shadoucmdb mfa reset-undecryptable             # asks for the database name, then turns it off
+```
+
+It deletes their authenticator and recovery codes in one transaction and writes one `mfa.disable`
+audit event per user with `reason: key_lost`. Users under the configured key are not touched.
+
+A secret that does not decrypt although its key is configured (altered in the database, or copied
+from another user's row) fails closed: the user's authenticator codes are refused, the server logs
+an error with the user id and writes an `mfa.failure` event with `reason: secret_undecryptable`.
+Recovery codes still work, and an administrator can reset the user's two-factor sign-in.
+
+**Downgrading** after the upgrade that introduced encryption needs a restore of a backup taken
+before it: the previous release cannot read encrypted secrets and rejects every authenticator code.
+
+Residual risk: the key is in the server's memory while it runs, so a memory dump of the running
+process exposes it, and the previous key widens the exposure while a rotation is in progress.
 
 ## First run
 
@@ -311,10 +397,14 @@ holds no state of its own besides its env file.
 - **Encrypt backups** at rest and in transit (e.g. `age` or `gpg` before the file leaves the host,
   or an encrypted backup repository). A backup, whether a `pg_dump` or a `shadoucmdb backup`
   file, contains the password hashes, the whole CMDB and the
-  [secrets stored unencrypted](#secrets-and-configuration): the users' authenticator secrets and
-  the identity provider credentials. Whoever has an unencrypted backup and cracks one password
-  hash can sign in as that user despite two-factor sign-in. Keep the decryption key away from the
-  backups and from the database host.
+  [identity provider credentials](#secrets-and-configuration), which are stored unencrypted. The
+  users' authenticator secrets in it are encrypted with the [encryption key](#encryption-key),
+  which is never part of a backup. Keep the backup decryption key away from the backups and from
+  the database host.
+- **Back up the encryption key separately.** A restored database needs the key it was encrypted
+  with (a backup taken before a rotation needs the previous key); without it, the users with
+  two-factor sign-in have to set it up again. Store the key where the backups are not, so that one
+  leak does not expose both.
 - **Restrict the file on the host.** `shadoucmdb backup` creates its file with mode `0600` on
   Linux. On Windows the file inherits the folder's ACL: write backups only to a folder limited to
   Administrators and the account that runs the backup (see
