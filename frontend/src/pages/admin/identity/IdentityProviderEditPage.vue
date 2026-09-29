@@ -556,7 +556,12 @@ const notFound = computed(() => {
             </p>
             <p class="muted no-margin">
               Local accounts keep working when a provider is down. Keep a local administrator with two-factor
-              authentication for emergencies. Two-factor authentication for provider accounts is the provider's job.
+              authentication for emergencies.
+            </p>
+            <p class="muted no-margin">
+              OpenID Connect accounts get their second factor from the provider. Directory (LDAP) accounts that hold a
+              permission profile requiring two-factor authentication set up an authenticator app in ShadouCMDB, confirmed
+              with their directory password; sign-in then asks for its code after the directory password.
             </p>
           </div>
         </section>

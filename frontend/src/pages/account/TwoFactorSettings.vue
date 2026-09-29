@@ -56,6 +56,11 @@ const generalError = computed(() => {
   if (e instanceof ApiError && e.code === "VALIDATION_ERROR" && e.details.every((d) => ["currentPassword", "code"].includes(d.field))) return null;
   return e;
 });
+/** The account's identity provider: a directory account confirms with its directory password, an OIDC account has none here. */
+const provider = computed(() => session.user?.identityProvider ?? null);
+const directory = computed(() => provider.value?.kind === "ldap");
+const passwordLabel = computed(() => (directory.value ? "Directory password" : "Current password"));
+const passwordHint = computed(() => (directory.value ? `The password you sign in with, checked against ${provider.value!.name}` : undefined));
 /** The secret in groups of four, as authenticator apps display and accept it. */
 const groupedSecret = computed(() => enrolment.value?.secret.match(/.{1,4}/g)?.join(" ") ?? "");
 
@@ -189,7 +194,10 @@ function codesSaved() {
         <ErrorAlert v-if="generalError" :error="generalError" title="Two-factor authentication not changed" />
 
         <!-- Off: set up an authenticator app -->
-        <template v-if="!enabled && mode !== 'scan'">
+        <p v-if="!enabled && provider && !directory" class="muted flush">
+          You sign in through {{ provider.name }}, which asks for your second factor. There is nothing to set up here.
+        </p>
+        <template v-else-if="!enabled && mode !== 'scan'">
           <div v-if="forced" class="alert alert-warn" role="note">
             A permission profile you hold requires two-factor authentication. Set up an authenticator app to continue.
           </div>
@@ -199,7 +207,7 @@ function codesSaved() {
           </p>
           <form class="stack" novalidate @submit.prevent="begin">
             <div class="form-grid">
-              <FormField id="mfa-currentPassword" label="Current password" required :error="fieldErrors.currentPassword" hint="Confirms it is you">
+              <FormField id="mfa-currentPassword" :label="passwordLabel" required :error="fieldErrors.currentPassword" :hint="passwordHint ?? 'Confirms it is you'">
                 <template #default="{ id, invalid, describedBy }">
                   <input :id="id" v-model="password" v-autofocus="forced" type="password" autocomplete="current-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
@@ -272,7 +280,7 @@ function codesSaved() {
               <template v-else>You get 10 new codes; the {{ remaining }} you have now stop working.</template>
             </p>
             <div class="form-grid">
-              <FormField id="mfa-currentPassword" label="Current password" required :error="fieldErrors.currentPassword">
+              <FormField id="mfa-currentPassword" :label="passwordLabel" required :error="fieldErrors.currentPassword" :hint="passwordHint">
                 <template #default="{ id, invalid, describedBy }">
                   <input :id="id" v-model="password" v-autofocus type="password" autocomplete="current-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
