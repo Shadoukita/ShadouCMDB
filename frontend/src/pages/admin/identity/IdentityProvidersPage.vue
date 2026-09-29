@@ -80,6 +80,14 @@ function warning(p: IdentityProvider): string | null {
             <td>
               <RouterLink :to="`/admin/identity-providers/${p.id}`">{{ p.name }}</RouterLink>
               <span v-if="warning(p)" class="badge warn spaced">{{ warning(p) }}</span>
+              <span
+                v-if="p.oidc?.mfaAssurance === 'trustProvider'"
+                class="badge warn spaced"
+                title="Trusts the provider to enforce MFA; the sign-in token is not checked"
+                data-testid="mfa-not-verified"
+              >
+                MFA not verified
+              </span>
             </td>
             <td>{{ KIND_LABELS[p.kind] }}</td>
             <td>
