@@ -3373,9 +3373,9 @@ export interface components {
             /** @description Stable machine key, lower_snake_case */
             classKey: string;
             tabs?: components["schemas"]["UiLayoutTab"][];
-            /** @description Fields not shown on the detail page or the form */
+            /** @description Fields not shown on the detail page or the form. Presentation only: the API still returns them; restrict access with permission profiles */
             hiddenFields?: string[];
-            /** @description Fields shown but not editable on the form */
+            /** @description Fields shown but not editable on the form. Presentation only: the API still accepts writes to them; restrict access with permission profiles */
             readOnlyFields?: string[];
             /**
              * @deprecated

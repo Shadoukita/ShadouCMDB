@@ -38,7 +38,7 @@ import {
   type LayoutSection,
   type LayoutTab,
 } from "../../lib/layoutDesign";
-import type { LayoutEditor } from "../../lib/layoutEditor";
+import { PRESENTATION_ONLY, type LayoutEditor } from "../../lib/layoutEditor";
 import {
   ATTRIBUTE_PREFIX,
   attributeKey,
@@ -608,6 +608,7 @@ function onHiddenDrop(e: DragEvent) {
       </ul>
       <span v-else class="muted">None.</span>
       <span class="hint">Drop a field here to hide it from the form and the detail page.</span>
+      <span class="hint" data-testid="le-presentation-only">{{ PRESENTATION_ONLY }}</span>
     </div>
 
     <div class="le-frame" :style="editor.previewWidth ? { width: `${editor.previewWidth}px` } : undefined" data-testid="le-frame">
