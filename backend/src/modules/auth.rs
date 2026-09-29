@@ -967,6 +967,7 @@ mod tests {
             current_password: current.into(),
             new_password: "a brand new passphrase".into(),
         };
+        auth.password_throttle.freeze();
         for _ in 0..crate::auth::throttle::FREE_FAILURES {
             let e = change_password(pool, &auth, &ctx, change(&wrong)).await.unwrap_err();
             assert_eq!(e.code, ErrorCode::ValidationError);
@@ -1149,6 +1150,7 @@ mod tests {
             profile_ids: vec![],
         };
         users::create(pool, &RequestContext::system("test", "test"), &input).await.unwrap();
+        auth.throttle.freeze();
         for _ in 0..crate::auth::throttle::FREE_FAILURES {
             let e = login(pool, &auth, &headers, &from("198.51.100.8"), login_body("gone", "gone correct horse"))
                 .await
@@ -1185,6 +1187,7 @@ mod tests {
         let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
         setup(pool, &auth, &headers, &from("192.0.2.1"), body("admin")).await.unwrap();
         let (right, wrong) = (OWNER_PASSWORD.as_str(), OWNER_PASSWORD.to_uppercase());
+        auth.throttle.freeze();
         for _ in 0..crate::auth::throttle::FREE_FAILURES {
             let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("admin", &wrong)).await.err();
             assert_eq!(e.map(|e| e.code), Some(ErrorCode::Unauthenticated));
