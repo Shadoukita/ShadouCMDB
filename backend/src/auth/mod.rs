@@ -83,6 +83,8 @@ pub struct AuthState {
     pub throttle: LoginThrottle,
     /// Changing one's own password, keyed by user id.
     pub password_throttle: LoginThrottle,
+    /// Wrong setup tokens on first-run setup, one key for all requests (GH#230).
+    pub setup_throttle: LoginThrottle,
     /// Discovered OIDC providers and their signing keys.
     pub oidc: sso::oidc::Cache,
     /// Seals the pending OIDC sign-in into its cookie; loaded on first use.
@@ -103,6 +105,7 @@ impl AuthState {
             config,
             throttle: LoginThrottle::default(),
             password_throttle: LoginThrottle::per_key(),
+            setup_throttle: LoginThrottle::per_key(),
             oidc_state_key: tokio::sync::OnceCell::new(),
             insecure_cookie_warned: AtomicBool::new(false),
             keyring,

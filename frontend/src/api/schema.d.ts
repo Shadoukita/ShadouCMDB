@@ -73,7 +73,7 @@ export interface paths {
         put?: never;
         /**
          * Create the first administrator and sign them in (only while no users exist)
-         * @description The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.
+         * @description The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. After 5 wrong tokens from one client network (the IPv4 /24 or IPv6 /64 of the client address), each further one locks setup for that network for 1 s, 2 s, 4 s, ... up to 15 min, and wrong tokens from several networks that add up to 15 lock it for every network; while locked the answer is 429 RATE_LIMITED with Retry-After and the token is not checked. The 409 answer is never throttled. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.
          */
         post: operations["completeSetup"];
         delete?: never;
@@ -4029,6 +4029,15 @@ export interface operations {
             };
             /** @description Body is not application/json */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
