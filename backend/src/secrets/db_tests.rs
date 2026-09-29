@@ -68,7 +68,7 @@ async fn plaintext_seeds_are_encrypted_at_start_up_without_re_enrolment() {
     MIGRATOR.run_to(23, pool).await.expect("migrations up to 0023");
     add_user(pool, ALICE, "alice").await;
     add_user(pool, BOB, "bob").await;
-    let (seed_a, seed_b) = ([0xA1u8; 20], [0xB2u8; 20]);
+    let (seed_a, seed_b) = (totp::new_secret(), totp::new_secret());
     let step = totp::current_step();
     // Alice has MFA on and signed in with the previous code; Bob has a set-up in progress.
     sqlx::query("INSERT INTO user_totp (user_id, secret, confirmed_at, last_used_step) VALUES ($1, $2, now(), $3)")
@@ -93,7 +93,7 @@ async fn plaintext_seeds_are_encrypted_at_start_up_without_re_enrolment() {
         (done[0].table, done[0].unencrypted, done[0].from_previous, done[0].failed),
         (SealedTable::UserTotp, 2, 0, 0)
     );
-    for (user, seed) in [(ALICE, seed_a), (BOB, seed_b)] {
+    for (user, seed) in [(ALICE, &seed_a), (BOB, &seed_b)] {
         let (stored, key_id, ..) = row(pool, user).await;
         assert_eq!((stored.len(), key_id), (48, Some(ring.active_id().0)));
         assert!(!stored.windows(20).any(|w| w == seed), "no plaintext seed left");
@@ -131,7 +131,7 @@ async fn rotation_re_encrypts_and_an_unknown_key_refuses_to_start() {
     add_user(pool, BOB, "bob").await;
     let (a, b) = (new_key(), new_key());
     let old = Keyring::from_keys(&a, None);
-    let seed = [0x5Au8; 20];
+    let seed = totp::new_secret();
     let step = totp::current_step();
     put_sealed(pool, &old, ALICE, &seed, step - 1).await;
     put_sealed(pool, &old, BOB, &seed, step - 1).await;
@@ -172,7 +172,7 @@ async fn a_secret_moved_to_another_user_fails_closed() {
     add_user(pool, ALICE, "alice").await;
     add_user(pool, BOB, "bob").await;
     let ring = Keyring::random();
-    let (seed_a, seed_b) = ([1u8; 20], [2u8; 20]);
+    let (seed_a, seed_b) = (totp::new_secret(), totp::new_secret());
     let step = totp::current_step();
     put_sealed(pool, &ring, ALICE, &seed_a, step - 5).await;
     put_sealed(pool, &ring, BOB, &seed_b, step - 5).await;
@@ -202,9 +202,9 @@ async fn reset_undecryptable_turns_off_mfa_under_lost_keys_only() {
     add_user(pool, CAROL, "carol").await;
     let (lost, current) = (Keyring::random(), Keyring::random());
     let step = totp::current_step();
-    put_sealed(pool, &lost, ALICE, &[1u8; 20], step).await;
-    put_sealed(pool, &lost, BOB, &[2u8; 20], step).await;
-    put_sealed(pool, &current, CAROL, &[3u8; 20], step).await;
+    put_sealed(pool, &lost, ALICE, &totp::new_secret(), step).await;
+    put_sealed(pool, &lost, BOB, &totp::new_secret(), step).await;
+    put_sealed(pool, &current, CAROL, &totp::new_secret(), step).await;
     for user in [ALICE, CAROL] {
         sqlx::query(
             "INSERT INTO user_recovery_codes (user_id, code_hash) VALUES ($1, sha256(gen_random_uuid()::text::bytea))",

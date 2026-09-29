@@ -67,8 +67,9 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
   icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'NT AUTHORITY\LocalService:(OI)(CI)M'
 
   # The key that encrypts the authenticator secrets: read-only for the service,
-  # outside the Modify grant above. Add ENCRYPTION_KEY_FILE=C:\ProgramData\ShadouCMDB\encryption.key
-  # to the env file, and store a copy apart from the database backups (password vault):
+  # outside the Modify grant above. Add ENCRYPTION_KEY_FILE='C:\ProgramData\ShadouCMDB\encryption.key'
+  # to the env file, in single quotes (unquoted, the backslashes are read as escapes and the
+  # service does not start), and store a copy apart from the database backups (password vault):
   & "$bin\shadoucmdb.exe" generate-encryption-key --out "$data\encryption.key"
   icacls "$data\encryption.key" /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' 'NT AUTHORITY\LocalService:R'
 

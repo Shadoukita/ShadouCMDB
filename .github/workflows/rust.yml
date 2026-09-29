@@ -218,7 +218,7 @@ jobs:
           @(
             "PGHOST=$env:PGHOST", "PGPORT=$env:PGPORT", "PGDATABASE=$env:PGDATABASE",
             "PGUSER=$env:PGUSER", "PGPASSWORD=$env:PGPASSWORD", 'DATABASE_SSL=disable',
-            'API_HOST=127.0.0.1', 'API_PORT=3000', "ENCRYPTION_KEY_FILE=$data\encryption.key"
+            'API_HOST=127.0.0.1', 'API_PORT=3000', "ENCRYPTION_KEY_FILE='$data\encryption.key'"
           ) | Set-Content -Encoding ascii "$data\shadoucmdb.env"
           icacls $data /grant 'NT AUTHORITY\LocalService:(OI)(CI)M' | Out-Null
           # deploy/windows/README.txt: the key is read-only for the service, outside the inherited Modify grant.

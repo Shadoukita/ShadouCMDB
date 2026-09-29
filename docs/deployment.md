@@ -469,7 +469,8 @@ Copy-Item .\.env "$data\shadoucmdb.env"          # your settings (DATABASE_URL o
 icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'NT AUTHORITY\LocalService:(OI)(CI)M'
 
 # The encryption key: read-only for the service, outside the Modify grant above.
-# The env file has ENCRYPTION_KEY_FILE=C:\ProgramData\ShadouCMDB\encryption.key.
+# The env file has ENCRYPTION_KEY_FILE='C:\ProgramData\ShadouCMDB\encryption.key'
+# (single quotes: unquoted, the backslashes are read as escapes and the service does not start).
 # Keep a copy apart from the database backups.
 & "$bin\shadoucmdb.exe" generate-encryption-key --out "$data\encryption.key"
 icacls "$data\encryption.key" /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' 'NT AUTHORITY\LocalService:R'
