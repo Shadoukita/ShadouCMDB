@@ -126,6 +126,8 @@ const login = (u: { username: string; password: string }) => call(null, 'POST', 
 const code = (r: Res) => r.json?.error?.code;
 const message = (r: Res) => r.json?.error?.message ?? '';
 const field = (r: Res) => r.json?.error?.details?.[0]?.field;
+/** For failure output of the MFA routes: never the secret, recovery codes or session data. */
+const brief = (r: Res) => ({ status: r.status, error: code(r), field: field(r) });
 
 /** Runs tools/ldap-it/ldap.sh with the same environment. */
 function directory(command: string, stdin?: string): void {
@@ -217,7 +219,7 @@ async function main(): Promise<void> {
   // ---------------------------------------------------------------------------------------
   section('1. Directory sign-in and group mapping');
   const aliceLogin = await login(ALICE);
-  check(aliceLogin.status === 200 && cookieOf(aliceLogin, 'shadoucmdb_session'), 'alice signs in with her directory password (200, session cookie)', aliceLogin.json);
+  check(aliceLogin.status === 200 && cookieOf(aliceLogin, 'shadoucmdb_session'), 'alice signs in with her directory password (200, session cookie)', brief(aliceLogin));
   let alice = identity(aliceLogin);
   const me = await ok(alice, 'GET', '/api/v1/auth/me');
   check(me.user.username === 'alice' && me.user.identityProvider?.id === provider.id, 'the account is created and linked to the directory', me.user);
@@ -227,7 +229,7 @@ async function main(): Promise<void> {
     'the mapped group gives exactly its profile; the unmapped group gives nothing',
     me.user.profiles,
   );
-  check(me.mfa.required === false && me.mfa.enrolmentRequired === false, 'no second factor required yet', me.mfa);
+  check(me.mfa.required === false && me.mfa.enrolmentRequired === false, 'no second factor required yet');
   const inventory = await call(alice, 'GET', '/api/v1/configuration-items?limit=1');
   check(inventory.status === 200, 'the profile applies: alice reads the inventory', inventory.json);
   const denied = await call(alice, 'GET', '/api/v1/admin/users');
@@ -325,17 +327,17 @@ async function main(): Promise<void> {
   t = await test('alice');
   check(t.ok === true, 'settings restored: the test passes again', t);
   const back = await login(ALICE);
-  check(back.status === 200, 'and alice signs in again', back.json);
+  check(back.status === 200, 'and alice signs in again', brief(back));
   alice = identity(back);
 
   // ---------------------------------------------------------------------------------------
   section('3. requireMfa for a directory account (GH#120)');
   await ok(admin, 'PATCH', `/api/v1/admin/profiles/${profile.id}`, { requireMfa: true });
   const gated = await login(ALICE);
-  check(gated.status === 200, 'with requireMfa and no authenticator, alice still signs in', gated.json);
+  check(gated.status === 200, 'with requireMfa and no authenticator, alice still signs in', brief(gated));
   alice = identity(gated);
   const gatedMe = await ok(alice, 'GET', '/api/v1/auth/me');
-  check(gatedMe.mfa.required === true && gatedMe.mfa.enrolmentRequired === true, '/auth/me: MFA required, enrolment required', gatedMe.mfa);
+  check(gatedMe.mfa.required === true && gatedMe.mfa.enrolmentRequired === true, '/auth/me: MFA required, enrolment required');
   const blocked = await call(alice, 'GET', '/api/v1/configuration-items?limit=1');
   check(blocked.status === 403 && code(blocked) === 'MFA_ENROLMENT_REQUIRED', 'everything else is 403 MFA_ENROLMENT_REQUIRED until she enrols', blocked.json);
 
@@ -346,10 +348,10 @@ async function main(): Promise<void> {
   if (enrol.status !== 201) throw new Error('enrolment failed: the remaining checks need an authenticator');
   const nextCode = authenticator(enrol.json.secret);
   const confirm = await call(alice, 'POST', '/api/v1/auth/mfa/totp/confirm', { code: await nextCode() });
-  check(confirm.status === 200 && confirm.json?.codes?.length === 10, 'a code confirms it: 200 with 10 recovery codes', confirm.json);
+  check(confirm.status === 200 && confirm.json?.codes?.length === 10, 'a code confirms it: 200 with 10 recovery codes', brief(confirm));
   let recovery: string[] = confirm.json.codes;
   const enrolledMe = await ok(alice, 'GET', '/api/v1/auth/me');
-  check(enrolledMe.mfa.totpEnabled === true && enrolledMe.mfa.enrolmentRequired === false, '/auth/me: MFA on, no enrolment due', enrolledMe.mfa);
+  check(enrolledMe.mfa.totpEnabled === true && enrolledMe.mfa.enrolmentRequired === false, '/auth/me: MFA on, no enrolment due');
   check((await call(alice, 'GET', '/api/v1/configuration-items?limit=1')).status === 200, 'the inventory is open again');
 
   const challenge = await login(ALICE);
@@ -357,19 +359,19 @@ async function main(): Promise<void> {
   check(challenge.status === 401 && code(challenge) === 'MFA_REQUIRED' && mfaCookie, 'directory sign-in now answers 401 MFA_REQUIRED with the challenge cookie', challenge.json);
   check(!cookieOf(challenge, 'shadoucmdb_session'), 'and no session yet');
   const second = await call(null, 'POST', '/api/v1/auth/login/mfa', { code: await nextCode() }, mfaCookie);
-  check(second.status === 200 && second.json?.user?.username === 'alice' && cookieOf(second, 'shadoucmdb_session'), 'a code completes the sign-in', second.json);
+  check(second.status === 200 && second.json?.user?.username === 'alice' && cookieOf(second, 'shadoucmdb_session'), 'a code completes the sign-in', brief(second));
   alice = identity(second);
 
   const reauth = async (who: Identity) => call(who, 'POST', '/api/v1/auth/mfa/recovery-codes', { currentPassword: ALICE.password, code: recovery[0] });
   let r = await reauth(alice);
-  check(r.status === 200 && r.json?.codes?.length === 10, 'the directory password re-authenticates on the MFA routes (new recovery codes)', r.json);
+  check(r.status === 200 && r.json?.codes?.length === 10, 'the directory password re-authenticates on the MFA routes (new recovery codes)', brief(r));
   if (r.status === 200) recovery = r.json.codes;
 
   const unavailable = async (what: string) => {
     const rc = await reauth(alice);
-    check(rc.status === 503 && code(rc) === 'IDENTITY_PROVIDER_UNAVAILABLE', `${what}: MFA route (recovery codes) is 503 IDENTITY_PROVIDER_UNAVAILABLE`, rc.json);
+    check(rc.status === 503 && code(rc) === 'IDENTITY_PROVIDER_UNAVAILABLE', `${what}: MFA route (recovery codes) is 503 IDENTITY_PROVIDER_UNAVAILABLE`, brief(rc));
     const off = await call(alice, 'DELETE', '/api/v1/auth/mfa/totp', { currentPassword: ALICE.password, code: recovery[0] });
-    check(off.status === 503 && code(off) === 'IDENTITY_PROVIDER_UNAVAILABLE', `${what}: MFA route (turn off) is 503 IDENTITY_PROVIDER_UNAVAILABLE`, off.json);
+    check(off.status === 503 && code(off) === 'IDENTITY_PROVIDER_UNAVAILABLE', `${what}: MFA route (turn off) is 503 IDENTITY_PROVIDER_UNAVAILABLE`, brief(off));
     const l = await login(ALICE);
     check(l.status === 503 && code(l) === 'IDENTITY_PROVIDER_UNAVAILABLE', `${what}: sign-in is 503 IDENTITY_PROVIDER_UNAVAILABLE`, l.json);
     check(!LEAK.test(JSON.stringify([rc.json, off.json, l.json])), `${what}: no socket or TLS detail in the answers`);
@@ -382,7 +384,7 @@ async function main(): Promise<void> {
   await unavailable('directory stopped');
   directory('start');
   r = await reauth(alice);
-  check(r.status === 200, 'directory back: re-authentication works again', r.json);
+  check(r.status === 200, 'directory back: re-authentication works again', brief(r));
   if (r.status === 200) recovery = r.json.codes;
 
   // Disabling through the API ends the account's sessions, so no session is left to reach
@@ -395,7 +397,7 @@ async function main(): Promise<void> {
   await patch({ isEnabled: true });
   const again = await login(ALICE);
   const viaRecovery = await call(null, 'POST', '/api/v1/auth/login/mfa', { code: recovery.shift() }, cookieOf(again, 'shadoucmdb_mfa'));
-  check(again.status === 401 && viaRecovery.status === 200, 'enabled again: she signs in (password, then a recovery code)', viaRecovery.json);
+  check(again.status === 401 && viaRecovery.status === 200, 'enabled again: she signs in (password, then a recovery code)', brief(viaRecovery));
   alice = identity(viaRecovery);
   sql(`UPDATE cmdb.identity_providers SET is_enabled = false WHERE id = '${provider.id}'`);
   for (const [method, url, body] of [
@@ -404,14 +406,14 @@ async function main(): Promise<void> {
     ['DELETE', '/api/v1/auth/mfa/totp', { currentPassword: ALICE.password, code: recovery[0] }],
   ] as const) {
     const d = await call(alice, method, url, body);
-    check(d.status === 409 && code(d) === 'CONFLICT' && /directory is disabled/.test(message(d)), `directory disabled, session live: ${method} ${url} is 409`, d.json);
+    check(d.status === 409 && code(d) === 'CONFLICT' && /directory is disabled/.test(message(d)), `directory disabled, session live: ${method} ${url} is 409`, brief(d));
   }
   sql(`UPDATE cmdb.identity_providers SET is_enabled = true WHERE id = '${provider.id}'`);
 
   // ---------------------------------------------------------------------------------------
   section('4. Renamed entry: the name now finds another entry');
   r = await reauth(alice);
-  check(r.status === 200, 'before the rename: her password re-authenticates', r.json);
+  check(r.status === 200, 'before the rename: her password re-authenticates', brief(r));
   if (r.status === 200) recovery = r.json.codes;
   // alice's entry keeps its entryUUID under a new name; a new entry takes the name "alice",
   // with the same password and group, so only its entryUUID differs.
@@ -440,11 +442,11 @@ member: uid=alice,ou=people,${SUFFIX}
   t = await test('alice');
   check(t.ok === true && t.user?.displayName === 'Alice Newcomer', 'the directory now answers "alice" with the new entry', t);
   r = await reauth(alice);
-  check(r.status === 400 && field(r) === 'currentPassword', 'directory re-auth for the old account is refused: 400 currentPassword', r.json);
+  check(r.status === 400 && field(r) === 'currentPassword', 'directory re-auth for the old account is refused: 400 currentPassword', brief(r));
   const off = await call(alice, 'DELETE', '/api/v1/auth/mfa/totp', { currentPassword: ALICE.password, code: recovery[0] });
-  check(off.status === 400 && field(off) === 'currentPassword', 'MFA cannot be turned off with it either', off.json);
+  check(off.status === 400 && field(off) === 'currentPassword', 'MFA cannot be turned off with it either', brief(off));
   const stillOn = await ok(alice, 'GET', '/api/v1/auth/me');
-  check(stillOn.mfa.totpEnabled === true, 'MFA is still on', stillOn.mfa);
+  check(stillOn.mfa.totpEnabled === true, 'MFA is still on');
   const newcomer = await login(ALICE);
   check(
     newcomer.status === 401 && /already exists/.test(message(newcomer)) && !cookieOf(newcomer, 'shadoucmdb_session'),
