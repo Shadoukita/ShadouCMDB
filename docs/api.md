@@ -405,7 +405,10 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
   again. Every save has an `audit_log` row (`entity_type = ui_settings`) with the old and new version.
 - **Logo and favicon.** `PUT /ui-settings/assets/{logo|favicon}` with `{ contentType, data }` (base64). Logo: PNG,
   JPEG, WebP or SVG up to 512 KiB; favicon: PNG, ICO or SVG up to 128 KiB. The bytes must match the declared type;
-  SVGs with scripts, event handlers, `javascript:` URLs or embedded HTML are refused. `GET` serves them without a
+  an SVG is parsed and must use only allowlisted drawing elements and attributes (shapes, text, gradients,
+  patterns, masks, filters, CSS). Scripts, event handlers, animation, links, `<foreignObject>`, DTD subsets,
+  processing instructions, CSS `@import`/escapes, and any reference outside the file (other than embedded PNG,
+  JPEG, GIF or WebP data on `<image>`) are refused with `unsafe_content`. `GET` serves them without a
   session, with an ETag (`If-None-Match` answers 304), `nosniff` and a sandboxing Content-Security-Policy. The
   `url` in the settings carries a content hash (`?v=`). Uploads and removals are audited (`entity_type = ui_assets`).
 

@@ -67,7 +67,7 @@ controls.
 | T3 | CSRF on state-changing requests (T) | double-submit CSRF token, SameSite=Lax, strict CORS allowlist, `*` rejected | 1 | 3 | 3 medium | — |
 | T4 | Broken access control / IDOR across classes (E, I) | permission declared per route and checked server-side; list, search and graph filtered by class grants | 2 | 3 | 6 high | pentest pass before `v0.1.0` (workstream 8); authz regression tests per route |
 | T5 | SQL injection (T, I) | parameterised queries, escaped LIKE wildcards, quoted identifiers | 1 | 3 | 3 medium | Runtime DDL for type tables (SHAA-56) raises likelihood: identifier handling must stay centralised and fuzz-tested |
-| T6 | Stored XSS via CI attributes or UI settings (T, E) | Vue escaping, no `v-html`, strict CSP without `unsafe-inline`, uploaded images type-checked (scripted SVGs refused) and served with a sandboxing CSP | 1 | 3 | 3 medium | ZAP baseline (workstream 8) |
+| T6 | Stored XSS via CI attributes or UI settings (T, E) | Vue escaping, no `v-html`, strict CSP without `unsafe-inline`, uploaded images type-checked (SVGs checked against an element/attribute allowlist) and served with a sandboxing CSP | 1 | 3 | 3 medium | ZAP baseline (workstream 8) |
 | T7 | Information disclosure via API docs (I) | none: `/docs`, `/openapi.json` public | 3 | 1 | 3 medium | Config switch, default off/authenticated (workstream 3) |
 | T8 | Resource exhaustion (D) | 1 MiB body limit, page size ≤ 200, 30 s statement timeout, connection pool bound | 2 | 2 | 4 medium | HTTP read/request timeouts (workstream 3) |
 | T9 | Audit log tampering by a DB-level attacker (T, R) | append-only by application design and triggers | 2 | 2 | 4 medium | Block TRUNCATE, hash chain, syslog/SIEM export (workstream 3) |

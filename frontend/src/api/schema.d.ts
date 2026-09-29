@@ -1597,7 +1597,7 @@ export interface paths {
         get: operations["getUiAsset"];
         /**
          * Upload or replace the logo or favicon
-         * @description Requires `customization.manage`. JSON body with the content type and the base64 file. Logo: PNG, JPEG, WebP or SVG up to 512 KiB. Favicon: PNG, ICO or SVG up to 128 KiB. The content must match the declared type; SVGs with scripts, event handlers or embedded HTML are refused.
+         * @description Requires `customization.manage`. JSON body with the content type and the base64 file. Logo: PNG, JPEG, WebP or SVG up to 512 KiB. Favicon: PNG, ICO or SVG up to 128 KiB. The content must match the declared type. SVGs must be well-formed and use only allowlisted drawing elements and attributes: no scripts, event handlers, animation, links, foreign content, DTD subsets or processing instructions, and references only within the file (`#id`) or to embedded PNG, JPEG, GIF or WebP data. Anything else is refused with `unsafe_content`.
          */
         put: operations["uploadUiAsset"];
         post?: never;
