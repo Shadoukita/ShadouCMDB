@@ -10,6 +10,9 @@ export const E2E_USER = {
   password: process.env.E2E_PASSWORD ?? "e2e-admin-password",
 };
 
+/** The first-run setup token of the APIs under test (their `SETUP_TOKEN`; CI sets one for every API it starts). */
+export const SETUP_TOKEN = process.env.E2E_SETUP_TOKEN ?? process.env.SETUP_TOKEN ?? "";
+
 /**
  * The fresh installs of e2e/fresh-install.spec.ts (E2E_BARE_BASE_URL, E2E_IMPORT_BASE_URL): first-run
  * setup creates this administrator on each, and their sessions are stored next to STORAGE_STATE.
@@ -27,9 +30,9 @@ async function signIn(baseURL: string | undefined, user: { username: string; pas
   const setup = await ctx.get("/api/v1/setup");
   if (!setup.ok()) throw new Error(`GET /api/v1/setup → ${setup.status()}: is the API running at ${baseURL}?`);
   const res = (await setup.json()).setupRequired
-    ? await ctx.post("/api/v1/setup", { data: user })
+    ? await ctx.post("/api/v1/setup", { data: { ...user, setupToken: SETUP_TOKEN } })
     : await ctx.post("/api/v1/auth/login", { data: { username: user.username, password: user.password } });
-  if (!res.ok()) throw new Error(`Signing in as ${user.username} at ${baseURL} failed: ${res.status()} ${await res.text()}`);
+  if (!res.ok()) throw new Error(`Signing in as ${user.username} at ${baseURL} failed: ${res.status()} ${await res.text()} (first-run setup needs E2E_SETUP_TOKEN or SETUP_TOKEN)`);
   await ctx.storageState({ path });
   await ctx.dispose();
 }

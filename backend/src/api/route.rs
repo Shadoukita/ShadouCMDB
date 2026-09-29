@@ -931,7 +931,7 @@ mod tests {
 
     /// Runs first-run setup and returns the owner's session.
     async fn set_up_owner(app: &axum::Router) -> Creds {
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let cookie = headers

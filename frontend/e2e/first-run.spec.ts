@@ -1,3 +1,4 @@
+import { SETUP_TOKEN } from "./global-setup";
 import { expect, snap, test } from "./support";
 
 // The real first-run setup, with nothing mocked, against a second API whose database has been migrated
@@ -22,6 +23,17 @@ test("first-run setup creates the administrator once, signs them in, and then cl
   await page.goto("/login");
   await expect(page).toHaveURL(/\/setup$/);
   await expect(page.getByRole("heading", { name: /create the first administrator/ })).toBeVisible();
+
+  // GitHub #192: without the server's one-time setup token nobody can claim the install.
+  await page.locator("#setup-setupToken").fill("not-the-setup-token");
+  await page.locator("#setup-username").fill(ADMIN.username);
+  await page.locator("#setup-displayName").fill(ADMIN.displayName);
+  await page.locator("#setup-password").fill(ADMIN.password);
+  await page.locator("#setup-confirm").fill(ADMIN.password);
+  await page.getByRole("button", { name: "Create administrator and sign in" }).click();
+  await expect(page.locator("#setup-setupToken")).toHaveAttribute("aria-invalid", "true");
+  expect((await (await anon.get("/api/v1/setup")).json()).setupRequired).toBe(true);
+  await page.locator("#setup-setupToken").fill(SETUP_TOKEN);
 
   // The server's own validation answers, not just the form's.
   await page.locator("#setup-username").fill(ADMIN.username);
@@ -48,7 +60,9 @@ test("first-run setup creates the administrator once, signs them in, and then cl
 
   // Setup is now closed, to the UI and to the API alike.
   expect((await (await anon.get("/api/v1/setup")).json()).setupRequired).toBe(false);
-  const again = await anon.post("/api/v1/setup", { data: { username: "second-admin", displayName: "Second", password: "another-password-123" } });
+  const again = await anon.post("/api/v1/setup", {
+    data: { username: "second-admin", displayName: "Second", password: "another-password-123", setupToken: SETUP_TOKEN },
+  });
   expect(again.status()).toBe(409);
   expect((await again.json()).error.code).toBe("CONFLICT");
 

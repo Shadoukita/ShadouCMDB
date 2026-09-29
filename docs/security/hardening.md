@@ -210,9 +210,12 @@ protect its password accordingly.
 
 ## First run
 
-Until the first administrator exists, anyone who can reach the server can create it through the
-first-run setup in the UI. Either create it with `shadoucmdb create-admin` before the server is
-reachable, or make sure only you can reach it until you have completed the setup.
+Until the first administrator exists, first-run setup in the UI creates it. Setup needs the one-time
+setup token the server writes to its log and to its setup token file (or the `SETUP_TOKEN` you set),
+so someone who can only reach the server over the network cannot claim it
+([details](../deployment.md#the-setup-token)). Still, create the first administrator with
+`shadoucmdb create-admin` before the server is reachable, or keep it reachable only by you until
+setup is done: whoever can read the log (a log collector, a shared container host) can read the token too.
 
 Then: give each person their own account, grant the smallest permission profile that fits
 their job, and keep the number of administrators small. Deactivate accounts of people who leave

@@ -16,12 +16,12 @@ import FormField from "../form/FormField.vue";
 useDocumentTitle("First-run setup");
 const router = useRouter();
 const session = useSessionStore();
-const form = ref({ username: "", displayName: "", email: "", password: "", confirm: "" });
+const form = ref({ setupToken: "", username: "", displayName: "", email: "", password: "", confirm: "" });
 const busy = ref(false);
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
 
-const FIELDS = ["username", "displayName", "email", "password"];
+const FIELDS = ["setupToken", "username", "displayName", "email", "password"];
 const fieldErrors = computed(() => ({ ...(error.value instanceof ApiError ? error.value.fieldErrors() : {}), ...local.value }));
 const unplaced = computed(() => (error.value instanceof ApiError ? error.value.details.filter((d) => !FIELDS.includes(d.field)) : []));
 
@@ -29,6 +29,7 @@ async function submit() {
   error.value = null;
   const f = form.value;
   const errs: Record<string, string> = {};
+  if (!f.setupToken.trim()) errs.setupToken = "Required";
   if (!f.username.trim()) errs.username = "Required";
   if (!f.displayName.trim()) errs.displayName = "Required";
   if ([...f.password].length < 12) errs.password = "Too short";
@@ -45,6 +46,7 @@ async function submit() {
       displayName: f.displayName.trim(),
       email: f.email.trim() || null,
       password: f.password,
+      setupToken: f.setupToken.trim(),
     });
     await router.replace("/");
   } catch (e) {
@@ -72,9 +74,21 @@ async function submit() {
         <RouterLink to="/login">Go to sign-in</RouterLink>
       </div>
       <div class="form-grid">
+        <FormField
+          id="setup-setupToken"
+          label="Setup token"
+          required
+          :error="fieldErrors.setupToken"
+          hint="The one-time token the server wrote to its log and to its setup token file when it started"
+        >
+          <template #default="{ id, invalid, describedBy }">
+            <input :id="id" v-model="form.setupToken" v-autofocus type="password" autocomplete="off" spellcheck="false" :aria-invalid="invalid" :aria-describedby="describedBy" />
+          </template>
+        </FormField>
+        <div />
         <FormField id="setup-username" label="Username" required :error="fieldErrors.username" hint="Letters, digits and . _ @ -">
           <template #default="{ id, invalid, describedBy }">
-            <input :id="id" v-model="form.username" v-autofocus type="text" autocomplete="username" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            <input :id="id" v-model="form.username" type="text" autocomplete="username" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>
         </FormField>
         <FormField id="setup-displayName" label="Display name" required :error="fieldErrors.displayName" hint="Shown in the header and the audit log">

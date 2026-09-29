@@ -28,6 +28,8 @@ const RUN = Date.now().toString(36);
 const VERBOSE = process.argv.includes('--verbose');
 const ADMIN_USERNAME = process.env.SMOKE_USERNAME ?? 'smoke-admin';
 const ADMIN_PASSWORD = process.env.SMOKE_PASSWORD ?? `smoke-${RUN}-password`;
+/** The API's first-run setup token (its SETUP_TOKEN), needed only when it has no users yet. */
+const SETUP_TOKEN = process.env.SETUP_TOKEN ?? '';
 
 /** A signed-in user: the session cookie and the CSRF token that goes with it. */
 interface Identity {
@@ -261,9 +263,13 @@ async function main() {
   console.log('\n# Setup / sign-in');
   const setupStatus = (await get('/api/v1/setup')).json;
   if (setupStatus.setupRequired) {
-    await post('/api/v1/setup', { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: 'too short' }, 400);
+    if (!SETUP_TOKEN) throw new Error('This API has no users yet: set SETUP_TOKEN to its first-run setup token (the SETUP_TOKEN it runs with, or the token in its log).');
+    await post('/api/v1/setup', { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: 'too short', setupToken: SETUP_TOKEN }, 400);
+    // GitHub #192: a wrong setup token cannot claim the install.
+    const guessed = await call('POST', '/api/v1/setup', { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: ADMIN_PASSWORD, setupToken: `${SETUP_TOKEN}x` }, undefined, {}, { accept: [403] });
+    check(guessed.json.error?.code === 'FORBIDDEN' && (await get('/api/v1/setup')).json.setupRequired === true, 'setup with a wrong setup token: 403, no user created');
     // Two at once: the advisory lock lets exactly one of them create the administrator.
-    const body = { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: ADMIN_PASSWORD };
+    const body = { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: ADMIN_PASSWORD, setupToken: SETUP_TOKEN };
     const both = await Promise.all([0, 1].map(() => call('POST', '/api/v1/setup', body, undefined, {}, { accept: [201, 409] })));
     check(both.map((r) => r.status).sort().join() === '201,409', 'two concurrent setups: exactly one 201 and one 409');
     const res = both.find((r) => r.status === 201) ?? both[0]!;
@@ -275,7 +281,7 @@ async function main() {
     me = await login(ADMIN_USERNAME, ADMIN_PASSWORD);
   }
   const admin = me;
-  await post('/api/v1/setup', { username: `late-${RUN}`, displayName: 'Too late', password: 'correct horse battery' }, 409);
+  await post('/api/v1/setup', { username: `late-${RUN}`, displayName: 'Too late', password: 'correct horse battery', setupToken: SETUP_TOKEN || 'any' }, 409);
   const adminMe = (await get('/api/v1/auth/me')).json;
   check(adminMe.user.username === ADMIN_USERNAME && adminMe.csrfToken === admin.csrf, '/auth/me returns the user and the CSRF token');
 

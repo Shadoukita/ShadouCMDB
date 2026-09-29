@@ -84,6 +84,12 @@ pub struct AuthConfig {
     /// `OIDC_ALLOWED_HOSTS`: the only hosts OIDC discovery, key and token
     /// requests may go to; None (unset) allows any host.
     pub oidc_allowed_hosts: Option<crate::auth::sso::oidc::AllowedHosts>,
+    /// `SETUP_TOKEN`: the first-run setup token chosen by the operator; None
+    /// generates one (see `auth::setup_token`).
+    pub setup_token: Option<crate::auth::secret::Secret>,
+    /// `SETUP_TOKEN_FILE`: where a generated setup token is written. `main`
+    /// defaults it to `setup-token` next to the env file.
+    pub setup_token_file: Option<PathBuf>,
 }
 
 /// Who may read `/openapi.json` and the Swagger UI at `/docs`.
@@ -185,6 +191,14 @@ pub struct Config {
     pub maintenance_url: Option<String>,
     pub auth: AuthConfig,
     pub audit: AuditConfig,
+}
+
+/// The env file the variables were read from (`--env-file`, or the `.env` found).
+static ENV_FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Records the env file `main` loaded: a generated setup token is written next to it.
+pub fn set_env_file(path: PathBuf) {
+    let _ = ENV_FILE.set(path);
 }
 
 /// A secret as it appears in `Debug` output: whether it is set, never its value.
@@ -445,7 +459,11 @@ impl Config {
     }
 
     pub fn from_env() -> anyhow::Result<Config> {
-        Config::from_lookup(&|key| std::env::var(key).ok())
+        let mut cfg = Config::from_lookup(&|key| std::env::var(key).ok())?;
+        if cfg.auth.setup_token_file.is_none() {
+            cfg.auth.setup_token_file = ENV_FILE.get().and_then(|p| p.parent()).map(|dir| dir.join("setup-token"));
+        }
+        Ok(cfg)
     }
 
     /// `from_env` with the environment supplied by the caller, so tests need not mutate the process environment.
@@ -543,6 +561,20 @@ impl Config {
                 .map_err(|e| r.errors.push(format!("OIDC_ALLOWED_HOSTS: {e}")))
                 .ok()
         });
+        let setup_token = r.raw("SETUP_TOKEN").and_then(|token| {
+            let length = token.chars().count();
+            if length < crate::auth::setup_token::MIN_PRESET_LENGTH {
+                r.errors.push(format!(
+                    "SETUP_TOKEN: must be at least {} characters, got {length}; generate one with e.g. \
+                     `openssl rand -hex 32`, or leave it unset and the server generates one",
+                    crate::auth::setup_token::MIN_PRESET_LENGTH
+                ));
+                None
+            } else {
+                Some(crate::auth::secret::Secret::from(token))
+            }
+        });
+        let setup_token_file = r.raw("SETUP_TOKEN_FILE").map(PathBuf::from);
 
         if !r.errors.is_empty() {
             let detail: Vec<String> = r.errors.iter().map(|e| format!("  - {e}")).collect();
@@ -585,6 +617,8 @@ impl Config {
                 cookie_secure,
                 public_url,
                 oidc_allowed_hosts,
+                setup_token,
+                setup_token_file,
             },
             audit: AuditConfig { capture_client_ip, capture_user_agent, export },
         })

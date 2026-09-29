@@ -450,7 +450,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn setup(app: &Router) -> (Creds, Value) {
-        let body = json!({ "username": "owner", "displayName": "Owner", "password": PASSWORD });
+        let body = json!({ "username": "owner", "displayName": "Owner", "password": PASSWORD, "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(app, "POST", "/api/v1/setup", &Creds::default(), Some(body)).await;
         assert_eq!(status, 201, "{me}");
         (session_of(&me, &headers), me)
@@ -855,6 +855,8 @@ pub(crate) mod tests {
             cookie_secure: crate::config::CookieSecure::Never,
             public_url: None,
             oidc_allowed_hosts: None,
+            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+            setup_token_file: None,
         });
         let (_, cookies) =
             super::super::auth::open_session(pool, &auth, &HeaderMap::new(), &system, user_id, name, LoginMethod::Ldap)

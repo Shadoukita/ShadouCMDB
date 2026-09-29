@@ -73,7 +73,7 @@ export interface paths {
         put?: never;
         /**
          * Create the first administrator and sign them in (only while no users exist)
-         * @description The new user holds the built-in Administrator profile. 409 once any user exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line.
+         * @description The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.
          */
         post: operations["completeSetup"];
         delete?: never;
@@ -3976,6 +3976,7 @@ export interface operations {
                      * @description At least 12 characters
                      */
                     password: string;
+                    setupToken: string;
                 };
             };
         };
@@ -3991,6 +3992,15 @@ export interface operations {
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
