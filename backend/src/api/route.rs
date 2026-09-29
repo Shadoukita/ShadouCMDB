@@ -682,7 +682,11 @@ impl RouteBuilder {
                         ip: auth::session::client_ip(&headers, peer_ip).filter(|_| capture.ip),
                         peer_ip,
                         user_agent: auth::session::user_agent(&headers).filter(|_| capture.user_agent),
-                        net: auth::throttle::Net::of(auth::session::client_ip(&headers, peer)),
+                        net: auth::throttle::Net::of(auth::session::throttle_ip(
+                            &headers,
+                            peer,
+                            &state.auth.config.trusted_proxies,
+                        )),
                     };
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
                     let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };
@@ -713,7 +717,19 @@ impl RouteBuilder {
                         .and_then(|p| p.csrf_token())
                         .and_then(|csrf| auth::session::upgrade_cookies(&state.auth.config, &headers, csrf));
                     let api = Api { pool: state.pool, ctx, auth: state.auth, headers, readiness: state.readiness };
-                    let mut res = f(api, input).await?.respond(status);
+                    let mut res = match f(api, input).await {
+                        Ok(out) => out.respond(status),
+                        // A refused sign-in answers no earlier than its floor (GH#216). The
+                        // handler is done, so no database connection is held; the permit is
+                        // given back first, so waiting answers do not use up capacity.
+                        Err(mut e) => {
+                            if let Some(until) = e.hold_until.take() {
+                                drop(_permit);
+                                tokio::time::sleep_until(until).await;
+                            }
+                            return Err(e);
+                        }
+                    };
                     // A session from before the __Host- names moves over on its first
                     // HTTPS answer, unless the route set the session cookies itself (logout).
                     if let Some(cookies) = upgrade

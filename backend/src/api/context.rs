@@ -60,16 +60,22 @@ pub enum Caller {
 }
 
 /// Where an HTTP request came from; recorded with authentication events.
-/// Evidence only: the IP may come from client-controlled headers (see
-/// [`crate::auth::session::client_ip`]), so never base an access decision on it.
+/// `ip` is evidence only: it may come from client-controlled headers (see
+/// [`crate::auth::session::client_ip`]), so never base an access decision on
+/// it. The one access decision that uses the client address, the sign-in
+/// throttle, reads `net`, which trusts forwarding headers only from
+/// `TRUSTED_PROXIES` (see [`crate::auth::session::throttle_ip`]).
 #[derive(Debug, Clone, Default)]
 pub struct ClientInfo {
+    /// The address the request claims (the leftmost forwarded hop), else the TCP peer.
     pub ip: Option<IpAddr>,
     /// The TCP peer: the one hop the client cannot forge (the proxy, if there is one).
     pub peer_ip: Option<IpAddr>,
     pub user_agent: Option<String>,
-    /// The client's network, for the sign-in throttle only: set whatever
-    /// `AUDIT_CAPTURE_CLIENT_IP` says, and never stored or logged.
+    /// The client's network, for the sign-in throttle only: the TCP peer's,
+    /// or behind a trusted proxy the client's it reports. Set whatever
+    /// `AUDIT_CAPTURE_CLIENT_IP` says (processed in memory only), and never
+    /// stored or logged.
     pub net: crate::auth::throttle::Net,
 }
 
