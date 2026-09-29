@@ -1,7 +1,7 @@
 ### Added: free window placement in Edit layout
 
 A tab of a class layout can now be switched from **Grid** to **Free** in the bar of **Edit layout** on a
-CI page ([SHAA-362]). On a free tab every section, note and panel is a window: drag it anywhere by its
+CI page ([editing a layout on the CI page]). On a free tab every section, note and panel is a window: drag it anywhere by its
 title bar, resize it from any edge or corner, and let windows overlap. A readout shows the position and
 size while a window moves. Edges snap to the other windows and to an 8 px guide grid; hold **Alt**, or
 turn **Snap off** in the bar, to place a window to the pixel.
@@ -22,7 +22,6 @@ turn **Snap off** in the bar, to place a window to the pixel.
 
 Grid stays the default, and grid tabs look and work as before. **Administration › Customization ›
 Detail and form layout** previews a free tab on the grid and says so; positions and layers are edited
-with Edit layout. No API or database change: the format is the one added in [SHAA-361].
+with Edit layout. No API or database change: the format is the one described under "free-placement tabs in the layout format".
 
-[SHAA-362]: docs/data-model.md#editing-a-layout-on-the-ci-page
-[SHAA-361]: docs/data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2
+[editing a layout on the CI page]: docs/data-model.md#editing-a-layout-on-the-ci-page

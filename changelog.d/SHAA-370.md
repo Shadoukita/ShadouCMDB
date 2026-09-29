@@ -2,7 +2,7 @@
 
 A token scoped to the Administrator profile could add an OIDC provider or LDAP directory, point an
 existing one at another server or remap its groups to profiles, and the sign-ins that set up kept
-working after the token was revoked ([SHAA-370], GitHub #137). These routes now need a signed-in
+working after the token was revoked ([sign-in hardening], [GH#137]). These routes now need a signed-in
 session and answer an API token with `403 FORBIDDEN`, like account and token administration:
 
 - `POST /api/v1/admin/identity-providers`
@@ -17,4 +17,5 @@ nothing) still accept tokens. Each refused request writes a `token.use` audit ro
 upgrade. Make those changes as a signed-in administrator in the web UI. The OpenAPI document lists
 these operations without the token scheme.
 
-[SHAA-370]: docs/security/hardening.md#enterprise-sign-in
+[sign-in hardening]: docs/security/hardening.md#enterprise-sign-in
+[GH#137]: https://github.com/Shadoukita/ShadouCMDB/issues/137

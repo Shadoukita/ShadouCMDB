@@ -2,9 +2,10 @@
 
 A layout tab can now set `placement: "free"`. Its sections become windows that can be placed anywhere,
 sized freely and stacked over each other: each has a `frame` with `x` and `w` as fractions of the tab
-width, `y` and `h` in pixels, a stacking order `z` and an optional `minH` ([SHAA-361]). This release adds
-the format, its validation and the grid ↔ free conversion to the API. The designer and the detail page
-follow in a later release; until then a free tab renders on the grid in its reading order.
+width, `y` and `h` in pixels, a stacking order `z` and an optional `minH` ([layout format]). This entry covers
+the format, its validation and the grid ↔ free conversion in the API; placing windows in **Edit layout**
+and showing them on the detail page and form are described under "free window placement in Edit
+layout".
 
 **Migration notes.** None needed. The change is additive: a tab without `placement` is a grid tab as
 before, and the API writes `placement` and `frame` only for free tabs, so stored layouts, saved
@@ -20,4 +21,4 @@ versions and configuration exports read and write back unchanged. What API clien
   with `400 VALIDATION_ERROR` and the path of the value, also in configuration imports.
 - The audit trail and configuration export/import carry the new keys unchanged.
 
-[SHAA-361]: docs/data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2
+[layout format]: docs/data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2

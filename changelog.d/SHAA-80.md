@@ -1,6 +1,6 @@
 ### Changed: API docs off by default; HTTP timeouts, audit hash chain and SIEM export
 
-Backend hardening ([SHAA-80]):
+Backend hardening ([hardening settings]):
 
 - **`/openapi.json` and `/docs` are off by default** (`API_DOCS=off`). Set `API_DOCS=authenticated`
   (any signed-in user) or `public` if tools or people read the contract from the server. The contract
@@ -18,4 +18,4 @@ Backend hardening ([SHAA-80]):
 - A three-role install that runs `sql/bootstrap/10_split_roles.sql` after upgrading needs this
   release's version of the script (it also locks the API role out of the chain head).
 
-[SHAA-80]: docs/deployment.md#hardening-settings
+[hardening settings]: docs/deployment.md#hardening-settings
