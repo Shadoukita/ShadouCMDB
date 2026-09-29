@@ -310,6 +310,12 @@ All optional; every variable is in [`.env.example`](../.env.example).
 - **Timeouts:** `HTTP_HEADER_READ_TIMEOUT_SECS` (default 10) closes connections that do not finish
   their headers in time; `HTTP_REQUEST_TIMEOUT_SECS` (default 120) answers `408 REQUEST_TIMEOUT` to a
   request that runs longer. A reverse proxy in front should have its own, shorter limits.
+- **Concurrent requests:** `HTTP_MAX_CONCURRENT_REQUESTS` (default 512) caps the requests the server
+  handles at once; further requests get `503 SERVER_BUSY` with `Retry-After: 1` until one finishes
+  (`/healthz` is exempt). Request bodies are read only after the caller is authenticated, at most
+  64 KiB on setup and sign-in, 1 MiB elsewhere and 16 MiB on configuration import, so the cap also
+  bounds the memory held by uploads. Size it to the memory available: in the worst case every
+  request is a 16 MiB import.
 - **Request rate limits:** the server does not limit requests per client address, because it cannot
   tell a real client address from a forged `X-Forwarded-For` without a trusted proxy. Limit the
   anonymous routes (`/api/v1/auth/*`) per client address at the reverse proxy, which sees the real

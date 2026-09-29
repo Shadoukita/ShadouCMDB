@@ -340,6 +340,27 @@ async fn request_timeout(
     }
 }
 
+/// Answers 503 SERVER_BUSY once `HTTP_MAX_CONCURRENT_REQUESTS` requests are in
+/// progress, instead of queueing: every accepted request may hold a buffered
+/// body and a pool connection. Liveness is exempt so an orchestrator does not
+/// restart a server that is merely busy.
+async fn concurrency_limit(
+    axum::extract::State(permits): axum::extract::State<Arc<tokio::sync::Semaphore>>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if req.uri().path() == "/healthz" {
+        return next.run(req).await;
+    }
+    let Ok(_permit) = permits.try_acquire_owned() else {
+        tracing::warn!("request refused: HTTP_MAX_CONCURRENT_REQUESTS reached");
+        let mut err = AppError::new(ErrorCode::ServerBusy, "The server is handling too many requests; retry shortly");
+        err.retry_after = Some(1);
+        return err.into_response();
+    };
+    next.run(req).await
+}
+
 pub fn router(state: AppState, cfg: &Config) -> Router {
     let mut app = api::router()
         .route(security_txt::PATH, axum::routing::get(security_txt::handler))
@@ -351,7 +372,11 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(cfg.http.request_timeout, request_timeout))
         .layer(CatchPanicLayer::custom(panic_response))
-        .layer(DefaultBodyLimit::max(1024 * 1024));
+        .layer(DefaultBodyLimit::max(api::route::BODY_LIMIT))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::new(tokio::sync::Semaphore::new(cfg.http.max_concurrent_requests)),
+            concurrency_limit,
+        ));
 
     if !cfg.cors_origins.is_empty() {
         let origins: Vec<HeaderValue> = cfg.cors_origins.iter().filter_map(|o| HeaderValue::from_str(o).ok()).collect();
@@ -546,6 +571,7 @@ mod tests {
             http: crate::config::HttpConfig {
                 header_read_timeout: Duration::from_secs(10),
                 request_timeout: Duration::from_secs(120),
+                max_concurrent_requests: 512,
             },
             database: crate::config::DatabaseConfig {
                 url: Some("postgres://nobody@127.0.0.1:1/none".into()),
@@ -568,6 +594,42 @@ mod tests {
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth), &cfg)
+    }
+
+    /// GH#181: past HTTP_MAX_CONCURRENT_REQUESTS the server answers 503 at once
+    /// instead of queueing; liveness stays reachable.
+    #[tokio::test]
+    async fn requests_beyond_the_concurrency_limit_are_refused() {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let entered = Arc::new(std::sync::Mutex::new(Some(entered_tx)));
+        let slow = Router::new()
+            .route(
+                "/slow",
+                axum::routing::get(move || {
+                    if let Some(tx) = entered.lock().unwrap().take() {
+                        let _ = tx.send(());
+                    }
+                    std::future::pending::<&'static str>()
+                }),
+            )
+            .route("/fast", axum::routing::get(|| async { "ok" }))
+            .route("/healthz", axum::routing::get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(Arc::new(tokio::sync::Semaphore::new(1)), concurrency_limit));
+
+        let held = tokio::spawn(get(slow.clone(), "/slow", &[]));
+        entered_rx.await.unwrap();
+        let res = get(slow.clone(), "/fast", &[]).await;
+        assert_eq!(res.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(header(&res, header::RETRY_AFTER), Some("1"));
+        let body = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "SERVER_BUSY");
+        assert_eq!(get(slow.clone(), "/healthz", &[]).await.status(), axum::http::StatusCode::OK);
+
+        // The permit is released when the request ends.
+        held.abort();
+        let _ = held.await;
+        assert_eq!(get(slow, "/fast", &[]).await.status(), axum::http::StatusCode::OK);
     }
 
     /// GH#43: `serve` before `migrate` answered every API call with 500 INTERNAL_ERROR.
@@ -858,6 +920,7 @@ mod tests {
         let http = crate::config::HttpConfig {
             header_read_timeout: Duration::from_millis(200),
             request_timeout: Duration::from_secs(5),
+            max_concurrent_requests: 512,
         };
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {

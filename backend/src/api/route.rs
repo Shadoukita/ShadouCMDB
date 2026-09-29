@@ -18,9 +18,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Extension;
-use axum::body::Bytes;
-use axum::extract::rejection::BytesRejection;
-use axum::extract::{ConnectInfo, DefaultBodyLimit, RawPathParams, RawQuery, State};
+use axum::body::Body as RequestBody;
+use axum::extract::{ConnectInfo, RawPathParams, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodFilter, MethodRouter, on};
@@ -616,7 +615,7 @@ impl RouteBuilder {
         }
         self
     }
-    /// Accept bodies up to this many bytes instead of the server-wide 1 MiB (config import).
+    /// Accept bodies up to this many bytes instead of [`BODY_LIMIT`] (config import).
     pub fn body_limit(mut self, bytes: usize) -> Self {
         self.body_limit = Some(bytes);
         self
@@ -642,6 +641,10 @@ impl RouteBuilder {
         let session_only = self.session_only;
         let before_mfa_enrolment = self.before_mfa_enrolment;
         let safe_method = self.method == Method::GET || self.method == Method::HEAD;
+        let body_limit = self.body_limit.unwrap_or(match access {
+            Access::Public => PUBLIC_BODY_LIMIT,
+            _ => BODY_LIMIT,
+        });
         let (method, operation_id) = (self.method.clone(), Arc::<str>::from(self.operation_id.as_str()));
 
         let handler = move |State(state): State<AppState>,
@@ -650,7 +653,7 @@ impl RouteBuilder {
                             RawQuery(raw_query): RawQuery,
                             headers: HeaderMap,
                             peer: Option<Extension<ConnectInfo<SocketAddr>>>,
-                            body: Result<Bytes, BytesRejection>| {
+                            body: RequestBody| {
             let f = f.clone();
             let (method, operation_id) = (method.clone(), operation_id.clone());
             async move {
@@ -665,8 +668,10 @@ impl RouteBuilder {
                     };
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
                     let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };
+                    // Authorise before reading the body: an anonymous caller must not make
+                    // the server buffer up to body_limit bytes only to be answered 401.
                     let ctx = authorise(&state, &headers, rule, client, used).await?;
-                    let body = read_body(&headers, body)?;
+                    let body = read_body(&headers, body, body_limit).await?;
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
                     let api = Api { pool: state.pool, ctx, auth: state.auth, headers };
                     Ok::<_, AppError>(f(api, input).await?.respond(status))
@@ -693,10 +698,7 @@ impl RouteBuilder {
             query_params: Q::params(),
             body: B::schema(),
             response,
-            handler: match self.body_limit {
-                Some(bytes) => on(filter, handler).layer(DefaultBodyLimit::max(bytes)),
-                None => on(filter, handler),
-            },
+            handler: on(filter, handler),
         }
     }
 }
@@ -763,13 +765,25 @@ async fn authorise(
 
 /// JSON is the only accepted body type. An empty body counts as no body
 /// (clients often send Content-Type: application/json on DELETE).
-fn read_body(headers: &HeaderMap, body: Result<Bytes, BytesRejection>) -> Result<Option<Value>, AppError> {
-    let bytes = match body {
+/// Largest request body a route accepts unless it sets [`RouteBuilder::body_limit`].
+pub const BODY_LIMIT: usize = 1024 * 1024;
+/// Largest body of a public route (setup, sign-in): anyone can send one, and
+/// none of them needs more than a few hundred bytes.
+pub const PUBLIC_BODY_LIMIT: usize = 64 * 1024;
+
+/// Reads the body, at most `limit` bytes: a larger declared Content-Length is
+/// refused without reading, a larger streamed body as soon as it passes the limit.
+async fn read_body(headers: &HeaderMap, body: RequestBody, limit: usize) -> Result<Option<Value>, AppError> {
+    let too_large = || AppError::new(ErrorCode::PayloadTooLarge, "Request body is too large");
+    let declared =
+        headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
+    if declared.is_some_and(|n| n > limit as u64) {
+        return Err(too_large());
+    }
+    let bytes = match axum::body::to_bytes(body, limit).await {
         Ok(b) => b,
-        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-            return Err(AppError::new(ErrorCode::PayloadTooLarge, "Request body is too large"));
-        }
-        Err(rejection) => return Err(root_error(&rejection.body_text(), "bad_request")),
+        Err(e) if is_length_limit(&e) => return Err(too_large()),
+        Err(e) => return Err(root_error(&format!("Failed to read the request body: {e}"), "bad_request")),
     };
     if bytes.is_empty() {
         return Ok(None);
@@ -787,6 +801,17 @@ fn read_body(headers: &HeaderMap, body: Result<Bytes, BytesRejection>) -> Result
         .map_err(|e| root_error(&format!("Body is not valid JSON: {e}"), "invalid_json"))
 }
 
+fn is_length_limit(err: &axum::Error) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = source {
+        if e.is::<http_body_util::LengthLimitError>() {
+            return true;
+        }
+        source = e.source();
+    }
+    false
+}
+
 fn root_error(message: &str, code: &str) -> AppError {
     let mut err = AppError::validation(vec![FieldError {
         location: FieldLocation::Body,
@@ -796,4 +821,130 @@ fn root_error(message: &str, code: &str) -> AppError {
     }]);
     err.message = message.to_owned();
     err
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use axum::body::{Body, Bytes};
+    use axum::http::{Request, header};
+    use futures_util::stream;
+    use serde_json::json;
+    use tower::ServiceExt;
+
+    use crate::db::scratch;
+    use crate::modules::api_tokens::tests::{Creds, app, call, code};
+
+    const IMPORT: &str = "/api/v1/admin/config/import";
+
+    /// A body of `len` bytes in one chunk that records whether it was ever polled.
+    fn spy_body(len: usize) -> (Body, Arc<AtomicBool>) {
+        let polled = Arc::new(AtomicBool::new(false));
+        let flag = polled.clone();
+        let chunk = stream::once(async move {
+            flag.store(true, Ordering::SeqCst);
+            Ok::<_, std::convert::Infallible>(Bytes::from(vec![b' '; len]))
+        });
+        (Body::from_stream(chunk), polled)
+    }
+
+    async fn send(
+        app: &axum::Router,
+        method: &str,
+        path: &str,
+        creds: &Creds,
+        body: Body,
+        content_length: Option<usize>,
+    ) -> (u16, String) {
+        let mut req = Request::builder().method(method).uri(path).header(header::CONTENT_TYPE, "application/json");
+        if let Some(n) = content_length {
+            req = req.header(header::CONTENT_LENGTH, n);
+        }
+        if let Some(c) = &creds.cookie {
+            req = req.header(header::COOKIE, c);
+        }
+        if let Some(c) = &creds.csrf {
+            req = req.header("x-csrf-token", c);
+        }
+        if let Some(b) = &creds.bearer {
+            req = req.header(header::AUTHORIZATION, format!("Bearer {b}"));
+        }
+        let res = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+        let status = res.status().as_u16();
+        let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        (status, code(&v).to_owned())
+    }
+
+    /// GH#181: bodies (16 MiB on config import) were buffered before the
+    /// caller was authenticated, so anonymous clients could exhaust memory.
+    #[tokio::test]
+    async fn bodies_are_read_only_after_authorisation_and_within_the_route_limit() {
+        let Some(db) = scratch::database("bodies_are_read_only_after_authorisation").await else { return };
+        let app = app(db.pool.clone());
+        const MIB: usize = 1024 * 1024;
+
+        // Anonymous, and with a bad API token: 401 and the body is never polled.
+        let (body, polled) = spy_body(16 * MIB);
+        assert_eq!(
+            send(&app, "POST", IMPORT, &Creds::default(), body, Some(16 * MIB)).await,
+            (401, "UNAUTHENTICATED".into())
+        );
+        assert!(!polled.load(Ordering::SeqCst), "an anonymous request body was read");
+        let bad_token = Creds { bearer: Some("scmdb_nope".into()), ..Creds::default() };
+        let (body, polled) = spy_body(16 * MIB);
+        assert_eq!(send(&app, "POST", IMPORT, &bad_token, body, None).await, (401, "UNAUTHENTICATED".into()));
+        assert!(!polled.load(Ordering::SeqCst), "the body of a request with a bad token was read");
+
+        // Public routes (sign-in) take at most 64 KiB, read or declared.
+        let (body, _) = spy_body(super::PUBLIC_BODY_LIMIT + 1);
+        let login = "/api/v1/auth/login";
+        assert_eq!(send(&app, "POST", login, &Creds::default(), body, None).await, (413, "PAYLOAD_TOO_LARGE".into()));
+        let (body, polled) = spy_body(1);
+        let declared = Some(super::PUBLIC_BODY_LIMIT + 1);
+        assert_eq!(
+            send(&app, "POST", login, &Creds::default(), body, declared).await,
+            (413, "PAYLOAD_TOO_LARGE".into())
+        );
+        assert!(!polled.load(Ordering::SeqCst), "an oversized declared body was read");
+
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let session = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+
+        // Signed in, but without the CSRF token: still refused before the body is read.
+        let no_csrf = Creds { csrf: None, ..session.clone() };
+        let (body, polled) = spy_body(16 * MIB);
+        assert_eq!(send(&app, "POST", IMPORT, &no_csrf, body, None).await, (403, "CSRF_TOKEN_INVALID".into()));
+        assert!(!polled.load(Ordering::SeqCst));
+
+        // Authorised: the route's own limit applies, declared or streamed.
+        let (body, polled) = spy_body(1);
+        assert_eq!(
+            send(&app, "POST", IMPORT, &session, body, Some(16 * MIB + 1)).await,
+            (413, "PAYLOAD_TOO_LARGE".into())
+        );
+        assert!(!polled.load(Ordering::SeqCst), "an oversized declared body was read");
+        let (body, _) = spy_body(16 * MIB + 1);
+        assert_eq!(send(&app, "POST", IMPORT, &session, body, None).await, (413, "PAYLOAD_TOO_LARGE".into()));
+        // Up to 16 MiB reaches the import, which parses it (whitespace is not JSON).
+        let (body, polled) = spy_body(2 * MIB);
+        assert_eq!(send(&app, "POST", IMPORT, &session, body, None).await, (400, "VALIDATION_ERROR".into()));
+        assert!(polled.load(Ordering::SeqCst));
+        // Other routes keep the 1 MiB default.
+        let (body, _) = spy_body(super::BODY_LIMIT + 1);
+        let settings = "/api/v1/ui-settings";
+        assert_eq!(send(&app, "PUT", settings, &session, body, None).await, (413, "PAYLOAD_TOO_LARGE".into()));
+
+        db.drop().await;
+    }
 }
