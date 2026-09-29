@@ -406,7 +406,7 @@ pub struct OidcPatch {
     #[schema(schema_with = short_text)]
     #[serde(default, deserialize_with = "schemas::trimmed_opt")]
     client_id: Option<String>,
-    /// A string replaces the secret, null removes it, left out keeps it
+    /// A string replaces the secret, null removes it, left out keeps it (not with a new issuerUrl)
     #[schema(schema_with = secret_schema)]
     #[serde(default, deserialize_with = "schemas::patch")]
     client_secret: Option<Option<Secret>>,
@@ -440,7 +440,7 @@ pub struct LdapPatch {
     #[schema(schema_with = nullable_text_1024)]
     #[serde(default, deserialize_with = "schemas::patch_trimmed")]
     bind_dn: Option<Option<String>>,
-    /// A string replaces the password, null removes it, left out keeps it
+    /// A string replaces the password, null removes it, left out keeps it (not with a new server or bindDn)
     #[schema(schema_with = secret_schema)]
     #[serde(default, deserialize_with = "schemas::patch")]
     bind_password: Option<Option<Secret>>,
@@ -710,10 +710,14 @@ impl Draft {
             if self.kind != OIDC {
                 errors.push(body_error("oidc", "Only for kind oidc", "not_allowed"));
             } else {
+                let stored_issuer = self.issuer_url.clone();
                 set(&mut self.issuer_url, &o.issuer_url);
                 set(&mut self.client_id, &o.client_id);
                 if let Some(secret) = &o.client_secret {
                     self.client_secret = non_empty_secret(secret.as_ref());
+                } else if self.client_secret.is_some() && !same_issuer(&stored_issuer, &self.issuer_url) {
+                    // GH#238: the stored secret would go to the new issuer's token endpoint.
+                    errors.push(secret_required("oidc.clientSecret", "client secret", "server address"));
                 }
                 set(&mut self.scopes, &o.scopes);
                 set(&mut self.username_claim, &o.username_claim);
@@ -734,6 +738,7 @@ impl Draft {
             if self.kind != LDAP {
                 errors.push(body_error("ldap", "Only for kind ldap", "not_allowed"));
             } else {
+                let (stored_url, stored_dn) = (self.ldap_url.clone(), self.bind_dn.clone());
                 if let Some(url) = &l.url {
                     // A changed scheme brings its own default, unless startTls is given too.
                     if l.start_tls.is_none() {
@@ -752,6 +757,13 @@ impl Draft {
                 }
                 if let Some(pw) = &l.bind_password {
                     self.bind_password = non_empty_secret(pw.as_ref());
+                } else if self.bind_password.is_some() {
+                    // GH#238: the stored password would be sent in the next bind to the new server or DN.
+                    if !same_ldap_server(&stored_url, &self.ldap_url) {
+                        errors.push(secret_required("ldap.bindPassword", "bind password", "server address"));
+                    } else if self.bind_dn != stored_dn {
+                        errors.push(secret_required("ldap.bindPassword", "bind password", "bind DN"));
+                    }
                 }
                 set(&mut self.user_base_dn, &l.user_base_dn);
                 set(&mut self.user_filter, &l.user_filter);
@@ -813,6 +825,51 @@ impl Draft {
 fn distinct(values: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
     values.iter().filter(|v| seen.insert(v.as_str())).cloned().collect()
+}
+
+/// A patch that moves a provider elsewhere while keeping its stored secret
+/// (GH#238). The code is stable: the UI asks for the secret on it.
+const SECRET_REQUIRED: &str = "secret_required";
+
+fn secret_required(field: &str, secret: &str, changed: &str) -> FieldError {
+    body_error(field, format!("Enter the {secret} again when the {changed} changes."), SECRET_REQUIRED)
+}
+
+/// The same issuer: scheme, host, port and path (a trailing slash aside).
+fn same_issuer(a: &Option<String>, b: &Option<String>) -> bool {
+    let key = |s: &str| {
+        url::Url::parse(s).ok().map(|u| {
+            let path = u.path().trim_end_matches('/').to_owned();
+            (u.scheme().to_owned(), u.host_str().map(str::to_owned), u.port_or_known_default(), path)
+        })
+    };
+    match (a.as_deref(), b.as_deref()) {
+        (Some(a), Some(b)) => a == b || key(a).is_some_and(|k| Some(k) == key(b)),
+        (a, b) => a == b,
+    }
+}
+
+/// The same directory server: scheme, host and port (389 or 636 when left out).
+fn same_ldap_server(a: &Option<String>, b: &Option<String>) -> bool {
+    match (a.as_deref(), b.as_deref()) {
+        (Some(a), Some(b)) => a == b || ldap_server(a).is_some_and(|s| Some(s) == ldap_server(b)),
+        (a, b) => a == b,
+    }
+}
+
+fn ldap_server(url: &str) -> Option<(bool, String, u16)> {
+    let lower = url.to_ascii_lowercase();
+    let (secure, rest) = match lower.strip_prefix("ldaps://") {
+        Some(rest) => (true, rest),
+        None => (false, lower.strip_prefix("ldap://")?),
+    };
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    let default = if secure { 636 } else { 389 };
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((host, port)) if !rest.ends_with(']') => (host, port.parse().ok()?),
+        _ => (rest, default),
+    };
+    (!host.is_empty()).then(|| (secure, host.to_owned(), port))
 }
 
 fn set(target: &mut Option<String>, value: &Option<String>) {
@@ -1131,10 +1188,13 @@ pub async fn update(
     let row = data::get(&mut tx, id, true).await?.ok_or_else(|| AppError::missing("Identity provider", id))?;
     let before = load(&mut tx, auth, id, false).await?;
     let mut draft = Draft::from_row(&row, &auth.keyring);
-    let mut problems = draft.apply(b);
+    let (secrets, mut problems): (Vec<_>, Vec<_>) = draft.apply(b).into_iter().partition(|e| e.code == SECRET_REQUIRED);
     problems.extend(draft.problems());
     if !problems.is_empty() {
         return Err(AppError::validation(problems));
+    }
+    if !secrets.is_empty() {
+        return Err(AppError::new(ErrorCode::SecretRequired, "Enter the stored secret again").with_details(secrets));
     }
     write(&mut tx, &auth.keyring, Some(id), &draft).await?;
     if let Some(mappings) = &b.group_mappings {
@@ -1370,11 +1430,11 @@ pub fn routes() -> Vec<Route> {
             .tag(ROUTE_TAG)
             .summary("Change an identity provider (partial); groupMappings replaces all mappings")
             .description(format!(
-                "{ADMIN_ONLY} The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts. `oidc.mfaAssurance: trustProvider` without `oidc.requiredAcr` also empties `requiredAcr` (400 when both are sent with values). Switching to `verify` ends, on their next request, the sessions whose sign-in did not prove MFA for users whose profiles require it."
+                "{ADMIN_ONLY} The kind cannot change. Secrets: a string replaces, null removes, left out keeps; but a patch that changes `oidc.issuerUrl`, the scheme, host or port of `ldap.url`, or `ldap.bindDn` must send the secret again, or it is refused with 422 SECRET_REQUIRED (detail code `secret_required` on `oidc.clientSecret` or `ldap.bindPassword`) and nothing changes. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts. `oidc.mfaAssurance: trustProvider` without `oidc.requiredAcr` also empties `requiredAcr` (400 when both are sent with values). Switching to `verify` ends, on their next request, the sessions whose sign-in did not prove MFA for users whose profiles require it."
             ))
             .requires(manage)
             .session_only()
-            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::SecretRequired])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<IdentityProviderUpdate>>| async move {
                 Ok(Json(update(&api.pool, &api.auth, &api.ctx, id, &b).await?))
             }),
@@ -1612,6 +1672,121 @@ mod tests {
         assert_eq!(status, 200);
         let (_, v, _) = call(&app, "POST", &test_path, &admin, Some(json!({}))).await;
         assert_ne!(v["message"].as_str(), Some(sso::SecretUndecryptable::MESSAGE), "{v}");
+        db.drop().await;
+    }
+
+    #[test]
+    fn a_server_is_its_scheme_host_and_port() {
+        let s = |v: &str| Some(v.to_owned());
+        assert!(same_ldap_server(&s("ldaps://DC1.example.com/"), &s("ldaps://dc1.example.com:636")));
+        assert!(same_ldap_server(&s("ldap://[::1]"), &s("ldap://[::1]:389")));
+        assert!(!same_ldap_server(&s("ldaps://dc1.example.com"), &s("ldaps://evil.example.com")));
+        assert!(!same_ldap_server(&s("ldaps://dc1.example.com"), &s("ldaps://dc1.example.com:3269")));
+        assert!(!same_ldap_server(&s("ldaps://dc1.example.com"), &s("ldap://dc1.example.com:636")));
+        assert!(!same_ldap_server(&s("ldaps://dc1.example.com"), &s("ldaps://dc1.example.com:x")));
+        assert!(same_issuer(&s("https://idp.example.com/realms/a/"), &s("https://IDP.example.com:443/realms/a")));
+        assert!(!same_issuer(&s("https://idp.example.com/realms/a"), &s("https://idp.example.com/realms/b")));
+        assert!(!same_issuer(&s("https://idp.example.com"), &s("https://idp.example.com.evil.test")));
+    }
+
+    /// GH#238: a patch that points a provider at another server (or another
+    /// bind DN) without the secret is refused with 422 SECRET_REQUIRED and
+    /// changes nothing; with the secret it goes through.
+    #[tokio::test]
+    async fn a_moved_provider_needs_its_secret_again() {
+        use axum::http::header;
+        use serde_json::json;
+
+        use crate::db::scratch;
+        use crate::modules::api_tokens::tests::{Creds, app, call};
+
+        let Some(db) = scratch::database("a_moved_provider_needs_its_secret_again").await else { return };
+        let (pool, app) = (&db.pool, app(db.pool.clone()));
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery",
+            "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let admin = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+        let create = async |body| {
+            let (status, v, _) = call(&app, "POST", BASE, &admin, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            v["id"].as_str().unwrap().parse::<Uuid>().unwrap()
+        };
+        let oidc_id = create(json!({
+            "kind": "oidc", "name": "Entra ID",
+            "oidc": { "issuerUrl": "https://idp.example.test", "clientId": "cmdb", "clientSecret": "client secret" },
+        }))
+        .await;
+        let ldap_id = create(json!({
+            "kind": "ldap", "name": "Corporate AD",
+            "ldap": { "url": "ldaps://dc1.example.test", "userBaseDn": "dc=example,dc=com",
+                      "bindDn": "cn=svc,dc=example,dc=com", "bindPassword": "bind password" },
+        }))
+        .await;
+        type Stored = (Option<String>, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>);
+        let stored = async |id: Uuid| -> Stored {
+            sqlx::query_as(
+                "SELECT issuer_url, ldap_url || ' ' || bind_dn, client_secret_enc, bind_password_enc
+                 FROM identity_providers WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        };
+        let refused = async |id: Uuid, body, field: &str| {
+            let before = stored(id).await;
+            let (status, v, _) = call(&app, "PATCH", &format!("{BASE}/{id}"), &admin, Some(body)).await;
+            let e = &v["error"];
+            assert_eq!(
+                (status, e["code"].as_str(), e["details"][0]["field"].as_str(), e["details"][0]["code"].as_str()),
+                (422, Some("SECRET_REQUIRED"), Some(field), Some("secret_required")),
+                "{v}"
+            );
+            assert_eq!(stored(id).await, before, "nothing changed, the ciphertext included");
+        };
+        let accepted = async |id: Uuid, body| {
+            let (status, v, _) = call(&app, "PATCH", &format!("{BASE}/{id}"), &admin, Some(body)).await;
+            assert_eq!(status, 200, "{v}");
+        };
+
+        // OIDC: another issuer (host or path) needs the client secret.
+        refused(oidc_id, json!({ "oidc": { "issuerUrl": "https://attacker.example.test" } }), "oidc.clientSecret")
+            .await;
+        refused(oidc_id, json!({ "oidc": { "issuerUrl": "https://idp.example.test/other" } }), "oidc.clientSecret")
+            .await;
+        accepted(oidc_id, json!({ "oidc": { "issuerUrl": "https://idp.example.test/", "clientId": "cmdb2" } })).await;
+        accepted(
+            oidc_id,
+            json!({ "oidc": { "issuerUrl": "https://idp2.example.test", "clientSecret": "new client secret" } }),
+        )
+        .await;
+        assert_eq!(stored(oidc_id).await.0.as_deref(), Some("https://idp2.example.test"));
+
+        // LDAP: another host, port or scheme, or another bind DN, needs the password.
+        let url = |u: &str| json!({ "ldap": { "url": u } });
+        refused(ldap_id, url("ldaps://attacker.example.test"), "ldap.bindPassword").await;
+        refused(ldap_id, url("ldaps://dc1.example.test:3269"), "ldap.bindPassword").await;
+        refused(ldap_id, url("ldap://dc1.example.test"), "ldap.bindPassword").await;
+        refused(ldap_id, json!({ "ldap": { "bindDn": "cn=other,dc=example,dc=com" } }), "ldap.bindPassword").await;
+        accepted(ldap_id, url("ldaps://DC1.example.test:636")).await;
+        accepted(ldap_id, json!({ "ldap": { "url": "ldaps://dc2.example.test", "bindPassword": "new password" } }))
+            .await;
+        accepted(
+            ldap_id,
+            json!({ "ldap": { "bindDn": "cn=other,dc=example,dc=com", "bindPassword": "other password" } }),
+        )
+        .await;
+        // No stored secret, nothing to send elsewhere; removing the DN removes the password.
+        accepted(ldap_id, json!({ "ldap": { "bindDn": null } })).await;
+        accepted(ldap_id, url("ldaps://dc3.example.test")).await;
+        assert_eq!(stored(ldap_id).await.1, None, "no bind DN");
         db.drop().await;
     }
 

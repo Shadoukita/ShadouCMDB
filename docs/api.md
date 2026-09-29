@@ -73,6 +73,7 @@ Every non-2xx response has this shape:
 | 410 | `GONE` | The operation was removed; `message` names its replacement. Today: `POST`, `PATCH` and `DELETE` on the read-only `/statuses`, `/environments`, `/locations` and `/owners` (use `/lookup-list-values`). |
 | 422 | `INVALID_NAME` | A technical name (area, type or field `key`) is malformed, reserved (SQL keyword, `pg_` or `shadoucmdb_` prefix, system schema, registry column) or already taken. `details[]` names the field and the reason. |
 | 422 | `SCHEMA_CHANGE_REFUSED` | A data-loss guard stopped a schema change: a type change some stored values would not survive, `isRequired` while assets lack a value, removing stored enum values, or a purge that is not allowed yet (still active, wrong `confirm`, dependants). Nothing was changed. |
+| 422 | `SECRET_REQUIRED` | `PATCH /admin/identity-providers/{id}` changes `oidc.issuerUrl`, the scheme, host or port of `ldap.url`, or `ldap.bindDn` without sending the stored secret again. `details[]` names `oidc.clientSecret` or `ldap.bindPassword` with code `secret_required`. Nothing was changed. |
 | 409 | `CONFLICT` (password) | `PUT /auth/password` or `PUT /admin/users/{id}/password` for an account that signs in through an identity provider. |
 | 429 | `RATE_LIMITED` | Too many failed sign-ins (for this username, or on the whole server), or too many wrong current passwords on `PUT /auth/password`; wait for `Retry-After` seconds. |
 | 413 / 415 | `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE` | The body is over 1 MiB (16 MiB for a configuration import), or is not JSON. |
@@ -258,7 +259,9 @@ service bind and, with `{"username": "..."}`, the entry, its groups and the prof
 cause, so its text no longer tells closed, filtered and non-TLS ports apart; the exact error is logged on the
 server (`identity provider connection test failed`). The time to answer still differs (a refused connection fails at
 once, a filtered one after the 10 s timeout); the test is for administrators only. The OIDC client secret and the LDAP bind password
-are write-only (`clientSecretSet`, `bindPasswordSet`); they are stored in the database so the server can present
+are write-only (`clientSecretSet`, `bindPasswordSet`). A `PATCH` that changes `oidc.issuerUrl`, the scheme, host or
+port of `ldap.url`, or `ldap.bindDn` must send the secret again (`422 SECRET_REQUIRED` otherwise), so a stored secret
+is never sent to a server it was not entered for. They are stored in the database so the server can present
 them, like the TOTP secrets, so protect database access and backups accordingly. SAML is not supported.
 
 **API tokens.** <a id="api-tokens"></a>For scripts and services. A token belongs to a user (its owner; use a
