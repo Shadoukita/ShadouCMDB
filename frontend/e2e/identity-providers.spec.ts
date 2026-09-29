@@ -299,10 +299,23 @@ test("MFA setting: required ACR values round-trip under Verify; Trust warns, dro
   await expect(trust).toBeChecked();
   await snap(page, "131-oidc-mfa-trust");
 
-  // The list badges it.
+  // The list badges it, visibly: next to the "No group mappings" warning the Name cell wraps
+  // instead of clipping the badge out of view (toHaveText/toBeVisible ignore overflow clipping).
+  await page.route("**/api/v1/admin/identity-providers", async (route: Route) => {
+    const body = (await (await route.fetch()).json()) as Provider[];
+    await route.fulfill({ json: body.map((p) => (p.id === oidcId ? { ...p, groupMappings: [] } : p)) });
+  });
   await page.goto("/admin/identity-providers");
   const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: OIDC_NAME, exact: true }) });
-  await expect(row.getByTestId("mfa-not-verified")).toHaveText("MFA not verified");
+  await expect(row.getByText("No group mappings: nobody can sign in")).toBeVisible();
+  const badge = row.getByTestId("mfa-not-verified");
+  await expect(badge).toHaveText("MFA not verified");
+  const cell = (await row.locator("td").nth(1).boundingBox())!;
+  const box = (await badge.boundingBox())!;
+  expect(box.x + box.width).toBeLessThanOrEqual(cell.x + cell.width + 0.5);
+  expect(box.y + box.height).toBeLessThanOrEqual(cell.y + cell.height + 0.5);
+  await snap(page, "131-oidc-mfa-list-badge");
+  await page.unroute("**/api/v1/admin/identity-providers");
 
   // Back to Verify: the badge goes, the list starts empty (amr decides).
   await page.goto(`/admin/identity-providers/${oidcId}`);

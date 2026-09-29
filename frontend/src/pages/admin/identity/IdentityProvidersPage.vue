@@ -77,7 +77,7 @@ function warning(p: IdentityProvider): string | null {
         <tbody>
           <tr v-for="p in rows" :key="p.id" :class="{ disabled: !p.isEnabled }">
             <td class="num">{{ p.sortOrder }}</td>
-            <td>
+            <td class="wrap">
               <RouterLink :to="`/admin/identity-providers/${p.id}`">{{ p.name }}</RouterLink>
               <span v-if="warning(p)" class="badge warn spaced">{{ warning(p) }}</span>
               <span
