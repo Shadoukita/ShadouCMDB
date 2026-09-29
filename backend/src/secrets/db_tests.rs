@@ -1,6 +1,7 @@
 //! Encrypted TOTP seeds against a real PostgreSQL (see `db::scratch`):
 //! the upgrade of plaintext rows, key rotation, the refusal on an unknown key,
-//! a row that does not decrypt, and `mfa reset-undecryptable` (GH#189).
+//! a row that does not decrypt, and `mfa reset-undecryptable` (GH#189), which
+//! without a key refuses unless `--no-key` is given (GH#223).
 
 use sqlx::{Executor, PgPool};
 use uuid::Uuid;
@@ -247,5 +248,51 @@ async fn reset_undecryptable_turns_off_mfa_under_lost_keys_only() {
     assert_eq!(events, vec![expected("alice"), expected("bob")]);
     // The server starts with the current key again.
     assert!(sealed::prepare(pool, &current).await.is_ok());
+    db.drop().await;
+}
+
+/// GH#223: without ENCRYPTION_KEY_FILE, `--yes` alone deletes nothing; only
+/// `--no-key` treats every encrypted secret as undecryptable.
+#[tokio::test]
+async fn reset_undecryptable_without_a_key_needs_no_key() {
+    let Some(db) = scratch::database("reset_undecryptable_no_key").await else { return };
+    let pool = &db.pool;
+    add_user(pool, ALICE, "alice").await;
+    add_user(pool, BOB, "bob").await;
+    let ring = Keyring::random();
+    let step = totp::current_step();
+    put_sealed(pool, &ring, ALICE, &totp::new_secret(), step).await;
+    put_sealed(pool, &ring, BOB, &totp::new_secret(), step).await;
+    sqlx::query(
+        "INSERT INTO user_recovery_codes (user_id, code_hash) VALUES ($1, sha256(gen_random_uuid()::text::bytea))",
+    )
+    .bind(ALICE)
+    .execute(pool)
+    .await
+    .unwrap();
+    let args = |no_key| super::cli::ResetUndecryptableArgs {
+        dry_run: false,
+        no_key,
+        confirm: crate::maintenance::ConfirmArgs { yes: true },
+    };
+    let counts = || async {
+        let totp: i64 = sqlx::query_scalar("SELECT count(*) FROM user_totp").fetch_one(pool).await.unwrap();
+        let codes: i64 = sqlx::query_scalar("SELECT count(*) FROM user_recovery_codes").fetch_one(pool).await.unwrap();
+        let events: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = 'mfa.disable'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        (totp, codes, events)
+    };
+
+    let err = super::cli::reset_mfa(pool, None, &args(false)).await.unwrap_err().to_string();
+    assert!(err.starts_with("ENCRYPTION_KEY_FILE is not set") && err.contains("--no-key"), "{err}");
+    assert_eq!(counts().await, (2, 1, 0), "nothing deleted without --no-key");
+    let err = super::cli::reset_mfa(pool, Some((ring.active_id(), None)), &args(true)).await.unwrap_err().to_string();
+    assert!(err.starts_with("--no-key was given, but ENCRYPTION_KEY_FILE is set"), "{err}");
+    assert_eq!(counts().await, (2, 1, 0), "nothing deleted with --no-key and a key");
+
+    super::cli::reset_mfa(pool, None, &args(true)).await.unwrap();
+    assert_eq!(counts().await, (0, 0, 2), "--no-key resets everyone, audited");
     db.drop().await;
 }

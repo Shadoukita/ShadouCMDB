@@ -39,10 +39,10 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
                             (backup, restore and reset: see docs/backup-and-reset.md)
   generate-encryption-key --out F
                             Write a new key for ENCRYPTION_KEY_FILE (offline; never overwrites F)
-  mfa reset-undecryptable [--dry-run] [--yes]
+  mfa reset-undecryptable [--dry-run] [--no-key] [--yes]
                             Turn off two-factor sign-in for users whose authenticator secret is
                             encrypted with a key that is lost (audited; see docs/security/hardening.md)
-  identity-providers reset-undecryptable [--dry-run] [--yes]
+  identity-providers reset-undecryptable [--dry-run] [--no-key] [--yes]
                             Disable identity providers whose OIDC client secret or LDAP bind password
                             is encrypted with a key that is lost, and clear it (audited)
   openapi [--out F|--check F]  Print the OpenAPI document, write it, or fail if F is stale

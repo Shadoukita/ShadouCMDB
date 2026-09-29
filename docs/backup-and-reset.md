@@ -209,7 +209,8 @@ disables the identity providers concerned and clears their secret (and a
 directory's bind DN), audited as an `update` of the provider with
 `reason: key_lost`. Sign-in through those providers stops until an administrator
 enters the secret again and enables the provider; a local administrator account
-is the way in meanwhile. Both commands take `--dry-run` (list only) and `--yes`. Restoring a staging copy without the production key is a legitimate
+is the way in meanwhile. Both commands take `--dry-run` (list only) and `--yes`, and refuse to run
+without `ENCRYPTION_KEY_FILE` unless `--no-key` is given. Restoring a staging copy without the production key is a legitimate
 test: the reset is the deliberate step that makes it usable. Enrolments are never
 dropped silently.
 
