@@ -1122,7 +1122,9 @@ mod tests {
         crate::data::identity_providers::insert_linked(&mut tx, &linked).await.unwrap();
         tx.commit().await.unwrap();
         let before = password::DUMMY_VERIFIES.with(|n| n.get());
-        let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", "some password")).await.err();
+        let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", OWNER_PASSWORD.as_str()))
+            .await
+            .err();
         assert_eq!(e.map(|e| e.code), Some(ErrorCode::Unauthenticated));
         assert_eq!(password::DUMMY_VERIFIES.with(|n| n.get()), before + 1, "the dummy hash was verified");
         db.drop().await;
