@@ -20,7 +20,7 @@ use crate::api::route::{
     Body, Check, Either, ErrorWithCookies, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, WithCookies, route,
 };
 use crate::api::schemas::{name_schema, trimmed};
-use crate::auth::events::{self, LoginMethod, RevokeReason};
+use crate::auth::events::{self, LoginMethod, ProviderMfa, RevokeReason};
 use crate::auth::permissions::{ClassRights, GlobalPermission, Permissions};
 use crate::auth::throttle::{Attempt, GLOBAL_PENALTY, Gate, LoginThrottle, SLOW_LANE_WAITERS};
 use crate::auth::{AuthState, Principal, password, session};
@@ -149,15 +149,15 @@ pub struct Session {
 // Service
 // ---------------------------------------------------------------------------
 
-async fn session_dto(pool: &PgPool, user_id: Uuid, csrf_token: String) -> Result<Session, AppError> {
+async fn session_dto(pool: &PgPool, user_id: Uuid, session_id: Uuid, csrf_token: String) -> Result<Session, AppError> {
     let mut conn = pool.acquire().await?;
     let user = users::load(&mut conn, user_id).await?;
     let permissions = data::load_permissions(&mut conn, user_id).await?;
-    let mfa = mfa::status(&mut conn, user_id).await?;
+    let mfa = mfa::status(&mut conn, user_id, Some(session_id)).await?;
     Ok(Session { user, permissions: EffectivePermissions::from(&permissions), mfa, csrf_token })
 }
 
-/// Opens a session for the user and records `login.success`; returns its cookies.
+/// Opens a session for the user and records `login.success`; returns its id and cookies.
 pub(crate) async fn open_session(
     pool: &PgPool,
     auth: &AuthState,
@@ -166,7 +166,7 @@ pub(crate) async fn open_session(
     user_id: Uuid,
     username: &str,
     method: LoginMethod,
-) -> Result<Vec<axum::http::HeaderValue>, AppError> {
+) -> Result<(Uuid, Vec<axum::http::HeaderValue>), AppError> {
     let ctx = ctx.acting_as_user(user_id, username);
     let token = session::new_token();
     let csrf = session::new_token();
@@ -185,11 +185,12 @@ pub(crate) async fn open_session(
         auth.config.session_max_age,
         ctx.client.user_agent.as_deref(),
         ctx.client.ip,
+        method == LoginMethod::Oidc(ProviderMfa::Verified),
     )
     .await?;
     events::login_success(&mut tx, &ctx, session_id, user_id, username, method).await?;
     tx.commit().await?;
-    Ok(session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &token, &csrf))
+    Ok((session_id, session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &token, &csrf)))
 }
 
 /// [`open_session`], answering with the session.
@@ -202,9 +203,9 @@ async fn start_session(
     username: &str,
     method: LoginMethod,
 ) -> Result<WithCookies<Json<Session>>, AppError> {
-    let cookies = open_session(pool, auth, headers, ctx, user_id, username, method).await?;
+    let (session_id, cookies) = open_session(pool, auth, headers, ctx, user_id, username, method).await?;
     let csrf = session::cookie_value(&cookies[1], session::CSRF_COOKIE).unwrap_or_default();
-    Ok(WithCookies(Json(session_dto(pool, user_id, csrf).await?), cookies))
+    Ok(WithCookies(Json(session_dto(pool, user_id, session_id, csrf).await?), cookies))
 }
 
 pub async fn setup_required(pool: &PgPool) -> Result<bool, AppError> {
@@ -284,15 +285,17 @@ fn invalid_credentials() -> AppError {
     AppError::new(ErrorCode::Unauthenticated, "Invalid username or password")
 }
 
-/// Records `login.failure`, and `login.locked` when this failure set a lock.
+/// Records `login.failure` (with `reason` when valid credentials were still
+/// refused), and `login.locked` when this failure set a lock.
 async fn record_failure(
     pool: &PgPool,
     ctx: &RequestContext,
     username: &str,
+    reason: Option<&str>,
     locked: Option<Duration>,
 ) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
-    let attempt = events::login_failure(&mut tx, ctx, username).await?;
+    let attempt = events::login_failure(&mut tx, ctx, username, reason).await?;
     if let Some(lock) = locked {
         events::login_locked(&mut tx, ctx, attempt, username, lock).await?;
     }
@@ -335,7 +338,7 @@ async fn login(
         // an unthrottled way to grow audit_log, and its rows would stand out.
         let locked = attempt.failure();
         tracing::warn!(username = %user.username, ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in to a disabled account");
-        record_failure(pool, ctx, &b.username, locked).await?;
+        record_failure(pool, ctx, &b.username, None, locked).await?;
         return Err(AppError::new(ErrorCode::Unauthenticated, "This account is disabled"));
     }
     password_accepted(pool, auth, headers, ctx, attempt, user.id, &user.username, LoginMethod::Password).await
@@ -393,7 +396,7 @@ async fn wrong_credentials(
 ) -> Result<AppError, AppError> {
     let locked = attempt.failure();
     tracing::warn!(username = %username.chars().take(64).collect::<String>(), ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in failed");
-    record_failure(pool, ctx, username, locked).await?;
+    record_failure(pool, ctx, username, None, locked).await?;
     Ok(invalid_credentials())
 }
 
@@ -416,7 +419,7 @@ async fn directory_login(
         // A right password that is still refused counts like a disabled account's.
         sso::DirectoryAnswer::Refused(refusal) => {
             let locked = attempt.failure();
-            record_failure(pool, ctx, &b.username, locked).await?;
+            record_failure(pool, ctx, &b.username, Some(refusal.code()), locked).await?;
             Err(AppError::new(ErrorCode::Unauthenticated, refusal.message()))
         }
         sso::DirectoryAnswer::Unavailable => Err(AppError::new(
@@ -680,7 +683,8 @@ pub fn routes() -> Vec<Route> {
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 let me = principal(&api.ctx)?;
                 let csrf_token = me.csrf_token().ok_or_else(unauthenticated)?.to_owned();
-                Ok(Json(session_dto(&api.pool, me.user_id, csrf_token).await?))
+                let session_id = me.session_id().ok_or_else(unauthenticated)?;
+                Ok(Json(session_dto(&api.pool, me.user_id, session_id, csrf_token).await?))
             }),
         route(Method::PUT, "/api/v1/auth/password", "changeOwnPassword")
             .tag(TAG)

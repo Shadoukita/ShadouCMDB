@@ -25,6 +25,7 @@ use axum::http::HeaderMap;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::api::context::{ClientInfo, RequestContext};
 use crate::config::{AuthConfig, CookieSecure};
 use crate::data::auth as data;
 use crate::http::error::AppError;
@@ -129,11 +130,32 @@ impl AuthState {
 
 /// The principal behind the request's session cookie, if the session is live
 /// (not expired, not idle too long) and the user is active.
-pub async fn authenticate(pool: &PgPool, cfg: &AuthConfig, headers: &HeaderMap) -> Result<Option<Principal>, AppError> {
+///
+/// An OIDC session that a `requireMfa` profile no longer exempts (see
+/// [`data::MFA_REQUIRED`]) is ended here (`session.revoke`, reason
+/// `mfa_not_enforced`) and the request answered like an expired session: its
+/// account has no password to set up MFA with, and signing in again lets the
+/// provider step up. `client`: the caller, for that audit row.
+pub async fn authenticate(
+    pool: &PgPool,
+    cfg: &AuthConfig,
+    headers: &HeaderMap,
+    client: &ClientInfo,
+) -> Result<Option<Principal>, AppError> {
     let Some(token) = session::cookie(headers, session::SESSION_COOKIE) else { return Ok(None) };
     let Some(s) = data::resolve_session(pool, &session::token_hash(token), cfg.session_idle).await? else {
         return Ok(None);
     };
+    if s.mfa_not_enforced {
+        let ctx =
+            RequestContext::system("requireMfa policy", crate::http::request_id::current()).with_client(client.clone());
+        let mut tx = pool.begin().await?;
+        let ended: Vec<_> = data::delete_session(&mut tx, s.session_id).await?.into_iter().collect();
+        events::revoked(&mut tx, &ctx, &ended, events::RevokeReason::MfaNotEnforced).await?;
+        tx.commit().await?;
+        tracing::warn!(user = %s.username, "OIDC session ended: a profile requires MFA and the sign-in did not prove it");
+        return Ok(None);
+    }
     if s.needs_touch {
         data::touch_session(pool, s.session_id).await?;
     }

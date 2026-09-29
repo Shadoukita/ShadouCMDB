@@ -26,20 +26,34 @@ pub struct LiveSession {
     /// last_seen_at is more than a minute old: worth an UPDATE.
     pub needs_touch: bool,
     /// A profile the user holds requires MFA and they have not set it up.
-    /// Local and directory (LDAP) accounts; never OIDC accounts, whose
-    /// provider enforces MFA (see [`MFA_REQUIRED`]).
+    /// Local and directory (LDAP) accounts only (see [`MFA_REQUIRED`]).
     pub mfa_enrolment_required: bool,
+    /// An OIDC session that [`MFA_REQUIRED`] no longer exempts: a profile now
+    /// requires MFA and neither the provider is trusted nor the sign-in proved
+    /// it. It cannot set up MFA here (no password), so it must be ended.
+    pub mfa_not_enforced: bool,
 }
 
-/// Whether a profile the user `u` holds requires MFA here. OIDC accounts are
-/// exempt: their provider runs its own second factor. Local and directory
-/// (LDAP) accounts are covered: a directory password alone is one factor.
-/// Shared by the per-request gate and `/auth/me`, so the two cannot disagree.
-pub const MFA_REQUIRED: &str = "(NOT EXISTS (SELECT 1 FROM identity_providers ip
-                  WHERE ip.id = u.identity_provider_id AND ip.kind = 'oidc')
-         AND EXISTS (SELECT 1 FROM user_permission_profiles up JOIN permission_profiles p ON p.id = up.profile_id
-                  WHERE up.user_id = u.id AND p.require_mfa))";
+/// Whether a profile the user `u` holds requires MFA of this session `s`
+/// (`s` may be NULL: no session, nothing proven). OIDC accounts are exempt
+/// only when their provider is trusted to enforce MFA (`trust_provider`) or
+/// the sign-in that opened the session proved it (`s.provider_mfa`, set under
+/// `verify`). Local and directory (LDAP) accounts are covered: a directory
+/// password alone is one factor. Shared by the per-request gate and
+/// `/auth/me`, so the two cannot disagree.
+pub const MFA_REQUIRED: &str =
+    "(EXISTS (SELECT 1 FROM user_permission_profiles up JOIN permission_profiles p ON p.id = up.profile_id
+                  WHERE up.user_id = u.id AND p.require_mfa)
+         AND NOT EXISTS (SELECT 1 FROM identity_providers ip
+                  WHERE ip.id = u.identity_provider_id AND ip.kind = 'oidc'
+                    AND (ip.mfa_assurance = 'trust_provider' OR COALESCE(s.provider_mfa, false))))";
 
+/// Whether the user `u` signs in through an OIDC provider.
+const OIDC_ACCOUNT: &str =
+    "EXISTS (SELECT 1 FROM identity_providers ip WHERE ip.id = u.identity_provider_id AND ip.kind = 'oidc')";
+
+/// `provider_mfa`: the OIDC sign-in proved a second factor under `verify`.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_session(
     conn: &mut PgConnection,
     user_id: Uuid,
@@ -48,10 +62,11 @@ pub async fn create_session(
     max_age: Duration,
     user_agent: Option<&str>,
     ip_address: Option<IpAddr>,
+    provider_mfa: bool,
 ) -> sqlx::Result<Uuid> {
     sqlx::query_scalar(
-        "INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at, user_agent, ip_address)
-         VALUES ($1, $2, $3, now() + $4::interval, $5, $6) RETURNING id",
+        "INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at, user_agent, ip_address, provider_mfa)
+         VALUES ($1, $2, $3, now() + $4::interval, $5, $6, $7) RETURNING id",
     )
     .bind(user_id)
     .bind(token_hash)
@@ -59,15 +74,17 @@ pub async fn create_session(
     .bind(interval(max_age))
     .bind(user_agent)
     .bind(ip_address.map(IpNetwork::from))
+    .bind(provider_mfa)
     .fetch_one(conn)
     .await
 }
 
 pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -> sqlx::Result<Option<LiveSession>> {
-    let row: Option<(Uuid, Uuid, String, String, bool, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    type Row = (Uuid, Uuid, String, String, bool, bool, bool, bool);
+    let row: Option<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT s.id, u.id, u.username, s.csrf_token, s.last_seen_at < now() - interval '1 minute',
-                {MFA_REQUIRED}
-                AND NOT EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL)
+                {MFA_REQUIRED}, {OIDC_ACCOUNT},
+                EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL)
          FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval AND u.is_active"
     )))
@@ -75,14 +92,26 @@ pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -
     .bind(interval(idle))
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, mfa_enrolment_required)| LiveSession {
+    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, required, oidc, totp)| LiveSession {
         session_id,
         user_id,
         username,
         csrf_token,
         needs_touch,
-        mfa_enrolment_required,
+        mfa_enrolment_required: required && !oidc && !totp,
+        mfa_not_enforced: required && oidc,
     }))
+}
+
+/// Whether a profile the user holds requires MFA (whatever the account's kind).
+pub async fn holds_mfa_profile(conn: &mut PgConnection, user_id: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM user_permission_profiles up JOIN permission_profiles p ON p.id = up.profile_id
+                        WHERE up.user_id = $1 AND p.require_mfa)",
+    )
+    .bind(user_id)
+    .fetch_one(conn)
+    .await
 }
 
 pub async fn touch_session(pool: &PgPool, id: Uuid) -> sqlx::Result<()> {

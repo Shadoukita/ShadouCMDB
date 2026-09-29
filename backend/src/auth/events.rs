@@ -47,6 +47,9 @@ pub enum RevokeReason {
     Replaced,
     /// The identity provider the user signs in through was disabled or deleted.
     ProviderDisabled,
+    /// An OIDC session no longer met `requireMfa`: a profile now requires MFA,
+    /// or the provider now verifies MFA and the sign-in did not prove it.
+    MfaNotEnforced,
 }
 
 impl RevokeReason {
@@ -58,12 +61,35 @@ impl RevokeReason {
             RevokeReason::PasswordChanged => "password_changed",
             RevokeReason::Replaced => "replaced",
             RevokeReason::ProviderDisabled => "provider_disabled",
+            RevokeReason::MfaNotEnforced => "mfa_not_enforced",
+        }
+    }
+}
+
+/// What an OIDC sign-in says about the second factor (`providerMfa` in the
+/// login row), so an auditor can tell which sessions rest on unverified trust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderMfa {
+    /// The ID token proved a second factor (provider set to verify).
+    Verified,
+    /// The provider is trusted to enforce MFA; nothing was checked.
+    Trusted,
+    /// No proof (allowed only while no profile of the user requires MFA).
+    None,
+}
+
+impl ProviderMfa {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProviderMfa::Verified => "verified",
+            ProviderMfa::Trusted => "trusted",
+            ProviderMfa::None => "none",
         }
     }
 }
 
 /// How a session was opened.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginMethod {
     Password,
     /// Password, then an authenticator code.
@@ -73,7 +99,7 @@ pub enum LoginMethod {
     /// First-run setup signs the new administrator in.
     Setup,
     /// An OpenID Connect provider vouched for the user.
-    Oidc,
+    Oidc(ProviderMfa),
     /// An LDAP / Active Directory bind with the user's password.
     Ldap,
 }
@@ -133,23 +159,39 @@ pub async fn login_success(
     username: &str,
     method: LoginMethod,
 ) -> sqlx::Result<()> {
-    let method = match method {
+    let name = match method {
         LoginMethod::Password => "password",
         LoginMethod::Totp => "totp",
         LoginMethod::RecoveryCode => "recovery_code",
         LoginMethod::Setup => "setup",
-        LoginMethod::Oidc => "oidc",
+        LoginMethod::Oidc(_) => "oidc",
         LoginMethod::Ldap => "ldap",
     };
-    let v = details(ctx, fields(json!({ "userId": user_id, "username": username, "method": method })));
+    let mut f = fields(json!({ "userId": user_id, "username": username, "method": name }));
+    if let LoginMethod::Oidc(mfa) = method {
+        f.insert("providerMfa".into(), json!(mfa.as_str()));
+    }
+    let v = details(ctx, f);
     write(conn, ctx, AuditAction::LoginSuccess, session_id, v).await
 }
 
-/// A sign-in was refused. Returns the attempt's id, which is the row's entity
-/// id (no session exists) and is shared with a `login.locked` row for the same attempt.
-pub async fn login_failure(conn: &mut PgConnection, ctx: &RequestContext, username: &str) -> sqlx::Result<Uuid> {
+/// A sign-in was refused. `reason`: why a sign-in with valid credentials was
+/// still refused (the refusal's code, e.g. `mfa_not_enforced`); None for a
+/// wrong password or unknown name. Returns the attempt's id, which is the
+/// row's entity id (no session exists) and is shared with a `login.locked`
+/// row for the same attempt.
+pub async fn login_failure(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    username: &str,
+    reason: Option<&str>,
+) -> sqlx::Result<Uuid> {
     let attempt = Uuid::new_v4();
-    let v = details(ctx, fields(json!({ "attemptedUsername": attempted(username) })));
+    let mut f = fields(json!({ "attemptedUsername": attempted(username) }));
+    if let Some(reason) = reason {
+        f.insert("reason".into(), json!(reason));
+    }
+    let v = details(ctx, f);
     write(conn, ctx, AuditAction::LoginFailure, attempt, v).await?;
     Ok(attempt)
 }

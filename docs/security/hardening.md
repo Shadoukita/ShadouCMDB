@@ -228,12 +228,52 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   Give one local administrator a long password and two-factor authentication, keep them in your
   emergency procedure, and use them only when the provider is down or misconfigured. Mark the
   built-in Administrator profile `requireMfa` so that account cannot sign in on a password alone.
-- **Enforce MFA at the provider for OIDC.** For OIDC accounts ShadouCMDB relies on the provider
-  for the second factor (conditional access, Okta policies, Keycloak OTP). `requireMfa` covers
-  local **and LDAP/AD directory** accounts: a directory user holding such a profile sets up an
-  authenticator app here at their next sign-in, confirming with their directory password, and from
-  then on signs in with the directory password plus a code. Tell directory administrators before
-  you upgrade or mark a profile `requireMfa`.
+- **`requireMfa` for local and directory accounts.** `requireMfa` covers local **and LDAP/AD
+  directory** accounts: a directory user holding such a profile sets up an authenticator app here
+  at their next sign-in, confirming with their directory password, and from then on signs in with
+  the directory password plus a code. Tell directory administrators before you upgrade or mark a
+  profile `requireMfa`.
+- **`requireMfa` for OIDC accounts: let ShadouCMDB verify it.** OIDC accounts have no password
+  here, so the provider runs the second factor (conditional access, Okta policies, Keycloak OTP).
+  Each OIDC provider has an MFA setting (`mfaAssurance`):
+  - **Verify** (`verify`, the default for new providers, recommended): a user holding a
+    `requireMfa` profile is signed in only when the signed ID token proves a second factor. With
+    **required ACR values** (`requiredAcr`) set, the token's `acr` must be exactly one of them
+    (they are also sent as `acr_values`, so the provider can step up). Otherwise its `amr` must
+    contain `mfa`, or values from two different factor categories of RFC 8176 (knowledge `pwd`
+    `pin` `kba`; possession `hwk` `swk` `otp` `sc` `sms` `tel` `pop`; inherence `fpt` `face`
+    `iris` `retina` `vbm`). A token without that proof is refused (`ssoError=mfa_not_enforced`, a
+    `login.failure` row with `reason: mfa_not_enforced`, the received `acr`/`amr` in the server
+    log). Users without a `requireMfa` profile sign in as before.
+  - **Trust the provider** (`trustProvider`): ShadouCMDB does not check the token. Choose it only
+    when the provider enforces MFA for this client and cannot put the proof in the token. The
+    provider list shows these providers as "MFA not verified", and their sign-ins are recorded
+    with `providerMfa: trusted`.
+
+  The check also holds for sessions already open: when a profile starts to require MFA, a group
+  mapping changes, or a provider is switched from trust to verify, an OIDC session whose sign-in
+  did not prove MFA is ended on its next request (`session.revoke`, `reason: mfa_not_enforced`)
+  and the user signs in again. Whether a sign-in proved MFA is judged once, against the provider's
+  settings at that moment: adding or changing `requiredAcr` later does not end sessions that proved
+  MFA through `amr`. To apply a stricter setting to everyone at once, disable and re-enable the
+  provider after the change, which ends the sessions of its accounts. Each `login.success` row of an OIDC sign-in carries `providerMfa`
+  (`verified`, `trusted` or `none`). The provider's connection test warns when the discovery
+  document suggests the check cannot pass. Per provider:
+  - **Microsoft Entra ID:** `amr` contains `mfa` when Conditional Access required MFA for the
+    sign-in. Require MFA for the ShadouCMDB application in a Conditional Access policy and use
+    Verify without ACR values.
+  - **Okta, Auth0, Ping:** `amr` lists the methods used (for example `pwd` and `otp`, or `mfa`).
+    Require MFA in the application's sign-on policy and use Verify without ACR values.
+  - **Keycloak:** configure step-up authentication (an ACR to level-of-authentication mapping on
+    the realm or client, with the OTP or WebAuthn step on the higher level) and set `requiredAcr`
+    to the ACR of that level. Keycloak does not send `amr` by default.
+  - **Google Workspace:** the ID token carries neither `amr` nor a usable `acr`. Enforce 2-Step
+    Verification in the Google Admin console and use Trust the provider.
+
+  **Upgrading:** providers that existed before this setting are set to Trust the provider, so the
+  upgrade locks nobody out. Review each one and switch it to Verify where the provider sends the
+  proof; test with a non-administrator account first, and keep the local break-glass
+  administrator at hand.
 - **`PUBLIC_URL=https://...`** It is the only source of the OIDC redirect URI (never the request's
   Host header). Register exactly `{PUBLIC_URL}/api/v1/auth/oidc/callback` at the provider.
 - **Map groups, not everyone.** A sign-in whose groups map to no profile is refused. Map a

@@ -81,6 +81,7 @@ controls.
 | T17 | Data loss / ransomware on the DB (D) | customer's PostgreSQL backups | 2 | 3 | 6 high | Backup guidance (hardening guide); `backup`/`restore` commands (workstream 7) |
 | T18 | Privilege misuse by an administrator (E, R) | permission profiles, audit log of all changes | 2 | 2 | 4 medium | Audit export to a system admins don't control (workstream 3) |
 | T19 | Malicious configuration file imported (`config.export_import`) to escalate privileges or plant markup (E, T) | needs `config.export_import`, plus `datamodel.manage` for data-model/lookup sections `customization.manage` for UI settings (GH#59) and `profiles.manage` for permission profiles (GH#80); same checks as the admin API; a profile can't grant more than the importer holds; dry run; audited; exports never contain users or passwords | 1 | 3 | 3 medium | Keep import on the admin-API code paths; requirements for CI data import in [feature requirements](feature-requirements.md#import-and-export) |
+| T20 | Single-factor sign-in through an OIDC provider to a profile that requires MFA (S, E; GH#131) | per-provider MFA setting, default verify for new providers: `requireMfa` users need `amr`/`acr` proof in the signed ID token, re-checked per request; trust mode explicit, audited (`providerMfa: trusted`) and badged; upgraded providers start in trust | 2 | 3 | 6 high while in trust, 2 low with verify | Operators review upgraded providers and switch to verify ([hardening guide](hardening.md#enterprise-sign-in)); optional end-to-end test against a real IdP |
 
 ## 5. Annex I Part I mapping
 
@@ -110,6 +111,16 @@ T11–T13 and T4 are addressed by the work required before `v0.1.0` (workstreams
 accepted for `v0.1.0` on the basis that installations run on internal networks behind a proxy, and
 reduced by MFA in a later release. T10 and T17 depend on the operator following the hardening
 guide.
+
+T20 (GH#131) is residual by design for OIDC providers set to **Trust the provider**: ShadouCMDB
+cannot tell whether such a provider used a second factor, so a password-only policy at the
+provider still gives a `requireMfa` profile (up to Administrator) on one factor. The choice is
+explicit, audited and shown in the UI, and every provider that existed before the upgrade starts
+in it until an administrator reviews it. With **Verify**, the remaining risks are inherent to
+federation: `amr` and `acr` are the provider's own assertions (a compromised or malicious provider
+can claim anything, as it can for the identity itself), a session that loses its exemption is
+ended rather than stepped up in place, and there is no end-to-end test against a real provider
+in CI.
 
 `TODO(owner)`: the security owner accepts or rejects this residual risk for `v0.1.0`, recorded
 here with date and name.

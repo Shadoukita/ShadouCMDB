@@ -287,7 +287,8 @@ async fn require_session(
     req: Request,
     next: axum::middleware::Next,
 ) -> Response {
-    match crate::auth::authenticate(&state.pool, &state.auth.config, req.headers()).await {
+    let client = crate::api::context::ClientInfo::default();
+    match crate::auth::authenticate(&state.pool, &state.auth.config, req.headers(), &client).await {
         Ok(Some(_)) => next.run(req).await,
         Ok(None) => AppError::new(ErrorCode::Unauthenticated, "Sign in to read the API documentation").into_response(),
         Err(e) => e.into_response(),
