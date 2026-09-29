@@ -19,6 +19,7 @@ use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
 use crate::auth::events::{self, LoginMethod};
 use crate::auth::permissions::GlobalPermission;
+use crate::auth::secret::Secret;
 use crate::auth::throttle::Attempt;
 use crate::auth::{AuthState, Principal, totp};
 use crate::data::auth as auth_data;
@@ -102,7 +103,7 @@ fn totp_code_schema() -> Schema {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasswordConfirmation {
     #[schema(schema_with = login_field_schema)]
-    current_password: String,
+    current_password: Secret,
 }
 impl Check for PasswordConfirmation {}
 
@@ -119,7 +120,7 @@ impl Check for TotpConfirmation {}
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MfaReauthentication {
     #[schema(schema_with = login_field_schema)]
-    current_password: String,
+    current_password: Secret,
     #[schema(schema_with = code_schema)]
     code: String,
 }
@@ -454,7 +455,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn setup(app: &Router) -> (Creds, Value) {
-        let body = json!({ "username": "owner", "displayName": "Owner", "password": PASSWORD });
+        let body = json!({ "username": "owner", "displayName": "Owner", "password": PASSWORD, "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(app, "POST", "/api/v1/setup", &Creds::default(), Some(body)).await;
         assert_eq!(status, 201, "{me}");
         (session_of(&me, &headers), me)
@@ -858,6 +859,9 @@ pub(crate) mod tests {
             session_max_age: std::time::Duration::from_secs(3600),
             cookie_secure: crate::config::CookieSecure::Never,
             public_url: None,
+            oidc_allowed_hosts: None,
+            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+            setup_token_file: None,
         });
         let (_, cookies) =
             super::super::auth::open_session(pool, &auth, &HeaderMap::new(), &system, user_id, name, LoginMethod::Ldap)

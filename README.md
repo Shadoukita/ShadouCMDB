@@ -142,7 +142,8 @@ from an empty directory to a verified install. The steps below are the same flow
    container, see [docs/deployment.md](docs/deployment.md).
 
 7. **Create the first administrator.** Every page and API call except the health probes needs a signed-in
-   user. Open the web UI, which offers first-run setup while no user exists, or run:
+   user. Open the web UI, which offers first-run setup while no user exists (it asks for the one-time setup
+   token the server writes to its log; see [the setup token](docs/deployment.md#the-setup-token)), or run:
 
    ```sh
    shadoucmdb create-admin --username admin --display-name "Jane Admin"   # prompts for the password

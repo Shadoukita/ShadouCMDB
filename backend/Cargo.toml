@@ -41,6 +41,9 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 # Verifies OIDC ID token signatures (RSA, ECDSA, Ed25519) and seals the OIDC sign-in
 # cookie (AES-256-GCM); already in the tree through rustls.
 ring = "0.17"
+# Parses uploaded SVG logos for the element/attribute allowlist. No dependencies
+# and never fetches external entities.
+roxmltree = "0.21"
 # Reads the password for `create-admin` without echoing it.
 rpassword = "7"
 # Trust anchors for the identity-provider TLS clients: extra CA PEMs per provider.

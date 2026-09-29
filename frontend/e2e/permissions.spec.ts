@@ -97,7 +97,7 @@ test("anonymous callers get 401 from every protected endpoint", async ({ playwri
   // Setup is closed once a user exists, and cannot be used to mint a second administrator.
   expect((await (await anon.get("/api/v1/setup")).json()).setupRequired).toBe(false);
   await expectError(
-    await anon.post("/api/v1/setup", { data: { username: `sneaky-${stamp}`, displayName: "x", password: "long-enough-pw" } }),
+    await anon.post("/api/v1/setup", { data: { username: `sneaky-${stamp}`, displayName: "x", password: "long-enough-pw", setupToken: "guessed" } }),
     409,
     "CONFLICT",
   );

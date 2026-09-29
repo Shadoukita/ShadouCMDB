@@ -79,8 +79,10 @@ test("first-run setup is shown while the API says no user exists, and signs the 
   await expect(page).toHaveURL(/\/setup$/); // sign-in makes no sense before an account exists
 
   await page.getByRole("button", { name: "Create administrator and sign in" }).click();
+  await expect(page.locator("#setup-setupToken")).toHaveAttribute("aria-invalid", "true");
   await expect(page.locator("#setup-username")).toHaveAttribute("aria-invalid", "true");
   await expect(page.locator("#setup-username-err")).toHaveText("Required");
+  await page.locator("#setup-setupToken").fill("  token-from-the-log  ");
   await page.locator("#setup-username").fill("first-admin");
   await page.locator("#setup-displayName").fill("First Admin");
   await page.locator("#setup-password").fill("a-long-enough-password");
@@ -92,5 +94,11 @@ test("first-run setup is shown while the API says no user exists, and signs the 
   await page.locator("#setup-confirm").fill("a-long-enough-password");
   await page.getByRole("button", { name: "Create administrator and sign in" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-  expect(sent).toEqual({ username: "first-admin", displayName: "First Admin", email: null, password: "a-long-enough-password" });
+  expect(sent).toEqual({
+    username: "first-admin",
+    displayName: "First Admin",
+    email: null,
+    password: "a-long-enough-password",
+    setupToken: "token-from-the-log",
+  });
 });

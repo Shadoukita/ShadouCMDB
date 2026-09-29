@@ -30,6 +30,8 @@ if (!BASE || !['seed', 'check'].includes(MODE ?? '')) {
 }
 const ADMIN = 'upgrade-admin';
 const ADMIN_PASSWORD = process.env.UPGRADE_PASSWORD ?? 'upgrade-admin-password';
+// First-run setup token (GitHub #192). Sent only when set: the releases this seeds through predate it and refuse unknown fields.
+const SETUP_TOKEN = process.env.SETUP_TOKEN;
 const VIEWER = 'upgrade-viewer';
 const VIEWER_PASSWORD = process.env.UPGRADE_VIEWER_PASSWORD ?? 'upgrade-viewer-password';
 
@@ -125,7 +127,7 @@ async function viewerView(ids: Json): Promise<ViewerView> {
 async function seed() {
   const setup = await call('GET', '/api/v1/setup');
   if (!setup.json?.setupRequired) throw new Error('first-run setup is already done: seed needs an empty database');
-  me = identity(await call('POST', '/api/v1/setup', { username: ADMIN, displayName: 'Upgrade Admin', password: ADMIN_PASSWORD }));
+  me = identity(await call('POST', '/api/v1/setup', { username: ADMIN, displayName: 'Upgrade Admin', password: ADMIN_PASSWORD, ...(SETUP_TOKEN ? { setupToken: SETUP_TOKEN } : {}) }));
 
   // Newer releases group types in areas. Create one when the release has them.
   const hasAreas = (await call('GET', '/api/v1/areas')).status === 200;

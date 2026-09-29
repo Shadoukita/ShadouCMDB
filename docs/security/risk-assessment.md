@@ -67,7 +67,7 @@ controls.
 | T3 | CSRF on state-changing requests (T) | double-submit CSRF token, SameSite=Lax, strict CORS allowlist, `*` rejected | 1 | 3 | 3 medium | — |
 | T4 | Broken access control / IDOR across classes (E, I) | permission declared per route and checked server-side; list, search and graph filtered by class grants | 2 | 3 | 6 high | pentest pass before `v0.1.0` (workstream 8); authz regression tests per route |
 | T5 | SQL injection (T, I) | parameterised queries, escaped LIKE wildcards, quoted identifiers | 1 | 3 | 3 medium | Runtime DDL for type tables (SHAA-56) raises likelihood: identifier handling must stay centralised and fuzz-tested |
-| T6 | Stored XSS via CI attributes or UI settings (T, E) | Vue escaping, no `v-html`, strict CSP without `unsafe-inline`, uploaded images type-checked (scripted SVGs refused) and served with a sandboxing CSP | 1 | 3 | 3 medium | ZAP baseline (workstream 8) |
+| T6 | Stored XSS via CI attributes or UI settings (T, E) | Vue escaping, no `v-html`, strict CSP without `unsafe-inline`, uploaded images type-checked (SVGs checked against an element/attribute allowlist) and served with a sandboxing CSP | 1 | 3 | 3 medium | ZAP baseline (workstream 8) |
 | T7 | Information disclosure via API docs (I) | none: `/docs`, `/openapi.json` public | 3 | 1 | 3 medium | Config switch, default off/authenticated (workstream 3) |
 | T8 | Resource exhaustion (D) | 1 MiB body limit, page size ≤ 200, 30 s statement timeout, connection pool bound | 2 | 2 | 4 medium | HTTP read/request timeouts (workstream 3) |
 | T9 | Audit log tampering by a DB-level attacker (T, R) | append-only by application design and triggers | 2 | 2 | 4 medium | Block TRUNCATE, hash chain, syslog/SIEM export (workstream 3) |
@@ -75,7 +75,7 @@ controls.
 | T11 | Compromised dependency (T, E) | lockfiles, `--locked`/`npm ci`, small dependency set, no OpenSSL | 2 | 3 | 6 high | cargo-deny, npm audit, Dependabot, CodeQL (workstream 1) |
 | T12 | Tampered release or image (T) | release only from tagged `main` by CI, `SHA256SUMS`, `contents: read` defaults | 2 | 3 | 6 high | cosign signatures, SLSA provenance, SBOM, SHA-pinned actions (workstream 1); [IR plan](incident-response.md) |
 | T13 | Compromised maintainer or AI agent account (S, E) | PR workflow, CI gates | 2 | 3 | 6 high | MFA, branch protection, mandatory human review of security changes ([SDL](sdl.md)) |
-| T14 | First-run takeover: attacker creates the first admin (E) | setup only while the user table is empty; `create-admin` CLI documented | 1 | 3 | 3 medium | Hardening guide first-run section |
+| T14 | First-run takeover: attacker creates the first admin (E) | setup only while the user table is empty; setup needs a one-time token that only the operator can read (server log, 0600 token file) or set (`SETUP_TOKEN`), dropped once the first admin exists (GH#192); `create-admin` CLI documented | 1 | 3 | 3 medium | Residual: whoever can read the server log during first run; hardening guide first-run section |
 | T15 | Forged client IP in audit log (R) | peer IP recorded alongside forwarded IP; documented as evidence, not access control | 2 | 1 | 2 low | — |
 | T16 | Sensitive data in logs (I) | no secrets or tokens logged; SQL statements only at `trace` | 1 | 2 | 2 low | — |
 | T17 | Data loss / ransomware on the DB (D) | customer's PostgreSQL backups | 2 | 3 | 6 high | Backup guidance (hardening guide); `backup`/`restore` commands (workstream 7) |

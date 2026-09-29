@@ -73,7 +73,7 @@ export interface paths {
         put?: never;
         /**
          * Create the first administrator and sign them in (only while no users exist)
-         * @description The new user holds the built-in Administrator profile. 409 once any user exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line.
+         * @description The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.
          */
         post: operations["completeSetup"];
         delete?: never;
@@ -93,7 +93,7 @@ export interface paths {
         put?: never;
         /**
          * Sign in with username and password
-         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the client address the reverse proxy reports), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.
+         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the client address the reverse proxy reports), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.
          */
         post: operations["login"];
         delete?: never;
@@ -1597,7 +1597,7 @@ export interface paths {
         get: operations["getUiAsset"];
         /**
          * Upload or replace the logo or favicon
-         * @description Requires `customization.manage`. JSON body with the content type and the base64 file. Logo: PNG, JPEG, WebP or SVG up to 512 KiB. Favicon: PNG, ICO or SVG up to 128 KiB. The content must match the declared type; SVGs with scripts, event handlers or embedded HTML are refused.
+         * @description Requires `customization.manage`. JSON body with the content type and the base64 file. Logo: PNG, JPEG, WebP or SVG up to 512 KiB. Favicon: PNG, ICO or SVG up to 128 KiB. The content must match the declared type. SVGs must be well-formed and use only allowlisted drawing elements and attributes: no scripts, event handlers, animation, links, foreign content, DTD subsets or processing instructions, and references only within the file (`#id`) or to embedded PNG, JPEG, GIF or WebP data. Anything else is refused with `unsafe_content`.
          */
         put: operations["uploadUiAsset"];
         post?: never;
@@ -1886,7 +1886,7 @@ export interface paths {
         put?: never;
         /**
          * Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to. For OIDC, `details` also warns when the MFA check is unlikely to work: `verify` without `requiredAcr` while the discovery document's `claims_supported` omits `amr`, or a `requiredAcr` value missing from `acr_values_supported`.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to. For OIDC, `details` also warns when the MFA check is unlikely to work: `verify` without `requiredAcr` while the discovery document's `claims_supported` omits `amr`, or a `requiredAcr` value missing from `acr_values_supported`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["testIdentityProvider"];
         delete?: never;
@@ -3179,7 +3179,7 @@ export interface components {
             mfa: components["schemas"]["MfaStatus"];
             /**
              * @description Send as the X-CSRF-Token header on every POST, PUT, PATCH and DELETE
-             *     (also readable from the shadoucmdb_csrf cookie)
+             *     (also readable from the shadoucmdb_csrf cookie, `__Host-shadoucmdb_csrf` behind HTTPS)
              */
             csrfToken: string;
         };
@@ -3986,6 +3986,7 @@ export interface operations {
                      * @description At least 12 characters
                      */
                     password: string;
+                    setupToken: string;
                 };
             };
         };
@@ -4001,6 +4002,15 @@ export interface operations {
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

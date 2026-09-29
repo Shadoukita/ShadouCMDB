@@ -66,7 +66,8 @@ shadoucmdb verify          # optional, writes nothing
 shadoucmdb serve           # http://<host>:3000/readyz
 ```
 
-Then open the web UI and create the first administrator, or run `create-admin` (below).
+Then open the web UI and create the first administrator with the setup token from the server log,
+or run `create-admin` (below).
 
 ## The first administrator
 
@@ -75,13 +76,43 @@ installation there are no users yet, and there are two ways to create the first 
 
 - **In the browser:** while no user exists, the UI offers first-run setup
   (`GET /api/v1/setup` reports `setupRequired: true`; `POST /api/v1/setup` creates the
-  account and signs it in). It only works while the user table is empty.
+  account and signs it in). It only works while the user table is empty, and it asks for the
+  **setup token** (see below).
 - **On the command line**, from any machine that can reach the database:
 
   ```sh
   shadoucmdb create-admin --username admin --display-name "Jane Admin"          # prompts twice for the password
   printf '%s\n' "$ADMIN_PASSWORD" | shadoucmdb create-admin --username admin --password-stdin   # scripts
   ```
+
+### The setup token
+
+> **Warning:** until the first administrator exists, first-run setup is the only thing standing
+> between a new installation and whoever reaches it first. Prefer `create-admin`, or keep the server
+> unreachable for others until setup is done. The setup token makes sure that only someone who can
+> read the server's log or its files can complete setup.
+
+When `serve` starts on a database without users, it generates a one-time setup token and writes it:
+
+- to the log, as a `WARN` line `no user exists yet: complete first-run setup ...` with the token in
+  its `setup_token` field (`journalctl -u shadoucmdb`, `docker logs`, or the `--log-file`);
+- to the **setup token file**, readable only by the service account (mode 0600 on Linux):
+  `SETUP_TOKEN_FILE` when set, otherwise `setup-token` next to the env file (`--env-file`, or the
+  `.env` the server found). With neither, as in a container configured through the environment, the
+  token is only in the log. If the file cannot be written, the log says so and the token is still logged.
+
+Enter the token on the first-run page. It stops working as soon as the first administrator exists,
+and the file is deleted. A wrong or missing token answers 403 and is logged with the client address.
+The token lives only in the running process: after a restart a new one is generated and the file
+rewritten. An installation that already has users never generates one.
+
+For unattended installs, or several API processes behind a load balancer (each would generate its
+own token), set `SETUP_TOKEN` to a random value of at least 32 characters (for example
+`openssl rand -hex 32`) and pass it in the setup request; then nothing is generated or written.
+Remove it from the environment once setup is done. The sample systemd unit sets
+`SETUP_TOKEN_FILE=/var/lib/shadoucmdb/setup-token`, because it makes `/etc` read-only for the service.
+
+`create-admin` needs no token: it has database access, which is stronger than the token.
 
 `create-admin` works at any time, not only on an empty database: it is also the way back in
 if every administrator is locked out or has forgotten their password (create a second
@@ -106,6 +137,10 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
   cannot send that header, set `COOKIE_SECURE=always`. With the default `COOKIE_SECURE=auto`,
   the first session cookie issued without `Secure` logs a one-time warning naming this fix;
   `COOKIE_SECURE=never` is taken as deliberate and is not warned about.
+- With `Secure`, the cookies are named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`
+  (without it, `shadoucmdb_session` and `shadoucmdb_csrf`). Browsers accept a `__Host-` cookie
+  only from the host itself, so another host under your domain cannot plant a session cookie for
+  ShadouCMDB. Do not rewrite cookie names, `Path` or `Domain` at the proxy.
 - Serve the UI and the API from the same origin (the embedded UI does this). A UI on another
   origin needs that origin in `CORS_ORIGINS`, spelled exactly as the browser sends it
   (`https://cmdb.example.com`: no path, no trailing slash); those origins may send the session
@@ -334,6 +369,14 @@ All optional; every variable is in [`.env.example`](../.env.example).
   password cannot lock the account holder out from their own network. That works only when the proxy
   overwrites `X-Forwarded-For`; otherwise a client can claim other networks and the per-username
   budget across networks (15 failures) is what locks the account.
+- **OIDC provider hosts:** `OIDC_ALLOWED_HOSTS` limits which hosts the server contacts for OIDC
+  sign-in, as a comma-separated list: `login.example.com,idp.corp.example:8443`. Host names match
+  exactly (case does not matter; `example.com` does not allow `login.example.com`), and an entry
+  with a port allows only that port. Every URL the server fetches is checked: the issuer's discovery
+  document, and the key set and token endpoint that document names. A provider elsewhere fails with
+  "The provider uses a host this server may not contact"; the server log names the URL. Unset (the
+  default), any host is allowed, as before. The server never follows redirects from a provider
+  either way.
 - **Client details:** `AUDIT_CAPTURE_CLIENT_IP=false` and `AUDIT_CAPTURE_USER_AGENT=false` stop the
   server recording the IP address and User-Agent of sign-ins and sessions (for example where a works
   council agreement rules them out). Changes stay attributed to the signed-in user.

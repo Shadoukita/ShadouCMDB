@@ -57,6 +57,10 @@ pub struct UsageReport {
 
 /// A list query: pagination, optional search, sort and resource-specific filters.
 pub trait ListQuery: Paged + Send + Sync + 'static {
+    /// The sortable fields (camelCase, each naming a column of the table).
+    /// `list` rejects any other `sort` value before it reaches ORDER BY, so a
+    /// query can never put its own SQL there, whatever the spec validation does.
+    const SORT_FIELDS: &'static [&'static str];
     fn q(&self) -> Option<&str> {
         None
     }
@@ -174,6 +178,19 @@ fn camel_to_snake(s: &str) -> String {
     out
 }
 
+/// The ORDER BY clause for a list: only a field in `allowed` gets there.
+fn order_by(sort: &Sort, allowed: &[&str]) -> Result<String, AppError> {
+    let Some(field) = allowed.iter().find(|f| **f == sort.field) else {
+        return Err(AppError::validation(vec![FieldError {
+            location: FieldLocation::Query,
+            field: "sort".into(),
+            message: format!("Invalid option: sort by one of {}", allowed.join("|")),
+            code: "invalid_value".into(),
+        }]));
+    };
+    Ok(format!("{} {}, id ASC", camel_to_snake(field), sort.dir()))
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -194,8 +211,7 @@ pub async fn list<R: Resource>(pool: &PgPool, query: &R::List) -> Result<Page<R:
         }
         query.filter(w);
     };
-    let sort = query.sort();
-    let order = format!("{} {}, id ASC", camel_to_snake(&sort.field), sort.dir());
+    let order = order_by(query.sort(), R::List::SORT_FIELDS)?;
     let (rows, total) = crud::select_page::<R::Dto>(
         &mut *pool.acquire().await?,
         R::TABLE,
@@ -490,5 +506,26 @@ fn gone_routes<R: Resource>(label: &str, by_id: &str, message: &'static str) -> 
 pub fn bool_filter(w: &mut Where<'_>, column: &str, value: Option<crate::api::schemas::QueryBool>) {
     if let Some(v) = value {
         w.and().push(column).push(" = ").push_bind(bool::from(v));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sort(field: &str, desc: bool) -> Sort {
+        Sort { field: field.into(), desc }
+    }
+
+    #[test]
+    fn order_by_takes_only_listed_fields() {
+        let allowed = &["sortOrder", "name"];
+        assert_eq!(order_by(&sort("sortOrder", false), allowed).unwrap(), "sort_order ASC, id ASC");
+        assert_eq!(order_by(&sort("name", true), allowed).unwrap(), "name DESC, id ASC");
+        for bad in ["createdAt", "name; DROP TABLE statuses", "(SELECT 1)", ""] {
+            let err = order_by(&sort(bad, false), allowed).unwrap_err();
+            assert_eq!(err.code, ErrorCode::ValidationError, "{bad}");
+            assert_eq!(err.details.unwrap()[0].field, "sort");
+        }
     }
 }

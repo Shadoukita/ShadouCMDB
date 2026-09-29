@@ -73,6 +73,8 @@ jobs:
       # Throwaway administrator for the CI-only database; the e2e suite signs in as it.
       E2E_USERNAME: e2e-admin
       E2E_PASSWORD: e2e-ci-only-password
+      # Throwaway first-run setup token of every API this job starts; first-run setup needs it.
+      SETUP_TOKEN: ci-only-setup-token-not-a-secret-0123456789
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
