@@ -73,8 +73,8 @@
   --c-text: #e3e8ef;
   --c-text-muted: #9aa5b4;
   --c-link: #7fb0ff;
-  --c-primary: #3b7be0;
-  --c-primary-hover: #5790ea;
+  --c-primary: #326fd4; /* white text on it: 4.8:1 */
+  --c-primary-hover: #3b7be0;
   --c-danger: #e5534b;
   --c-danger-hover: #f06e66;
   --c-danger-bg: #3a1d1c;
