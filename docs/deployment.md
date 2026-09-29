@@ -111,6 +111,10 @@ you are locked out yourself, wait for the lock to expire, restart the server (th
 memory), or use `create-admin`. At most 10 refusals per minute are logged one by one; the rest are
 counted and logged in a single line (`first-run setup refused N more times ...`), so a client looping
 wrong tokens cannot push the line with the setup token out of a size-limited log.
+The account-wide lock is a trade-off: anyone who can reach setup from three client networks (a
+single IPv6 host is enough) can keep web setup locked for everyone, by sending one wrong token each
+time a 15-minute lock expires. Keep a new instance unreachable from untrusted networks until the
+first administrator exists, and if setup stays locked, create the administrator with `create-admin`.
 The token lives only in the running process: after a restart a new one is generated and the file
 rewritten. An installation that already has users never generates one.
 
