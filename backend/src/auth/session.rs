@@ -15,7 +15,9 @@
 //! HttpOnly, sent only to `/api/v1/auth`, gone after a few minutes.
 //!
 //! An OIDC sign-in sets `shadoucmdb_oidc` (HttpOnly, sent only to
-//! `/api/v1/auth/oidc`, 10 minutes) to the `state` it sends the provider.
+//! `/api/v1/auth/oidc`, 10 minutes): the pending sign-in, including the
+//! `state` it sends the provider, sealed with a server key
+//! ([`crate::auth::sso::login_state`]). Nothing is stored in the database.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -29,8 +31,9 @@ pub const CSRF_COOKIE: &str = "shadoucmdb_csrf";
 pub const CSRF_HEADER: &str = "x-csrf-token";
 pub const MFA_COOKIE: &str = "shadoucmdb_mfa";
 const MFA_COOKIE_PATH: &str = "/api/v1/auth";
-/// The state of a pending OIDC sign-in, checked against the callback's `state`
-/// parameter so a callback only completes in the browser that started it.
+/// The sealed pending OIDC sign-in; its `state` is checked against the
+/// callback's `state` parameter so a callback only completes in the browser
+/// that started it.
 pub const OIDC_COOKIE: &str = "shadoucmdb_oidc";
 const OIDC_COOKIE_PATH: &str = "/api/v1/auth/oidc";
 
@@ -170,8 +173,8 @@ pub fn clear_mfa_cookie(secure: bool) -> HeaderValue {
 
 /// Set-Cookie header binding a pending OIDC sign-in to this browser. SameSite=Lax
 /// still sends it on the provider's top-level redirect back to the callback.
-pub fn oidc_cookie(secure: bool, state: &str, ttl: std::time::Duration) -> HeaderValue {
-    build_at(OIDC_COOKIE_PATH, OIDC_COOKIE, state, ttl.as_secs(), true, secure)
+pub fn oidc_cookie(secure: bool, sealed: &str, ttl: std::time::Duration) -> HeaderValue {
+    build_at(OIDC_COOKIE_PATH, OIDC_COOKIE, sealed, ttl.as_secs(), true, secure)
 }
 
 pub fn clear_oidc_cookie(secure: bool) -> HeaderValue {

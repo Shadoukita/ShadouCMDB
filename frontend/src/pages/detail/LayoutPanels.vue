@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import type { Ci, EffectiveAttribute } from "../../api/queries";
 import type { TrailStep } from "../../lib/trail";
-import { attributeKey, cellClass, fieldLabel, gridClass, sectionClass, sectionStyle, type ResolvedSection } from "../../lib/uiSettings";
+import { attributeKey, cellClass, fieldLabel, freeAreaStyle, gridClass, sectionClass, sectionStyle, windowClass, windowStyle, type ResolvedSection } from "../../lib/uiSettings";
 import AttributeValue from "./AttributeValue.vue";
 import BlockContent from "./BlockContent.vue";
 import CoreFieldValue from "./CoreFieldValue.vue";
@@ -15,7 +15,9 @@ import CoreFieldValue from "./CoreFieldValue.vue";
  * the attribute groups and the record's class and timestamps. Notes and the
  * built-in panels a layout places are sections too (BlockContent). Values no current
  * definition describes (e.g. after a class change) are listed last on the first
- * tab (`orphans`), so nothing stored is hidden.
+ * tab (`orphans`), so nothing stored is hidden. On a free tab the sections with
+ * a frame are windows where the layout puts them (lib/freeLayout), and the rest
+ * follows below them on the grid.
  */
 const props = defineProps<{
   ci: Ci;
@@ -28,6 +30,12 @@ const props = defineProps<{
 const values = computed(() => props.ci.attributes as Record<string, unknown>);
 const refs = computed(() => props.ci.attributeReferences);
 const defFor = (field: string) => props.defs.find((d) => d.key === attributeKey(field));
+/** The windows of a free tab, then everything on the grid. */
+const groups = computed(() => {
+  const windows = props.sections.filter((p) => p.frame);
+  const flow = props.sections.filter((p) => !p.frame);
+  return windows.length > 0 ? [{ free: true, items: windows }, { free: false, items: flow }] : [{ free: false, items: flow }];
+});
 const orphanKeys = computed(() => {
   if (!props.orphans) return [];
   const known = new Set(props.defs.map((d) => d.key));
@@ -37,8 +45,15 @@ const orphanKeys = computed(() => {
 
 <template>
   <div class="layout-container">
-    <div class="layout-panels">
-      <details v-for="p in sections" :key="p.key" :class="['panel', 'layout-panel', ...sectionClass(p)]" :style="sectionStyle(p)" :data-section="p.key" :open="!p.collapsed">
+    <div v-for="g in groups" :key="String(g.free)" :class="g.free ? 'lg-free' : 'layout-panels'" :style="g.free ? freeAreaStyle(g.items) : undefined">
+      <details
+        v-for="p in g.items"
+        :key="p.key"
+        :class="['panel', 'layout-panel', ...(p.frame ? [windowClass] : sectionClass(p))]"
+        :style="p.frame ? windowStyle(p.frame) : sectionStyle(p)"
+        :data-section="p.key"
+        :open="!p.collapsed"
+      >
         <summary class="panel-header"><h2>{{ p.label }}</h2></summary>
         <BlockContent v-if="p.kind !== 'fields'" :kind="p.kind" :text="p.text" :ci="ci" :self="self" :trail="trail" />
         <div v-else class="panel-body">
@@ -57,7 +72,7 @@ const orphanKeys = computed(() => {
           </dl>
         </div>
       </details>
-      <section v-if="orphanKeys.length > 0" class="panel">
+      <section v-if="!g.free && orphanKeys.length > 0" class="panel">
         <div class="panel-header"><h2>Not defined by this class</h2></div>
         <div class="panel-body">
           <dl class="props">

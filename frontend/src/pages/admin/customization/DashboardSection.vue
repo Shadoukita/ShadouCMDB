@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useLookupLists } from "../../../api/datamodel";
-import { useCiClasses } from "../../../api/queries";
+import { useAttributesOfClasses, useCiClasses } from "../../../api/queries";
 import type { UiListFilters, UiSettingsDocument, UiWidget, UiWidgetType } from "../../../api/uiSettings";
 import { moveItem } from "../../../lib/reorder";
-import { SORT_FIELDS, WIDGET_TYPES, widgetLabel } from "../../../lib/uiSettings";
+import { attributeSortFields, sharedSortAttributes, SORT_FIELDS, unavailableSortLabel, WIDGET_TYPES, widgetLabel } from "../../../lib/uiSettings";
 import DashboardWidgets from "../../dashboard/DashboardWidgets.vue";
 import KeyChecklist from "./KeyChecklist.vue";
 import LookupFilterEditor from "./LookupFilterEditor.vue";
@@ -60,6 +60,17 @@ function setLimit(w: UiWidget, v: string) {
 function setSortField(w: UiWidget, field: string) {
   w.search!.sort = field ? { field, direction: w.search!.sort?.direction ?? "asc" } : null;
 }
+
+// A saved search can sort by an attribute its classes share; the list API needs a class to sort by one.
+const searchClassIds = (w: UiWidget) => (classes.data.value ?? []).filter((c) => w.search?.classKeys?.includes(c.key)).map((c) => c.id);
+const classAttrs = useAttributesOfClasses(() => (widgets.value ?? []).flatMap((w) => (w.type === "saved_search" ? searchClassIds(w) : [])));
+function sortOptions(w: UiWidget) {
+  const ids = searchClassIds(w);
+  const attrs = classAttrs.value && ids.length > 0 ? sharedSortAttributes(ids.map((id) => classAttrs.value!.get(id) ?? [])) : [];
+  return [...SORT_FIELDS, ...attributeSortFields(attrs)];
+}
+/** A stored sort the chosen classes do not offer (once their attributes have loaded). */
+const staleSort = (w: UiWidget) => (classAttrs.value ? unavailableSortLabel(w.search?.sort?.field, sortOptions(w)) : null);
 </script>
 
 <template>
@@ -135,14 +146,19 @@ function setSortField(w: UiWidget, field: string) {
                   <div class="inline-control">
                     <label :for="`w-sort-${w.id}`">Sort by</label>
                     <select :id="`w-sort-${w.id}`" :value="w.search.sort?.field ?? ''" @change="setSortField(w, ($event.target as HTMLSelectElement).value)">
-                      <option value="">Label</option>
-                      <option v-for="s in SORT_FIELDS" :key="s.field" :value="s.field">{{ s.label }}</option>
+                      <option value="">Default (label, ascending)</option>
+                      <option v-for="s in sortOptions(w)" :key="s.field" :value="s.field">{{ s.label }}</option>
+                      <option v-if="staleSort(w)" :value="w.search.sort!.field">{{ staleSort(w) }}</option>
                     </select>
                     <select v-if="w.search.sort" v-model="w.search.sort.direction" :aria-label="`Sort direction of ${w.id}`">
                       <option value="asc">Ascending</option>
                       <option value="desc">Descending</option>
                     </select>
                   </div>
+                  <p v-if="staleSort(w)" class="alert alert-warn" role="alert">
+                    Sorting by an attribute needs classes that all have it: tick such classes or pick another sort.
+                  </p>
+                  <p v-else class="hint">Attribute sorts list the attributes every ticked class has.</p>
                 </template>
               </td>
               <td class="row-actions">
@@ -179,5 +195,11 @@ function setSortField(w: UiWidget, field: string) {
   flex-direction: column;
   gap: var(--sp-3);
   min-width: 320px;
+  /* A flex cell takes table.data's fixed row height literally: let it grow with its options instead of clipping them. */
+  height: auto;
+  max-width: none;
+  overflow: visible;
+  white-space: normal;
+  padding-block: var(--sp-2);
 }
 </style>

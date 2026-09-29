@@ -188,6 +188,17 @@ impl RequestContext {
         }
     }
 
+    /// A record in a class the caller may not view answers exactly like a
+    /// missing one (404 `entity id not found`), so a 403 never confirms that
+    /// it exists. Check this before [`Self::require_class`] for `op`s other
+    /// than view.
+    pub fn require_class_visible(&self, class_id: Uuid, entity: &str, id: Uuid) -> Result<(), AppError> {
+        match &self.caller {
+            Caller::User(p) if !p.permissions.can(class_id, ClassOp::View) => Err(AppError::missing(entity, id)),
+            _ => self.require_class(class_id, ClassOp::View),
+        }
+    }
+
     /// Classes the caller may perform `op` on; `None` means every class.
     pub fn class_scope(&self, op: ClassOp) -> Option<Vec<Uuid>> {
         match &self.caller {

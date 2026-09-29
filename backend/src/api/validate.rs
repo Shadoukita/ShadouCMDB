@@ -25,6 +25,10 @@ pub fn pattern_message(pattern: &str) -> Option<&'static str> {
         super::schemas::KEY_PATTERN => "Must be lower_snake_case: a letter, then letters, digits or _ (max 63)",
         super::schemas::HOSTNAME_PATTERN => "Letters, digits, \".\", \"_\" and \"-\", starting with a letter or digit",
         super::schemas::NOT_BLANK_PATTERN => "Must not be blank",
+        crate::data::items::SORT_PATTERN => {
+            "One of label, ident, className, validFrom, validUntil, createdAt, updatedAt or attributes.<key>, \
+             optionally prefixed with \"-\""
+        }
         super::schemas::IDENT_PATTERN => {
             "Letters, digits, \".\", \"_\" and \"-\", starting with a letter or digit (max 64)"
         }
@@ -320,6 +324,13 @@ impl<'a> Walker<'a> {
             self.push(path, "Must not be blank", "too_small");
             return;
         }
+        // New passwords: the policy message ("Must be at least 12 characters") instead of the generic length text.
+        if schema.get("format").and_then(Value::as_str) == Some("password") {
+            if let Some(msg) = crate::auth::password::policy_error(s) {
+                self.push(path, msg, "password_policy");
+            }
+            return;
+        }
         if let Some(min) = schema.get("minLength").and_then(Value::as_u64)
             && len < min
         {
@@ -569,6 +580,24 @@ mod tests {
         assert!(!is_datetime("2026-01-02T03:04Z"));
         assert!(!is_datetime("not-a-date") && !is_datetime("2026-02-30T00:00Z"));
         assert!(is_email("a.b@example.com") && !is_email("not-an-email") && !is_email(".a@x.io"));
+    }
+
+    #[test]
+    fn password_policy_messages() {
+        let schema = json!({"type": "string", "format": "password", "minLength": 12, "maxLength": 256});
+        let msg = |v: &str| {
+            check(&schema, &json!(v), FieldLocation::Body, None)
+                .into_iter()
+                .map(|e| (e.message, e.code))
+                .collect::<Vec<_>>()
+        };
+        let policy = |m: &str| vec![(m.to_owned(), "password_policy".to_owned())];
+        assert!(msg("correct horse battery").is_empty());
+        assert_eq!(msg("short"), policy("Must be at least 12 characters"));
+        // Counted in characters: 6 emoji are 12 UTF-16 units but 6 characters.
+        assert_eq!(msg(&"🔑".repeat(6)), policy("Must be at least 12 characters"));
+        assert_eq!(msg(&"x".repeat(257)), policy("Must be at most 256 characters"));
+        assert_eq!(msg(&" ".repeat(14)), policy("Must not be only whitespace"));
     }
 
     #[test]

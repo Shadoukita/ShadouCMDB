@@ -268,11 +268,14 @@ pub enum UiSortDirection {
     Desc,
 }
 
-/// Sort for an inventory list; `field` is one of the inventory sort fields
+/// Sort for an inventory list; `field` is one of the inventory sort fields or
+/// `attributes.<key>` (the list's `sort` parameter without the "-")
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiListSort {
-    #[schema(pattern = "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt)$")]
+    #[schema(
+        pattern = "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+    )]
     pub field: String,
     #[serde(default)]
     #[schema(inline)]
@@ -511,6 +514,85 @@ pub struct UiLayoutSection {
     /// Start collapsed on the detail page
     #[serde(default)]
     pub collapsed: bool,
+    /// Where the section sits in a tab with `placement` free. Sent in a grid tab, it converts the tab back to
+    /// the grid on save (see the tab's `placement`); a stored grid tab never has frames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub frame: Option<UiSectionFrame>,
+}
+
+/// Narrowest frame, as a fraction of the tab's width (a 12-column grid cell is 1/12).
+pub const FRAME_MIN_W: f64 = 0.05;
+/// Lowest frame, in px: the section's title bar.
+pub const FRAME_MIN_H: u32 = 48;
+pub const FRAME_MAX_H: u32 = 4000;
+pub const FRAME_MAX_Y: u32 = 100_000;
+/// Heights used to turn grid positions into frames: a section's title bar, one row of its field grid (the
+/// `minHeight` unit, 3em), the gap between grid rows, a note and a built-in panel.
+pub const FRAME_HEADER_PX: u32 = 48;
+pub const FRAME_ROW_PX: u32 = 48;
+pub const FRAME_GAP_PX: u32 = 16;
+pub const FRAME_NOTE_PX: u32 = 144;
+pub const FRAME_PANEL_PX: u32 = 320;
+/// Tolerance for `x + w <= 1`, so that e.g. 11/12 + 1/12 passes.
+const FRAME_EPSILON: f64 = 1e-6;
+
+/// A window on a free tab: position and size, and its place in the stacking order. `x` and `w` are
+/// fractions of the tab's width, so windows scale with the browser window; `y` and `h` are px from the top
+/// of the tab. The window scrolls its own content, so an overlapped window loses nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiSectionFrame {
+    /// Left edge, as a fraction of the tab's width (0: the left edge). `x + w` is at most 1.
+    #[schema(minimum = 0.0, maximum = 0.95)]
+    pub x: f64,
+    /// Top edge in px from the top of the tab
+    #[schema(minimum = 0, maximum = 100_000)]
+    pub y: u32,
+    /// Width, as a fraction of the tab's width (1: the full width)
+    #[schema(minimum = 0.05, maximum = 1.0)]
+    pub w: f64,
+    /// Height in px
+    #[schema(minimum = 48, maximum = 4000)]
+    pub h: u32,
+    /// Stacking order: a higher z is drawn on top. Saved as 1..n per tab, in the order given (ties: the
+    /// section order).
+    #[schema(minimum = 0, maximum = 10_000)]
+    pub z: u32,
+    /// Smallest height in px the window may be resized to, and its least height when the tab stacks the
+    /// windows on a narrow screen; at most `h`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, minimum = 48, maximum = 4000)]
+    pub min_h: Option<u32>,
+}
+
+/// How a tab arranges its sections. Absent means `grid`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UiTabPlacement {
+    /// Sections fill the tab's 12-column grid row by row, in order (`width`, `newRow`, `minHeight`)
+    #[default]
+    Grid,
+    /// Every section is a window placed by its `frame`; windows may overlap
+    Free,
+}
+
+fn is_grid(p: &UiTabPlacement) -> bool {
+    *p == UiTabPlacement::Grid
+}
+
+fn placement_schema() -> Schema {
+    string()
+        .enum_values(Some(["grid", "free"]))
+        .description(Some(
+            "How the tab arranges its sections (absent: grid). grid: sections fill the 12-column grid row by row. \
+             free: each section is a window placed by its `frame`, and windows may overlap. On save, a free tab's \
+             sections without a frame get one from their grid position (below the existing windows), z becomes \
+             1..n and the sections are ordered by y, then x: the reading order, used on narrow screens, in print \
+             and by screen readers. A grid tab sent with frames is converted back: sections ordered by y, then \
+             x, width from w, and the frames dropped.",
+        ))
+        .into()
 }
 
 /// A tab of the detail page and the form
@@ -522,9 +604,142 @@ pub struct UiLayoutTab {
     pub key: String,
     #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
     pub label: String,
+    #[serde(default, skip_serializing_if = "is_grid")]
+    #[schema(schema_with = placement_schema)]
+    pub placement: UiTabPlacement,
     #[serde(default)]
     #[schema(max_items = 50)]
     pub sections: Vec<UiLayoutSection>,
+}
+
+/// Rounds a fraction of the tab's width to 4 decimals (0.2 px of a 2000 px tab).
+fn round4(v: f64) -> f64 {
+    (v * 10_000.0).round() / 10_000.0
+}
+
+/// Height of a section's frame when it leaves the grid: title bar plus its field rows (at least one, and at
+/// least `minHeight`), a note or a built-in panel.
+pub fn estimated_height(s: &UiLayoutSection) -> u32 {
+    let h = match s.kind {
+        UiSectionKind::Fields => {
+            let (mut rows, mut col) = (0u32, s.columns);
+            for f in &s.fields {
+                let w = f.width.clamp(1, s.columns.max(1));
+                if col + w > s.columns {
+                    rows += 1;
+                    col = 0;
+                }
+                col += w;
+            }
+            FRAME_HEADER_PX + rows.max(u32::from(s.min_height.unwrap_or(1))).max(1) * FRAME_ROW_PX
+        }
+        UiSectionKind::Note => FRAME_NOTE_PX,
+        _ => FRAME_PANEL_PX,
+    };
+    h.clamp(FRAME_MIN_H, FRAME_MAX_H)
+}
+
+/// Frames for sections in grid order, starting `top` px down: the 12-column grid's rows (a section
+/// starts a new row when it has `newRow` or does not fit), each as tall as its tallest section, with
+/// [`FRAME_GAP_PX`] between rows. `z` is 1..n in order.
+pub fn grid_frames<'a>(sections: impl IntoIterator<Item = &'a UiLayoutSection>, top: u32) -> Vec<UiSectionFrame> {
+    let cols = u32::from(GRID_COLUMNS);
+    let (mut col, mut row_y, mut row_h) = (0u32, top, 0u32);
+    let mut out = Vec::new();
+    for (i, s) in sections.into_iter().enumerate() {
+        let w = u32::from(s.width.clamp(1, GRID_COLUMNS));
+        if col > 0 && (s.new_row || col + w > cols) {
+            row_y = row_y.saturating_add(row_h + FRAME_GAP_PX);
+            (col, row_h) = (0, 0);
+        }
+        let h = estimated_height(s);
+        out.push(UiSectionFrame {
+            x: round4(f64::from(col) / f64::from(cols)),
+            y: row_y.min(FRAME_MAX_Y),
+            w: round4(f64::from(w) / f64::from(cols)),
+            h,
+            z: i as u32 + 1,
+            min_h: None,
+        });
+        col += w;
+        row_h = row_h.max(h);
+    }
+    out
+}
+
+impl UiLayoutTab {
+    /// The stored form of the tab. A free tab: every section framed (the missing frames from their grid
+    /// position, below the existing windows), x and w rounded and within the tab, z 1..n and the sections
+    /// in reading order (y, then x). A grid tab sent with frames: back on the grid, see [`Self::convert_to_grid`].
+    pub fn normalize(&mut self) {
+        match self.placement {
+            UiTabPlacement::Free => self.normalize_free(),
+            UiTabPlacement::Grid if self.sections.iter().any(|s| s.frame.is_some()) => self.convert_to_grid(),
+            UiTabPlacement::Grid => {}
+        }
+    }
+
+    fn normalize_free(&mut self) {
+        let bottom = self.sections.iter().filter_map(|s| s.frame).map(|f| f.y + f.h).max();
+        let top = bottom.map_or(0, |b| b + FRAME_GAP_PX);
+        let top_z = self.sections.iter().filter_map(|s| s.frame).map(|f| f.z).max().unwrap_or(0);
+        let derived = grid_frames(self.sections.iter().filter(|s| s.frame.is_none()), top);
+        let mut derived = derived.into_iter();
+        for s in &mut self.sections {
+            if s.frame.is_none() {
+                let mut f = derived.next().expect("one frame per section without one");
+                f.z += top_z;
+                s.frame = Some(f);
+            }
+        }
+        // Stacking order: rank by (z, position), so equal z keeps the section order.
+        let mut by_z: Vec<usize> = (0..self.sections.len()).collect();
+        by_z.sort_by_key(|&i| (self.sections[i].frame.map_or(0, |f| f.z), i));
+        for (rank, i) in by_z.into_iter().enumerate() {
+            let f = self.sections[i].frame.as_mut().expect("framed above");
+            f.z = rank as u32 + 1;
+            f.w = round4(f.w).clamp(FRAME_MIN_W, 1.0);
+            f.x = round4(f.x.clamp(0.0, 1.0 - f.w));
+            if f.x + f.w > 1.0 + FRAME_EPSILON {
+                f.x = round4(f.x - 0.0001);
+            }
+        }
+        self.sections.sort_by(|a, b| {
+            let (a, b) = (a.frame.expect("framed"), b.frame.expect("framed"));
+            a.y.cmp(&b.y).then(a.x.total_cmp(&b.x))
+        });
+    }
+
+    /// Free -> grid: sections ordered by y, then x; each spans the grid columns nearest its width, and one
+    /// that starts below the bottom of the first window of the current row starts a new row. Frames are
+    /// dropped; sections without one follow at the end in their order.
+    pub fn convert_to_grid(&mut self) {
+        self.placement = UiTabPlacement::Grid;
+        let mut order: Vec<usize> = (0..self.sections.len()).collect();
+        order.sort_by(|&a, &b| match (self.sections[a].frame, self.sections[b].frame) {
+            (Some(fa), Some(fb)) => fa.y.cmp(&fb.y).then(fa.x.total_cmp(&fb.x)).then(a.cmp(&b)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.cmp(&b),
+        });
+        let mut taken: Vec<Option<UiLayoutSection>> =
+            std::mem::take(&mut self.sections).into_iter().map(Some).collect();
+        let mut row_bottom: Option<u32> = None;
+        for (n, i) in order.into_iter().enumerate() {
+            let mut s = taken[i].take().expect("each section once");
+            if let Some(f) = s.frame.take() {
+                s.width = ((f.w * f64::from(GRID_COLUMNS)).round() as u8).clamp(1, GRID_COLUMNS);
+                s.new_row = match row_bottom {
+                    Some(b) if f.y < b => false,
+                    _ => {
+                        row_bottom = Some(f.y + f.h);
+                        n > 0
+                    }
+                };
+            }
+            self.sections.push(s);
+        }
+    }
 }
 
 /// A panel of the layout format before tabs (v1). Accepted on input and converted to a section of one
@@ -617,9 +832,10 @@ pub fn convert_panels(panels: Vec<UiLayoutPanel>) -> Vec<UiLayoutTab> {
             fields: p.fields.into_iter().map(|field| UiLayoutField { field, width: 1 }).collect(),
             text: None,
             collapsed: p.collapsed,
+            frame: None,
         })
         .collect();
-    vec![UiLayoutTab { key: "general".into(), label: "General".into(), sections }]
+    vec![UiLayoutTab { key: "general".into(), label: "General".into(), placement: UiTabPlacement::Grid, sections }]
 }
 
 /// Every UI setting. All sections are optional; `{}` is the default UI.
@@ -648,6 +864,15 @@ impl Check for UiSettingsDocument {
 }
 
 impl UiSettingsDocument {
+    /// The form in which a valid document is stored: every layout tab normalised (see
+    /// [`UiLayoutTab::normalize`]).
+    pub fn normalized(mut self) -> Self {
+        for tab in self.layouts.iter_mut().flat_map(|l| &mut l.tabs) {
+            tab.normalize();
+        }
+        self
+    }
+
     /// Cross-field problems, with field paths below `prefix` (e.g. "settings.").
     pub fn problems(&self, prefix: &str) -> Vec<FieldError> {
         let mut e = Vec::new();
@@ -818,6 +1043,28 @@ impl UiSettingsDocument {
                         }
                         _ => {}
                     }
+                    if let Some(f) = &s.frame {
+                        let pf = format!("{ps}.frame");
+                        if !f.x.is_finite() || !f.w.is_finite() {
+                            e.push(custom(at(pf.clone()), "x and w must be finite numbers"));
+                        } else if f.w < FRAME_MIN_W - FRAME_EPSILON {
+                            e.push(custom(at(format!("{pf}.w")), format!("At least {FRAME_MIN_W} of the tab's width")));
+                        } else if f.x + f.w > 1.0 + FRAME_EPSILON {
+                            e.push(custom(
+                                at(format!("{pf}.w")),
+                                "The window must end inside the tab: x + w must be at most 1",
+                            ));
+                        }
+                        if !(FRAME_MIN_H..=FRAME_MAX_H).contains(&f.h) {
+                            e.push(custom(
+                                at(format!("{pf}.h")),
+                                format!("Between {FRAME_MIN_H} and {FRAME_MAX_H} px"),
+                            ));
+                        }
+                        if f.min_h.is_some_and(|m| m > f.h) {
+                            e.push(custom(at(format!("{pf}.minH")), "At most the window's height h"));
+                        }
+                    }
                     for (k, f) in s.fields.iter().enumerate() {
                         if !placed.insert(f.field.as_str()) {
                             e.push(custom(at(format!("{ps}.fields.{k}.field")), "A field can be placed once only"));
@@ -938,6 +1185,23 @@ impl Resolver<'_> {
         UiListFilters { q: f.q.clone(), lookups }
     }
 
+    /// Keeps a sort on a built-in field, or on an attribute every one of the classes has.
+    fn sort(&mut self, path: &str, classes: &[String], sort: &Option<UiListSort>) -> Option<UiListSort> {
+        let s = sort.as_ref()?;
+        let Some(a) = s.field.strip_prefix(ATTRIBUTE_PREFIX) else { return Some(s.clone()) };
+        match classes.iter().find(|c| !self.model.classes.get(*c).is_some_and(|attrs| attrs.contains_key(a))) {
+            None if !classes.is_empty() => Some(s.clone()),
+            missing => {
+                let message = match missing {
+                    Some(c) => format!("Attribute \"{a}\" is not defined on class \"{c}\"; the list sorts by label"),
+                    None => format!("Sorting by attribute \"{a}\" needs a class; the list sorts by label"),
+                };
+                self.flag(format!("{path}.field"), IssueCode::UnknownAttribute, message);
+                None
+            }
+        }
+    }
+
     /// Keeps built-in fields and attributes of the class.
     fn fields(&mut self, path: &str, class: &str, fields: &[String]) -> Vec<String> {
         let attrs = &self.model.classes[class];
@@ -997,7 +1261,8 @@ pub fn resolve(doc: &UiSettingsDocument, model: &Model) -> (UiSettingsDocument, 
             if let Some(s) = &w.search {
                 let class_keys = r.classes(&format!("{p}.search.classKeys"), &s.class_keys);
                 let filters = r.filters(&format!("{p}.search.filters"), &s.filters);
-                w.search = Some(UiSavedSearch { class_keys, filters, ..s.clone() });
+                let sort = r.sort(&format!("{p}.search.sort"), &class_keys, &s.sort);
+                w.search = Some(UiSavedSearch { class_keys, filters, sort, ..s.clone() });
             }
             kept.push(w);
         }
@@ -1013,6 +1278,7 @@ pub fn resolve(doc: &UiSettingsDocument, model: &Model) -> (UiSettingsDocument, 
         let mut v = v.clone();
         v.columns = r.fields(&format!("{p}.columns"), &v.class_key, &v.columns);
         v.default_filters = r.filters(&format!("{p}.defaultFilters"), &v.default_filters);
+        v.default_sort = r.sort(&format!("{p}.defaultSort"), std::slice::from_ref(&v.class_key), &v.default_sort);
         out.list_views.push(v);
     }
 
@@ -1330,6 +1596,44 @@ mod tests {
         assert_eq!(search.filters.lookups, BTreeMap::from([("status".to_owned(), vec!["in_service".to_owned()])]));
     }
 
+    /// GH#112: a sort on an attribute is kept where the class has it, otherwise dropped (label order).
+    #[test]
+    fn attribute_sorts_need_the_attribute() {
+        let sort = |field: &str| json!({"field": field, "direction": "desc"});
+        let search = |classes: serde_json::Value, field: &str| json!({"id": field.replace('.', "_"), "type": "saved_search", "search": {"classKeys": classes, "sort": sort(field)}});
+        let d = doc(json!({
+            "dashboard": {"widgets": [
+                search(json!(["server"]), "attributes.cpu_cores"),
+                search(json!(["server", "application"]), "attributes.serial"),
+                search(json!([]), "attributes.ram"),
+                search(json!([]), "createdAt"),
+            ]},
+            "listViews": [
+                {"classKey": "server", "defaultSort": sort("attributes.cpu_cores")},
+                {"classKey": "application", "defaultSort": sort("attributes.cpu_cores")},
+            ],
+        }));
+        assert!(d.check().is_empty());
+        let (effective, issues) = resolve(&d, &model());
+        let got: Vec<(&str, IssueCode)> = issues.iter().map(|i| (i.path.as_str(), i.code)).collect();
+        assert_eq!(
+            got,
+            [
+                ("dashboard.widgets.1.search.sort.field", IssueCode::UnknownAttribute),
+                ("dashboard.widgets.2.search.sort.field", IssueCode::UnknownAttribute),
+                ("listViews.1.defaultSort.field", IssueCode::UnknownAttribute),
+            ]
+        );
+        let kept: Vec<Option<String>> =
+            effective.dashboard.widgets.unwrap().into_iter().map(|w| w.search.unwrap().sort.map(|s| s.field)).collect();
+        assert_eq!(kept, [Some("attributes.cpu_cores".into()), None, None, Some("createdAt".into())]);
+        assert_eq!(
+            effective.list_views[0].default_sort.as_ref().map(|s| s.field.as_str()),
+            Some("attributes.cpu_cores")
+        );
+        assert_eq!(effective.list_views[1].default_sort, None);
+    }
+
     #[test]
     fn sections_can_hold_a_note_or_a_built_in_panel() {
         let d = doc(json!({"layouts": [{"classKey": "server", "tabs": [
@@ -1424,6 +1728,172 @@ mod tests {
         let unknown = serde_json::from_value::<UiSettingsDocument>(json!({"layouts": [{"classKey": "server",
             "tabs": [{"key": "t", "label": "T", "sections": [{"key": "s", "label": "S", "kind": "html"}]}]}]}));
         assert!(unknown.is_err());
+    }
+
+    fn one_tab(tab: serde_json::Value) -> UiSettingsDocument {
+        doc(json!({"layouts": [{"classKey": "server", "tabs": [tab]}]}))
+    }
+
+    fn frames(tab: &UiLayoutTab) -> Vec<(&str, f64, u32, f64, u32, u32)> {
+        tab.sections
+            .iter()
+            .map(|s| {
+                let f = s.frame.unwrap();
+                (s.key.as_str(), f.x, f.y, f.w, f.h, f.z)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn free_tabs_round_trip_and_grid_tabs_are_written_as_before() {
+        let stored = json!({"layouts": [{"classKey": "server", "tabs": [
+            {"key": "g", "label": "Grid", "sections": [
+                {"key": "a", "label": "A", "columns": 3, "width": 12, "collapsed": false, "fields": []}]},
+            {"key": "f", "label": "Free", "placement": "free", "sections": [
+                {"key": "b", "label": "B", "columns": 3, "width": 12, "collapsed": false, "fields": [],
+                 "frame": {"x": 0.0, "y": 0, "w": 0.5, "h": 200, "z": 2, "minH": 96}},
+                {"key": "n", "label": "N", "kind": "note", "text": "On top", "columns": 3, "width": 12,
+                 "collapsed": false, "fields": [], "frame": {"x": 0.25, "y": 40, "w": 0.75, "h": 120, "z": 1}},
+            ]},
+        ], "hiddenFields": [], "readOnlyFields": []}]});
+        let d = doc(stored.clone());
+        assert!(d.check().is_empty(), "{:?}", d.check());
+        let tabs = &d.layouts[0].tabs;
+        assert_eq!((tabs[0].placement, tabs[1].placement), (UiTabPlacement::Grid, UiTabPlacement::Free));
+        assert_eq!(tabs[1].sections[0].frame.unwrap().min_h, Some(96));
+        // Written back exactly: no placement or frame on grid tabs, minH only when set.
+        assert_eq!(serde_json::to_value(&d).unwrap()["layouts"], stored["layouts"]);
+        // Already in stored form, so normalising changes nothing.
+        let n = d.clone().normalized();
+        assert_eq!(frames(&n.layouts[0].tabs[1]), [("b", 0.0, 0, 0.5, 200, 2), ("n", 0.25, 40, 0.75, 120, 1)]);
+        assert_eq!(n, d);
+    }
+
+    #[test]
+    fn frames_must_fit_the_tab() {
+        let d = one_tab(json!({"key": "t", "label": "T", "placement": "free", "sections": [
+            {"key": "a", "label": "A", "frame": {"x": 0.6, "y": 0, "w": 0.5, "h": 100, "z": 1}},
+            {"key": "b", "label": "B", "frame": {"x": 0.0, "y": 0, "w": 0.01, "h": 100, "z": 2}},
+            {"key": "c", "label": "C", "frame": {"x": 0.0, "y": 0, "w": 1.0, "h": 100, "z": 3, "minH": 101}},
+            {"key": "d", "label": "D", "frame": {"x": 0.0, "y": 0, "w": 1.0, "h": 10, "z": 4}},
+            // 11/12 + 1/12 is 1 within rounding.
+            {"key": "e", "label": "E", "frame": {"x": 11.0 / 12.0, "y": 0, "w": 1.0 / 12.0, "h": 48, "z": 5}},
+        ]}));
+        let fields: Vec<String> = d.check().into_iter().map(|e| e.field).collect();
+        assert_eq!(
+            fields,
+            [
+                "layouts.0.tabs.0.sections.0.frame.w",
+                "layouts.0.tabs.0.sections.1.frame.w",
+                "layouts.0.tabs.0.sections.2.frame.minH",
+                "layouts.0.tabs.0.sections.3.frame.h",
+            ]
+        );
+        let junk = |frame: serde_json::Value| {
+            serde_json::from_value::<UiSettingsDocument>(json!({"layouts": [{"classKey": "server", "tabs": [
+                {"key": "t", "label": "T", "placement": "free", "sections": [{"key": "a", "label": "A", "frame": frame}]}]}]}))
+        };
+        assert!(junk(json!({"x": 0, "y": 0, "w": 1, "h": 100})).is_err(), "z is required");
+        assert!(junk(json!({"x": 0, "y": -1, "w": 1, "h": 100, "z": 1})).is_err());
+        assert!(junk(json!({"x": 0, "y": 0, "w": 1, "h": 100, "z": 1, "depth": 3})).is_err());
+        assert!(junk(json!({"x": "0", "y": 0, "w": 1, "h": 100, "z": 1})).is_err());
+        let placement = serde_json::from_value::<UiSettingsDocument>(
+            json!({"layouts": [{"classKey": "server", "tabs": [{"key": "t", "label": "T", "placement": "floating"}]}]}),
+        );
+        assert!(placement.is_err());
+    }
+
+    /// Two halves, a full-width section with two rows of fields, one forced onto a new row, and a panel
+    /// that does not fit next to it.
+    fn grid_tab() -> serde_json::Value {
+        json!({"key": "t", "label": "T", "sections": [
+            {"key": "a", "label": "A", "width": 6},
+            {"key": "b", "label": "B", "width": 6, "minHeight": 3},
+            {"key": "c", "label": "C", "fields": [
+                {"field": "ident"}, {"field": "label"}, {"field": "validFrom"}, {"field": "validUntil"}]},
+            {"key": "d", "label": "D", "width": 4, "newRow": true},
+            {"key": "r", "label": "R", "kind": "relations"},
+        ]})
+    }
+
+    #[test]
+    fn grid_to_free_keeps_every_section_where_it_was() {
+        let mut tab = grid_tab();
+        tab["placement"] = json!("free");
+        let d = one_tab(tab).normalized();
+        assert!(d.check().is_empty(), "{:?}", d.check());
+        let t = &d.layouts[0].tabs[0];
+        // Rows at y 0 (a; b with 3 field rows), 208 (c: 2 field rows), 368 (d) and 480 (r, a panel).
+        assert_eq!(
+            frames(t),
+            [
+                ("a", 0.0, 0, 0.5, 96, 1),
+                ("b", 0.5, 0, 0.5, 192, 2),
+                ("c", 0.0, 208, 1.0, 144, 3),
+                ("d", 0.0, 368, 0.3333, 96, 4),
+                ("r", 0.0, 480, 1.0, FRAME_PANEL_PX, 5),
+            ]
+        );
+        // Back on the grid, every section is where it was.
+        let mut back = t.clone();
+        back.convert_to_grid();
+        let grid: Vec<(&str, u8, bool, bool)> =
+            back.sections.iter().map(|s| (s.key.as_str(), s.width, s.new_row, s.frame.is_none())).collect();
+        assert_eq!(
+            grid,
+            [
+                ("a", 6, false, true),
+                ("b", 6, false, true),
+                ("c", 12, true, true),
+                ("d", 4, true, true),
+                ("r", 12, true, true)
+            ]
+        );
+        assert_eq!(grid_frames(&back.sections, 0), grid_frames(&one_tab(grid_tab()).layouts[0].tabs[0].sections, 0));
+    }
+
+    #[test]
+    fn free_to_grid_orders_by_y_then_x() {
+        // Sent as a grid tab that still has frames: the tab goes back on the grid on save.
+        let d = one_tab(json!({"key": "t", "label": "T", "sections": [
+            {"key": "low", "label": "Low", "frame": {"x": 0.0, "y": 500, "w": 1.0, "h": 100, "z": 1}},
+            {"key": "right", "label": "Right", "frame": {"x": 0.6, "y": 10, "w": 0.4, "h": 200, "z": 3}},
+            {"key": "left", "label": "Left", "frame": {"x": 0.0, "y": 0, "w": 0.55, "h": 300, "z": 2}},
+            {"key": "under", "label": "Under", "frame": {"x": 0.1, "y": 150, "w": 0.2, "h": 50, "z": 4}},
+        ]}))
+        .normalized();
+        let t = &d.layouts[0].tabs[0];
+        assert_eq!(t.placement, UiTabPlacement::Grid);
+        let grid: Vec<(&str, u8, bool)> = t.sections.iter().map(|s| (s.key.as_str(), s.width, s.new_row)).collect();
+        // "under" starts above the bottom of "left", so it stays in that row (and wraps if it does not fit).
+        assert_eq!(grid, [("left", 7, false), ("right", 5, false), ("under", 2, false), ("low", 12, true)]);
+        assert!(t.sections.iter().all(|s| s.frame.is_none()));
+        let out = serde_json::to_value(&d).unwrap();
+        assert!(out["layouts"][0]["tabs"][0].get("placement").is_none(), "{out}");
+    }
+
+    #[test]
+    fn saving_a_free_tab_normalises_it() {
+        let d = one_tab(json!({"key": "t", "label": "T", "placement": "free", "sections": [
+            {"key": "b", "label": "B", "frame": {"x": 0.123456, "y": 300, "w": 0.3, "h": 100, "z": 7}},
+            {"key": "a", "label": "A", "frame": {"x": 0.5, "y": 0, "w": 0.5, "h": 200, "z": 7}},
+            {"key": "c", "label": "C", "frame": {"x": 0.1, "y": 0, "w": 0.2, "h": 60, "z": 0}},
+            {"key": "new", "label": "New"},
+        ]}))
+        .normalized();
+        assert!(d.check().is_empty(), "{:?}", d.check());
+        // Reading order y, then x; z 1..n by (z, order sent); the new section below every window, on top.
+        assert_eq!(
+            frames(&d.layouts[0].tabs[0]),
+            [
+                ("c", 0.1, 0, 0.2, 60, 1),
+                ("a", 0.5, 0, 0.5, 200, 3),
+                ("b", 0.1235, 300, 0.3, 100, 2),
+                ("new", 0.0, 416, 1.0, 96, 4),
+            ]
+        );
+        // Saving again changes nothing.
+        assert_eq!(d.clone().normalized(), d);
     }
 
     #[test]

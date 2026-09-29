@@ -2,9 +2,10 @@
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import { useDocumentTitle } from "../../lib/composables";
 import { useSessionStore } from "../../stores/session";
+import PasswordSettings from "./PasswordSettings.vue";
 import TwoFactorSettings from "./TwoFactorSettings.vue";
 
-/** The signed-in user's own account: who they are and their two-factor authentication. */
+/** The signed-in user's own account: who they are, their password and their two-factor authentication. */
 useDocumentTitle("My account");
 const session = useSessionStore();
 </script>
@@ -18,6 +19,7 @@ const session = useSessionStore();
     </div>
   </div>
   <div class="account">
+    <PasswordSettings />
     <TwoFactorSettings />
   </div>
 </template>

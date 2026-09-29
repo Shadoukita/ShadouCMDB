@@ -7,12 +7,15 @@ import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import {
   ATTRIBUTE_PREFIX,
+  attributeSortFields,
   BUILTIN_FIELDS,
   DEFAULT_COLUMNS,
   EMPTY_FILTERS,
   fieldLabel,
+  listColumns,
   SORT_FIELDS,
   sortParam,
+  unavailableSortLabel,
 } from "../../../lib/uiSettings";
 import ClassPicker from "./ClassPicker.vue";
 import FieldListEditor from "./FieldListEditor.vue";
@@ -32,6 +35,21 @@ const columnOptions = computed(() => [
   ...BUILTIN_FIELDS.map((f) => ({ key: f.key, label: f.label })),
   ...attrDefs.value.map((d) => ({ key: `${ATTRIBUTE_PREFIX}${d.key}`, label: `${d.label} (attribute)` })),
 ]);
+/** The built-in sorts and the class's attributes (not references: the API cannot sort by them). */
+const sortOptions = computed(() => [...SORT_FIELDS, ...attributeSortFields(attrDefs.value)]);
+/** A stored sort the class no longer offers (e.g. its attribute was archived); the settings API drops it. */
+const staleSort = computed(() => (attrs.data.value ? unavailableSortLabel(view.value?.defaultSort?.field, sortOptions.value) : null));
+/**
+ * The columns the editor works on. A view stored without columns (migration 0020, the API, an
+ * import) shows the default columns, so the editor lists them and the first change starts from
+ * them: adding a column must not drop Label and the others.
+ */
+const editorColumns = computed({
+  get: () => (view.value?.columns?.length ? view.value.columns : [...DEFAULT_COLUMNS]),
+  set: (v: string[]) => {
+    if (view.value) view.value.columns = v;
+  },
+});
 
 function customize() {
   if (!cls.value) return;
@@ -63,10 +81,10 @@ function setPageSize(v: string) {
 const previewQuery = computed<CiListQuery>(() => ({
   classId: cls.value?.id,
   limit: 5,
-  sort: (sortParam(view.value?.defaultSort) ?? "label") as CiListQuery["sort"],
+  sort: ((staleSort.value ? null : sortParam(view.value?.defaultSort)) ?? "label") as CiListQuery["sort"],
 }));
 const preview = useCiList(previewQuery);
-const columns = computed(() => (view.value?.columns?.length ? view.value.columns : DEFAULT_COLUMNS));
+const columns = computed(() => listColumns(view.value?.columns));
 </script>
 
 <template>
@@ -86,21 +104,29 @@ const columns = computed(() => (view.value?.columns?.length ? view.value.columns
         <div class="editor-row">
           <div class="field">
             <span class="label">Columns, in order</span>
-            <FieldListEditor v-model="view.columns!" :options="columnOptions" label="Columns" id-prefix="lv-col" empty-text="No columns chosen: the default columns are shown." />
+            <FieldListEditor v-model="editorColumns" :options="columnOptions" label="Columns" id-prefix="lv-col" />
+            <p v-if="!view.columns?.length" class="hint">No columns chosen: the default columns are shown.</p>
+            <p v-else-if="!view.columns.includes('label')" class="hint">
+              Label is not chosen: it is shown as the first column anyway, as it is the link that opens each CI.
+            </p>
           </div>
           <div class="form-grid" style="grid-template-columns: 1fr">
             <div class="field">
               <label for="lv-sort">Default sort</label>
               <div class="inline-control">
                 <select id="lv-sort" :value="view.defaultSort?.field ?? ''" @change="setSortField(($event.target as HTMLSelectElement).value)">
-                  <option value="">Label (built-in)</option>
-                  <option v-for="s in SORT_FIELDS" :key="s.field" :value="s.field">{{ s.label }}</option>
+                  <option value="">Default (label, ascending)</option>
+                  <option v-for="s in sortOptions" :key="s.field" :value="s.field">{{ s.label }}</option>
+                  <option v-if="staleSort" :value="view.defaultSort!.field">{{ staleSort }}</option>
                 </select>
                 <select v-if="view.defaultSort" v-model="view.defaultSort.direction" aria-label="Sort direction">
                   <option value="asc">Ascending</option>
                   <option value="desc">Descending</option>
                 </select>
               </div>
+              <p v-if="staleSort" class="alert alert-warn" role="alert">
+                {{ cls.name }} cannot be sorted by {{ view.defaultSort!.field }} (no such attribute, or it is archived or a reference): the list is sorted by label until another sort is chosen.
+              </p>
             </div>
             <div class="field">
               <label for="lv-size">Rows per page (10-200)</label>

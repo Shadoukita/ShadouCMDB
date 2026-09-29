@@ -97,7 +97,7 @@ async function saveRecoveryCodes(page: Page): Promise<string[]> {
 
 /** Password → QR code and setup key → first code → recovery codes. Returns the key and the codes. */
 async function enrol(page: Page, shot: string) {
-  await page.getByLabel("Current password").fill(PASSWORD);
+  await page.locator("#mfa-currentPassword").fill(PASSWORD);
   await page.getByRole("button", { name: "Set up authenticator app" }).click();
   await expect(page.getByRole("img", { name: "QR code to add ShadouCMDB to your authenticator app" })).toBeVisible();
   const secret = await page.getByLabel("Setup key").inputValue();
@@ -141,7 +141,7 @@ test.describe("an operator's own two-factor authentication", () => {
     await expect(panel.getByText("Off", { exact: true })).toBeVisible();
 
     // The password is checked first, next to its field.
-    await page.getByLabel("Current password").fill("not-the-password");
+    await page.locator("#mfa-currentPassword").fill("not-the-password");
     await page.getByRole("button", { name: "Set up authenticator app" }).click();
     await expect(page.locator("#mfa-currentPassword-err")).toBeVisible();
 
@@ -182,7 +182,7 @@ test.describe("an operator's own two-factor authentication", () => {
 
   test("replace the recovery codes, then turn two-factor authentication off", async () => {
     await page.getByRole("button", { name: "New recovery codes" }).click();
-    await page.getByLabel("Current password").fill(PASSWORD);
+    await page.locator("#mfa-currentPassword").fill(PASSWORD);
     await page.getByLabel("Authentication code").fill(await app.next());
     await page.getByRole("button", { name: "Create new recovery codes" }).click();
     const fresh = await saveRecoveryCodes(page);
@@ -191,7 +191,7 @@ test.describe("an operator's own two-factor authentication", () => {
     await expect(panel.getByText("10 unused")).toBeVisible();
 
     await page.getByRole("button", { name: "Turn off" }).click();
-    await page.getByLabel("Current password").fill(PASSWORD);
+    await page.locator("#mfa-currentPassword").fill(PASSWORD);
     await page.getByLabel("Authentication code").fill(await app.next());
     await page.getByRole("button", { name: "Turn off two-factor authentication" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Sign-in asks for your password only." })).toBeVisible();

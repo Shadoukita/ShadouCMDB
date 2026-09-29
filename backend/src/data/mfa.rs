@@ -108,21 +108,24 @@ pub async fn use_recovery_code(conn: &mut PgConnection, user_id: Uuid, hash: &[u
 
 pub struct Status {
     pub totp_enabled: bool,
-    /// A profile the user holds requires MFA.
+    /// A profile the user holds requires MFA here (never for OIDC accounts,
+    /// the same rule as the per-request gate).
     pub required: bool,
     pub recovery_codes_remaining: i64,
 }
 
 pub async fn status(conn: &mut PgConnection, user_id: Uuid) -> sqlx::Result<Status> {
-    let (totp_enabled, required, recovery_codes_remaining): (bool, bool, i64) = sqlx::query_as(
-        "SELECT EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = $1 AND t.confirmed_at IS NOT NULL),
-                EXISTS (SELECT 1 FROM user_permission_profiles up JOIN permission_profiles p ON p.id = up.profile_id
-                        WHERE up.user_id = $1 AND p.require_mfa),
-                (SELECT count(*) FROM user_recovery_codes r WHERE r.user_id = $1 AND r.used_at IS NULL)",
-    )
-    .bind(user_id)
-    .fetch_one(conn)
-    .await?;
+    let (totp_enabled, required, recovery_codes_remaining): (bool, bool, i64) =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL),
+                    {},
+                    (SELECT count(*) FROM user_recovery_codes r WHERE r.user_id = u.id AND r.used_at IS NULL)
+             FROM users u WHERE u.id = $1",
+            crate::data::auth::MFA_REQUIRED
+        )))
+        .bind(user_id)
+        .fetch_one(conn)
+        .await?;
     Ok(Status { totp_enabled, required, recovery_codes_remaining })
 }
 

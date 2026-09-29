@@ -21,7 +21,25 @@ import { HIDDEN_CI } from "../../lib/format";
 import { hintFor, nowFormValue, NOW_HINT, toApiValue, toFormValue, type FormValue } from "../../lib/attributeValues";
 import type { LayoutEditor } from "../../lib/layoutEditor";
 import { createReusableTemplate } from "../../lib/reusableTemplate";
-import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, builtInLayout, cellClass, CORE_FIELDS, gridClass, layoutFor, PANELS, resolveLayout, sectionClass, sectionStyle, withoutKinds } from "../../lib/uiSettings";
+import {
+  ATTRIBUTE_PREFIX,
+  attributeKey,
+  BUILTIN,
+  builtInLayout,
+  cellClass,
+  CORE_FIELDS,
+  freeAreaStyle,
+  gridClass,
+  layoutFor,
+  PANELS,
+  resolveLayout,
+  sectionClass,
+  sectionStyle,
+  windowClass,
+  windowStyle,
+  withoutKinds,
+  type ResolvedSection,
+} from "../../lib/uiSettings";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import NoteText from "../../components/NoteText.vue";
@@ -96,6 +114,12 @@ const tabs = computed(() => {
   const l = withoutKinds(layout.value ?? builtInLayout(""), PANELS.map((p) => p.kind));
   return resolveLayout({ ...l, hiddenFields: (l.hiddenFields ?? []).filter((f) => !keepEditable(f)) }, defs.value, CORE_FIELDS);
 });
+/** A tab's sections: the windows of a free tab (lib/freeLayout), then everything on the grid. */
+function sectionGroups(sections: readonly ResolvedSection[]) {
+  const windows = sections.filter((sec) => sec.frame);
+  const flow = sections.filter((sec) => !sec.frame);
+  return windows.length > 0 ? [{ free: true, items: windows }, { free: false, items: flow }] : [{ free: false, items: flow }];
+}
 /** The first section of fields, which also shows whether the attributes loaded. */
 const firstGrid = computed(() => tabs.value[0]?.sections.find((sec) => sec.kind === "fields")?.key);
 const activeTab = ref(0);
@@ -328,28 +352,36 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
         :key="t.key"
         :role="tabs.length > 1 ? 'tabpanel' : undefined"
         :aria-labelledby="tabs.length > 1 ? `form-tab-${t.key}` : undefined"
-        class="layout-panels"
       >
-        <details v-for="sec in t.sections" :key="sec.key" :class="['panel', 'layout-panel', ...sectionClass(sec)]" :style="sectionStyle(sec)" :data-section="sec.key" :open="!sec.collapsed">
-          <summary class="panel-header">
-            <h2>{{ sec.label }}</h2>
-          </summary>
-          <div v-if="sec.kind === 'note'" class="panel-body"><NoteText :text="sec.text ?? ''" /></div>
-          <div v-else class="panel-body">
-            <template v-if="i === 0 && sec.key === firstGrid">
-              <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
-              <ErrorAlert
-                v-if="attrs.isError.value"
-                :error="attrs.error.value"
-                title="Could not load this class's attributes"
-                :on-retry="() => attrs.refetch()"
-              />
-            </template>
-            <div :class="gridClass(sec.columns)">
-              <FormCell v-for="{ field: f, width } in sec.fields" :key="f" :f="f" :width="width" :columns="sec.columns" />
+        <div v-for="g in sectionGroups(t.sections)" :key="String(g.free)" :class="g.free ? 'lg-free' : 'layout-panels'" :style="g.free ? freeAreaStyle(g.items) : undefined">
+          <details
+            v-for="sec in g.items"
+            :key="sec.key"
+            :class="['panel', 'layout-panel', ...(sec.frame ? [windowClass] : sectionClass(sec))]"
+            :style="sec.frame ? windowStyle(sec.frame) : sectionStyle(sec)"
+            :data-section="sec.key"
+            :open="!sec.collapsed"
+          >
+            <summary class="panel-header">
+              <h2>{{ sec.label }}</h2>
+            </summary>
+            <div v-if="sec.kind === 'note'" class="panel-body"><NoteText :text="sec.text ?? ''" /></div>
+            <div v-else class="panel-body">
+              <template v-if="i === 0 && sec.key === firstGrid">
+                <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
+                <ErrorAlert
+                  v-if="attrs.isError.value"
+                  :error="attrs.error.value"
+                  title="Could not load this class's attributes"
+                  :on-retry="() => attrs.refetch()"
+                />
+              </template>
+              <div :class="gridClass(sec.columns)">
+                <FormCell v-for="{ field: f, width } in sec.fields" :key="f" :f="f" :width="width" :columns="sec.columns" />
+              </div>
             </div>
-          </div>
-        </details>
+          </details>
+        </div>
       </div>
     </div>
     <div class="panel form-footer">

@@ -198,7 +198,11 @@ reachable, or make sure only you can reach it until you have completed the setup
 
 Then: give each person their own account, grant the smallest permission profile that fits
 their job, and keep the number of administrators small. Deactivate accounts of people who leave
-(it ends their sessions immediately).
+(it ends their sessions immediately and their API tokens stop working). If an account may be
+compromised, reset its password: that ends its sessions and revokes every API token it owns and
+every token it created for another account, so a token created with the stolen password does not
+keep working. Then review what the account changed in the audit log, including identity provider
+changes (see the [incident response plan](incident-response.md#customer-notification)).
 
 ## Enterprise sign-in
 
@@ -209,16 +213,22 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   Give one local administrator a long password and two-factor authentication, keep them in your
   emergency procedure, and use them only when the provider is down or misconfigured. Mark the
   built-in Administrator profile `requireMfa` so that account cannot sign in on a password alone.
-- **Enforce MFA at the provider.** For provider accounts ShadouCMDB relies on the provider for
-  the second factor (conditional access, Okta policies, Keycloak OTP); `requireMfa` covers local
-  accounts only.
+- **Enforce MFA at the provider for OIDC.** For OIDC accounts ShadouCMDB relies on the provider
+  for the second factor (conditional access, Okta policies, Keycloak OTP). `requireMfa` covers
+  local **and LDAP/AD directory** accounts: a directory user holding such a profile sets up an
+  authenticator app here at their next sign-in, confirming with their directory password, and from
+  then on signs in with the directory password plus a code. Tell directory administrators before
+  you upgrade or mark a profile `requireMfa`.
 - **`PUBLIC_URL=https://...`** It is the only source of the OIDC redirect URI (never the request's
   Host header). Register exactly `{PUBLIC_URL}/api/v1/auth/oidc/callback` at the provider.
 - **Map groups, not everyone.** A sign-in whose groups map to no profile is refused. Map a
   dedicated group per profile ("CMDB-Admins" → Administrator) rather than a company-wide group,
   and review the mappings like any other admin rights: whoever controls a mapped group in the
   provider controls who holds that profile here. Only holders of the Administrator profile can
-  change providers and mappings.
+  change providers and mappings, and only from a signed-in session: API tokens, even with the
+  Administrator profile, can read providers and run the connection test but get `403` on every
+  change, so a leaked token cannot add a provider or remap a group that keeps signing people in
+  after the token is revoked.
 - **Directory service account read-only.** It only searches for users; it needs no write rights.
   Prefer `ldaps://`; `ldap://` is accepted only with StartTLS, and certificates are always
   verified. For a private CA paste its certificate into the directory's `caCertificate`, or

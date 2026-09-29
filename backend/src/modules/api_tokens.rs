@@ -77,8 +77,14 @@ pub struct ApiToken {
     /// Client address of the last accepted request (evidence only)
     #[schema(required = true)]
     pub last_used_ip: Option<String>,
+    /// The creator's name, for display
     #[schema(required = true)]
     pub created_by: Option<String>,
+    /// The user who created the token; null when the CLI created it, the
+    /// creator was deleted, or (for a token older than this field) the
+    /// creator is unknown
+    #[schema(required = true)]
+    pub created_by_user_id: Option<Uuid>,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
 }
@@ -109,6 +115,7 @@ impl From<TokenRow> for ApiToken {
             last_used_at: r.last_used_at,
             last_used_ip: r.last_used_ip.map(|n| n.ip().to_string()),
             created_by: r.created_by,
+            created_by_user_id: r.created_by_user_id,
             created_at: r.created_at,
         }
     }
@@ -180,6 +187,9 @@ pub struct ApiTokenList {
     /// Tokens owned by any of these users
     #[param(schema_with = schemas::uuid_list_schema)]
     user_id: Option<UuidList>,
+    /// Tokens created by any of these users (for any owner)
+    #[param(schema_with = schemas::uuid_list_schema)]
+    created_by: Option<UuidList>,
     #[param(inline)]
     status: Option<TokenStatus>,
 }
@@ -209,6 +219,9 @@ pub async fn list(pool: &PgPool, q: &ApiTokenList) -> Result<Page<ApiToken>, App
         }
         if let Some(ids) = &q.user_id {
             w.and().push("t.user_id = ANY(").push_bind(ids.0.clone()).push(")");
+        }
+        if let Some(ids) = &q.created_by {
+            w.and().push("t.created_by_user_id = ANY(").push_bind(ids.0.clone()).push(")");
         }
         match q.status {
             Some(TokenStatus::Active) => w.and_sql("t.revoked_at IS NULL AND t.expires_at > now()"),
@@ -248,6 +261,16 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> 
     };
 
     let mut tx = pool.begin().await?;
+    // Serialised with a password change of the owner or the caller (GH#143):
+    // it either revokes this token, or it ended the caller's session first
+    // and the mint is refused here.
+    let locked: Vec<Uuid> = std::iter::once(owner_id).chain(me.filter(|&id| id != owner_id)).collect();
+    auth_data::share_lock_users(&mut tx, &locked).await?;
+    if let Some(session_id) = ctx.principal().and_then(|p| p.session_id())
+        && !auth_data::session_exists(&mut tx, session_id).await?
+    {
+        return Err(AppError::new(ErrorCode::Unauthenticated, "Your session has ended; sign in again"));
+    }
     let owner = auth_data::get_user(&mut tx, owner_id, false).await?;
     let Some(owner) = owner else {
         return Err(AppError::field("userId", "User does not exist", "not_found"));
@@ -274,6 +297,7 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> 
             token_prefix: &prefix,
             expires_at: b.expires_at,
             created_by: ctx.actor.name.as_deref(),
+            created_by_user_id: me,
         },
     )
     .await?;
@@ -317,6 +341,57 @@ pub async fn revoke(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     Ok(())
 }
 
+/// Revokes every token of the user that still works, in the transaction that
+/// sets their password: a token minted with a stolen password must not
+/// outlive the reset. With `created_for_others` (an administrator's reset),
+/// also every working token the user created for another owner: the account
+/// may have been compromised, and such a token would otherwise outlive the
+/// reset (GH#145). Each gets an update row; returns how many were revoked.
+///
+/// Call it before anything else in the transaction writes to the audit log:
+/// every audit insert takes the chain head, and taking it before these token
+/// rows lets two resets wait on each other (GH#166).
+pub async fn revoke_all_of_user(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    user_id: Uuid,
+    created_for_others: bool,
+) -> Result<usize, AppError> {
+    let rows = data::active_of_user(conn, user_id, created_for_others).await?;
+    revoke_rows(conn, ctx, user_id, rows).await
+}
+
+async fn revoke_rows(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    user_id: Uuid,
+    rows: Vec<TokenRow>,
+) -> Result<usize, AppError> {
+    let by = ctx.actor.name.clone().unwrap_or_else(|| ctx.actor.actor_type.as_str().to_owned());
+    let mut entries = Vec::new();
+    for row in rows {
+        let before = ApiToken::from(row);
+        data::revoke(conn, before.id, &by).await?;
+        let after = load(conn, before.id, false).await?;
+        let message = if after.user_id == user_id {
+            "API token revoked with the password change"
+        } else {
+            "API token revoked with its creator's password reset"
+        };
+        tracing::info!(token = %after.token_prefix, owner = %after.username, "{message}");
+        entries.push(AuditEntry {
+            action: AuditAction::Update,
+            entity_type: TOKEN_ENTITY,
+            entity_id: after.id,
+            old_value: Some(crud::json(&before)),
+            new_value: Some(crud::json(&after)),
+        });
+    }
+    let revoked = entries.len();
+    crud::write_audit(conn, ctx, entries).await?;
+    Ok(revoked)
+}
+
 /// Audits the deletion of a user's tokens, in the transaction that deletes the user.
 pub async fn audit_deleted_with_owner(
     conn: &mut PgConnection,
@@ -354,7 +429,7 @@ pub fn routes() -> Vec<Route> {
     vec![
         route(Method::GET, BASE, "listApiTokens")
             .tag(TAG)
-            .summary("List API tokens (paginated, searchable, filterable by owner and status); never their secrets")
+            .summary("List API tokens (paginated, searchable, filterable by owner, creator and status); never their secrets")
             .requires(manage)
             .session_only()
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ApiTokenList>, NoBody>| async move {
@@ -648,6 +723,692 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert!(!everything.contains(&secret[6..]) && !everything.contains(&hex::encode(&hash)));
+
+        db.drop().await;
+    }
+
+    /// A token scoped to users.manage may read accounts but not create,
+    /// change, delete or set the password of one: a credential it minted
+    /// would outlive the token's revocation (GH #119).
+    #[tokio::test]
+    async fn user_administration_needs_a_session() {
+        let Some(db) = scratch::database("user_administration_needs_a_session").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let session = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+
+        let managers: uuid::Uuid =
+            sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ('User managers') RETURNING id")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        sqlx::query(
+            "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'users.manage')",
+        )
+        .bind(managers)
+        .execute(pool)
+        .await
+        .unwrap();
+        let peer = json!({ "username": "peer", "displayName": "Peer", "password": "another long passphrase" });
+        let (status, peer, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(peer)).await;
+        assert_eq!(status, 201, "{peer}");
+        let peer_id = peer["id"].as_str().unwrap().to_owned();
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let create = json!({ "name": "provisioning", "profileId": managers, "expiresAt": expires });
+        let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(create)).await;
+        assert_eq!(status, 201, "{created}");
+        let tok = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+
+        // Reading stays open to the token.
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &tok, None).await;
+        assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(2)), "{v}");
+        let peer_path = format!("/api/v1/admin/users/{peer_id}");
+        let (status, _, _) = call(&app, "GET", &peer_path, &tok, None).await;
+        assert_eq!(status, 200);
+
+        // Every account write is refused.
+        let minted = json!({ "username": "minted", "displayName": "Minted", "password": "a token-made passphrase",
+            "profileIds": [managers] });
+        let writes = [
+            ("POST", "/api/v1/admin/users".to_owned(), Some(minted)),
+            ("PATCH", peer_path.clone(), Some(json!({ "profileIds": [managers] }))),
+            ("PATCH", peer_path.clone(), Some(json!({ "isActive": false }))),
+            ("PUT", format!("{peer_path}/password"), Some(json!({ "password": "a token-chosen passphrase" }))),
+            ("DELETE", peer_path.clone(), None),
+        ];
+        for (method, path, body) in writes {
+            let (status, v, _) = call(&app, method, &path, &tok, body).await;
+            assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{method} {path}: {v}");
+        }
+
+        let (users, peer_active): (i64, bool) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM users), (SELECT is_active FROM users WHERE username = 'peer')",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!((users, peer_active), (2, true));
+        let outcomes: Vec<String> =
+            sqlx::query_scalar("SELECT new_value->>'outcome' FROM audit_log WHERE action = 'token.use' ORDER BY id")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            outcomes,
+            ["accepted", "accepted", "session_only", "session_only", "session_only", "session_only", "session_only"]
+        );
+
+        // A session still administers accounts.
+        let (status, v, _) = call(
+            &app,
+            "PUT",
+            &format!("{peer_path}/password"),
+            &session,
+            Some(json!({ "password": "a fresh long passphrase" })),
+        )
+        .await;
+        assert_eq!(status, 200, "{v}");
+
+        db.drop().await;
+    }
+
+    fn session_of(me: &Value, headers: &HeaderMap) -> Creds {
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None }
+    }
+
+    /// A new password, set by an administrator or by the owner, revokes the
+    /// owner's API tokens: a token minted with a stolen password must not
+    /// survive the reset (GH#124).
+    #[tokio::test]
+    async fn setting_a_password_revokes_the_owners_tokens() {
+        let Some(db) = scratch::database("setting_a_password_revokes_the_owners_tokens").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let alice = json!({ "username": "alice", "displayName": "Alice", "password": "alice first password",
+            "profileIds": [administrators] });
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(alice)).await;
+        assert_eq!(status, 201, "{v}");
+        let alice_id = v["id"].as_str().unwrap().to_owned();
+        let login = json!({ "username": "alice", "password": "alice first password" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+        assert_eq!(status, 200, "{me}");
+        let alice_session = session_of(&me, &headers);
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let mint = |session: Creds, name: &'static str| {
+            let app = app.clone();
+            let expires = expires.clone();
+            async move {
+                let body = json!({ "name": name, "profileId": administrators, "expiresAt": expires });
+                let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(body)).await;
+                assert_eq!(status, 201, "{created}");
+                Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() }
+            }
+        };
+        let works = |tok: Creds| {
+            let app = app.clone();
+            async move { call(&app, "GET", "/api/v1/audit-log?limit=1", &tok, None).await }
+        };
+
+        // An administrator resets Alice's password: her token is revoked by them.
+        let alices = mint(alice_session.clone(), "alice script").await;
+        let admins = mint(admin.clone(), "admin script").await;
+        assert_eq!(works(alices.clone()).await.0, 200);
+        let reset = json!({ "password": "alice second password" });
+        let path = format!("/api/v1/admin/users/{alice_id}/password");
+        let (status, v, _) = call(&app, "PUT", &path, &admin, Some(reset)).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = works(alices).await;
+        assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
+        let revoked: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT name, revoked_by FROM api_tokens WHERE revoked_at IS NOT NULL ORDER BY name")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(revoked, vec![("alice script".to_owned(), Some("admin".to_owned()))]);
+        // Only hers: the administrator's own token keeps working.
+        assert_eq!(works(admins.clone()).await.0, 200);
+
+        // Alice changes her own password: her tokens go, her session stays.
+        let alice_session = {
+            let login = json!({ "username": "alice", "password": "alice second password" });
+            let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+            assert_eq!(status, 200, "{me}");
+            session_of(&me, &headers)
+        };
+        let alices = mint(alice_session.clone(), "alice again").await;
+        let change = json!({ "currentPassword": "alice second password", "newPassword": "alice third password" });
+        let (status, v, _) = call(&app, "PUT", "/api/v1/auth/password", &alice_session, Some(change)).await;
+        assert!(status < 300, "{status} {v}");
+        assert_eq!(works(alices).await.0, 401);
+        let (status, _, _) = call(&app, "GET", "/api/v1/auth/me", &alice_session, None).await;
+        assert_eq!(status, 200, "the caller's own session survives");
+        let (by,): (Option<String>,) = sqlx::query_as("SELECT revoked_by FROM api_tokens WHERE name = 'alice again'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(by.as_deref(), Some("alice"));
+        assert_eq!(works(admins).await.0, 200);
+
+        // Each revocation is audited as an update of the token.
+        let audited: Vec<(String, Option<String>, Value)> = sqlx::query_as(
+            "SELECT a.actor_name, t.name, a.new_value FROM audit_log a JOIN api_tokens t ON t.id = a.entity_id
+             WHERE a.entity_type = 'api_tokens' AND a.action = 'update' ORDER BY a.id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let summary: Vec<(&str, Option<&str>, Option<&str>)> =
+            audited.iter().map(|(a, n, v)| (a.as_str(), n.as_deref(), v["status"].as_str())).collect();
+        assert_eq!(
+            summary,
+            vec![("admin", Some("alice script"), Some("revoked")), ("alice", Some("alice again"), Some("revoked"))]
+        );
+
+        db.drop().await;
+    }
+
+    /// An administrator's reset of a user's password also revokes the tokens
+    /// that user minted for other owners; their own password change does not.
+    /// `createdBy` finds them either way (GH#145).
+    #[tokio::test]
+    async fn resetting_a_password_revokes_the_tokens_the_user_minted_for_others() {
+        let Some(db) = scratch::database("resetting_a_password_revokes_tokens_minted_for_others").await else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let mut ids = Vec::new();
+        for name in ["alice", "bob"] {
+            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+                "profileIds": [administrators] });
+            let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            ids.push(v["id"].as_str().unwrap().to_owned());
+        }
+        let (alice_id, bob_id) = (ids[0].clone(), ids[1].clone());
+        let sign_in = |password: &'static str| {
+            let app = app.clone();
+            async move {
+                let login = json!({ "username": "alice", "password": password });
+                let (status, me, headers) =
+                    call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+                assert_eq!(status, 200, "{me}");
+                session_of(&me, &headers)
+            }
+        };
+        let alice = sign_in("alice first password").await;
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let mint = |session: Creds, owner: String, name: &'static str| {
+            let app = app.clone();
+            let expires = expires.clone();
+            async move {
+                let body = json!({ "name": name, "userId": owner, "profileId": administrators, "expiresAt": expires });
+                let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(body)).await;
+                assert_eq!(status, 201, "{created}");
+                Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() }
+            }
+        };
+        let works = |tok: Creds| {
+            let app = app.clone();
+            async move { call(&app, "GET", "/api/v1/audit-log?limit=1", &tok, None).await }
+        };
+
+        // Alice mints a token for Bob; the administrator mints one for Bob too.
+        let alices_for_bob = mint(alice.clone(), bob_id.clone(), "minted by alice").await;
+        let admins_for_bob = mint(admin.clone(), bob_id.clone(), "minted by admin").await;
+        let (status, v, _) = call(&app, "GET", &format!("{}?createdBy={alice_id}", super::BASE), &admin, None).await;
+        assert_eq!(status, 200, "{v}");
+        let listed: Vec<(&str, &str, &str)> = v["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (t["name"].as_str().unwrap(), t["userId"].as_str().unwrap(), t["createdByUserId"].as_str().unwrap())
+            })
+            .collect();
+        assert_eq!(listed, vec![("minted by alice", bob_id.as_str(), alice_id.as_str())]);
+
+        // Her own password change leaves the token she minted for Bob alone.
+        let change = json!({ "currentPassword": "alice first password", "newPassword": "alice second password" });
+        let (status, v, _) = call(&app, "PUT", "/api/v1/auth/password", &alice, Some(change)).await;
+        assert!(status < 300, "{status} {v}");
+        assert_eq!(works(alices_for_bob.clone()).await.0, 200);
+
+        // The issue's repro: the administrator resets Alice's password.
+        let reset = json!({ "password": "alice third password" });
+        let (status, v, _) =
+            call(&app, "PUT", &format!("/api/v1/admin/users/{alice_id}/password"), &admin, Some(reset)).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = works(alices_for_bob).await;
+        assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
+        assert_eq!(works(admins_for_bob).await.0, 200, "Bob's token from another creator keeps working");
+        let revoked: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT name, revoked_by FROM api_tokens WHERE revoked_at IS NOT NULL ORDER BY name")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(revoked, vec![("minted by alice".to_owned(), Some("admin".to_owned()))]);
+        let audited: Vec<(String, Value)> = sqlx::query_as(
+            "SELECT a.actor_name, a.new_value FROM audit_log a
+             WHERE a.entity_type = 'api_tokens' AND a.action = 'update' ORDER BY a.id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let summary: Vec<(&str, Option<&str>, Option<&str>)> =
+            audited.iter().map(|(a, v)| (a.as_str(), v["name"].as_str(), v["status"].as_str())).collect();
+        assert_eq!(summary, vec![("admin", Some("minted by alice"), Some("revoked"))]);
+
+        // A deleted creator is forgotten; the token stays with its owner.
+        let alice = sign_in("alice third password").await;
+        let again = mint(alice, bob_id.clone(), "minted before deletion").await;
+        let (status, v, _) = call(&app, "DELETE", &format!("/api/v1/admin/users/{alice_id}"), &admin, None).await;
+        assert_eq!(status, 204, "{v}");
+        assert_eq!(works(again).await.0, 200);
+        let (creator,): (Option<uuid::Uuid>,) =
+            sqlx::query_as("SELECT created_by_user_id FROM api_tokens WHERE name = 'minted before deletion'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(creator, None);
+
+        db.drop().await;
+    }
+
+    /// A mint in flight while the owner's password is reset waits for the
+    /// reset and is then refused, as the reset ended the session it came
+    /// with: no token minted with the old password survives (GH#143).
+    #[tokio::test]
+    async fn a_token_minted_during_a_password_reset_does_not_survive_it() {
+        let Some(db) = scratch::database("a_token_minted_during_a_password_reset_does_not_survive_it").await else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let alice = json!({ "username": "alice", "displayName": "Alice", "password": "alice first password",
+            "profileIds": [administrators] });
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(alice)).await;
+        assert_eq!(status, 201, "{v}");
+        let alice_id: uuid::Uuid = v["id"].as_str().unwrap().parse().unwrap();
+        let login = json!({ "username": "alice", "password": "alice first password" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+        assert_eq!(status, 200, "{me}");
+        let alice_session = session_of(&me, &headers);
+
+        // The reset's steps, held open: Alice's row locked, her sessions ended,
+        // her tokens (none yet) revoked.
+        let mut reset = pool.begin().await.unwrap();
+        crate::data::auth::get_user(&mut reset, alice_id, true).await.unwrap();
+        crate::data::auth::delete_user_sessions(&mut reset, alice_id, None).await.unwrap();
+        let ctx = crate::api::context::RequestContext::system("admin", "reset");
+        super::revoke_all_of_user(&mut reset, &ctx, alice_id, true).await.unwrap();
+
+        // Her session passed authentication before the reset commits.
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let body = json!({ "name": "raced", "profileId": administrators, "expiresAt": expires });
+        let mint = tokio::spawn({
+            let app = app.clone();
+            async move { call(&app, "POST", super::BASE, &alice_session, Some(body)).await }
+        });
+        let mut waiting = false;
+        for _ in 0..200 {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if n > 0 {
+                waiting = true;
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(25)).await;
+        }
+        assert!(waiting, "the mint waits for the reset's lock on the owner");
+        reset.commit().await.unwrap();
+
+        let (status, v, _) = mint.await.unwrap();
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+        let tokens: i64 = sqlx::query_scalar("SELECT count(*) FROM api_tokens").fetch_one(pool).await.unwrap();
+        assert_eq!(tokens, 0);
+
+        db.drop().await;
+    }
+
+    /// Two administrators reset the passwords of two users who minted tokens
+    /// for each other, at the same time and with no session open (sessions
+    /// would serialise the resets on the audit chain head): both succeed and
+    /// every token is revoked. The token rows were locked in two statements,
+    /// in opposite orders, and one reset failed with a deadlock (GH#166).
+    #[tokio::test]
+    async fn concurrent_resets_of_users_who_minted_tokens_for_each_other_both_succeed() {
+        let Some(db) = scratch::database("concurrent_resets_of_users_who_minted_tokens_for_each_other").await else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let mut ids = Vec::new();
+        for name in ["alice", "bob", "second"] {
+            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+                "profileIds": [administrators] });
+            let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            ids.push(v["id"].as_str().unwrap().parse::<uuid::Uuid>().unwrap());
+        }
+        let (alice_id, bob_id) = (ids[0], ids[1]);
+        let login = json!({ "username": "second", "password": "second first password" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+        assert_eq!(status, 200, "{me}");
+        let second = session_of(&me, &headers);
+
+        for round in 0..10 {
+            // Alice's token for Bob and Bob's for Alice, written directly so
+            // that neither has a session open.
+            let mut conn = pool.acquire().await.unwrap();
+            for (owner, creator) in [(bob_id, alice_id), (alice_id, bob_id)] {
+                let name = format!("round {round} for {owner}");
+                let hash = crate::auth::session::token_hash(&crate::auth::token::new_secret());
+                crate::data::api_tokens::insert(
+                    &mut conn,
+                    &crate::data::api_tokens::NewToken {
+                        name: &name,
+                        user_id: owner,
+                        profile_id: administrators,
+                        token_hash: &hash,
+                        token_prefix: &name[..8],
+                        expires_at: chrono::Utc::now() + chrono::Duration::days(1),
+                        created_by: None,
+                        created_by_user_id: Some(creator),
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            drop(conn);
+
+            let reset = |session: Creds, id: uuid::Uuid| {
+                let app = app.clone();
+                let body = json!({ "password": format!("password of round {round}") });
+                tokio::spawn(async move {
+                    call(&app, "PUT", &format!("/api/v1/admin/users/{id}/password"), &session, Some(body)).await
+                })
+            };
+            let (a, b) = (reset(admin.clone(), alice_id), reset(second.clone(), bob_id));
+            for (status, v, _) in [a.await.unwrap(), b.await.unwrap()] {
+                assert_eq!(status, 200, "round {round}: {v}");
+            }
+            let working: i64 = sqlx::query_scalar("SELECT count(*) FROM api_tokens WHERE revoked_at IS NULL")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            assert_eq!(working, 0, "round {round}");
+        }
+
+        db.drop().await;
+    }
+
+    /// A token with the Administrator profile may read identity providers
+    /// and run the connection test, but not add, change (settings or group
+    /// mappings) or delete one: a provider or mapping it set up would keep
+    /// signing people in after the token's revocation (GH #137).
+    #[tokio::test]
+    async fn identity_provider_administration_needs_a_session() {
+        let Some(db) = scratch::database("identity_provider_administration_needs_a_session").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let session = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE is_builtin AND name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        // Nothing listens on port 1, so the connection test fails fast.
+        let directory = |name: &str, group: &str| {
+            json!({ "kind": "ldap", "name": name,
+                "ldap": { "url": "ldaps://127.0.0.1:1", "userBaseDn": "dc=example,dc=com" },
+                "groupMappings": [{ "group": group, "profileId": administrators }] })
+        };
+        let (status, idp, _) = call(
+            &app,
+            "POST",
+            "/api/v1/admin/identity-providers",
+            &session,
+            Some(directory("Corporate AD", "cn=cmdb-admins,dc=example,dc=com")),
+        )
+        .await;
+        assert_eq!(status, 201, "{idp}");
+        let idp_path = format!("/api/v1/admin/identity-providers/{}", idp["id"].as_str().unwrap());
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let create = json!({ "name": "automation", "profileId": administrators, "expiresAt": expires });
+        let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(create)).await;
+        assert_eq!(status, 201, "{created}");
+        let tok = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+
+        // Reading and the connection test (it changes nothing) stay open to the token.
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/identity-providers", &tok, None).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "GET", &idp_path, &tok, None).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "POST", &format!("{idp_path}/test"), &tok, Some(json!({}))).await;
+        assert_eq!((status, v["ok"].as_bool()), (200, Some(false)), "{v}");
+
+        // Every provider write is refused.
+        let writes = [
+            (
+                "POST",
+                "/api/v1/admin/identity-providers".to_owned(),
+                Some(directory("Rogue directory", "cn=everyone,dc=example,dc=com")),
+            ),
+            (
+                "PATCH",
+                idp_path.clone(),
+                Some(
+                    json!({ "groupMappings": [{ "group": "cn=everyone,dc=example,dc=com", "profileId": administrators }] }),
+                ),
+            ),
+            ("PATCH", idp_path.clone(), Some(json!({ "ldap": { "url": "ldaps://attacker.example.com" } }))),
+            ("PATCH", idp_path.clone(), Some(json!({ "isEnabled": false }))),
+            ("DELETE", idp_path.clone(), None),
+        ];
+        for (method, path, body) in writes {
+            let (status, v, _) = call(&app, method, &path, &tok, body).await;
+            assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{method} {path}: {v}");
+        }
+
+        let (status, v, _) = call(&app, "GET", &idp_path, &session, None).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(
+            (v["isEnabled"].as_bool(), v["ldap"]["url"].as_str(), v["groupMappings"][0]["group"].as_str()),
+            (Some(true), Some("ldaps://127.0.0.1:1"), Some("cn=cmdb-admins,dc=example,dc=com")),
+            "{v}"
+        );
+        let providers: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM identity_providers").fetch_one(pool).await.unwrap();
+        assert_eq!(providers, 1);
+        let outcomes: Vec<String> =
+            sqlx::query_scalar("SELECT new_value->>'outcome' FROM audit_log WHERE action = 'token.use' ORDER BY id")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            outcomes,
+            [
+                "accepted",
+                "accepted",
+                "accepted",
+                "session_only",
+                "session_only",
+                "session_only",
+                "session_only",
+                "session_only"
+            ]
+        );
+
+        // A session still administers providers.
+        let remap =
+            json!({ "groupMappings": [{ "group": "cn=cmdb-owners,dc=example,dc=com", "profileId": administrators }] });
+        let (status, v, _) = call(&app, "PATCH", &idp_path, &session, Some(remap)).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "DELETE", &idp_path, &session, None).await;
+        assert_eq!(status, 204, "{v}");
+
+        db.drop().await;
+    }
+
+    /// GitHub #154: a token must not widen or weaken a permission profile
+    /// (including `requireMfa` on the built-in one) or import profiles, since
+    /// the change would outlive the token's revocation.
+    #[tokio::test]
+    async fn permission_profile_administration_needs_a_session() {
+        let Some(db) = scratch::database("permission_profile_administration_needs_a_session").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let session = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE is_builtin AND name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let admin_path = format!("/api/v1/admin/profiles/{administrators}");
+        let readers = json!({ "name": "Readers", "globalPermissions": ["audit.view"], "classPermissions": [] });
+        let (status, profile, _) = call(&app, "POST", "/api/v1/admin/profiles", &session, Some(readers)).await;
+        assert_eq!(status, 201, "{profile}");
+        let profile_path = format!("/api/v1/admin/profiles/{}", profile["id"].as_str().unwrap());
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let create = json!({ "name": "automation", "profileId": administrators, "expiresAt": expires });
+        let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(create)).await;
+        assert_eq!(status, 201, "{created}");
+        let tok = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+
+        // Reading profiles and exporting the configuration stay open to the token.
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/profiles", &tok, None).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "GET", &admin_path, &tok, None).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, mut file, _) = call(&app, "GET", "/api/v1/admin/config/export", &tok, None).await;
+        assert_eq!(status, 200, "{file}");
+        file["permissionProfiles"][0]["globalPermissions"] = json!(["audit.view", "users.manage"]);
+
+        // Every profile write, and the import, is refused.
+        let writes = [
+            ("PATCH", admin_path.clone(), Some(json!({ "requireMfa": true }))),
+            ("PATCH", profile_path.clone(), Some(json!({ "globalPermissions": ["audit.view", "users.manage"] }))),
+            ("POST", "/api/v1/admin/profiles".to_owned(), Some(json!({ "name": "Rogue", "globalPermissions": [] }))),
+            ("POST", format!("{admin_path}/clone"), Some(json!({ "name": "Rogue administrators" }))),
+            ("DELETE", profile_path.clone(), None),
+            ("POST", "/api/v1/admin/config/import?mode=apply".to_owned(), Some(file.clone())),
+            ("POST", "/api/v1/admin/config/import?mode=dry_run".to_owned(), Some(file.clone())),
+        ];
+        for (method, path, body) in writes {
+            let (status, v, _) = call(&app, method, &path, &tok, body).await;
+            assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{method} {path}: {v}");
+        }
+
+        let (_, v, _) = call(&app, "GET", &admin_path, &session, None).await;
+        assert_eq!(v["requireMfa"], json!(false), "{v}");
+        let (_, v, _) = call(&app, "GET", &profile_path, &session, None).await;
+        assert_eq!(v["globalPermissions"], json!(["audit.view"]), "{v}");
+        let rogue: i64 = sqlx::query_scalar("SELECT count(*) FROM permission_profiles WHERE name LIKE 'Rogue%'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(rogue, 0);
+        let outcomes: Vec<String> =
+            sqlx::query_scalar("SELECT new_value->>'outcome' FROM audit_log WHERE action = 'token.use' ORDER BY id")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(outcomes[..3], ["accepted", "accepted", "accepted"]);
+        assert_eq!(outcomes[3..], ["session_only"; 7]);
+
+        // A session still administers profiles and imports.
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/config/import?mode=apply", &session, Some(file)).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "DELETE", &profile_path, &session, None).await;
+        assert_eq!(status, 204, "{v}");
 
         db.drop().await;
     }

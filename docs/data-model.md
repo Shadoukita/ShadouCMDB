@@ -15,7 +15,8 @@ Migrations: [`sql/migrations/`](../sql/migrations/)
 `0003_users_and_permission_profiles`, `0004_data_model_admin`, `0005_ui_settings`, `0006_auth_audit`,
 `0007_audit_retention`, `0008_cmdb_schema_and_areas`, `0009_type_tables`, `0010_api_tokens` …
 `0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`,
-`0018_audit_hash_chain`, `0019_multiline_notes`).
+`0018_audit_hash_chain`, `0019_multiline_notes`, `0020_attribute_sorts`,
+`0021_stateless_oidc_start`, `0022_api_token_creator`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -44,8 +45,8 @@ users ─< user_permission_profiles >─ permission_profiles ─┬─< permissi
   ├─< user_totp (0..1), user_recovery_codes, mfa_challenges
   ├─< api_tokens >─ permission_profiles (scope; NULL once deleted)
   └── identity_providers (0..1; the provider the account signs in through)
-         ├─< identity_provider_group_mappings >─ permission_profiles
-         └─< oidc_login_states
+         └─< identity_provider_group_mappings >─ permission_profiles
+server_keys (secrets the server generates for itself, one row per purpose)
 
 ui_settings (one row) ── (version) ─> ui_settings_versions (append-only)
 ui_assets (logo, favicon)
@@ -65,19 +66,19 @@ ui_assets (logo, favicon)
 | `relationship_types` | `runs_on`, `depends_on`, `located_in`, `connected_to`, …, with `forward_label` / `reverse_label` and `is_directional`. | unique `key` |
 | `relationship_type_rules` | Legal (source class, target class) pairs per type. A rule matches the named class **and all its descendants**. | unique triple |
 | `ci_relationships` | Typed, directional edge `source_ci_id → target_ci_id`. | **no self-edges** (check); **no duplicate live edges** (partial unique index); for non-directional types the reverse edge also counts as a duplicate (trigger + advisory lock); endpoints must satisfy a rule and must not be soft-deleted (trigger) |
-| `statuses` | **Deprecated (0016).** CI lifecycle as it was before the barebone core; `is_operational` flagged "live" statuses. Migration 0016 copied the rows into the lookup list `status` with the same ids; CIs hold those values. Kept unchanged for existing integrations and history; will be removed in a later release. The web UI shows these four tables read only under *Data model › Lookups*, each linking to its Dropdowns list. | unique `key` |
+| `statuses` | **Deprecated (0016).** CI lifecycle as it was before the barebone core; `is_operational` flagged "live" statuses. Migration 0016 copied the rows into the lookup list `status` with the same ids; CIs hold those values. Kept read-only for history (the API's writes answer `410 GONE`); will be removed in a later release. The web UI shows these four tables read only under *Data model › Lookups*, each linking to its Dropdowns list. | unique `key` |
 | `environments` | **Deprecated (0016)**, copied into the lookup list `environment`. | unique `key` |
 | `locations` | **Deprecated (0016)**, copied into the lookup list `location` (flat; the hierarchy, type and address stay here). | unique `key`; `location_type` check; no cycles (trigger) |
 | `owners` | **Deprecated (0016)**, copied into the lookup list `owner` (key derived from the name; kind and e-mail in the value's description). This is not a login table (see `users`). | `kind` check; unique `external_ref`; email format |
 | `users` | Accounts: `username`, `display_name`, `email`, `is_active`, argon2id `password_hash` (PHC string, never returned by the API), `password_changed_at`, `last_login_at`. An account created by an identity provider has `identity_provider_id` and `external_id` (the OIDC `sub`, or the directory entry's `objectGUID`/`entryUUID`/DN) and no password. | unique `lower(username)`; username format; `password_hash LIKE '$argon2id$%'`; a password **iff** local (check); `identity_provider_id` and `external_id` together, unique as a pair; provider FK `RESTRICT`; email format |
 | `identity_providers` | OIDC providers (`kind = 'oidc'`: `issuer_url`, `client_id`, `client_secret`, `scopes`, `username_claim`, `groups_claim`) and LDAP/AD directories (`kind = 'ldap'`: `ldap_url`, `start_tls`, `bind_dn`, `bind_password`, `user_base_dn`, `user_filter`, attribute names), with `name`, `is_enabled`, `sort_order` and an optional `ca_certificate` (PEM). Secrets are stored as is (the server presents them) and never returned by the API. | unique `lower(name)`; the columns of its kind required and the other kind's NULL (checks); issuer `https://` (or loopback `http://`); `ldaps://`, or `ldap://` with `start_tls` (check); bind DN and password together; filter contains `{username}`; `kind` immutable (trigger) |
 | `identity_provider_group_mappings` | A group the provider reports (`group_name`: an OIDC groups-claim value or an LDAP group DN) grants a permission profile. | unique (`provider_id`, `lower(group_name)`, `profile_id`); cascades with the provider and the profile |
-| `oidc_login_states` | An OIDC sign-in between the redirect to the provider and its callback: SHA-256 of the `state`, the `nonce`, the PKCE verifier, `return_to` (a local path), `expires_at` (10 minutes). Never backed up. | unique `state_hash` (32 bytes); `return_to` is a local path (check); cascades with the provider |
+| `server_keys` | Secrets the server generates for itself, one row per `purpose`, with the `key_id` byte sent in front of every value sealed with it. `oidc_state` seals the `shadoucmdb_oidc` cookie: an OIDC sign-in between the redirect to the provider and its callback (provider, `state`, `nonce`, PKCE verifier, return path, expiry after 10 minutes), encrypted and authenticated with AES-256-GCM, so starting a sign-in stores nothing (migration 0021 replaced the former `oidc_login_states` table). The first API process that needs a key inserts it; all processes then share it. Never backed up. | PK `purpose`; `key_id` 0–255; `secret` exactly 32 bytes; the API role may only `SELECT` and `INSERT` |
 | `permission_profiles` | Named sets of permissions. `is_builtin` marks the one Administrator profile (created by the migration), which holds every permission implicitly. `require_mfa`: holders must set up two-factor authentication. | unique `lower(name)`; at most one built-in; built-in cannot be updated (except `require_mfa`) or deleted (trigger) |
 | `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
 | `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
-| `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by`. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted |
+| `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by` (the creator's name, for display) and `created_by_user_id` (the creating user; NULL for the CLI, a deleted creator, or an older token whose audit `create` row was purged). An administrator's password reset revokes the working tokens they created for other users. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted, `created_by_user_id` set NULL when the creator is deleted |
 | `user_totp` | A user's authenticator: the 160-bit TOTP `secret` (stored as is: checking a code needs it; whoever reads it still needs the password), `confirmed_at` (NULL while the set-up is unconfirmed, which does not count as MFA), `last_used_step` (the last accepted 30 s step, so no code works twice). | PK `user_id`, cascades with the user; secret exactly 20 bytes |
 | `user_recovery_codes` | Ten one-time codes per confirmed authenticator: SHA-256 of each (`code_hash`, 80 random bits per code), `used_at`. | unique (`user_id`, `code_hash`); 32-byte hash; cascades with the user |
 | `mfa_challenges` | A sign-in whose password was right and whose code is due: SHA-256 of the `shadoucmdb_mfa` cookie token, `expires_at` (5 minutes), `failed_attempts`. Never backed up. | unique `token_hash` (32 bytes); cascades with the user |
@@ -207,13 +208,18 @@ the grip on its right edge; **Full width** / **Laptop** / **Tablet** / **Phone**
 
 ```
 layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
-  tabs[]:     { key, label, sections[] }                   key unique among the layout's tabs
+  tabs[]:     { key, label, placement, sections[] }        key unique among the layout's tabs;
+                                                           placement grid (default) or free
   sections[]: { key, label, kind (default fields),         key unique across the whole layout
                 width 1–12 (default 12), newRow, minHeight 1–50,   placement on the tab's 12-column grid
                 columns 1–12 (default 3), collapsed,       columns of the section's own field grid
                 fields[],                                  kind fields only
-                text }                                     kind note only: 1–4,000 characters
+                text,                                      kind note only: 1–4,000 characters
+                frame }                                    free tabs only (see below)
   fields[]:   { field, width 1–12 (default 1) }            field placed once; width ≤ the section's columns
+  frame:      { x 0–0.95, w 0.05–1,                        fractions of the tab's width; x + w ≤ 1
+                y 0–100,000, h 48–4,000,                   px from the top of the tab, px tall
+                z 0–10,000, minH 48–h }                    stacking order (stored 1..n); optional minH
 ```
 
 - **Section kinds.** `kind` says what a section shows. `fields` (the default when `kind` is absent) is a
@@ -235,6 +241,43 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   layout works on every screen. Below the tablet breakpoint (820 px of content width, which includes
   tablets in portrait at 768 px and every phone) sections stack at the full width in their order and
   `newRow` has no effect; the side-by-side arrangement is the desktop layout.
+- **Free tabs (`placement: "free"`).** Sections are windows on a desktop: each has a `frame` and may
+  sit anywhere, at any size, over other windows. `x` and `w` are fractions of the tab's
+  width, so windows scale with the browser window; `y` and `h` are pixels from the top of the tab. The
+  window with the higher `z` is drawn on top. The rendering contract for the detail page and the form:
+  - The tab is as tall as its lowest window (`max(y + h)`); windows are positioned absolutely in it.
+  - Each window scrolls its own content (fields, note or panel), so content under another window or
+    below the window's height is never lost. `collapsed` shrinks a window to its title bar.
+  - **Reading order** is `y`, then `x`, and the API stores a free tab's sections in that order. The
+    page renders them in that order in the document, so keyboard focus and screen readers follow it
+    whatever the stacking order. Below the tablet breakpoint (820 px of tab width, the same as for the
+    grid) and in print, the tab does not position anything: the windows stack at the full width in
+    reading order, each at least `minH` px tall (else as tall as its content).
+  - Fields no section places, and panels the layout does not place, behave as in a grid tab: the
+    General section and attribute groups that follow on the first tab sit at the full width below its
+    lowest window.
+
+  **On save** the API normalises a free tab, so the stored form is always complete: a section without
+  a `frame` gets one from its position on the grid (below the existing windows, on top of them), `x`
+  and `w` are rounded to 4 decimals and kept inside the tab, `z` becomes 1..n in the order of the
+  values sent (equal values keep the section order), and the sections are sorted into reading order.
+  Saving the result again changes nothing.
+
+  **Grid → free:** send the tab with `placement: "free"` and no frames. The frames follow the grid
+  rows: `x` and `w` from the columns (a section of width 6 in the second half is `x` 0.5, `w` 0.5),
+  each row as tall as its tallest section and 16 px between rows. Heights are estimates, since the
+  server does not render: 48 px title bar plus 48 px per row of fields (at least one row, at least
+  `minHeight`), 144 px for a note and 320 px for a built-in panel. Nothing jumps sideways, and each
+  window scrolls if its content is taller than the estimate.
+
+  **Free → grid:** send the tab with `placement: "grid"` (or without `placement`) and its frames. The
+  sections are ordered by `y`, then `x`, each spans the columns nearest its width
+  (`round(w × 12)`), a section that starts below the bottom of the first window of the current row
+  starts a new row, and the frames are dropped. A stored grid tab never has frames.
+
+  Frames are refused with `400 VALIDATION_ERROR` and the path of the offending value (e.g.
+  `settings.layouts.0.tabs.1.sections.2.frame.w`) when they are out of range, when `x + w` exceeds 1
+  (the window must end inside the tab), when `minH` exceeds `h`, or when they carry unknown keys.
 - `field` is a core field (`ident`, `validFrom`, `validUntil`), a detail-page field (`label`, `class`,
   `active`, `createdAt`, `updatedAt`) or `attributes.<key>`. Fields fill a section's grid row by row in
   the order given; `width` is the number of the section's `columns` a field spans. A grid of 12 columns
@@ -255,13 +298,15 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   patterns, section widths, columns and field widths of 1–12, `minHeight` of 1–50, at most 20 tabs, 50 sections per tab, 200 fields per section) and
   the cross-field rules above (unique keys, a field placed once, width within the section's columns,
   core fields not hidden, each built-in panel once, `fields` and `text` only on sections of their kind,
-  note text not blank). References to attributes that do not exist are accepted, dropped from the
+  note text not blank, frames inside the tab). References to attributes that do not exist are accepted, dropped from the
   effective settings and listed as `issues`, like everywhere else in the document.
 
 **Layouts saved before the grid** (no section `width`, `columns` and field widths of 1–4) stay valid
 unchanged and render as before: every section is 12 wide, so they stack at the full width. There is
 no migration; the API fills in `width: 12` when it returns a layout or saves it again. `newRow` and
-`minHeight` are only written when set.
+`minHeight` are only written when set. **Layouts saved before free tabs** need no migration either: a
+tab without `placement` is a grid tab, and the API writes `placement` and `frame` only for free tabs, so
+existing layouts, exports and saved versions read and write back unchanged.
 
 ### Editing a layout on the CI page
 
@@ -297,6 +342,22 @@ the editor opens in the same tab with a notice, and **Done** returns to the page
 Placing a section beside another fits it into the row: it takes the columns the row leaves free (a 6
 next to a 6), and when the row is full the section it is dropped on gives up half of its width. Every
 drag is one undo step, however far the edge travelled.
+
+**Free tabs in the editor.** **Grid** / **Free** in the bar switches the tab in view (Grid is the
+default). To Free, each section becomes a window where it is on screen, so nothing moves; back to Grid,
+the sections are ordered by position with widths from their windows, as the API converts them (see
+*Free tabs* above). On a free tab:
+
+| To… | With the mouse | From the keyboard (on the window's grip) |
+|---|---|---|
+| Move a window | drag its title bar (its name too: a click renames, a drag moves); a readout shows `x, y · w × h px` | ← → ↑ ↓: 8 px (Shift: 64 px, Alt: 1 px) |
+| Resize a window | drag any edge or corner | Ctrl+→ / Ctrl+←: width, Ctrl+↓ / Ctrl+↑: height |
+| Place without snapping | hold **Alt** while dragging, or **Snap off** in the bar (edges otherwise snap to other windows within 6 px, else to an 8 px grid) | keys never snap |
+| Change the layers | pressing on a window brings it to the front; right-click it, its toolbar or the bar for **Bring to front** / **Bring forward** / **Send backward** / **Send to back** | Ctrl+PageUp / Ctrl+PageDown (with Shift: front / back); Shift+F10 opens the layers menu |
+
+A new section, note or panel, and one moved in from another tab, starts below the lowest window at the
+full width, on top of the stack. Below 820 px of preview width the windows stack as they do on a phone,
+and cannot be moved there. Every drag is one undo step, and each key press or layer change is one.
 
 **Undo** / **Redo** (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y outside text fields), **Desktop** / **Tablet** /
 **Phone** as shortcuts for the preview width, **Reset to built-in layout** (drops the class's own layout from the draft; undoable),
@@ -400,7 +461,7 @@ value before and after the upgrade.
 | `api_tokens` | **Revoke** (`revoked_at`), row kept | A revoked or expired token stays listed next to its audit rows. Deleting the owner deletes their tokens; the API writes a `delete` audit row for each first. |
 | `user_totp`, `user_recovery_codes`, `mfa_challenges` | **Hard delete** | Turning MFA off (by the user or an administrator) deletes the authenticator and codes; the `mfa.disable` audit row is the history. A used recovery code keeps its row (`used_at`) until the codes are replaced. Challenges are deleted when used, after 5 wrong codes, at the next sign-in once expired, and by `prune-audit --scope auth`. |
 | `identity_providers`, `identity_provider_group_mappings` | **Disable** (`is_enabled = false`), hard delete only without accounts | Disabling stops sign-ins through the provider and ends its accounts' sessions. A provider that accounts still belong to cannot be deleted (FK `RESTRICT`, checked by the API first: `409 IN_USE`). Mappings are configuration: replaced as a whole, history in `audit_log`. |
-| `oidc_login_states` | **Hard delete** | Deleted when the callback redeems them, and once expired at the next OIDC sign-in. |
+| `server_keys` | **Never changed by the API** | The API only reads and adds keys. To rotate the OIDC sign-in key, delete its row as the owner role (`DELETE FROM cmdb.server_keys WHERE purpose = 'oidc_state';`) and restart every API process: they generate a new key, and sign-ins in progress end with "expired" once. A restore does the same, since the table is not backed up. |
 | `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login, and `prune-audit` removes any left 30 days after their expiry. Every session the API ends (not expiry) leaves a `logout` or `session.revoke` row in `audit_log`. |
 
 ## Auditing

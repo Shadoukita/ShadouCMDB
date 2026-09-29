@@ -450,3 +450,182 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   await expect(d("Audit trail")).toContainText("Audit trail panel");
   await snap(page, "layout-blocks-designer");
 });
+
+test("free placement: windows dragged, resized, overlapped and layered, saved, and shown as placed", async ({ page: origin, request }) => {
+  await resetUiSettings(request);
+  await origin.goto(`/cis/${ci.id}`);
+  const page = await openEditor(origin);
+  await page.setViewportSize({ width: 1440, height: 1600 });
+  const area = page.locator("[data-le-area]");
+  const win = (key: string) => page.locator(`[data-window="${key}"]`);
+  const num = async (key: string, attr: "x" | "y" | "w" | "h" | "z") => Number(await win(key).getAttribute(`data-${attr}`));
+  const say = page.locator(".le-canvas [aria-live=assertive]");
+
+  // Grid stays the default; switching the tab to Free keeps every section where it is.
+  const placement = bar(page).getByRole("group", { name: "Placement of the tab General" });
+  await expect(placement.getByRole("button", { name: "Grid" })).toHaveAttribute("aria-pressed", "true");
+  const before = (await page.locator('[data-section-shell="general"]').boundingBox())!;
+  await placement.getByRole("button", { name: "Free" }).click();
+  await expect(area).toHaveAttribute("data-placement", "free");
+  const after = (await win("general").boundingBox())!;
+  expect(Math.abs(after.y - before.y)).toBeLessThan(2);
+  expect(Math.abs(after.x - before.x)).toBeLessThan(2);
+  expect(Math.abs(after.width - before.width)).toBeLessThan(2);
+  expect(Math.abs(after.height - before.height)).toBeLessThan(2);
+  await expect(say).toContainText("Tab General is free");
+
+  // + Section on a free tab: a new window below the others, on top of the stack.
+  await page.getByRole("button", { name: "Add a section to General" }).click();
+  await page.getByLabel("Section name").fill("Floating");
+  await page.getByLabel("Section name").press("Enter");
+  const key = (await page.locator("[data-window]").filter({ has: section(page, "Floating") }).getAttribute("data-window"))!;
+  await field(page, "Serial number").hover();
+  await field(page, "Serial number").getByLabel("Move Serial number to section").selectOption({ label: "Floating" });
+  await expect(section(page, "Floating").locator(".le-field")).toHaveCount(1);
+  expect(await num(key, "y")).toBeGreaterThanOrEqual((await num("general", "y")) + (await num("general", "h")));
+  expect(await num(key, "z")).toBeGreaterThan(await num("general", "z"));
+
+  const areaBox = (await area.boundingBox())!;
+  // Resize it from the bottom-right corner, narrower and taller, snapping to the 8 px guide grid.
+  const w0 = (await win(key).boundingBox())!;
+  const corner = (await win(key).getByTestId("window-edge-se").boundingBox())!;
+  await page.mouse.move(corner.x + corner.width / 2, corner.y + corner.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(corner.x - 600, corner.y + 90, { steps: 6 });
+  await expect(win(key).getByTestId("window-readout")).toBeVisible();
+  await page.mouse.up();
+  const w1 = (await win(key).boundingBox())!;
+  expect(w1.width).toBeLessThan(w0.width - 580);
+  expect(w1.height).toBeGreaterThan(w0.height + 80);
+  // Its right and bottom edges are on the guide grid, or on another window's edge.
+  const snapped = (v: number, edges: number[]) => v % 8 === 0 || edges.some((e) => Math.abs(e - v) < 1);
+  expect(snapped((await num(key, "y")) + (await num(key, "h")), [(await num("general", "y")) + (await num("general", "h"))])).toBe(true);
+  // Undo takes back the whole resize; redo brings it back.
+  await bar(page).getByRole("button", { name: "Undo" }).click();
+  await expect.poll(async () => Math.round((await win(key).boundingBox())!.width)).toBe(Math.round(w0.width));
+  await bar(page).getByRole("button", { name: "Redo" }).click();
+  await expect.poll(async () => Math.round((await win(key).boundingBox())!.width)).toBe(Math.round(w1.width));
+
+  // Drag it by its title bar over General, pixel-free with Alt: a live readout while it moves, and one undo step.
+  // Grabbed by its name in the title bar (a click there renames it; a drag moves the window).
+  const title = (await section(page, "Floating").getByRole("button", { name: "Floating", exact: true }).boundingBox())!;
+  const from = { x: title.x + title.width / 2, y: title.y + title.height / 2 };
+  const target = { x: areaBox.x + 403, y: areaBox.y + 61 };
+  const box0 = (await win(key).boundingBox())!;
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.keyboard.down("Alt");
+  await page.mouse.move((from.x + target.x) / 2, (from.y + target.y) / 2, { steps: 5 });
+  await page.mouse.move(target.x + (from.x - box0.x), target.y + (from.y - box0.y), { steps: 5 });
+  await expect(win(key).getByTestId("window-readout")).toHaveText(/^403, 61 · \d+ × \d+ px$/);
+  await page.mouse.up();
+  await page.keyboard.up("Alt");
+  await expect(win(key).getByTestId("window-readout")).toHaveCount(0);
+  expect(await num(key, "y")).toBe(61);
+  expect(Math.round((await num(key, "x")) * areaBox.width)).toBe(403);
+  await expect(say).toHaveText(/^Window Floating: 403, 61 · /);
+  // The click that ended the drag did not rename the section.
+  await expect(page.getByLabel("Section name")).toHaveCount(0);
+
+  // Overlapping: Floating sits over General, and whatever is on top gets the pointer.
+  const g = (await win("general").boundingBox())!;
+  const f = (await win(key).boundingBox())!;
+  const overlap = { x: Math.max(g.x, f.x) + 20, y: Math.max(g.y, f.y) + 60 };
+  expect(overlap.x).toBeLessThan(Math.min(g.x + g.width, f.x + f.width));
+  expect(overlap.y).toBeLessThan(Math.min(g.y + g.height, f.y + f.height));
+  const onTop = () => page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest("[data-window]")?.getAttribute("data-window"), overlap);
+  expect(await onTop()).toBe(key);
+  // Pressing on General brings it to the front.
+  await page.mouse.click(g.x + 12, g.y + 12);
+  await expect.poll(onTop).toBe("general");
+  await expect(bar(page).getByTestId("le-layer")).toHaveText("Layer 7 of 7");
+  // The context menu sends it to the back again.
+  await page.mouse.click(g.x + 12, g.y + 12, { button: "right" });
+  const menu = page.getByRole("menu", { name: "Layers of General" });
+  await expect(menu.getByRole("menuitem", { name: /Bring to front/ })).toBeDisabled();
+  await menu.getByRole("menuitem", { name: /Send to back/ }).click();
+  await expect(menu).toHaveCount(0);
+  await expect.poll(onTop).toBe(key);
+  await expect(say).toHaveText("Send to back: General is layer 1 of 7.");
+  // …and the bar's toolbar works on the selected window: General to the front, then one step back.
+  await bar(page).getByRole("button", { name: "Bring to front" }).click();
+  await expect.poll(onTop).toBe("general");
+  await bar(page).getByRole("button", { name: "Send backward" }).click();
+  await expect.poll(onTop).toBe(key);
+
+  // Keyboard, on Floating's grip: arrows move it (Shift: further), Ctrl+arrows resize it, Ctrl+PageDown lowers it.
+  const grip = page.getByRole("button", { name: /^Window Floating: / });
+  await grip.focus();
+  const [x0, y0, h0] = [await num(key, "x"), await num(key, "y"), await num(key, "h")];
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect.poll(() => num(key, "y")).toBe(y0 + 64);
+  expect(Math.round(((await num(key, "x")) - x0) * areaBox.width)).toBe(8);
+  await page.keyboard.press("Control+ArrowDown");
+  await expect.poll(() => num(key, "h")).toBe(h0 + 8);
+  await expect(grip).toBeFocused();
+  await page.keyboard.press("Control+PageDown");
+  await expect.poll(onTop).toBe("general");
+  await page.keyboard.press("Control+Shift+PageUp");
+  await expect.poll(onTop).toBe(key);
+  await expect(grip).toBeFocused();
+  // Every keyboard step is an undo step of its own.
+  await page.keyboard.press("Control+z");
+  await expect.poll(onTop).toBe("general");
+  await page.keyboard.press("Control+Shift+z");
+  await expect.poll(onTop).toBe(key);
+  await snap(page, "layout-free-editor");
+
+  const expected = { x: await num(key, "x"), y: await num(key, "y"), w: await num(key, "w"), h: await num(key, "h") };
+  await bar(page).getByRole("button", { name: "Save layout" }).click();
+  await expect(bar(page).getByRole("status")).toContainText(/Saved as version \d+/);
+  await closeEditor(page);
+
+  // Stored: a free tab, the frames as placed, Floating on top of General; sections in reading order (y, then x).
+  type Frame = { x: number; y: number; w: number; h: number; z: number };
+  const stored = await apiGet<{ settings: { layouts: { classKey: string; tabs: { placement?: string; sections: { key: string; frame?: Frame }[] }[] }[] } }>(request, "/ui-settings");
+  const tab = stored.settings.layouts.find((l) => l.classKey === "server")!.tabs[0];
+  expect(tab.placement).toBe("free");
+  const saved = Object.fromEntries(tab.sections.map((s) => [s.key, s.frame!]));
+  expect(saved[key]).toMatchObject({ y: expected.y, h: expected.h });
+  expect(Math.abs(saved[key].x - expected.x)).toBeLessThan(0.0002);
+  expect(saved[key].z).toBeGreaterThan(saved.general.z);
+  const ys = tab.sections.map((s) => s.frame!.y);
+  expect(ys).toEqual([...ys].sort((a, b) => a - b));
+
+  // The page the editor was opened from shows the tab as placed after the save, and again after a reload.
+  const onPage = (k: string) => origin.locator(`.lg-free > details[data-section="${k}"]`);
+  for (const reload of [false, true]) {
+    if (reload) await origin.reload();
+    await expect(onPage(key)).toContainText("Floating");
+    const free = (await origin.locator(".lg-free").boundingBox())!;
+    const pf = (await onPage(key).boundingBox())!;
+    expect(Math.abs(pf.y - free.y - saved[key].y)).toBeLessThan(2);
+    expect(Math.abs(pf.x - free.x - saved[key].x * free.width)).toBeLessThan(2);
+    expect(Math.abs(pf.height - saved[key].h)).toBeLessThan(2);
+    const pg = (await onPage("general").boundingBox())!;
+    const point = { x: Math.max(pg.x, pf.x) + 20, y: Math.max(pg.y, pf.y) + 60 };
+    expect(await origin.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest("[data-section]")?.getAttribute("data-section"), point)).toBe(key);
+    // In the document (and for the keyboard) the windows come in reading order.
+    expect(await origin.locator(".lg-free > details").evaluateAll((els) => els.map((e) => e.getAttribute("data-section")))).toEqual(tab.sections.map((s) => s.key));
+  }
+  await snap(origin, "layout-free-detail");
+  // On a phone the windows stack at the full width in reading order.
+  await origin.setViewportSize({ width: 390, height: 844 });
+  await expect(async () => {
+    const a = (await onPage("general").boundingBox())!;
+    const b = (await onPage(key).boundingBox())!;
+    expect(b.y).toBeGreaterThan(a.y + a.height - 1);
+    expect(Math.abs(b.width - a.width)).toBeLessThan(2);
+  }).toPass();
+  await snap(origin, "layout-free-phone");
+  await origin.setViewportSize({ width: 1440, height: 900 });
+
+  // Back to the grid: the editor orders the sections by position, as the API does.
+  const editor = await openEditor(origin);
+  await bar(editor).getByRole("group", { name: "Placement of the tab General" }).getByRole("button", { name: "Grid" }).click();
+  await expect(editor.locator("[data-le-area]")).toHaveAttribute("data-placement", "grid");
+  expect(await editor.locator("[data-section-shell]").evaluateAll((els) => els.map((e) => e.getAttribute("data-section-shell")))).toEqual(tab.sections.map((s) => s.key));
+  await expect(editor.locator("[data-window]")).toHaveCount(0);
+  await resetUiSettings(request);
+});

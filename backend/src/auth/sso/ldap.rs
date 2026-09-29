@@ -63,19 +63,45 @@ pub enum Outcome {
     SignedIn(DirectoryUser),
 }
 
-/// The directory could not be reached or refused the service account. The
-/// text is for the log and the administrator's connection test.
+/// The directory could not be reached or refused the service account.
+/// `Display` gives the full text, for the server log only;
+/// [`DirectoryError::summary`] is what the administrator's connection test may show.
 #[derive(Debug, Clone)]
-pub struct DirectoryError(pub String);
+pub struct DirectoryError {
+    pub detail: String,
+    /// No LDAP answer came back over verified TLS (connect, TLS, StartTLS or
+    /// transport failure).
+    unreachable: bool,
+}
 
-impl std::fmt::Display for DirectoryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+/// What the connection test shows instead of the transport error: the error
+/// texts would tell a closed, a filtered and a non-LDAP port apart (GH#125).
+pub const UNREACHABLE: &str = "Could not reach the directory over verified TLS (no connection, TLS or StartTLS failed, \
+                               or no LDAP answer); the server log has the details";
+
+impl DirectoryError {
+    fn new(detail: String) -> Self {
+        DirectoryError { detail, unreachable: false }
+    }
+
+    /// The text for the administrator: the directory's own result once it
+    /// answered over verified TLS, else [`UNREACHABLE`].
+    pub fn summary(&self) -> &str {
+        if self.unreachable { UNREACHABLE } else { &self.detail }
     }
 }
 
+impl std::fmt::Display for DirectoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+/// After the TLS session is up: an LDAP result code is the directory's answer;
+/// anything else (I/O, timeout, a peer that does not speak LDAP) is not.
 fn fail(what: &str, e: LdapError) -> DirectoryError {
-    DirectoryError(format!("{what}: {e}"))
+    let unreachable = !matches!(e, LdapError::LdapResult { .. });
+    DirectoryError { detail: format!("{what}: {e}"), unreachable }
 }
 
 /// The configured filter with `{username}` replaced by the escaped name.
@@ -84,11 +110,14 @@ pub fn user_filter(template: &str, username: &str) -> String {
 }
 
 async fn connect(s: &Settings) -> Result<Ldap, DirectoryError> {
-    let config =
-        tls::client_config(s.ca_certificate.as_deref()).map_err(|e| DirectoryError(format!("CA certificate: {e}")))?;
+    let config = tls::client_config(s.ca_certificate.as_deref())
+        .map_err(|e| DirectoryError::new(format!("CA certificate: {e}")))?;
     let settings =
         LdapConnSettings::new().set_conn_timeout(TIMEOUT).set_starttls(s.start_tls).set_config(Arc::new(config));
-    let (conn, ldap) = LdapConnAsync::with_settings(settings, &s.url).await.map_err(|e| fail("connection", e))?;
+    // Whatever fails here, a StartTLS refusal included, came before verified TLS.
+    let (conn, ldap) = LdapConnAsync::with_settings(settings, &s.url)
+        .await
+        .map_err(|e| DirectoryError { detail: format!("connection: {e}"), unreachable: true })?;
     tokio::spawn(async move {
         if let Err(e) = conn.drive().await {
             tracing::debug!(error = %e, "LDAP connection ended");
@@ -171,20 +200,41 @@ async fn find(ldap: &mut Ldap, s: &Settings, username: &str) -> Result<Result<Di
 
 /// Checks `username` and `password` against the directory.
 pub async fn authenticate(s: &Settings, username: &str, password: &str) -> Result<Outcome, DirectoryError> {
+    check(s, username, None, password).await
+}
+
+/// Checks the password of one known entry: the one `username` finds must have
+/// `external_id`, or it counts as not found and no bind is attempted (another
+/// entry that now has the name is someone else).
+pub async fn reauthenticate(
+    s: &Settings,
+    username: &str,
+    external_id: &str,
+    password: &str,
+) -> Result<Outcome, DirectoryError> {
+    check(s, username, Some(external_id), password).await
+}
+
+async fn check(
+    s: &Settings,
+    username: &str,
+    expected: Option<&str>,
+    password: &str,
+) -> Result<Outcome, DirectoryError> {
     if password.is_empty() {
         return Ok(Outcome::WrongPassword);
     }
     let mut ldap = connect(s).await?;
     service_bind(&mut ldap, s).await?;
     let user = match find(&mut ldap, s, username).await? {
-        Ok(user) => user,
-        Err(0) => return Ok(Outcome::NotFound),
+        Ok(user) if expected.is_none_or(|id| id == user.external_id) => user,
+        Ok(_) | Err(0) => return Ok(Outcome::NotFound),
         Err(n) => return Ok(Outcome::Ambiguous(n)),
     };
     let outcome = match ldap.with_timeout(TIMEOUT).simple_bind(&user.dn, password).await {
         Ok(r) if r.rc == 0 => Outcome::SignedIn(user),
         Ok(r) if r.rc == INVALID_CREDENTIALS => Outcome::WrongPassword,
-        Ok(r) => return Err(DirectoryError(format!("user bind: result code {} {}", r.rc, r.text))),
+        Ok(r) => return Err(DirectoryError::new(format!("user bind: result code {} {}", r.rc, r.text))),
         Err(e) => return Err(fail("user bind", e)),
     };
     let _ = ldap.unbind().await;
@@ -275,5 +325,43 @@ mod tests {
         let s = Settings { url: "ldaps://unreachable.invalid".into(), ..settings() };
         let empty = String::new();
         assert!(matches!(authenticate(&s, "alice", &empty).await, Ok(Outcome::WrongPassword)));
+    }
+
+    #[test]
+    fn only_a_directory_answer_is_shown_to_the_administrator() {
+        let answer =
+            ldap3::LdapResult { rc: 49, matched: String::new(), text: "bad".into(), refs: vec![], ctrls: vec![] };
+        let e = fail("service account bind", LdapError::from(answer));
+        assert!(e.summary().starts_with("service account bind: "), "{}", e.summary());
+        let e = fail("user search", LdapError::from(std::io::Error::from(std::io::ErrorKind::ConnectionReset)));
+        assert_eq!(e.summary(), UNREACHABLE);
+        assert!(e.to_string().starts_with("user search: "));
+    }
+
+    /// GH#125: a closed port and a port that does not speak TLS read the same.
+    #[tokio::test]
+    async fn unreachable_directories_all_read_the_same() {
+        let closed = {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let plain = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let plain_port = plain.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            while let Ok((mut socket, _)) = plain.accept().await {
+                let _ = socket.write_all(b"SSH-2.0-OpenSSH_9.6\r\n").await;
+            }
+        });
+        for (url, start_tls) in [
+            (format!("ldaps://127.0.0.1:{closed}"), false),
+            (format!("ldaps://127.0.0.1:{plain_port}"), false),
+            (format!("ldap://127.0.0.1:{plain_port}"), true),
+        ] {
+            let s = Settings { url: url.clone(), start_tls, ..settings() };
+            let e = probe(&s, None).await.expect_err(&url);
+            assert_eq!(e.summary(), UNREACHABLE, "{url}");
+            assert!(e.to_string().starts_with("connection: "), "{url}: {e}");
+        }
     }
 }

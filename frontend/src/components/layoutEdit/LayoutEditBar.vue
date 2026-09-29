@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
+import { isFreeTab, LAYER_ICONS, layerOf, LAYER_MOVES } from "../../lib/freeLayout";
+import { findSection } from "../../lib/layoutDesign";
 import { WIDTH_PRESETS, type LayoutEditor } from "../../lib/layoutEditor";
 import ConfirmDialog from "../ConfirmDialog.vue";
 import ErrorAlert from "../ErrorAlert.vue";
@@ -10,10 +12,19 @@ import ErrorAlert from "../ErrorAlert.vue";
  * edited (it applies to every CI of that class), undo and redo, preview widths,
  * back to the built-in layout, and save (a new settings version with an
  * optional note) or discard, and Done (closes the editor's window). Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) undo and redo
- * outside text fields.
+ * outside text fields. For the tab in view: Grid or Free placement, and on a free
+ * tab whether windows snap and the layers of the selected window.
  */
 const props = defineProps<{ editor: LayoutEditor; className: string; classKey: string }>();
 const comment = ref("");
+const free = computed(() => isFreeTab(props.editor.tab));
+/** The window selected on the free tab in view, with its place in the stack. */
+const picked = computed(() => {
+  const l = props.editor.layout;
+  const t = props.editor.tab;
+  const at = l && t && props.editor.selected ? findSection(l, props.editor.selected) : undefined;
+  return at && at.tab.key === t!.key ? { section: at.section, ...layerOf(t!, at.section) } : null;
+});
 const confirmReset = ref(false);
 
 async function onSave() {
@@ -63,6 +74,31 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       <RouterLink class="btn btn-sm" :to="{ path: '/admin/customization/layouts', query: { class: classKey } }">Open in the designer</RouterLink>
     </div>
     <div class="le-bar-row">
+      <span v-if="editor.tab" class="le-bar-group" role="group" :aria-label="`Placement of the tab ${editor.tab.label}`" title="Grid: sections fill 12 columns row by row. Free: sections are windows you place anywhere, overlapping.">
+        <span class="muted">Tab {{ editor.tab.label }}</span>
+        <button type="button" class="btn btn-sm" :aria-pressed="!free" @click="editor.setPlacement('grid')">Grid</button>
+        <button type="button" class="btn btn-sm" :aria-pressed="free" @click="editor.setPlacement('free')">Free</button>
+      </span>
+      <template v-if="free">
+        <button type="button" class="btn btn-sm" :aria-pressed="editor.snap" title="Snap windows to each other's edges and an 8 px grid (hold Alt while dragging to place freely)" @click="editor.snap = !editor.snap">
+          Snap {{ editor.snap ? "on" : "off" }}
+        </button>
+        <span class="le-bar-group" role="group" aria-label="Layers of the selected window">
+          <span class="muted" data-testid="le-layer" :title="picked ? picked.section.label : undefined">{{ picked ? `Layer ${picked.index} of ${picked.count}` : "No window selected" }}</span>
+          <button
+            v-for="m in LAYER_MOVES"
+            :key="m.move"
+            type="button"
+            class="btn btn-sm"
+            :aria-label="m.label"
+            :title="`${m.label} (${m.keys})`"
+            :disabled="!picked || (m.move === 'front' || m.move === 'forward' ? picked.index >= picked.count : picked.index <= 1)"
+            @click="editor.layer(m.move)"
+          >
+            {{ LAYER_ICONS[m.move] }}
+          </button>
+        </span>
+      </template>
       <span v-if="editor.dirty" class="badge warn">Unsaved changes</span>
       <span v-else class="muted">No unsaved changes</span>
       <label class="sr-only" for="le-comment">Note for this version</label>

@@ -102,6 +102,11 @@ pub trait Resource: Send + Sync + 'static {
     /// deprecated in the OpenAPI document and its description starts with this.
     const DEPRECATED: Option<&'static str> = None;
 
+    /// Set for resources whose data moved elsewhere: create, update and delete
+    /// still need the write permission but then answer 410 GONE with this
+    /// message (which names the replacement) and change nothing. Reads stay.
+    const WRITES_GONE: Option<&'static str> = None;
+
     /// Description of the PATCH operation (empty: none).
     const UPDATE_DESCRIPTION: &'static str = "";
 
@@ -371,6 +376,42 @@ pub fn routes<R: Resource>() -> Vec<Route> {
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 Ok(Json(get::<R>(&api.pool, id).await?))
             }),
+    ];
+    match R::WRITES_GONE {
+        None => routes.extend(write_routes::<R>(&label, &by_id)),
+        Some(message) => routes.extend(gone_routes::<R>(&label, &by_id, message)),
+    }
+    if !R::USAGE.is_empty() {
+        let kinds: Vec<&str> = R::USAGE.iter().map(|u| u.kind).collect();
+        routes.push(
+            route(Method::GET, format!("{}/{{id}}/usage", R::BASE_PATH), format!("get{}Usage", cap(R::SINGULAR)))
+                .tag(R::TAG)
+                .summary(format!("What still refers to a {label}"))
+                .description(format!(
+                    "Counts of {}. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.",
+                    kinds.join(", ")
+                ))
+                .requires(GlobalPermission::DatamodelManage)
+                .errors(&[ErrorCode::NotFound])
+                .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                    Ok(Json(usage::<R>(&api.pool, id).await?))
+                }),
+        );
+    }
+    if let Some(note) = R::DEPRECATED {
+        for r in &mut routes {
+            r.deprecated = true;
+            r.description = Some(match r.description.take() {
+                Some(d) => format!("{note} {d}"),
+                None => note.to_owned(),
+            });
+        }
+    }
+    routes
+}
+
+fn write_routes<R: Resource>(label: &str, by_id: &str) -> Vec<Route> {
+    vec![
         route(Method::POST, R::BASE_PATH, format!("create{}", cap(R::SINGULAR)))
             .tag(R::TAG)
             .summary(format!("Create a {label}"))
@@ -381,7 +422,7 @@ pub fn routes<R: Resource>() -> Vec<Route> {
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<R::Create>>| async move {
                 Ok(Json(create::<R>(&api.pool, &api.ctx, &b).await?))
             }),
-        route(Method::PATCH, by_id.clone(), format!("update{}", cap(R::SINGULAR)))
+        route(Method::PATCH, by_id, format!("update{}", cap(R::SINGULAR)))
             .tag(R::TAG)
             .summary(format!("Update a {label} (partial)"))
             .description(R::UPDATE_DESCRIPTION)
@@ -406,33 +447,35 @@ pub fn routes<R: Resource>() -> Vec<Route> {
                 remove::<R>(&api.pool, &api.ctx, id).await?;
                 Ok(NoContent)
             }),
-    ];
-    if !R::USAGE.is_empty() {
-        let kinds: Vec<&str> = R::USAGE.iter().map(|u| u.kind).collect();
-        routes.push(
-            route(Method::GET, format!("{}/{{id}}/usage", R::BASE_PATH), format!("get{}Usage", cap(R::SINGULAR)))
-                .tag(R::TAG)
-                .summary(format!("What still refers to a {label}"))
-                .description(format!(
-                    "Counts of {}. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
-                    kinds.join(", ")
-                ))
-                .errors(&[ErrorCode::NotFound])
-                .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                    Ok(Json(usage::<R>(&api.pool, id).await?))
-                }),
-        );
-    }
-    if let Some(note) = R::DEPRECATED {
-        for r in &mut routes {
-            r.deprecated = true;
-            r.description = Some(match r.description.take() {
-                Some(d) => format!("{note} {d}"),
-                None => note.to_owned(),
-            });
-        }
-    }
-    routes
+    ]
+}
+
+/// Create, update and delete of a resource whose writes moved elsewhere ([`Resource::WRITES_GONE`]):
+/// same paths, operation ids and permission as before, so a client learns why instead of getting 404/405.
+fn gone_routes<R: Resource>(label: &str, by_id: &str, message: &'static str) -> Vec<Route> {
+    let gone = move || async move { Err::<NoContent, _>(AppError::new(ErrorCode::Gone, message)) };
+    let removed = |method: Method, path: &str, op: String, summary: String| {
+        route(method, path, op)
+            .tag(R::TAG)
+            .summary(summary)
+            .description(message)
+            .requires(GlobalPermission::DatamodelManage)
+            .status(StatusCode::GONE)
+            .errors(&[ErrorCode::Gone])
+    };
+    vec![
+        removed(
+            Method::POST,
+            R::BASE_PATH,
+            format!("create{}", cap(R::SINGULAR)),
+            format!("Create a {label} (removed)"),
+        )
+        .handle(move |_, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| gone()),
+        removed(Method::PATCH, by_id, format!("update{}", cap(R::SINGULAR)), format!("Update a {label} (removed)"))
+            .handle(move |_, In(IdPath(_), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| gone()),
+        removed(Method::DELETE, by_id, format!("delete{}", cap(R::SINGULAR)), format!("Delete a {label} (removed)"))
+            .handle(move |_, In(IdPath(_), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| gone()),
+    ]
 }
 
 /// `isActive=true|false` and similar boolean column filters.

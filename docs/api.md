@@ -65,6 +65,7 @@ Every non-2xx response has this shape:
 | 409 | `IN_USE` | A hard delete of a row that is still referenced. `details[]` names each kind of reference and its count (`field` is the kind, e.g. `configurationItems`; `code` is `in_use`). Retire the row with `PATCH {"isActive": false}` instead. |
 | 409 | `VERSION_CONFLICT` | A stale `version` on a CI `PATCH`. |
 | 409 | `LAST_ADMINISTRATOR` | The change would leave no active user holding the Administrator profile. |
+| 410 | `GONE` | The operation was removed; `message` names its replacement. Today: `POST`, `PATCH` and `DELETE` on the read-only `/statuses`, `/environments`, `/locations` and `/owners` (use `/lookup-list-values`). |
 | 422 | `INVALID_NAME` | A technical name (area, type or field `key`) is malformed, reserved (SQL keyword, `pg_` or `shadoucmdb_` prefix, system schema, registry column) or already taken. `details[]` names the field and the reason. |
 | 422 | `SCHEMA_CHANGE_REFUSED` | A data-loss guard stopped a schema change: a type change some stored values would not survive, `isRequired` while assets lack a value, removing stored enum values, or a purge that is not allowed yet (still active, wrong `confirm`, dependants). Nothing was changed. |
 | 409 | `CONFLICT` (password) | `PUT /auth/password` or `PUT /admin/users/{id}/password` for an account that signs in through an identity provider. |
@@ -79,7 +80,7 @@ Every non-2xx response has this shape:
 
 | Resource | Endpoints | Notes |
 | --- | --- | --- |
-| Configuration items | `GET/POST /configuration-items`, `GET/PATCH/DELETE /configuration-items/{id}` | Every CI has the core `ident` (generated, e.g. `CI-7K3M9Q2X`; only administrators may set or change it, `403` otherwise), `validFrom`, `validUntil`, the derived `active` and `label` (the value of the class's title attribute, or the ident); everything else, name and status included, is an attribute of its class (see [the data model](data-model.md#the-ci-core-ident-validity-and-label)). Filters: `classId` (includes subclasses unless `includeSubclasses=false`), `active=true\|false\|all` (default `true`: only CIs inside their validity period), `lookupValueId` (lookup list value ids: one of the values of each list, e.g. a status and an environment), `ipWithin` (CIDR, over IP attributes), `deleted=exclude\|include\|only`. Items embed `class` and carry `attributes` (a key → value map; unset attributes are absent) and `attributeReferences` (`{id, name, deleted, hidden}` for reference attributes) in both the list and the detail view, so a list view can show attribute columns. The `name` of a reference is the referenced CI's label. A reference into a class the caller may not view comes back with `hidden: true`, `name: null` and `deleted: false`; setting a reference to such a CI fails with the same `not_found` as a missing one. DELETE is a soft delete and also soft-deletes the CI's relationships. |
+| Configuration items | `GET/POST /configuration-items`, `GET/PATCH/DELETE /configuration-items/{id}` | Every CI has the core `ident` (generated, e.g. `CI-7K3M9Q2X`; only administrators may set or change it, `403` otherwise), `validFrom`, `validUntil`, the derived `active` and `label` (the value of the class's title attribute, or the ident); everything else, name and status included, is an attribute of its class (see [the data model](data-model.md#the-ci-core-ident-validity-and-label)). Filters: `classId` (includes subclasses unless `includeSubclasses=false`), `active=true\|false\|all` (default `true`: only CIs inside their validity period), `lookupValueId` (lookup list value ids: one of the values of each list, e.g. a status and an environment), `ipWithin` (CIDR, over IP attributes), `deleted=exclude\|include\|only`. Sort by `label` (default), `ident`, `className`, `validFrom`, `validUntil`, `createdAt`, `updatedAt`, or by an attribute with `sort=attributes.<key>` (`-` for descending) when `classId` is given: the key must be the same attribute on every class in `classId` (inherited ones count) and not a reference; text sorts case-insensitively, IP/CIDR by address, lookups by list order, CIs without a value last (`400` on the field `sort` otherwise). Items embed `class` and carry `attributes` (a key → value map; unset attributes are absent) and `attributeReferences` (`{id, name, deleted, hidden}` for reference attributes) in both the list and the detail view, so a list view can show attribute columns. The `name` of a reference is the referenced CI's label. A reference into a class the caller may not view comes back with `hidden: true`, `name: null` and `deleted: false`; setting a reference to such a CI fails with the same `not_found` as a missing one. DELETE is a soft delete and also soft-deletes the CI's relationships. |
 | Graph | `GET /configuration-items/{id}/graph?depth=1..6&direction=both\|outgoing\|incoming&relationshipTypeId=&maxNodes=` | Returns `{ nodes[], edges[], truncated }` in one call. `nodes[].depth` is the number of hops from the root. Each edge embeds its type and labels. |
 | Search | `GET /search?q=` | Results are ranked (exact label or ident first, then label prefix, then similarity), each with `matches[]` naming the field that hit (`label`, `ident`, `attributes.hostname`, …). It takes the same filters as the CI list, so it returns active CIs unless `active=false\|all`. |
 | Relationships | `GET/POST /relationships`, `GET/PATCH/DELETE /relationships/{id}` | Filters: `ciId` (either end), `sourceCiId`, `targetCiId`, `relationshipTypeId`, `deleted`. Each edge embeds `type`, `source` and `target`. PATCH changes only `notes` or `relationshipTypeId`. DELETE is a soft delete. |
@@ -89,20 +90,20 @@ Every non-2xx response has this shape:
 | Schema changes | `GET /schema-changes`, `GET /schema-changes/{id}`, `POST /schema-changes/preview`, `POST /schema-changes/reconcile`, `GET /technical-names?name=&kind=` | Needs `datamodel.manage`. The history of every DDL plan (actor, time, exact statements, impact). `preview` runs any data model operation in a transaction that is rolled back and returns its DDL and impact. `reconcile` brings the catalog and reporting grants in line with the metadata. `technical-names` previews the key a display name maps to. |
 | Relationship types | `GET/POST /relationship-types`, `GET/PATCH/DELETE /relationship-types/{id}`, `GET /relationship-types/{id}/usage` | `?sourceClassId=&targetClassId=` returns only the types legal between two classes, which is what the "add relationship" picker needs. |
 | Relationship rules | `GET/POST /relationship-rules`, `GET/PATCH/DELETE /relationship-rules/{id}`, `GET /relationship-rules/{id}/usage` | Define which classes each type may connect. A rule also covers the subclasses of its classes. Deleting a rule keeps existing relationships; its usage counts them. |
-| Statuses, environments, locations, owners (deprecated) | `GET/POST /{statuses\|environments\|locations\|owners}`, `GET/PATCH/DELETE /…/{id}`, `GET /…/{id}/usage` | **Deprecated since migration 0016:** CIs no longer refer to these rows; status, environment, owner and location are lookup attributes on the lists `status`, `environment`, `owner` and `location`, whose values kept the ids of these rows. The endpoints stay unchanged until a later release. Filters include `isActive`, `isOperational` (statuses), `parentId` and `locationType` (locations), and `kind` (owners). |
+| Statuses, environments, locations, owners (deprecated, read-only) | `GET /{statuses\|environments\|locations\|owners}`, `GET /…/{id}`, `GET /…/{id}/usage` | **Deprecated since migration 0016:** CIs no longer refer to these rows; status, environment, owner and location are lookup attributes on the lists `status`, `environment`, `owner` and `location`, whose values kept the ids of these rows. Change those values through `/lookup-list-values`. `POST`, `PATCH` and `DELETE` here answer `410 GONE` (after the usual `401`/`403` checks) and change nothing; the reads stay for history until a later release. Filters include `isActive`, `isOperational` (statuses), `parentId` and `locationType` (locations), and `kind` (owners). |
 | Lookup lists | `GET/POST /lookup-lists`, `GET/PATCH/DELETE /lookup-lists/{id}`, `GET/POST /lookup-list-values`, `GET/PATCH/DELETE /lookup-list-values/{id}`, `GET /…/{id}/usage` | Lists an administrator defines (e.g. "Support contract": Gold, Silver). Values have `key`, `name`, `color`, `sortOrder`, `isActive`; filter values by `listId`. A `lookup` attribute stores one value by id. A list can be deleted with its values only while no attribute uses it and no list depends on it. Dependent lists: a list's `parentListId`, each value's `parentValueId` (filter `parentValueId=<id>|none`) and a field's `parentAttributeId`; see [Dependent lookup lists](data-model.md#dependent-lookup-lists). |
 | Templates | `GET /admin/templates`, `POST /admin/templates/{key}/install` | Needs `datamodel.manage`. Lists the starter templates (today `it_infrastructure`: classes, attributes, relationship types and rules, lookup lists and their values) with what each brings, how much of it exists already and a `status` (`not_installed`, `partial`, `installed`). Install adds every missing row in one transaction and leaves existing ones alone, so it is idempotent; the response counts `created` and `existing` rows. Every created row is audited with the installing user. |
 | UI settings | `GET/PUT /ui-settings`, `GET /ui-settings/branding`, `GET /ui-settings/versions`, `GET /ui-settings/versions/{version}`, `POST /ui-settings/versions/{version}/restore`, `GET/PUT/DELETE /ui-settings/assets/{logo\|favicon}` | One settings document for every user: branding, navigation, dashboard widgets, list views and detail/form layouts per class. Any signed-in user reads it; writes need `customization.manage`. `branding` and the images are public (login page). See [Customization](#customization-and-configuration-exportimport). |
-| Configuration export/import | `GET /admin/config/export`, `POST /admin/config/import?mode=dry_run\|apply` | Needs `config.export_import`; importing a non-empty `dataModel` or `lookups` section also needs `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). One JSON file with the data model, lookups, permission profiles and UI settings (no users, passwords or CIs). See [Customization](#customization-and-configuration-exportimport). |
+| Configuration export/import | `GET /admin/config/export`, `POST /admin/config/import?mode=dry_run\|apply` | Needs `config.export_import`; importing a non-empty `dataModel` or `lookups` section also needs `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Import needs a session (API tokens get `403`); export accepts tokens. One JSON file with the data model, lookups, permission profiles and UI settings (no users, passwords or CIs). See [Customization](#customization-and-configuration-exportimport). |
 | Audit log | `GET /audit-log` | Read-only, needs `audit.view`. Filters: `entityType`, `entityId`, `action`, `actorId`, `actorName`, `requestId`, `from`, `to`. Also records authentication events (`entityType=sessions`; actions `login.success`, `login.failure`, `login.locked`, `logout`, `session.revoke`) with the client `ipAddress` and `userAgent` in `newValue` (plus `peerIpAddress` when the TCP peer differs from the forwarded address); a failed sign-in has no actor id and stores only the attempted username. See [data model](data-model.md#auditing). |
 | Setup | `GET /setup`, `POST /setup` | `setupRequired` is true while no user exists. `POST` creates the first user with the Administrator profile and signs them in; `409` once any user exists. |
-| Authentication | `POST /auth/login`, `POST /auth/login/mfa`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` | `login` and `me` return `{ user, permissions, mfa, csrfToken }`. `permissions` is the union of the user's profiles: `administrator`, `global[]`, `allClasses` and per-class `classes[]`. Changing your own password needs `currentPassword` and ends your other sessions. |
+| Authentication | `POST /auth/login`, `POST /auth/login/mfa`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` | `login` and `me` return `{ user, permissions, mfa, csrfToken }`. `permissions` is the union of the user's profiles: `administrator`, `global[]`, `allClasses` and per-class `classes[]`. Changing your own password needs `currentPassword`, ends your other sessions and revokes your API tokens. |
 | Enterprise sign-in | `GET /auth/providers`, `GET /auth/oidc/{id}/start`, `GET /auth/oidc/callback` | Public. The sign-in page's OIDC buttons and whether a directory is enabled; the OIDC redirect flow (browser navigations, not fetches). See [Enterprise sign-in](#enterprise-sign-in). |
-| Identity providers | `GET/POST /admin/identity-providers`, `GET/PATCH/DELETE /admin/identity-providers/{id}`, `POST /admin/identity-providers/{id}/test` | Administrator profile only (`users.manage` alone is `403`). OIDC providers and LDAP/AD directories with their group-to-profile mappings; secrets are write-only. See [Enterprise sign-in](#enterprise-sign-in). |
+| Identity providers | `GET/POST /admin/identity-providers`, `GET/PATCH/DELETE /admin/identity-providers/{id}`, `POST /admin/identity-providers/{id}/test` | Administrator profile only (`users.manage` alone is `403`); `POST`, `PATCH` and `DELETE` also need a session (API tokens get `403`). OIDC providers and LDAP/AD directories with their group-to-profile mappings; secrets are write-only. See [Enterprise sign-in](#enterprise-sign-in). |
 | Two-factor authentication | `GET /auth/mfa`, `POST/DELETE /auth/mfa/totp`, `POST /auth/mfa/totp/confirm`, `POST /auth/mfa/recovery-codes` | One's own TOTP set-up; needs a session. See [Two-factor authentication](#two-factor-authentication). |
-| Users | `GET/POST /admin/users`, `GET/PATCH/DELETE /admin/users/{id}`, `PUT /admin/users/{id}/password`, `DELETE /admin/users/{id}/mfa` | Needs `users.manage`. `PATCH` renames, disables (`isActive: false`, which ends the user's sessions) and assigns profiles (`profileIds` replaces the set). `PUT …/password` sets a new password and ends the user's sessions. `DELETE …/mfa` turns off a user's two-factor authentication (lost device). A user shows `mfaEnabled` and `identityProvider` (null for a local account). Filters: `q`, `isActive`, `profileId`. |
-| API tokens | `GET/POST /admin/api-tokens`, `GET/DELETE /admin/api-tokens/{id}` | Needs `users.manage` and a session. `POST {name, profileId, expiresAt, userId?}` answers `201 { token, secret }`; the secret is in that response only. `DELETE` revokes (the token stays listed with `status: revoked`). Filters: `q`, `userId`, `status` (`active`, `expired`, `revoked`). See [API tokens](#api-tokens). |
-| Permission profiles | `GET/POST /admin/profiles`, `GET/PATCH/DELETE /admin/profiles/{id}`, `POST /admin/profiles/{id}/clone` | Writes need `profiles.manage`; reading also works with `users.manage`. A profile is `{ name, description, globalPermissions[], classPermissions[], requireMfa }`; `PATCH` replaces whichever list it sends. `requireMfa` makes two-factor authentication mandatory for its holders. The built-in Administrator profile is read-only except for `requireMfa` (`409`) and listed first. |
+| Users | `GET/POST /admin/users`, `GET/PATCH/DELETE /admin/users/{id}`, `PUT /admin/users/{id}/password`, `DELETE /admin/users/{id}/mfa` | Needs `users.manage`. `PATCH` renames, disables (`isActive: false`, which ends the user's sessions) and assigns profiles (`profileIds` replaces the set). `PUT …/password` sets a new password, ends the user's sessions and revokes their API tokens (`revokedBy` is the administrator), and also the working tokens the user created for other owners. `DELETE …/mfa` turns off a user's two-factor authentication (lost device). A user shows `mfaEnabled` and `identityProvider` (null for a local account). Filters: `q`, `isActive`, `profileId`. |
+| API tokens | `GET/POST /admin/api-tokens`, `GET/DELETE /admin/api-tokens/{id}` | Needs `users.manage` and a session. `POST {name, profileId, expiresAt, userId?}` answers `201 { token, secret }`; the secret is in that response only. `DELETE` revokes (the token stays listed with `status: revoked`). Filters: `q`, `userId` (owner), `createdBy` (the creating user, `createdByUserId`), `status` (`active`, `expired`, `revoked`). See [API tokens](#api-tokens). |
+| Permission profiles | `GET/POST /admin/profiles`, `GET/PATCH/DELETE /admin/profiles/{id}`, `POST /admin/profiles/{id}/clone` | Writes need `profiles.manage` and a session (API tokens get `403`); reading also works with `users.manage`. A profile is `{ name, description, globalPermissions[], classPermissions[], requireMfa }`; `PATCH` replaces whichever list it sends. `requireMfa` makes two-factor authentication mandatory for its holders. The built-in Administrator profile is read-only except for `requireMfa` (`409`) and listed first. |
 | Health | `GET /healthz`, `GET /readyz` | `/readyz` returns `503` when the database is unreachable or migrations are pending, and reports `migrations: { applied, expected, upToDate }`. `database` is `ok`, `unreachable` (no connection), `authentication_failed` (credentials refused), `permission_denied` (connected, but the role may not read the schema) or `error` (see the server log). |
 
 ## Authentication and permissions
@@ -129,6 +130,11 @@ or `Forwarded: proto=https`); `COOKIE_SECURE=always|never` overrides that.
 password. A success resets the counter. Unknown usernames are throttled the same way and cost the same argon2
 work, so neither the answer nor its timing reveals which usernames exist.
 
+The limits hold for concurrent requests too: an attempt is reserved when it passes the check and counts as if it
+had failed until it finishes. A username admits only as many attempts at once as it has free failures left (one at a
+time once it has been locked); further attempts that arrive meanwhile get `429` with `Retry-After: 1`. Attempts in
+progress also count towards the server-wide budget below.
+
 On top of that, the server counts failed sign-ins for all usernames together. Once 300 fall within any
 10 minutes, sign-in is slowed down, not refused: attempts wait in a single queue that lets one through every
 2 s, so guessing across all accounts stays at about 300 per 10 minutes while a correct password still signs in
@@ -144,12 +150,17 @@ memory (per process, reset on restart).
 **Two-factor authentication.** <a id="two-factor-authentication"></a>Any user can add an authenticator app (TOTP,
 RFC 6238: SHA-1, 6 digits, 30 s; Google Authenticator, Microsoft Authenticator, 1Password, Aegis, … all work).
 
+Local and LDAP/AD directory accounts can; for a directory account `currentPassword` below is the directory password,
+checked against the account's own directory entry (`409` while that directory is disabled, `503
+IDENTITY_PROVIDER_UNAVAILABLE` when it cannot be reached). OIDC accounts have no password here (`409`); their provider
+runs the second factor.
+
 1. `POST /api/v1/auth/mfa/totp {currentPassword}` answers `201 { secret, otpauthUri, algorithm, digits, period }`.
    Show `otpauthUri` as a QR code (or let the user type `secret`). Calling it again replaces an unconfirmed secret.
 2. `POST /api/v1/auth/mfa/totp/confirm {code}` with a code from the app turns MFA on and answers
    `{ codes: [10 recovery codes] }`. They are shown only in this response (the server keeps their SHA-256); each
    signs in once in place of a code. `POST /api/v1/auth/mfa/recovery-codes {currentPassword, code}` replaces them.
-3. From then on `POST /auth/login` with the right password answers `401 MFA_REQUIRED` and sets the
+3. From then on `POST /auth/login` with the right password (local or directory) answers `401 MFA_REQUIRED` and sets the
    `shadoucmdb_mfa` cookie (`HttpOnly`, `Path=/api/v1/auth`, 5 minutes). `POST /api/v1/auth/login/mfa {code}` with an
    authenticator code or a recovery code then signs in like login did before. A challenge takes at most 5 wrong
    codes; after that, or after 5 minutes, the password is asked for again.
@@ -158,10 +169,14 @@ Each authenticator code works once (a code already used, even within its 30 s, i
 drift either way is accepted. **Wrong codes are failed sign-ins**: they count towards the same per-username lock and
 the same server-wide budget as wrong passwords (see *Login backoff*), and the right password alone does not reset
 that count while a code is due. `DELETE /api/v1/auth/mfa/totp {currentPassword, code}` turns MFA off; the password
-and code checks on these self-service routes share the per-user lock of `PUT /auth/password`.
+and code checks on these self-service routes share the per-user lock of `PUT /auth/password`. Once MFA is set up,
+a right current password alone (on any of these routes or `PUT /auth/password`) does not reset that count either; only
+a right password together with a right code does, so holding a session and the password does not buy unlimited
+guesses at the code.
 
 A permission profile with `requireMfa: true` (any profile, including the built-in Administrator) makes MFA mandatory
-for its holders. They still sign in with their password, but until they have confirmed an authenticator every route
+for its holders with a local or directory (LDAP/AD) account; OIDC accounts are exempt and rely on their provider
+(`mfa.required` is then false). They still sign in with their password, but until they have confirmed an authenticator every route
 except sign-out, `/auth/me`, `PUT /auth/password` and the `/auth/mfa` set-up routes answers
 `403 MFA_ENROLMENT_REQUIRED`; `/auth/me` shows `mfa.enrolmentRequired`. The requirement applies to sessions only: API
 tokens are separate credentials and keep working. A user who lost their device and their recovery codes asks a
@@ -183,8 +198,8 @@ and maps the provider's groups to permission profiles.
   by hand lasts until its next sign-in; change the mappings instead.
 - **Break-glass.** Local accounts keep working next to any provider, including when the provider is down or
   misconfigured. Keep at least one local administrator (with two-factor authentication) and its password in your
-  emergency procedure; `shadoucmdb create-admin` remains the last resort. Two-factor authentication for provider
-  accounts is the provider's job: `requireMfa` on a profile applies to local accounts only.
+  emergency procedure; `shadoucmdb create-admin` remains the last resort. For OIDC accounts two-factor
+  authentication is the provider's job; `requireMfa` on a profile applies to local and directory (LDAP) accounts.
 - **Disabling or deleting a provider** ends the sessions of its accounts. A provider with accounts cannot be deleted
   (`409 IN_USE`): disable it.
 
@@ -215,7 +230,11 @@ the directory could not be asked.
 
 `POST /api/v1/admin/identity-providers/{id}/test` checks the saved settings (OIDC: discovery and keys; LDAP: TLS,
 service bind and, with `{"username": "..."}`, the entry, its groups and the profiles they map to) and answers
-`200 { ok, message, details, user }` without changing anything. The OIDC client secret and the LDAP bind password
+`200 { ok, message, details, user }` without changing anything. When no answer came back over verified TLS
+(refused, timed out, TLS or StartTLS failed, not an LDAP server), `message` is the same generic text whatever the
+cause, so its text no longer tells closed, filtered and non-TLS ports apart; the exact error is logged on the
+server (`identity provider connection test failed`). The time to answer still differs (a refused connection fails at
+once, a filtered one after the 10 s timeout); the test is for administrators only. The OIDC client secret and the LDAP bind password
 are write-only (`clientSecretSet`, `bindPasswordSet`); they are stored in the database so the server can present
 them, like the TOTP secrets, so protect database access and backups accordingly. SAML is not supported.
 
@@ -232,10 +251,24 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
   header (and `CORS_ORIGINS` does not allow it), and adding one cannot take a browser's session past the CSRF
   check. Other schemes (a proxy's `Basic` auth) are ignored and the session applies as usual.
 - The same server-side checks apply as for a session: the route's global permission, then class permissions in the
-  service. Sign-out, `/auth/me`, the password change and token administration need a session and answer tokens with
-  `403 FORBIDDEN`, so a token cannot mint a longer-lived token.
+  service. Sign-out, `/auth/me`, the password change, MFA administration, token administration and account
+  changes (creating, updating, deleting a user and setting their password) and identity provider changes (adding,
+  changing, including the group mappings, and deleting a provider), permission profile changes (creating,
+  updating, including `requireMfa` on the built-in Administrator profile, cloning and deleting a profile) and
+  configuration import need a session and answer tokens with `403 FORBIDDEN`, so a token cannot mint a credential
+  (a token, an account, a password or a sign-in path) or widen or weaken what an account may do in a way that
+  outlives its revocation. Listing and reading accounts, providers and profiles, the provider connection test and
+  configuration export accept tokens.
 - Managing tokens needs `users.manage`. As for accounts, a non-administrator can only create or revoke tokens for
   users whose permissions they hold themselves (their own tokens are always revocable).
+- A token records who created it (`createdByUserId`; `createdBy` is the name, for display). An administrator's
+  reset of a user's password (`PUT /admin/users/{id}/password`) revokes the user's own tokens **and** every
+  working token the user created for another owner, since the account may have been compromised. The user's own
+  password change (`PUT /auth/password`) revokes only their own tokens. `GET /admin/api-tokens?createdBy=<id>`
+  lists what a user created. Tokens created before this field existed have it only where their `create` audit
+  row was still there when the upgrade ran; deleting the creator sets it to null and keeps the token. Disabling or
+  deleting a user does not revoke the tokens they created for others, and single sign-on accounts have no password
+  to reset: revoke those tokens by listing them with `createdBy` first.
 - Every request made with a known token, accepted or refused, writes a `token.use` audit row; creating and revoking
   write `create` and `update` rows (see [data model](data-model.md#auditing)).
 
@@ -250,7 +283,7 @@ several; their effective permissions are the union.
 | --- | --- |
 | `users.manage` | `/admin/users`: create, edit, disable, delete users, reset passwords, assign profiles |
 | `profiles.manage` | `/admin/profiles`: create, edit, clone, delete profiles |
-| `datamodel.manage` | Writes to CI classes, attribute definitions, relationship types and rules, statuses, environments, locations, owners and lookup lists; `/admin/templates` |
+| `datamodel.manage` | Writes to CI classes, attribute definitions, relationship types and rules and lookup lists; `/admin/templates` |
 | `customization.manage` | Branding, navigation, dashboard and layouts (phase 3) |
 | `config.export_import` | Configuration export and import (phase 3) |
 | `audit.view` | `GET /audit-log` |
@@ -259,9 +292,14 @@ several; their effective permissions are the union.
 - A class grant applies to exactly that class, not its subclasses; the wildcard also covers classes added later.
 - Every signed-in user can read the data model and lookups: the UI needs them to render CIs.
 - CI lists, search and the graph only contain CIs of classes the user may view (the graph does not traverse
-  through hidden CIs). Reading or changing one CI of another class answers `403`.
+  through hidden CIs). A CI of a class the user may not view answers `404 NOT_FOUND` by id, exactly like a
+  missing one, so the status does not reveal that it exists; changing a CI the user may view but not edit or
+  delete answers `403`.
 - Relationships: reading needs `view` on both CIs' classes; creating, changing or removing one needs `edit` on
-  the source CI's class and `view` on the target's.
+  the source CI's class and `view` on the target's. A relationship with an endpoint the user may not view
+  answers `404`, and creating one to such a CI fails with the same `not_found` field error as a missing CI.
+- The `GET …/{id}/usage` routes of the data model and lookups need `datamodel.manage`, like the changes they
+  prepare: their counts span every CI class.
 - Moving a CI to another class needs `edit` on the old class and `create` on the new one.
 
 **The built-in Administrator profile** holds every permission, including every class. It cannot be changed or
@@ -327,7 +365,7 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
 | `navigation.entries[]` | Menu order. `type: page` (`dashboard`, `inventory`, `search`, `audit_log`, `administration`), `type: class` (`classKey`) or `type: section` (`key`, `label`, `items[]` of classes). Each entry can be renamed (`label`) and `hidden`. Pages and classes not listed follow in their default order. |
 | `dashboard.widgets[]` | Widgets in order: `count_by_class` (optional `classKeys`), `count_by_lookup` (`lookupListKey`: CIs per value of that list, e.g. `status`), `recent_changes` (`limit`), `saved_search` (`search`: `classKeys`, `includeSubclasses`, `filters`, `sort`). `null` keeps the built-in dashboard. |
 | `listViews[]` | Per class: `columns` (built-in fields `label`, `ident`, `class`, `validFrom`, `validUntil`, `active`, `createdAt`, `updatedAt`, or `attributes.<key>`), `defaultSort`, `defaultFilters` (`q`, and `lookups`: lookup list key → value keys), `pageSize`. |
-| `layouts[]` | Per class (layout format v2): `tabs[]` (`key`, `label`, `sections[]`), each section `key` (unique in the layout), `label`, `kind` (`fields` by default; `note` with `text`, or a built-in panel `relations`, `history` or `audit`, each once per layout), `width` on the tab's 12-column grid (1–12, default 12: sections fill rows in order, so two of width 6 sit side by side), `newRow`, `minHeight` (field rows, 1–50), `columns` of its field grid (1–12, default 3), `collapsed` and `fields[]` of `{ field, width }` (1–12 columns, at most the section's), plus `hiddenFields` and `readOnlyFields`. Fields no section places follow at the end of the first tab, grouped by attribute group. `ident`, `validFrom` and `validUntil` cannot be hidden. The older `panels[]` format is still accepted and converted to one "General" tab (see [data model](data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2)). |
+| `layouts[]` | Per class (layout format v2): `tabs[]` (`key`, `label`, `sections[]`), each section `key` (unique in the layout), `label`, `kind` (`fields` by default; `note` with `text`, or a built-in panel `relations`, `history` or `audit`, each once per layout), `width` on the tab's 12-column grid (1–12, default 12: sections fill rows in order, so two of width 6 sit side by side), `newRow`, `minHeight` (field rows, 1–50), `columns` of its field grid (1–12, default 3), `collapsed` and `fields[]` of `{ field, width }` (1–12 columns, at most the section's), plus `hiddenFields` and `readOnlyFields`. A tab with `placement: "free"` places each section by a `frame` (`x`, `w` as fractions of the tab width, `y`, `h` in px, stacking order `z`, optional `minH`) and windows may overlap; the API normalises free tabs on save (missing frames from the grid positions, `z` 1..n, sections in reading order y then x) and converts a grid tab sent with frames back to the grid (see [data model](data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2)). Fields no section places follow at the end of the first tab, grouped by attribute group. `ident`, `validFrom` and `validUntil` cannot be hidden. The older `panels[]` format is still accepted and converted to one "General" tab (see [data model](data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2)). |
 
 - **References are keys.** Classes, attributes and lookups are named by key, so a document moves between installs.
   A reference to something that does not exist is accepted: `GET` returns the *effective* settings without it and
@@ -354,7 +392,8 @@ relationships. Parents come before children; every reference is a key (a lookup 
 key; a list's `parent`, a value's `parent` and an attribute's `parentAttribute` are keys too). Files of versions 1
 and 2 are still read; they carry no parents, so rows that exist in the target keep theirs.
 
-**Import** (`POST /api/v1/admin/config/import?mode=dry_run|apply`, body: such a file, up to 16 MiB):
+**Import** (`POST /api/v1/admin/config/import?mode=dry_run|apply`, body: such a file, up to 16 MiB; needs a
+signed-in session, API tokens get `403`):
 
 - Every section is optional. Rows are matched by key (owners by kind and name, profiles by name, both
   case-insensitive), then created or updated field by field. **Nothing is deleted**: rows missing from the file are

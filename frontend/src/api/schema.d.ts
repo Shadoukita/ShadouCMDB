@@ -93,7 +93,7 @@ export interface paths {
         put?: never;
         /**
          * Sign in with username and password
-         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. Accounts of an OIDC provider cannot sign in here.
+         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.
          */
         post: operations["login"];
         delete?: never;
@@ -171,8 +171,8 @@ export interface paths {
         };
         get?: never;
         /**
-         * Change your own password (ends your other sessions)
-         * @description 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * Change your own password (ends your other sessions and revokes your API tokens)
+         * @description Every API token you own that still works is revoked; create new ones after the change. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["changeOwnPassword"];
         post?: never;
@@ -213,12 +213,12 @@ export interface paths {
         put?: never;
         /**
          * Start setting up an authenticator app: returns a new secret to confirm
-         * @description Nothing changes at sign-in until the secret is confirmed (POST /api/v1/auth/mfa/totp/confirm); calling this again replaces an unconfirmed secret. 409 when an authenticator is already set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Nothing changes at sign-in until the secret is confirmed (POST /api/v1/auth/mfa/totp/confirm); calling this again replaces an unconfirmed secret. 409 when an authenticator is already set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["startTotpEnrolment"];
         /**
          * Turn your two-factor authentication off (or cancel an unfinished set-up)
-         * @description Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["disableTotp"];
         options?: never;
@@ -257,7 +257,7 @@ export interface paths {
         put?: never;
         /**
          * Replace your recovery codes with 10 new ones (shown once)
-         * @description Needs the password and a current code. The old codes stop working. 409 when MFA is not set up. 400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Needs the password and a current code. The old codes stop working. 409 when MFA is not set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["regenerateRecoveryCodes"];
         delete?: never;
@@ -614,7 +614,7 @@ export interface paths {
         };
         /**
          * What still refers to a ci class
-         * @description Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getCiClassUsage"];
         put?: never;
@@ -723,7 +723,7 @@ export interface paths {
         };
         /**
          * What still refers to a attribute definition
-         * @description Counts of attributeValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of attributeValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getAttributeDefinitionUsage"];
         put?: never;
@@ -812,7 +812,7 @@ export interface paths {
         };
         /**
          * What still refers to a relationship type
-         * @description Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getRelationshipTypeUsage"];
         put?: never;
@@ -878,7 +878,7 @@ export interface paths {
         };
         /**
          * What still refers to a relationship rule
-         * @description Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getRelationshipRuleUsage"];
         put?: never;
@@ -999,14 +999,14 @@ export interface paths {
         /**
          * List status records (paginated, searchable, sortable)
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
          */
         get: operations["listStatuses"];
         put?: never;
         /**
-         * Create a status
+         * Create a status (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createStatus"];
         delete?: never;
@@ -1025,23 +1025,23 @@ export interface paths {
         /**
          * Get one status
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.
          */
         get: operations["getStatus"];
         put?: never;
         post?: never;
         /**
-         * Delete a status
+         * Delete a status (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteStatus"];
         options?: never;
         head?: never;
         /**
-         * Update a status (partial)
+         * Update a status (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateStatus"];
         trace?: never;
@@ -1056,7 +1056,7 @@ export interface paths {
         /**
          * What still refers to a status
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getStatusUsage"];
         put?: never;
@@ -1077,14 +1077,14 @@ export interface paths {
         /**
          * List environment records (paginated, searchable, sortable)
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. `q` matches key, name, description (case-insensitive substring).
          */
         get: operations["listEnvironments"];
         put?: never;
         /**
-         * Create a environment
+         * Create a environment (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createEnvironment"];
         delete?: never;
@@ -1103,23 +1103,23 @@ export interface paths {
         /**
          * Get one environment
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.
          */
         get: operations["getEnvironment"];
         put?: never;
         post?: never;
         /**
-         * Delete a environment
+         * Delete a environment (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteEnvironment"];
         options?: never;
         head?: never;
         /**
-         * Update a environment (partial)
+         * Update a environment (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateEnvironment"];
         trace?: never;
@@ -1134,7 +1134,7 @@ export interface paths {
         /**
          * What still refers to a environment
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getEnvironmentUsage"];
         put?: never;
@@ -1155,14 +1155,14 @@ export interface paths {
         /**
          * List location records (paginated, searchable, sortable)
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches key, name, description, address (case-insensitive substring).
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. `q` matches key, name, description, address (case-insensitive substring).
          */
         get: operations["listLocations"];
         put?: never;
         /**
-         * Create a location
+         * Create a location (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createLocation"];
         delete?: never;
@@ -1181,23 +1181,23 @@ export interface paths {
         /**
          * Get one location
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.
          */
         get: operations["getLocation"];
         put?: never;
         post?: never;
         /**
-         * Delete a location
+         * Delete a location (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteLocation"];
         options?: never;
         head?: never;
         /**
-         * Update a location (partial)
+         * Update a location (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateLocation"];
         trace?: never;
@@ -1212,7 +1212,7 @@ export interface paths {
         /**
          * What still refers to a location
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getLocationUsage"];
         put?: never;
@@ -1233,14 +1233,14 @@ export interface paths {
         /**
          * List owner records (paginated, searchable, sortable)
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. `q` matches name, email, external_ref (case-insensitive substring).
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. `q` matches name, email, external_ref (case-insensitive substring).
          */
         get: operations["listOwners"];
         put?: never;
         /**
-         * Create a owner
+         * Create a owner (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createOwner"];
         delete?: never;
@@ -1259,23 +1259,23 @@ export interface paths {
         /**
          * Get one owner
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release.
          */
         get: operations["getOwner"];
         put?: never;
         post?: never;
         /**
-         * Delete a owner
+         * Delete a owner (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Hard delete, allowed only while nothing references the row. A referenced row returns 409 IN_USE whose details name what still refers to it (the same counts as the usage endpoint, where there is one); retire it with `PATCH {"isActive": false}` instead so history keeps resolving.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteOwner"];
         options?: never;
         head?: never;
         /**
-         * Update a owner (partial)
+         * Update a owner (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateOwner"];
         trace?: never;
@@ -1290,7 +1290,7 @@ export interface paths {
         /**
          * What still refers to a owner
          * @deprecated
-         * @description Deprecated: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). This endpoint will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getOwnerUsage"];
         put?: never;
@@ -1359,7 +1359,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list
-         * @description Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getLookupListUsage"];
         put?: never;
@@ -1428,7 +1428,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list value
-         * @description Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getLookupListValueUsage"];
         put?: never;
@@ -1620,7 +1620,7 @@ export interface paths {
         };
         /**
          * Change history (read-only, paginated, newest first by default)
-         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, no_scope, session_only, forbidden), method, path, `operationId`, `ipAddress` and `userAgent`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
+         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, no_scope, session_only, forbidden), method, path, `operationId`, `ipAddress` and `userAgent`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view gets `oldValue` and `newValue` withheld (both null, `redacted` true) on entries about a CI of another class and on relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value; in the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do). Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
          */
         get: operations["listAuditLog"];
         put?: never;
@@ -1646,7 +1646,7 @@ export interface paths {
         put?: never;
         /**
          * Create a local user with a password and permission profiles
-         * @description Requires `users.manage`. 403 when assigning a profile that grants permissions the caller does not hold.
+         * @description Requires `users.manage`. 403 when assigning a profile that grants permissions the caller does not hold. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createUser"];
         delete?: never;
@@ -1671,14 +1671,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a user (prefer disabling; the audit log keeps their id and name)
-         * @description Requires `users.manage`. 409 when deleting yourself or the last active Administrator.
+         * @description Requires `users.manage`. 409 when deleting yourself or the last active Administrator. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["deleteUser"];
         options?: never;
         head?: never;
         /**
          * Update a user (partial): rename, disable/enable, assign profiles
-         * @description Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. For an account of an identity provider, the name, e-mail and profiles are set again from the provider at its next sign-in (change the group mappings instead); disabling it holds whatever the provider says. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.
+         * @description Requires `users.manage`. `isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. For an account of an identity provider, the name, e-mail and profiles are set again from the provider at its next sign-in (change the group mappings instead); disabling it holds whatever the provider says. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updateUser"];
         trace?: never;
@@ -1692,8 +1692,8 @@ export interface paths {
         };
         get?: never;
         /**
-         * Set a new password for a user and end their sessions
-         * @description Requires `users.manage`. 409 for an account that signs in through an identity provider (it has no password here).
+         * Set a new password for a user, end their sessions and revoke their API tokens
+         * @description Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["resetUserPassword"];
         post?: never;
@@ -1718,7 +1718,7 @@ export interface paths {
         put?: never;
         /**
          * Create a permission profile
-         * @description Requires `profiles.manage`. A non-administrator can only grant permissions they hold themselves (403 otherwise).
+         * @description Requires `profiles.manage`. A non-administrator can only grant permissions they hold themselves (403 otherwise). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createPermissionProfile"];
         delete?: never;
@@ -1743,14 +1743,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a permission profile (users holding it lose it)
-         * @description Requires `profiles.manage`. The built-in Administrator profile cannot be deleted (409).
+         * @description Requires `profiles.manage`. The built-in Administrator profile cannot be deleted (409). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["deletePermissionProfile"];
         options?: never;
         head?: never;
         /**
          * Update a permission profile (partial; permission lists replace the current ones)
-         * @description Requires `profiles.manage`. The built-in Administrator profile accepts only `requireMfa` (409 for anything else). Takes effect on the holders' next request.
+         * @description Requires `profiles.manage`. The built-in Administrator profile accepts only `requireMfa` (409 for anything else). Takes effect on the holders' next request. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updatePermissionProfile"];
         trace?: never;
@@ -1766,7 +1766,7 @@ export interface paths {
         put?: never;
         /**
          * Copy a profile (including the built-in one) into a new, editable profile
-         * @description Requires `profiles.manage`.
+         * @description Requires `profiles.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["clonePermissionProfile"];
         delete?: never;
@@ -1783,7 +1783,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List API tokens (paginated, searchable, filterable by owner and status); never their secrets
+         * List API tokens (paginated, searchable, filterable by owner, creator and status); never their secrets
          * @description Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["listApiTokens"];
@@ -1838,7 +1838,7 @@ export interface paths {
         put?: never;
         /**
          * Add an OIDC provider or an LDAP/AD directory
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). OIDC: the issuer must be https (http only for a test issuer on this host); register `oidc.redirectUri` of the response at the provider. LDAP: ldaps://, or ldap:// with StartTLS; certificates are always verified (add a private CA with `caCertificate`). Users signing in get the profiles their groups map to; with no matching mapping they are refused. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createIdentityProvider"];
         delete?: never;
@@ -1863,14 +1863,14 @@ export interface paths {
         post?: never;
         /**
          * Delete an identity provider that no account signs in through
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). 409 IN_USE while accounts belong to it: disable it instead.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). 409 IN_USE while accounts belong to it: disable it instead. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["deleteIdentityProvider"];
         options?: never;
         head?: never;
         /**
          * Change an identity provider (partial); groupMappings replaces all mappings
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updateIdentityProvider"];
         trace?: never;
@@ -1886,7 +1886,7 @@ export interface paths {
         put?: never;
         /**
          * Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to.
          */
         post: operations["testIdentityProvider"];
         delete?: never;
@@ -1926,7 +1926,7 @@ export interface paths {
         put?: never;
         /**
          * Import a configuration file (dry run or apply)
-         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited.
+         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["importConfig"];
         delete?: never;
@@ -1965,7 +1965,15 @@ export interface components {
             lastUsedAt: string | null;
             /** @description Client address of the last accepted request (evidence only) */
             lastUsedIp: string | null;
+            /** @description The creator's name, for display */
             createdBy: string | null;
+            /**
+             * Format: uuid
+             * @description The user who created the token; null when the CLI created it, the
+             *     creator was deleted, or (for a token older than this field) the
+             *     creator is unknown
+             */
+            createdByUserId: string | null;
             /** Format: date-time */
             createdAt: string;
         };
@@ -2087,6 +2095,11 @@ export interface components {
             /** @description API representation after the change (null for delete); the details of an authentication event */
             newValue: unknown;
             requestId: string | null;
+            /**
+             * @description True when oldValue and newValue were withheld because the entry is about
+             *     a CI (or a relationship with an endpoint) in a class the caller may not view
+             */
+            redacted: boolean;
         };
         AuditEntryList: {
             data: components["schemas"]["AuditEntry"][];
@@ -2490,7 +2503,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
                 message: string;
                 details?: {
                     /** @enum {string} */
@@ -2796,7 +2809,10 @@ export interface components {
         MfaStatus: {
             /** @description An authenticator app is set up: sign-in asks for its code after the password */
             totpEnabled: boolean;
-            /** @description A permission profile the user holds requires MFA */
+            /**
+             * @description A permission profile the user holds requires MFA (local and directory
+             *     accounts; never OIDC accounts, whose provider runs its own second factor)
+             */
             required: boolean;
             /**
              * @description Required but not set up: until it is, the session only reaches sign-out,
@@ -3436,12 +3452,22 @@ export interface components {
             text?: string;
             /** @description Start collapsed on the detail page */
             collapsed?: boolean;
+            /**
+             * @description Where the section sits in a tab with `placement` free. Sent in a grid tab, it converts the tab back to
+             *     the grid on save (see the tab's `placement`); a stored grid tab never has frames.
+             */
+            frame?: components["schemas"]["UiSectionFrame"];
         };
         /** @description A tab of the detail page and the form */
         UiLayoutTab: {
             /** @description Stable machine key, lower_snake_case */
             key: string;
             label: string;
+            /**
+             * @description How the tab arranges its sections (absent: grid). grid: sections fill the 12-column grid row by row. free: each section is a window placed by its `frame`, and windows may overlap. On save, a free tab's sections without a frame get one from their grid position (below the existing windows), z becomes 1..n and the sections are ordered by y, then x: the reading order, used on narrow screens, in print and by screen readers. A grid tab sent with frames is converted back: sections ordered by y, then x, width from w, and the frames dropped.
+             * @enum {string}
+             */
+            placement?: "grid" | "free";
             sections?: components["schemas"]["UiLayoutSection"][];
         };
         /** @description Inventory filters, by key */
@@ -3456,7 +3482,10 @@ export interface components {
                 [key: string]: string[];
             };
         };
-        /** @description Sort for an inventory list; `field` is one of the inventory sort fields */
+        /**
+         * @description Sort for an inventory list; `field` is one of the inventory sort fields or
+         *     `attributes.<key>` (the list's `sort` parameter without the "-")
+         */
         UiListSort: {
             field: string;
             /** @enum {string} */
@@ -3539,6 +3568,45 @@ export interface components {
                 /** @enum {string} */
                 direction?: "asc" | "desc";
             } | null;
+        };
+        /**
+         * @description A window on a free tab: position and size, and its place in the stacking order. `x` and `w` are
+         *     fractions of the tab's width, so windows scale with the browser window; `y` and `h` are px from the top
+         *     of the tab. The window scrolls its own content, so an overlapped window loses nothing.
+         */
+        UiSectionFrame: {
+            /**
+             * Format: double
+             * @description Left edge, as a fraction of the tab's width (0: the left edge). `x + w` is at most 1.
+             */
+            x: number;
+            /**
+             * Format: int32
+             * @description Top edge in px from the top of the tab
+             */
+            y: number;
+            /**
+             * Format: double
+             * @description Width, as a fraction of the tab's width (1: the full width)
+             */
+            w: number;
+            /**
+             * Format: int32
+             * @description Height in px
+             */
+            h: number;
+            /**
+             * Format: int32
+             * @description Stacking order: a higher z is drawn on top. Saved as 1..n per tab, in the order given (ties: the
+             *     section order).
+             */
+            z: number;
+            /**
+             * Format: int32
+             * @description Smallest height in px the window may be resized to, and its least height when the tab stacks the
+             *     windows on a narrow screen; at most `h`
+             */
+            minH?: number;
         };
         /** @description The current UI settings as the web UI applies them */
         UiSettings: {
@@ -3896,7 +3964,10 @@ export interface operations {
                     username: string;
                     displayName: string;
                     email?: string | null;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                 };
             };
@@ -4241,7 +4312,10 @@ export interface operations {
             content: {
                 "application/json": {
                     currentPassword: string;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     newPassword: string;
                 };
             };
@@ -4471,7 +4545,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            /** @description The LDAP directory could not be reached (code IDENTITY_PROVIDER_UNAVAILABLE; local accounts still sign in), the database is unreachable (code DATABASE_UNAVAILABLE), or migrations are pending (code SCHEMA_NOT_MIGRATED) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4569,7 +4643,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            /** @description The LDAP directory could not be reached (code IDENTITY_PROVIDER_UNAVAILABLE; local accounts still sign in), the database is unreachable (code DATABASE_UNAVAILABLE), or migrations are pending (code SCHEMA_NOT_MIGRATED) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4759,7 +4833,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`) */
+            /** @description The LDAP directory could not be reached (code IDENTITY_PROVIDER_UNAVAILABLE; local accounts still sign in), the database is unreachable (code DATABASE_UNAVAILABLE), or migrations are pending (code SCHEMA_NOT_MIGRATED) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4997,8 +5071,8 @@ export interface operations {
                 offset?: number;
                 /** @description Search label, ident and attribute values */
                 q?: string;
-                /** @description Sort field; prefix with "-" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt */
-                sort?: "label" | "-label" | "ident" | "-ident" | "className" | "-className" | "validFrom" | "-validFrom" | "validUntil" | "-validUntil" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
+                /** @description Sort field; prefix with "-" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt, or attributes.<key> (needs classId; the attribute must be the same one on every class in classId, and not a reference). Attributes sort case-insensitively for text, by address for IP/CIDR and by list order for lookups; CIs without a value come last. */
+                sort?: string;
                 /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
                 classId?: string;
                 includeSubclasses?: "true" | "false";
@@ -9545,38 +9619,8 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Stable machine key, lower_snake_case */
-                    key: string;
-                    name: string;
-                    description?: string | null;
-                    sortOrder?: number;
-                    isActive?: boolean;
-                    isOperational?: boolean;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Status"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
@@ -9595,17 +9639,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not application/json */
-            415: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9720,13 +9755,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success, no content */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
                 headers: {
@@ -9754,17 +9782,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9801,29 +9820,8 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Stable machine key, lower_snake_case */
-                    key?: string;
-                    name?: string;
-                    description?: string | null;
-                    sortOrder?: number;
-                    isActive?: boolean;
-                    isOperational?: boolean;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Status"];
-                };
-            };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
                 headers: {
@@ -9851,26 +9849,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not application/json */
-            415: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10056,37 +10036,8 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Stable machine key, lower_snake_case */
-                    key: string;
-                    name: string;
-                    description?: string | null;
-                    sortOrder?: number;
-                    isActive?: boolean;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Environment"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
@@ -10105,17 +10056,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not application/json */
-            415: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10230,13 +10172,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success, no content */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
                 headers: {
@@ -10264,17 +10199,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10311,28 +10237,8 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Stable machine key, lower_snake_case */
-                    key?: string;
-                    name?: string;
-                    description?: string | null;
-                    sortOrder?: number;
-                    isActive?: boolean;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Environment"];
-                };
-            };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
                 headers: {
@@ -10360,26 +10266,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not application/json */
-            415: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10568,41 +10456,8 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Stable machine key, lower_snake_case */
-                    key: string;
-                    name: string;
-                    description?: string | null;
-                    sortOrder?: number;
-                    isActive?: boolean;
-                    parentId?: string | null;
-                    /** @enum {string} */
-                    locationType: "region" | "site" | "building" | "floor" | "room" | "rack" | "cloud_region" | "other";
-                    address?: string | null;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Location"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
@@ -10621,17 +10476,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not application/json */
-            415: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10746,13 +10592,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success, no content */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
                 headers: {
@@ -10780,17 +10619,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10827,32 +10657,8 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Stable machine key, lower_snake_case */
-                    key?: string;
-                    name?: string;
-                    description?: string | null;
-                    sortOrder?: number;
-                    isActive?: boolean;
-                    parentId?: string | null;
-                    /** @enum {string} */
-                    locationType?: "region" | "site" | "building" | "floor" | "room" | "rack" | "cloud_region" | "other";
-                    address?: string | null;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Location"];
-                };
-            };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
                 headers: {
@@ -10880,26 +10686,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not application/json */
-            415: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11088,37 +10876,8 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @enum {string} */
-                    kind: "person" | "team";
-                    name: string;
-                    email?: string | null;
-                    externalRef?: string | null;
-                    isActive?: boolean;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Owner"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
             401: {
                 headers: {
@@ -11137,17 +10896,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not application/json */
-            415: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11262,13 +11012,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success, no content */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
                 headers: {
@@ -11296,17 +11039,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11343,28 +11077,8 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @enum {string} */
-                    kind?: "person" | "team";
-                    name?: string;
-                    email?: string | null;
-                    externalRef?: string | null;
-                    isActive?: boolean;
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Owner"];
-                };
-            };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
                 headers: {
@@ -11392,26 +11106,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not application/json */
-            415: {
+            /** @description The operation was removed (code GONE); the message names its replacement */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13521,7 +13217,10 @@ export interface operations {
                     username: string;
                     displayName: string;
                     email?: string | null;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                     /** @description Default true */
                     isActive?: boolean;
@@ -13882,7 +13581,10 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                 };
             };
@@ -14545,6 +14247,8 @@ export interface operations {
                 sort?: "createdAt" | "-createdAt" | "name" | "-name" | "expiresAt" | "-expiresAt" | "lastUsedAt" | "-lastUsedAt";
                 /** @description One or more ids, comma-separated */
                 userId?: string;
+                /** @description One or more ids, comma-separated */
+                createdBy?: string;
                 status?: "active" | "expired" | "revoked";
             };
             header?: never;

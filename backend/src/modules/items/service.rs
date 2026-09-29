@@ -21,7 +21,10 @@ use crate::api::{pg_error, validate};
 use crate::auth::permissions::ClassOp;
 use crate::data::classes::{self as class_data, EffectiveAttributeRow};
 use crate::data::crud::{self, AuditAction, AuditEntry};
-use crate::data::items::{self as data, ActiveFilter, Direction, ItemFilters, StoredValue, SummaryRow};
+use crate::data::items::{
+    self as data, ATTRIBUTE_SORT_PREFIX, ActiveFilter, Direction, ItemFilters, ListSort, SORT_FIELDS, StoredValue,
+    SummaryRow,
+};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
 use crate::schema::model::{Field, Model};
@@ -568,6 +571,54 @@ async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuer
     })
 }
 
+fn sort_error(message: String, code: &str) -> AppError {
+    AppError::validation(vec![FieldError {
+        location: FieldLocation::Query,
+        field: "sort".into(),
+        message,
+        code: code.into(),
+    }])
+}
+
+/// `attributes.<key>` sorts on the field of that key that every requested
+/// class has (its own or inherited), so it needs `classId`. CIs of
+/// subclasses have a row in that field's table too.
+fn list_sort<'m>(model: &'m Model, q: &ListItemsQuery) -> Result<ListSort<'m>, AppError> {
+    let Some(key) = q.sort.field.strip_prefix(ATTRIBUTE_SORT_PREFIX) else {
+        return Ok(ListSort::Core(SORT_FIELDS.iter().find(|f| **f == q.sort.field).copied().unwrap_or("label")));
+    };
+    let Some(class_ids) = q.class_id() else {
+        return Err(sort_error("Sorting by an attribute needs classId".into(), "class_required"));
+    };
+    let mut found: Option<&Field> = None;
+    for class_id in &class_ids.0 {
+        let field = model.lineage(*class_id).into_iter().find_map(|c| model.own_fields(c.id).find(|f| f.key == key));
+        match (field, found) {
+            (None, _) => {
+                return Err(sort_error(
+                    format!("Attribute \"{key}\" is not defined on every class in classId"),
+                    "unknown_attribute",
+                ));
+            }
+            (Some(a), Some(b)) if a.id != b.id => {
+                return Err(sort_error(
+                    format!("Attribute \"{key}\" is a different attribute in the classes of classId"),
+                    "ambiguous_attribute",
+                ));
+            }
+            (Some(a), _) => found = Some(a),
+        }
+    }
+    let Some(field) = found else { return Err(AppError::internal()) };
+    if !data::is_sortable(field.data_type) {
+        return Err(sort_error(format!("Attribute \"{key}\" is a reference and cannot be sorted on"), "not_sortable"));
+    }
+    match model.table(field.class_id) {
+        Some(table) => Ok(ListSort::Attribute(table, field)),
+        None => Err(AppError::internal()),
+    }
+}
+
 /// Only CIs of classes the caller may view.
 pub async fn list(
     pool: &PgPool,
@@ -576,12 +627,13 @@ pub async fn list(
 ) -> Result<Page<ConfigurationItem>, AppError> {
     let mut conn = pool.acquire().await?;
     let model = Model::load(&mut conn).await?;
+    let sort = list_sort(&model, q)?;
     let f = ItemFilters {
         q: q.q.clone(),
         visible_class_ids: ctx.class_scope(ClassOp::View),
         ..filters(&mut conn, &model, q).await?
     };
-    let (rows, total) = data::list(pool, &f, &q.sort.field, q.sort.desc, q.limit, q.offset).await?;
+    let (rows, total) = data::list(pool, &f, sort, q.sort.desc, q.limit, q.offset).await?;
     let data = with_attributes(&mut conn, &model, rows, f.visible_class_ids.as_deref()).await?;
     Ok(Page { data, page: q.page_meta(total) })
 }
@@ -719,7 +771,7 @@ pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Config
     let Some(row) = data::summary(&mut conn, id).await? else {
         return Err(AppError::missing("Configuration item", id));
     };
-    ctx.require_class(row.class_id, ClassOp::View)?;
+    ctx.require_class_visible(row.class_id, "Configuration item", id)?;
     let model = Model::load(&mut conn).await?;
     let visible = ctx.class_scope(ClassOp::View);
     let dto = with_attributes(&mut conn, &model, vec![row], visible.as_deref()).await?.pop();
@@ -780,6 +832,7 @@ pub async fn update(
 ) -> Result<ConfigurationItem, AppError> {
     let mut tx = pool.begin().await?;
     let before = data::lock(&mut tx, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))?;
+    ctx.require_class_visible(before.class_id, "Configuration item", id)?;
     ctx.require_class(before.class_id, ClassOp::Edit)?;
     // Moving a CI to another class also needs create rights there.
     if let Some(new_class) = input.class_id.filter(|c| *c != before.class_id) {
@@ -884,7 +937,10 @@ pub async fn update(
 pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
     match data::lock(&mut tx, id).await? {
-        Some(row) if row.deleted_at.is_none() => ctx.require_class(row.class_id, ClassOp::Delete)?,
+        Some(row) if row.deleted_at.is_none() => {
+            ctx.require_class_visible(row.class_id, "Configuration item", id)?;
+            ctx.require_class(row.class_id, ClassOp::Delete)?
+        }
         _ => return Err(AppError::missing("Configuration item", id)),
     }
     let model = Model::load(&mut tx).await?;
@@ -926,7 +982,7 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
     let Some(root) = data::summary(&mut conn, root_id).await? else {
         return Err(AppError::missing("Configuration item", root_id));
     };
-    ctx.require_class(root.class_id, ClassOp::View)?;
+    ctx.require_class_visible(root.class_id, "Configuration item", root_id)?;
     let visible = ctx.class_scope(ClassOp::View);
     let visible = visible.as_deref();
     let direction = match q.direction {
@@ -1228,6 +1284,67 @@ mod tests {
         let hits = search(pool, &editor, &q).await.unwrap();
         assert_eq!(hits.data.len(), 1);
         assert!(hits.data[0].matches.iter().any(|m| m.field == "ident"));
+        db.drop().await;
+    }
+
+    /// GH#112: attributes.<key> sorts a class's list on the type-table column.
+    #[tokio::test]
+    async fn list_sorts_by_attribute() {
+        let Some(db) = scratch::database("list_sorts_by_attribute").await else { return };
+        let pool = &db.pool;
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        let (hardware, server) =
+            (id_of(pool, "ci_classes", "hardware").await, id_of(pool, "ci_classes", "server").await);
+        let (switch, vm) =
+            (id_of(pool, "ci_classes", "network_device").await, id_of(pool, "ci_classes", "virtual_machine").await);
+        let (in_service, retired) = (status(pool, "in_service").await, status(pool, "retired").await);
+        let ctx = user_ctx(false);
+        for (class, attributes) in [
+            (server, json!({ "name": "a", "status": retired, "hostname": "B-host", "ip_address": "10.0.0.10" })),
+            (server, json!({ "name": "b", "status": in_service, "hostname": "a-host", "ip_address": "10.0.0.9" })),
+            (server, json!({ "name": "c", "status": in_service, "hostname": "c-host" })),
+            (switch, json!({ "name": "d", "status": retired, "device_role": "switch", "ip_address": "10.0.0.100" })),
+        ] {
+            let body = parse::<CreateItemBody>(json!({ "classId": class, "attributes": attributes }))
+                .unwrap_or_else(|_| panic!("invalid create body"));
+            create(pool, &ctx, &body).await.unwrap();
+        }
+        let query = |sort: &str, class_ids: &[Uuid]| {
+            let mut q: ListItemsQuery = serde_json::from_value(json!({
+                "limit": 50, "offset": 0, "sort": sort, "includeSubclasses": "true", "deleted": "exclude", "active": "true"
+            }))
+            .unwrap();
+            q.class_id = (!class_ids.is_empty()).then(|| crate::api::schemas::UuidList(class_ids.to_vec()));
+            q
+        };
+        let labels = |page: Page<ConfigurationItem>| page.data.into_iter().map(|c| c.summary.label).collect::<Vec<_>>();
+        let sorted = async |sort: &str, class_ids: &[Uuid]| {
+            labels(super::list(pool, &ctx, &query(sort, class_ids)).await.unwrap())
+        };
+
+        // IP addresses in address order (not text order), CIs without a value last either way.
+        assert_eq!(sorted("attributes.ip_address", &[hardware]).await, ["b", "a", "d", "c"]);
+        assert_eq!(sorted("-attributes.ip_address", &[hardware]).await, ["d", "a", "b", "c"]);
+        // Text ignores case; an inherited attribute works on the subclass.
+        assert_eq!(sorted("attributes.hostname", &[server]).await, ["b", "a", "c"]);
+        // A lookup in the list's order (in_service before retired), then the label.
+        assert_eq!(sorted("attributes.status", &[hardware]).await, ["b", "c", "a", "d"]);
+        assert_eq!(sorted("-attributes.status", &[hardware]).await, ["a", "d", "b", "c"]);
+
+        let code = async |sort: &str, class_ids: &[Uuid]| {
+            let err = super::list(pool, &ctx, &query(sort, class_ids)).await.unwrap_err();
+            let d = &err.details.as_ref().unwrap()[0];
+            assert_eq!(
+                (err.code, d.field.as_str(), d.location),
+                (ErrorCode::ValidationError, "sort", FieldLocation::Query)
+            );
+            d.code.clone()
+        };
+        assert_eq!(code("attributes.hostname", &[]).await, "class_required");
+        assert_eq!(code("attributes.nope", &[server]).await, "unknown_attribute");
+        assert_eq!(code("attributes.cpu_cores", &[server, switch]).await, "unknown_attribute");
+        // virtual_machine defines its own hostname: not the same attribute as the servers'.
+        assert_eq!(code("attributes.hostname", &[server, vm]).await, "ambiguous_attribute");
         db.drop().await;
     }
 }

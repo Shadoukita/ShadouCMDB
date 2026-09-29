@@ -13,12 +13,13 @@ use utoipa::ToSchema;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use uuid::Uuid;
 
-use super::auth::{check_current_password, login_field_schema};
+use super::auth::{confirm_current_password, confirm_current_password_attempt, login_field_schema};
 use super::users;
 use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
 use crate::auth::events::{self, LoginMethod};
 use crate::auth::permissions::GlobalPermission;
+use crate::auth::throttle::Attempt;
 use crate::auth::{AuthState, Principal, totp};
 use crate::data::auth as auth_data;
 use crate::data::crud::AuditAction;
@@ -35,7 +36,8 @@ use crate::http::error::{AppError, ErrorCode};
 pub struct MfaStatus {
     /// An authenticator app is set up: sign-in asks for its code after the password
     pub totp_enabled: bool,
-    /// A permission profile the user holds requires MFA
+    /// A permission profile the user holds requires MFA (local and directory
+    /// accounts; never OIDC accounts, whose provider runs its own second factor)
     pub required: bool,
     /// Required but not set up: until it is, the session only reaches sign-out,
     /// /auth/me and the MFA set-up routes (others answer 403 MFA_ENROLMENT_REQUIRED)
@@ -196,7 +198,7 @@ async fn enrol(
     b: PasswordConfirmation,
 ) -> Result<TotpEnrolment, AppError> {
     let me = me(ctx)?;
-    check_current_password(pool, auth, me, &b.current_password).await?;
+    confirm_current_password(pool, auth, me, &b.current_password).await?;
     let mut tx = pool.begin().await?;
     auth_data::get_user(&mut tx, me.user_id, true).await?;
     if data::get_totp(&mut tx, me.user_id, false).await?.is_some_and(|t| t.confirmed) {
@@ -240,22 +242,28 @@ async fn confirm(pool: &PgPool, ctx: &RequestContext, b: TotpConfirmation) -> Re
     Ok(codes)
 }
 
-/// The password, then a current second factor. A wrong code counts against
-/// the same per-user lock as a wrong password and is audited as `mfa.failure`.
+/// After the password (its `attempt`), a current second factor. A wrong code
+/// counts against the same per-user lock as a wrong password and is audited as
+/// `mfa.failure`; only a right code clears the count.
 async fn reauthenticate(
     pool: &PgPool,
-    auth: &AuthState,
     ctx: &RequestContext,
     tx: &mut PgConnection,
+    attempt: Attempt<'_>,
     b: &MfaReauthentication,
     stage: &str,
 ) -> Result<(), AppError> {
     let me = me(ctx)?;
     match verify_second_factor(tx, me.user_id, &b.code).await? {
-        Some(LoginMethod::RecoveryCode) => audit_recovery_code_used(tx, ctx, me.user_id, &me.username, stage).await,
-        Some(_) => Ok(()),
+        Some(method) => {
+            attempt.success();
+            if matches!(method, LoginMethod::RecoveryCode) {
+                audit_recovery_code_used(tx, ctx, me.user_id, &me.username, stage).await?;
+            }
+            Ok(())
+        }
         None => {
-            let locked = auth.password_throttle.failure(&me.user_id.to_string());
+            let locked = attempt.failure();
             let extra = json!({ "stage": stage, "lockedForSeconds": locked.map(|d| d.as_secs().max(1)) });
             let mut own = pool.begin().await?;
             events::mfa(&mut own, ctx, AuditAction::MfaFailure, me.user_id, &me.username, extra).await?;
@@ -273,11 +281,13 @@ async fn disable(
     b: MfaReauthentication,
 ) -> Result<(), AppError> {
     let me = me(ctx)?;
-    check_current_password(pool, auth, me, &b.current_password).await?;
+    let attempt = confirm_current_password_attempt(pool, auth, me, &b.current_password).await?;
     let mut tx = pool.begin().await?;
     let Some(t) = data::get_totp(&mut tx, me.user_id, true).await? else { return Err(not_enabled()) };
     if t.confirmed {
-        reauthenticate(pool, auth, ctx, &mut tx, &b, "disable").await?;
+        reauthenticate(pool, ctx, &mut tx, attempt, &b, "disable").await?;
+    } else {
+        attempt.success();
     }
     if data::delete_mfa(&mut tx, me.user_id).await? {
         let extra = json!({ "reason": "self_service" });
@@ -295,12 +305,12 @@ async fn regenerate(
     b: MfaReauthentication,
 ) -> Result<RecoveryCodes, AppError> {
     let me = me(ctx)?;
-    check_current_password(pool, auth, me, &b.current_password).await?;
+    let attempt = confirm_current_password_attempt(pool, auth, me, &b.current_password).await?;
     let mut tx = pool.begin().await?;
     if !data::get_totp(&mut tx, me.user_id, true).await?.is_some_and(|t| t.confirmed) {
         return Err(not_enabled());
     }
-    reauthenticate(pool, auth, ctx, &mut tx, &b, "recovery_codes").await?;
+    reauthenticate(pool, ctx, &mut tx, attempt, &b, "recovery_codes").await?;
     let codes = new_recovery_codes(&mut tx, me.user_id).await?;
     let extra = json!({ "recoveryCodes": codes.codes.len() });
     events::mfa(&mut tx, ctx, AuditAction::MfaRecoveryCodes, me.user_id, &me.username, extra).await?;
@@ -328,7 +338,7 @@ pub async fn reset(pool: &PgPool, ctx: &RequestContext, user_id: Uuid) -> Result
 // ---------------------------------------------------------------------------
 
 const TAG: &str = "Authentication";
-const LOCK_NOTE: &str = "400 when `currentPassword` is wrong. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After).";
+const LOCK_NOTE: &str = "`currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does.";
 
 pub fn routes() -> Vec<Route> {
     vec![
@@ -350,7 +360,7 @@ pub fn routes() -> Vec<Route> {
             .status(StatusCode::CREATED)
             .session_only()
             .before_mfa_enrolment()
-            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited])
+            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<PasswordConfirmation>>| async move {
                 Ok(Json(enrol(&api.pool, &api.auth, &api.ctx, b).await?))
             }),
@@ -374,7 +384,7 @@ pub fn routes() -> Vec<Route> {
             ))
             .session_only()
             .before_mfa_enrolment()
-            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited])
+            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<MfaReauthentication>>| async move {
                 disable(&api.pool, &api.auth, &api.ctx, b).await?;
                 Ok(NoContent)
@@ -386,7 +396,7 @@ pub fn routes() -> Vec<Route> {
                 "Needs the password and a current code. The old codes stop working. 409 when MFA is not set up. {LOCK_NOTE}"
             ))
             .session_only()
-            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited])
+            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<MfaReauthentication>>| async move {
                 Ok(Json(regenerate(&api.pool, &api.auth, &api.ctx, b).await?))
             }),
@@ -407,7 +417,7 @@ pub fn routes() -> Vec<Route> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use axum::Router;
     use axum::http::{HeaderMap, header};
     use serde_json::{Value, json};
@@ -639,6 +649,44 @@ mod tests {
         db.drop().await;
     }
 
+    /// With the session and the password, guessing the code to turn MFA off
+    /// or get new recovery codes locks like guessing the password: a right
+    /// password does not clear the count, not even on a password-only
+    /// endpoint in between (GH#141).
+    #[tokio::test]
+    async fn right_password_wrong_code_locks_reauthentication() {
+        let Some(db) = scratch::database("right_password_wrong_code_locks_reauthentication").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, _) = setup(&app).await;
+        let step = settled_step().await;
+        let (secret, _) = enrol(&app, pool, &session, step).await;
+        let with = |c: &str| json!({ "currentPassword": PASSWORD, "code": c });
+        let password_only = json!({ "currentPassword": PASSWORD });
+
+        for i in 0..crate::auth::throttle::FREE_FAILURES {
+            let (method, path) = match i % 2 {
+                0 => ("DELETE", "/api/v1/auth/mfa/totp"),
+                _ => ("POST", "/api/v1/auth/mfa/recovery-codes"),
+            };
+            let (status, v, _) =
+                call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(password_only.clone())).await;
+            assert_eq!((status, code(&v)), (409, "CONFLICT"), "{i}: already set up: {v}");
+            let (status, v, _) = call(&app, method, path, &session, Some(with("000000"))).await;
+            assert_eq!((status, v["error"]["details"][0]["field"].as_str()), (400, Some("code")), "{i}: {v}");
+        }
+        let right = totp::code_at(&secret, step);
+        let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(with(&right))).await;
+        assert_eq!((status, code(&v)), (429, "RATE_LIMITED"), "locked: not even the right code is checked");
+        let (status, _, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(password_only)).await;
+        assert_eq!(status, 429, "the password-only endpoints share the lock");
+
+        // Once the lock has passed, the right password and code go through.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(with(&right))).await;
+        assert_eq!(status, 204, "{v}");
+        db.drop().await;
+    }
+
     /// A profile that requires MFA limits its holders' sessions to setting it
     /// up; an administrator's reset puts them back there.
     #[tokio::test]
@@ -675,6 +723,142 @@ mod tests {
         assert_eq!((last.0.as_str(), last.1["reason"].as_str()), ("mfa.disable", Some("admin_reset")));
         let (status, _, _) = call(&app, "DELETE", &reset, &session, None).await;
         assert_eq!(status, 403, "the reset route is not an enrolment route");
+        db.drop().await;
+    }
+
+    /// An identity provider row of `kind` (`ldap` or `oidc`). Nothing is
+    /// ever contacted at `ldap_url`, except by tests that expect a refusal.
+    pub(crate) async fn provider(pool: &PgPool, kind: &str, enabled: bool, ldap_url: &str) -> Uuid {
+        let sql = if kind == "ldap" {
+            "INSERT INTO identity_providers (kind, name, is_enabled, ldap_url, start_tls, user_base_dn, user_filter,
+               username_attribute, display_name_attribute, email_attribute, group_attribute)
+             VALUES ('ldap', 'Directory ' || gen_random_uuid(), $1, $2, false, 'DC=example,DC=test',
+               '(uid={username})', 'uid', 'cn', 'mail', 'memberOf') RETURNING id"
+        } else {
+            "INSERT INTO identity_providers (kind, name, is_enabled, issuer_url, client_id, scopes, username_claim,
+               groups_claim)
+             VALUES ('oidc', 'Company SSO ' || gen_random_uuid(), $1, 'https://sso.example.test', 'cmdb', 'openid',
+               'preferred_username', 'groups') RETURNING id"
+        };
+        let q = sqlx::query_scalar(sql).bind(enabled);
+        let q = if kind == "ldap" { q.bind(ldap_url) } else { q };
+        q.fetch_one(pool).await.unwrap()
+    }
+
+    /// A user holding a profile that requires MFA, local (with PASSWORD) or
+    /// linked to `linked`, with an open session; returns the credentials to
+    /// call the API with.
+    async fn mfa_required_user(pool: &PgPool, name: &str, linked: Option<Uuid>) -> Creds {
+        let profile: Uuid =
+            sqlx::query_scalar("INSERT INTO permission_profiles (name, require_mfa) VALUES ($1, true) RETURNING id")
+                .bind(format!("MFA required for {name}"))
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let system = RequestContext::system("test", "test");
+        let user_id = match linked {
+            None => {
+                let input = users::UserCreate {
+                    username: name.into(),
+                    display_name: name.into(),
+                    email: None,
+                    password: PASSWORD.into(),
+                    is_active: Some(true),
+                    profile_ids: vec![profile],
+                };
+                users::create(pool, &system, &input).await.unwrap().id
+            }
+            Some(provider_id) => {
+                let mut tx = pool.begin().await.unwrap();
+                let new = crate::data::identity_providers::NewLinkedUser {
+                    provider_id,
+                    external_id: &format!("entry-{name}"),
+                    username: name,
+                    display_name: name,
+                    email: None,
+                };
+                let id = crate::data::identity_providers::insert_linked(&mut tx, &new).await.unwrap();
+                auth_data::set_user_profiles(&mut tx, id, &[profile]).await.unwrap();
+                tx.commit().await.unwrap();
+                id
+            }
+        };
+        let auth = AuthState::new(crate::config::AuthConfig {
+            session_idle: std::time::Duration::from_secs(3600),
+            session_max_age: std::time::Duration::from_secs(3600),
+            cookie_secure: crate::config::CookieSecure::Never,
+            public_url: None,
+        });
+        let cookies =
+            super::super::auth::open_session(pool, &auth, &HeaderMap::new(), &system, user_id, name, LoginMethod::Ldap)
+                .await
+                .unwrap();
+        let token = crate::auth::session::cookie_value(&cookies[0], crate::auth::session::SESSION_COOKIE).unwrap();
+        let csrf = crate::auth::session::cookie_value(&cookies[1], crate::auth::session::CSRF_COOKIE).unwrap();
+        let cookie = format!("shadoucmdb_session={token}; shadoucmdb_csrf={csrf}");
+        Creds { cookie: Some(cookie), csrf: Some(csrf), bearer: None }
+    }
+
+    /// GH#120: requireMfa covers local and directory (LDAP) accounts; OIDC
+    /// accounts are left to their provider. The per-request gate and
+    /// /auth/me agree for all three.
+    #[tokio::test]
+    async fn require_mfa_covers_directory_accounts_but_not_oidc() {
+        let Some(db) = scratch::database("require_mfa_covers_directory_accounts_but_not_oidc").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let ldap = provider(pool, "ldap", true, "ldaps://dc.example.test").await;
+        let oidc = provider(pool, "oidc", true, "").await;
+        for (name, linked, gated) in [("lena", None, true), ("dirk", Some(ldap), true), ("olga", Some(oidc), false)] {
+            let creds = mfa_required_user(pool, name, linked).await;
+            let idle = std::time::Duration::from_secs(3600);
+            // The stored hash of the session just opened for this user.
+            let hash: Vec<u8> = sqlx::query_scalar(
+                "SELECT s.token_hash FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.username = $1",
+            )
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            let live = auth_data::resolve_session(pool, &hash, idle).await.unwrap().expect("live session");
+            assert_eq!(live.mfa_enrolment_required, gated, "{name}: resolve_session");
+            // The profile grants nothing: past the gate the answer is FORBIDDEN.
+            let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &creds, None).await;
+            let expected = if gated { "MFA_ENROLMENT_REQUIRED" } else { "FORBIDDEN" };
+            assert_eq!((status, code(&v)), (403, expected), "{name}: {v}");
+            let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &creds, None).await;
+            assert_eq!(
+                (status, &v["mfa"]["required"], &v["mfa"]["enrolmentRequired"]),
+                (200, &json!(gated), &json!(gated)),
+                "{name}: {v}"
+            );
+        }
+        db.drop().await;
+    }
+
+    /// Setting up MFA confirms the password first. An OIDC account has none
+    /// here, and a disabled directory cannot be asked: 409 for both. A
+    /// directory that cannot be reached: 503. Nothing is set up in any case.
+    #[tokio::test]
+    async fn enrolment_needs_a_password_that_can_be_confirmed() {
+        let Some(db) = scratch::database("enrolment_needs_a_password_that_can_be_confirmed").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let oidc = provider(pool, "oidc", true, "").await;
+        let disabled = provider(pool, "ldap", false, "ldaps://dc.example.test").await;
+        // Nothing listens on port 1: the connection is refused at once.
+        let unreachable = provider(pool, "ldap", true, "ldaps://127.0.0.1:1").await;
+        let body = json!({ "currentPassword": PASSWORD });
+        for (name, linked, status_code, error, says) in [
+            ("olga", oidc, 409, "CONFLICT", "identity provider"),
+            ("dirk", disabled, 409, "CONFLICT", "directory is disabled"),
+            ("dana", unreachable, 503, "IDENTITY_PROVIDER_UNAVAILABLE", "could not be reached"),
+        ] {
+            let creds = mfa_required_user(pool, name, Some(linked)).await;
+            let (status, v, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &creds, Some(body.clone())).await;
+            assert_eq!((status, code(&v)), (status_code, error), "{name}: {v}");
+            assert!(v["error"]["message"].as_str().unwrap().contains(says), "{name}: {v}");
+        }
+        let set_up: i64 = sqlx::query_scalar("SELECT count(*) FROM user_totp").fetch_one(pool).await.unwrap();
+        assert_eq!(set_up, 0);
         db.drop().await;
     }
 }

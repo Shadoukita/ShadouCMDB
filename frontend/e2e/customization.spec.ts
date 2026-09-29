@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { apiGet, ciIdByName, classIdByName, csrf, expect, resetUiSettings as resetSettings, snap, test } from "./support";
+import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, resetUiSettings as resetSettings, snap, test } from "./support";
 
 // Administration › Customization and Export / import, against the demo seed (the Server class
 // and its attributes). The settings apply to every user, so the walk starts from and ends with
@@ -26,8 +26,19 @@ async function save(page: Page, comment: string) {
   await expect(bar.getByText("No unsaved changes")).toBeVisible();
 }
 
+// Servers created for the sort walk. They are deleted afterwards: "e2e-sort-…" sorts before the demo
+// servers, and later specs open the first Server by label and expect its demo relationships.
+const sortCis: string[] = [];
+
 test.beforeAll(async ({ request }) => resetSettings(request));
-test.afterAll(async ({ request }) => resetSettings(request));
+test.afterAll(async ({ request }) => {
+  await resetSettings(request);
+  const headers = { "X-CSRF-Token": await csrf(request) };
+  for (const id of sortCis.splice(0)) {
+    const res = await request.delete(`/api/v1/configuration-items/${id}`, { headers });
+    expect(res.ok(), `delete ${id} → ${res.status()}`).toBeTruthy();
+  }
+});
 
 test("branding: name, colour, theme and logo apply app-wide and on the sign-in page", async ({ page, browser }) => {
   await page.goto("/admin");
@@ -162,6 +173,99 @@ test("list views: a class's columns, default sort, filter and page size apply to
   await expect(page.getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
   await expect(page).not.toHaveURL(/lookupValueId=/);
   await snap(page, "customization-list-view");
+});
+
+test("list views: an attribute default sort, and attribute column headers sort the class's inventory", async ({ page, request }) => {
+  const serverId = await classIdByName(request, "Server");
+  // Text order would put .100 before .11 before .9; the API sorts IP addresses by address, hostnames case-insensitively.
+  for (const [n, host, ip] of [["x", "b-sort", "10.99.0.100"], ["y", "A-sort", "10.99.0.9"], ["z", "c-sort", "10.99.0.11"]]) {
+    sortCis.push((await createCi(request, serverId, `e2e-sort-${stamp}-${n}`, { hostname: `${host}-${stamp}`, ip_address: ip })).id);
+  }
+  await page.goto("/admin/customization/list-views?class=server");
+  const customize = page.getByRole("button", { name: "Customize the Server list" });
+  if (await customize.isVisible()) await customize.click();
+  const sort = page.getByLabel("Default sort");
+  await expect(sort.getByRole("option", { name: "Hostname (attribute)" })).toHaveCount(1);
+  // The empty choice is the default sort, not a second "Label" next to the built-in field.
+  await expect(sort.getByRole("option", { name: "Label", exact: true })).toHaveCount(1);
+  await expect(sort.getByRole("option", { name: "Default (label, ascending)" })).toHaveCount(1);
+  await sort.selectOption("attributes.hostname");
+  await page.getByLabel("Sort direction").selectOption("asc");
+  for (const label of ["Hostname (attribute)", "IP address (attribute)"]) {
+    await page.getByLabel("Add to Columns").selectOption({ label });
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+  }
+  await save(page, "e2e attribute sort");
+
+  const names = page.locator("table.data tbody tr td:first-child");
+  await page.goto(`/cis?classId=${serverId}&q=e2e-sort-${stamp}`);
+  await expect(page.getByRole("columnheader", { name: /Hostname/ })).toHaveAttribute("aria-sort", "ascending");
+  await expect(names).toHaveText([`e2e-sort-${stamp}-y`, `e2e-sort-${stamp}-x`, `e2e-sort-${stamp}-z`]);
+
+  await page.getByRole("columnheader", { name: /IP address/ }).getByRole("button").click();
+  await expect(page).toHaveURL(/sort=attributes\.ip_address/);
+  await expect(page.getByRole("columnheader", { name: /IP address/ })).toHaveAttribute("aria-sort", "ascending");
+  await expect(names).toHaveText([`e2e-sort-${stamp}-y`, `e2e-sort-${stamp}-z`, `e2e-sort-${stamp}-x`]);
+  await page.getByRole("columnheader", { name: /IP address/ }).getByRole("button").click();
+  await expect(page).toHaveURL(/sort=-attributes\.ip_address/);
+  await expect(names).toHaveText([`e2e-sort-${stamp}-x`, `e2e-sort-${stamp}-z`, `e2e-sort-${stamp}-y`]);
+  // The sort survives a reload; another class drops it (it may not have the attribute).
+  await page.reload();
+  await expect(page.getByRole("columnheader", { name: /IP address/ })).toHaveAttribute("aria-sort", "descending");
+  await page.getByLabel("Class", { exact: true }).selectOption({ label: "All classes" });
+  await expect(page).not.toHaveURL(/sort=/);
+  await expect(page.getByRole("columnheader", { name: /Label/ })).toHaveAttribute("aria-sort", "ascending");
+});
+
+test("list views: adding a column to a view without columns keeps the default columns", async ({ page, request }) => {
+  const serverId = await classIdByName(request, "Server");
+  // What migration 0020 writes for an rc.1 default sort, and what an API client or an import may send (GH#168).
+  const s = await apiGet<Settings>(request, "/ui-settings");
+  const view = { classKey: "server", columns: [], defaultSort: { field: "attributes.ip_address", direction: "asc" } };
+  const res = await request.put("/api/v1/ui-settings", {
+    data: { version: s.version, settings: { ...s.settings, listViews: [view] }, comment: `e2e view without columns ${stamp}` },
+    headers: { "X-CSRF-Token": await csrf(request) },
+  });
+  expect(res.ok(), `put → ${res.status()} ${await res.text()}`).toBeTruthy();
+
+  await page.goto("/admin/customization/list-views?class=server");
+  const list = page.getByRole("list", { name: "Columns" });
+  const defaults = ["Label", "Ident", "Class", "Active", "Updated"];
+  await expect(page.getByText("No columns chosen: the default columns are shown.")).toBeVisible();
+  await expect(list.getByRole("listitem")).toHaveCount(defaults.length);
+  await page.getByLabel("Add to Columns").selectOption({ label: "Hostname (attribute)" });
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(list.getByRole("listitem")).toHaveCount(defaults.length + 1);
+  await expect(page.getByText("No columns chosen: the default columns are shown.")).toHaveCount(0);
+  await save(page, "e2e add column to default view");
+
+  await page.goto(`/cis?classId=${serverId}`);
+  await expect(page.locator("table.data thead th")).toHaveText([...defaults, "Hostname"].map((h) => new RegExp(`^${h}`)));
+  // The label column still opens the CI.
+  await expect(page.locator("table.data tbody tr a").first()).toBeVisible();
+});
+
+test("list views: a view without the Label column still shows it first, so every row opens its CI", async ({ page, request }) => {
+  const serverId = await classIdByName(request, "Server");
+  await page.goto("/admin/customization/list-views?class=server");
+  const customize = page.getByRole("button", { name: "Customize the Server list" });
+  if (await customize.isVisible()) await customize.click();
+  await page.getByLabel("Remove Label").click();
+  await expect(page.getByText("Label is not chosen: it is shown as the first column anyway")).toBeVisible();
+  await expect(page.getByLabel("List preview").getByRole("columnheader").first()).toHaveText("Label");
+  await save(page, "e2e list view without label");
+
+  await page.goto(`/cis?classId=${serverId}`);
+  // Wait for the view (its Hostname column, page size and sort) and the list it refetches: until the
+  // settings load, the inventory shows the default columns and page size.
+  await expect(page.getByRole("columnheader", { name: /Hostname/ })).toBeVisible();
+  await expect(page.getByRole("columnheader").first()).toHaveText(/^Label/);
+  await expect(page.locator("table.data.loading")).toHaveCount(0);
+  const rows = page.locator("table.data tbody tr");
+  await expect(rows.first()).toBeVisible();
+  await expect(rows.filter({ hasNot: page.locator("td:first-child a") })).toHaveCount(0);
+  await rows.first().locator("td:first-child a").click();
+  await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);
 });
 
 test("layouts: the form designer arranges tabs, sections and widths for the form and the detail page", async ({ page, request }) => {

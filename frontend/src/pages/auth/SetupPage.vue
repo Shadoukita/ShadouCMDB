@@ -31,7 +31,7 @@ async function submit() {
   const errs: Record<string, string> = {};
   if (!f.username.trim()) errs.username = "Required";
   if (!f.displayName.trim()) errs.displayName = "Required";
-  if (f.password.length < 12) errs.password = "Too short";
+  if ([...f.password].length < 12) errs.password = "Too short";
   if (f.password !== f.confirm) errs.confirm = "The passwords do not match";
   local.value = errs;
   if (Object.keys(errs).length > 0) {

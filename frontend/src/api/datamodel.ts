@@ -26,16 +26,12 @@ export type AttributeUpdateBody = JsonBody<"/api/v1/attribute-definitions/{id}",
 export type RelTypeCreateBody = JsonBody<"/api/v1/relationship-types", "post">;
 export type RelTypeUpdateBody = JsonBody<"/api/v1/relationship-types/{id}", "patch">;
 export type RuleCreateBody = JsonBody<"/api/v1/relationship-rules", "post">;
-export type StatusBody = JsonBody<"/api/v1/statuses", "post">;
-export type EnvironmentBody = JsonBody<"/api/v1/environments", "post">;
-export type LocationBody = JsonBody<"/api/v1/locations", "post">;
-export type OwnerBody = JsonBody<"/api/v1/owners", "post">;
 export type LookupListBody = JsonBody<"/api/v1/lookup-lists", "post">;
 export type LookupListValueBody = JsonBody<"/api/v1/lookup-list-values", "post">;
 export type LocationListQuery = ListQuery<"/api/v1/locations">;
 export type OwnerListQuery = ListQuery<"/api/v1/owners">;
-export type LocationType = LocationBody["locationType"];
-export type OwnerKind = OwnerBody["kind"];
+export type LocationType = Schemas["Location"]["locationType"];
+export type OwnerKind = Schemas["Owner"]["kind"];
 
 /** Every data model and lookup resource. Each has GET/PATCH/DELETE /{resource}/{id} and GET …/{id}/usage. */
 export type Resource =
@@ -307,7 +303,7 @@ export function useCreateLookup(resource: Extract<Resource, "statuses" | "enviro
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: Record<string, unknown>) =>
-      unwrap(api.POST(`/api/v1/${resource}` as "/api/v1/statuses", { body: body as StatusBody })),
+      unwrap(api.POST(`/api/v1/${resource}` as "/api/v1/lookup-list-values", { body: body as LookupListValueBody })),
     onSuccess: () => invalidateResource(qc, resource),
   });
 }

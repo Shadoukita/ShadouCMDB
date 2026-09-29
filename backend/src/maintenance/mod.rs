@@ -21,8 +21,15 @@ use crate::config::DatabaseConfig;
 
 /// System tables whose rows are never backed up. Restoring sessions would sign
 /// people back in with tokens from the past; after a restore everyone signs in
-/// again. Pending second-factor challenges and OIDC sign-ins are sessions-in-waiting.
-pub const EXCLUDED_TABLES: &[&str] = &["sessions", "mfa_challenges", "oidc_login_states"];
+/// again. Pending second-factor challenges are sessions-in-waiting. Server
+/// keys are secrets the server makes for itself: a restored database gets a
+/// fresh one, and at worst a sign-in in progress ends with "expired".
+///
+/// `oidc_login_states` stays on the list although migration 0021 dropped it:
+/// backups from releases at levels 0014–0020 left it out, and restoring one
+/// first migrates to that level, which creates the table again. Without the
+/// legacy name the restore would refuse that table as missing from the backup.
+pub const EXCLUDED_TABLES: &[&str] = &["sessions", "mfa_challenges", "server_keys", "oidc_login_states"];
 
 /// Schemas of the application's own tables: `cmdb` since migration 0008,
 /// `public` before (and still for the migration bookkeeping table). Areas are

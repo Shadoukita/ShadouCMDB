@@ -589,9 +589,10 @@ impl RouteBuilder {
         self.access = Access::Permission(permission);
         self
     }
-    /// Refuse API tokens (403 FORBIDDEN): sign-out, password changes and token
-    /// administration need a signed-in session, so a token cannot outlive its
-    /// revocation by minting another.
+    /// Refuse API tokens (403 FORBIDDEN): sign-out, password changes, token,
+    /// user account and identity provider administration need a signed-in
+    /// session, so a token cannot outlive its revocation by minting another
+    /// credential (a token, an account, a password or a sign-in path).
     pub fn session_only(mut self) -> Self {
         self.session_only = true;
         self
