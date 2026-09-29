@@ -119,6 +119,8 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await page.getByRole("button", { name: /^Asset tag, / }).focus();
   await page.keyboard.press("Delete");
   await expect(page.getByTestId("le-hidden").getByRole("listitem")).toHaveText([/Asset tag/]);
+  // GH#192: hiding is presentation only, and the tray says so.
+  await expect(page.getByTestId("le-presentation-only")).toContainText("use permission profiles");
 
   // Undo and redo.
   await bar(page).getByRole("button", { name: "Undo" }).click();

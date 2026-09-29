@@ -32,6 +32,12 @@ import { normalizeDocument, type AttributeLike } from "./uiSettings";
 /** The editor's route: the CI page's path plus this suffix. */
 export const EDITOR_SUFFIX = "/layout-editor";
 export const LEAVE_QUESTION = "Discard your unsaved layout changes?";
+/**
+ * Layouts shape the web UI only: the API returns hidden fields and accepts writes to read-only ones
+ * (GH#192). Shown wherever a layout hides a field or makes it read-only, so nobody mistakes it for access control.
+ */
+export const PRESENTATION_ONLY =
+  "Hidden and read-only fields change what the web UI shows, not who can read or change the data: the API still returns and accepts them. To restrict access, use permission profiles.";
 
 /** Width presets for checking the layout on smaller screens. */
 export const WIDTH_PRESETS = [

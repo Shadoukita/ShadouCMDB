@@ -45,7 +45,7 @@ import {
 } from "../../../lib/layoutDesign";
 import PreviewResizeHandle from "../../../components/layoutEdit/PreviewResizeHandle.vue";
 import SectionShell, { type DropSide } from "../../../components/layoutEdit/SectionShell.vue";
-import { sectionErrors } from "../../../lib/layoutEditor";
+import { PRESENTATION_ONLY, sectionErrors } from "../../../lib/layoutEditor";
 import {
   ATTRIBUTE_PREFIX,
   attributeKey,
@@ -470,6 +470,7 @@ function setPreview(w: number | null) {
                 Read-only on the form
               </label>
               <p v-if="defFor(selField)?.isRequired && isReadOnly(selField)" class="hint">Required: stays editable on new CIs, which cannot be saved without it.</p>
+              <p v-if="isReadOnly(selField)" class="hint">Read-only in the web UI only: API clients can still change it.</p>
               <span><button type="button" class="btn btn-sm" :disabled="isCore(selField)" @click="hide(selField)">Hide field</button></span>
             </template>
 
@@ -557,6 +558,7 @@ function setPreview(w: number | null) {
           <div class="panel-header"><h2>Hidden fields</h2></div>
           <div class="panel-body">
             <p class="hint">Not on the form or the detail page. Drop a field here to hide it.</p>
+            <p class="hint" data-testid="designer-presentation-only">{{ PRESENTATION_ONLY }}</p>
             <ul v-if="hidden.length > 0" class="designer-hidden-list" aria-label="Hidden fields">
               <li v-for="f in hidden" :key="f" draggable="true" @dragstart="onDragStart(f, $event)" @dragend="onDragEnd">
                 <span>

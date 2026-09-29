@@ -31,8 +31,10 @@ carries passwords and session cookies. Requirements for the proxy:
   cookies `Secure` and doesn't send HSTS. If the proxy can't, set `COOKIE_SECURE=always`.
 - **Replace `X-Forwarded-For`** with the client address; never append to what the client sent.
   The audit log records that address.
-- **Don't add `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`
-  or `Referrer-Policy`**: the server sends them. Do add `Permissions-Policy`.
+- **Don't add `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`,
+  `Referrer-Policy`, `X-Frame-Options`, `Permissions-Policy` or `Cross-Origin-Opener-Policy`**: the
+  server sends them (see [deployment.md](../deployment.md#https-and-session-cookies)). If an earlier
+  version of this guide had you add `Permissions-Policy` at the proxy, remove it.
 - **Don't cache `/api/`** (see [deployment.md](../deployment.md#https-and-session-cookies)).
 - Use a certificate from a CA your clients trust (ACME or your internal PKI). Monitor its expiry.
 
@@ -58,7 +60,6 @@ server {
     ssl_session_tickets off;
 
     client_max_body_size 1m;   # the server rejects larger bodies anyway
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
 
     location / {
         proxy_pass http://127.0.0.1:3000;
@@ -74,7 +75,6 @@ Caddy (automatic certificates; TLS 1.2+ by default):
 
 ```caddyfile
 cmdb.example.com {
-    header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
     reverse_proxy 127.0.0.1:3000 {
         header_up X-Forwarded-For {remote_host}
     }

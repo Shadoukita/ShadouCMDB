@@ -12,6 +12,7 @@
 10037	FAIL	(Server Leaks Information via X-Powered-By HTTP Response Header Field(s))
 10038	FAIL	(Content Security Policy (CSP) Header Not Set)
 10054	FAIL	(Cookie without SameSite Attribute)
+10063	FAIL	(Permissions Policy Header Not Set)
 10098	FAIL	(Cross-Domain Misconfiguration)
 90022	WARN	(Application Error Disclosure)
 # CI serves plain HTTP; Secure is set behind TLS (COOKIE_SECURE, unit-tested in auth/session.rs).

@@ -128,13 +128,16 @@ of the others are confusing at best. In particular, a proxy cannot bolt violatio
 onto our policy: a second header containing only `report-uri`/`report-to` is a separate policy
 that blocks nothing and so reports nothing, while violations of ours still go nowhere. The
 proxy's only alternative is to strip our header and serve a complete policy of its own, which
-drifts from ours with every release. Use `CSP_REPORT_URI` instead (below). Headers the server
-does not set (for example `Permissions-Policy`) are the proxy's to add.
+drifts from ours with every release. Use `CSP_REPORT_URI` instead (below). Since this release that includes `Permissions-Policy`,
+`X-Frame-Options` and `Cross-Origin-Opener-Policy`: remove any copies a proxy adds.
 
 | Header | Value | Sent on |
 | --- | --- | --- |
 | `X-Content-Type-Options` | `nosniff` | every response |
 | `Referrer-Policy` | `no-referrer` | every response |
+| `X-Frame-Options` | `DENY` | every response. CSP `frame-ancestors 'none'` covers HTML documents; this header keeps API responses, assets and uploaded logos out of frames too. ShadouCMDB cannot be embedded in another site's frame, a portal or an intranet dashboard |
+| `Permissions-Policy` | `accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=()` | every response. Clipboard access is left at the browser default: the UI copies API token secrets and recovery codes |
+| `Cross-Origin-Opener-Policy` | `same-origin` | every response. Pages on other origins opened from ShadouCMDB, or that open it, get no `window.opener` handle to it. Browsers apply it on HTTPS only |
 | `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | only requests that arrived over HTTPS (`X-Forwarded-Proto: https` or `Forwarded: proto=https`); never over plain HTTP, so a lab or LAN install is not locked onto a scheme it cannot serve |
 | `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'` | HTML documents only (the web UI and `/docs`), not JSON |
 | `Cache-Control` | `no-store` | every `/api/` response, so no shared cache stores one user's data. The web UI keeps its own caching: `assets/*` `public, max-age=31536000, immutable`, `index.html` `no-cache` |

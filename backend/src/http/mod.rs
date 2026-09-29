@@ -157,6 +157,13 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-
 
 const HSTS: &str = "max-age=31536000; includeSubDomains";
 
+/// Powerful browser features nothing here uses, switched off for this origin
+/// and anything it might embed. Clipboard stays at the browser default
+/// (`self`): the UI copies API token secrets, recovery codes and the OIDC
+/// redirect URI with `navigator.clipboard.writeText`.
+const PERMISSIONS_POLICY: &str = "accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), \
+    gyroscope=(), hid=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=()";
+
 /// Responses under `/api/` carry one principal's data (`GET /api/v1/auth/me`
 /// returns the username, permissions and the CSRF token) and are
 /// authenticated by the session cookie. RFC 9111 §3.5 only keeps a shared
@@ -252,10 +259,26 @@ async fn security_headers(
 /// Security headers for every response. The UI is served same-origin with the
 /// API by this router, so this is the only place they can be set; a reverse
 /// proxy in front should not add its own copies (see docs/deployment.md).
+///
+/// CSP `frame-ancestors` only reaches HTML documents; `X-Frame-Options: DENY`
+/// keeps every other response (API JSON, assets, uploaded logos) out of frames
+/// too. `Cross-Origin-Opener-Policy: same-origin` cuts the `window.opener` link
+/// to cross-origin pages. The layout editor's popup is same-origin with the
+/// same policy, so it keeps its opener; sign-in with OIDC is a top-level
+/// redirect, not a popup.
 fn with_security_headers(app: Router, csp: Csp) -> Router {
     app.layer(axum::middleware::from_fn_with_state(Arc::new(csp), security_headers))
         .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
         .layer(SetResponseHeaderLayer::overriding(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer")))
+        .layer(SetResponseHeaderLayer::overriding(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static(PERMISSIONS_POLICY),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        ))
 }
 
 /// `API_DOCS=authenticated`: the contract and Swagger UI need a session, like `/api/v1/auth/me`.
@@ -620,11 +643,27 @@ mod tests {
         Router::new().fallback(move || async move { ([(header::CACHE_CONTROL, cache)], "ui file") })
     }
 
+    /// Sent on every response, whatever its path or type (GH#192): framing protection cannot rely on
+    /// CSP `frame-ancestors`, which only HTML documents carry.
+    fn assert_baseline_headers(res: &Response) {
+        assert_eq!(header(res, header::X_CONTENT_TYPE_OPTIONS), Some("nosniff"));
+        assert_eq!(header(res, header::REFERRER_POLICY), Some("no-referrer"));
+        assert_eq!(header(res, header::X_FRAME_OPTIONS), Some("DENY"));
+        assert_eq!(header(res, header::HeaderName::from_static("cross-origin-opener-policy")), Some("same-origin"));
+        let policy = header(res, header::HeaderName::from_static("permissions-policy")).unwrap();
+        assert_eq!(policy, PERMISSIONS_POLICY);
+        for feature in ["camera", "microphone", "geolocation", "payment", "usb"] {
+            assert!(policy.split(", ").any(|d| d == format!("{feature}=()")), "{feature} not disabled: {policy}");
+        }
+        assert!(!policy.contains("clipboard"), "the UI copies secrets with navigator.clipboard: {policy}");
+    }
+
     #[tokio::test]
     async fn immutable_ui_assets_keep_their_long_cache() {
         let immutable = "public, max-age=31536000, immutable";
         let res = get(with_security_headers(ui_file(immutable), Csp::new(None)), "/assets/index-abc123.js", &[]).await;
         assert_eq!(header(&res, header::CACHE_CONTROL), Some(immutable));
+        assert_baseline_headers(&res);
         assert!(!varies_on(&res, "cookie"), "{:?}", vary(&res));
     }
 
@@ -641,6 +680,7 @@ mod tests {
             let res = get(app(), path, &[]).await;
             assert_eq!(header(&res, header::CACHE_CONTROL), None, "{path}");
             assert!(vary(&res).is_empty(), "{path}: {:?}", vary(&res));
+            assert_baseline_headers(&res);
         }
     }
 
@@ -649,7 +689,7 @@ mod tests {
         let res = get(app(), "/.well-known/security.txt", &[]).await;
         assert_eq!(res.status(), 200);
         assert_eq!(header(&res, header::CONTENT_TYPE), Some("text/plain; charset=utf-8"));
-        assert_eq!(header(&res, header::X_CONTENT_TYPE_OPTIONS), Some("nosniff"));
+        assert_baseline_headers(&res);
         let body = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
         let body = std::str::from_utf8(&body).unwrap();
         assert!(body.lines().any(|l| l.starts_with("Contact: ")), "{body}");
@@ -661,8 +701,7 @@ mod tests {
         let res = get(app(), "/api/v1/no-such-route", &[]).await;
         assert_eq!(res.status(), 404);
         assert!(header(&res, header::CONTENT_TYPE).unwrap().starts_with("application/json"));
-        assert_eq!(header(&res, header::X_CONTENT_TYPE_OPTIONS), Some("nosniff"));
-        assert_eq!(header(&res, header::REFERRER_POLICY), Some("no-referrer"));
+        assert_baseline_headers(&res);
         assert_eq!(header(&res, header::CONTENT_SECURITY_POLICY), None);
         assert_eq!(header(&res, header::STRICT_TRANSPORT_SECURITY), None, "no HSTS over plain HTTP");
     }
@@ -684,8 +723,7 @@ mod tests {
         let res = get(ui, "/inventory", &[("x-forwarded-proto", "https")]).await;
         assert_eq!(header(&res, header::CONTENT_SECURITY_POLICY), Some(CSP));
         assert!(!CSP.contains("unsafe"));
-        assert_eq!(header(&res, header::X_CONTENT_TYPE_OPTIONS), Some("nosniff"));
-        assert_eq!(header(&res, header::REFERRER_POLICY), Some("no-referrer"));
+        assert_baseline_headers(&res);
         assert_eq!(header(&res, header::STRICT_TRANSPORT_SECURITY), Some(HSTS));
         // Reporting is opt-in: without CSP_REPORT_URI the policy is exactly CSP and reports go nowhere.
         assert_eq!(header(&res, REPORTING_ENDPOINTS), None);
