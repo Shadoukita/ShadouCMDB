@@ -24,7 +24,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 | `SECURITY.md`, `docs/security/` | Vulnerability reporting and disclosure policy, hardening guide, support period, telemetry statement, secure development lifecycle, CRA incident process, risk assessment. See [docs/security](docs/security/README.md). |
 | `docs/api.md` | API conventions, error envelope, endpoint overview, extension seams. |
 | `backend/openapi.json` | OpenAPI contract generated from the code (`shadoucmdb openapi --out backend/openapi.json`; CI fails if it is stale). |
-| `tools/` | `smoke/smoke.ts`: end-to-end check of every API operation against any API URL. `openapi-diff.mjs`: semantic diff of two specs. |
+| `tools/` | `smoke/smoke.ts`: end-to-end check of every API operation against any API URL. `ldap-it/`: LDAPS sign-in against a real OpenLDAP directory. `openapi-diff.mjs`: semantic diff of two specs. |
 | `Dockerfile`, `deploy/` | Multi-arch container image of `shadoucmdb`; systemd unit; release Dockerfile and the READMEs shipped in the release archives. See [docs/deployment.md](docs/deployment.md). |
 
 ## Requirements
