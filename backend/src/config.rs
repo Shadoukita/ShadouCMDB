@@ -650,8 +650,9 @@ mod tests {
         })
         .unwrap();
         let shown = format!("{cfg:?} {:#?}", cfg.database);
-        for secret in ["url-secret", "migration-secret", "maintenance-secret", "pg-secret"] {
-            assert!(!shown.contains(secret), "{secret} in {shown}");
+        // The failure message names only the fixture, never the Debug output that would carry it.
+        for fixture in ["url-secret", "migration-secret", "maintenance-secret", "pg-secret"] {
+            assert!(!shown.contains(fixture), "Debug output leaks the {fixture} fixture");
         }
         assert!(shown.contains("<redacted>"));
     }
