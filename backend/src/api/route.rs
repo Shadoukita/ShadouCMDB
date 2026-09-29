@@ -533,6 +533,7 @@ pub struct RouteBuilder {
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
     body_limit: Option<usize>,
+    unlimited: bool,
 }
 
 pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<String>) -> RouteBuilder {
@@ -550,6 +551,7 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         errors: Vec::new(),
         also_returns: Vec::new(),
         body_limit: None,
+        unlimited: false,
     }
 }
 
@@ -581,6 +583,15 @@ impl RouteBuilder {
     /// Callable without a session.
     pub fn public(mut self) -> Self {
         self.access = Access::Public;
+        self
+    }
+    /// Public and exempt from HTTP_MAX_CONCURRENT_REQUESTS, so a busy server is
+    /// not reported as down: only for the health routes, which read no body and
+    /// open no outbound connection. Every other public route, whatever its
+    /// method, draws from the public pool.
+    pub fn unlimited(mut self) -> Self {
+        self.access = Access::Public;
+        self.unlimited = true;
         self
     }
     /// Requires this global permission (403 FORBIDDEN without it).
@@ -638,6 +649,9 @@ impl RouteBuilder {
         let status = self.status.unwrap_or(if response.is_some() { StatusCode::OK } else { StatusCode::NO_CONTENT });
         let filter = MethodFilter::try_from(self.method.clone()).expect("supported HTTP method");
         let access = self.access;
+        let unlimited = self.unlimited;
+        // No route name in the message: it is static, but CodeQL taints the whole builder.
+        assert!(!unlimited || access == Access::Public, "only public routes can be unlimited");
         let session_only = self.session_only;
         let before_mfa_enrolment = self.before_mfa_enrolment;
         let safe_method = self.method == Method::GET || self.method == Method::HEAD;
@@ -674,15 +688,12 @@ impl RouteBuilder {
                     // the server buffer up to body_limit bytes only to be answered 401.
                     let ctx = authorise(&state, &headers, rule, client, used).await?;
                     // The permit is taken only once the caller is authorised, so rejected
-                    // requests never hold capacity. Public routes that take a body draw from
-                    // their own pool and get a short deadline for it, so anonymous slow
-                    // senders cannot hold the capacity signed-in users need; bodiless public
-                    // routes (health) take none.
+                    // requests never hold capacity. Public routes draw from their own pool
+                    // and get a short deadline for their body, so anonymous callers cannot
+                    // hold the capacity signed-in users need; only the health routes
+                    // (`unlimited`) take none.
                     let public = access == Access::Public;
-                    let _permit = match (public, safe_method) {
-                        (true, true) => None,
-                        _ => Some(state.capacity.acquire(public)?),
-                    };
+                    let _permit = if unlimited { None } else { Some(state.capacity.acquire(public)?) };
                     let body = if public {
                         let limit = state.capacity.public_body_timeout;
                         tokio::time::timeout(limit, read_body(&headers, body, body_limit)).await.map_err(|_| {
@@ -1036,6 +1047,15 @@ mod tests {
         assert_eq!((status, code.as_str()), (503, "SERVER_BUSY"));
         assert_eq!(headers.get(header::RETRY_AFTER).and_then(|v| v.to_str().ok()), Some("1"));
         assert!(!polled.load(Ordering::SeqCst));
+        // GH#219: so are bodiless anonymous routes, which would otherwise queue on the
+        // database pool or open unbounded connections to an identity provider.
+        for path in ["/api/v1/ui-settings/branding", "/api/v1/auth/providers", "/api/v1/setup"] {
+            assert_eq!(
+                send(&app, "GET", path, &Creds::default(), Body::empty(), None).await,
+                (503, "SERVER_BUSY".into()),
+                "{path}"
+            );
+        }
         // Signed-in users and health checks are unaffected.
         assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await.0, 200);
         for path in ["/healthz", "/readyz", "/api/v1/version"] {

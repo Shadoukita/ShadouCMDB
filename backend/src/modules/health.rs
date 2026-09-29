@@ -102,14 +102,14 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, "/healthz", "getLiveness")
             .tag("Health")
             .summary("Liveness: the process is up (does not touch the database)")
-            .public()
+            .unlimited()
             .handle(|_, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async {
                 Ok(Json(Liveness { status: LiveStatus::Ok, version: VERSION }))
             }),
         route(Method::GET, "/api/v1/version", "getVersion")
             .tag("Health")
             .summary("Version of the running server")
-            .public()
+            .unlimited()
             .description(
                 "Public, like /healthz: monitoring and vulnerability scanners need it without a session. Does not touch the database.",
             )
@@ -119,7 +119,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, "/readyz", "getReadiness")
             .tag("Health")
             .summary("Readiness: database reachable and all migrations applied")
-            .public()
+            .unlimited()
             .description(
                 "Returns 200 with status \"ready\" only when the database answers and every migration in this build is applied; otherwise 503 with the same body shape.",
             )
