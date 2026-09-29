@@ -91,3 +91,132 @@ async fn sections_side_by_side_are_validated_and_stored() {
 
     db.drop().await;
 }
+
+/// A saved version as stored (the effective settings leave out layouts of classes that do not exist).
+async fn stored(app: &axum::Router, s: &Creds, version: i64) -> Value {
+    let (status, v, _) = call(app, "GET", &format!("/api/v1/ui-settings/versions/{version}"), s, None).await;
+    assert_eq!(status, 200, "{v}");
+    v
+}
+
+/// Free tabs (SHAA-361): junk frames are refused, a converted tab is stored normalised, and the frames
+/// are in the audit trail and survive export and import.
+#[tokio::test]
+async fn free_tabs_are_validated_normalised_audited_and_exported() {
+    let Some(db) = scratch::database("free_tabs_are_validated_normalised_audited_and_exported").await else { return };
+    let app = app(db.pool.clone());
+
+    let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+    let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+    assert_eq!(status, 201, "{me}");
+    let cookie = headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let s = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+    let (_, current, _) = call(&app, "GET", "/api/v1/ui-settings", &s, None).await;
+    let version = current["version"].as_i64().unwrap();
+    let free = |sections: Value| {
+        json!({"layouts": [{"classKey": "server", "tabs": [
+            {"key": "t", "label": "T", "placement": "free", "sections": sections}]}]})
+    };
+
+    // Out of range on the schema, and windows that do not fit the tab.
+    let bad = free(json!([
+        {"key": "a", "label": "A", "frame": {"x": -0.1, "y": 0, "w": 0.01, "h": 20, "z": 1}},
+        {"key": "b", "label": "B", "frame": {"x": 0.5, "y": 1.5, "w": 1.2, "h": 100, "z": -1, "minH": 10}},
+        {"key": "c", "label": "C", "frame": {"x": 0.6, "y": 0, "w": 0.5, "h": 100, "z": 1, "minH": 200}},
+    ]));
+    let (status, v, _) =
+        call(&app, "PUT", "/api/v1/ui-settings", &s, Some(json!({"version": version, "settings": bad}))).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+    let mut got = errors(&v);
+    got.sort_unstable();
+    assert_eq!(
+        got,
+        [
+            "settings.layouts.0.tabs.0.sections.0.frame.h",
+            "settings.layouts.0.tabs.0.sections.0.frame.w",
+            "settings.layouts.0.tabs.0.sections.0.frame.x",
+            "settings.layouts.0.tabs.0.sections.1.frame.minH",
+            "settings.layouts.0.tabs.0.sections.1.frame.w",
+            "settings.layouts.0.tabs.0.sections.1.frame.y",
+            "settings.layouts.0.tabs.0.sections.1.frame.z",
+        ],
+        "{v}"
+    );
+    let bad =
+        free(json!([{"key": "c", "label": "C", "frame": {"x": 0.6, "y": 0, "w": 0.5, "h": 100, "z": 1, "minH": 200}}]));
+    let (status, v, _) =
+        call(&app, "PUT", "/api/v1/ui-settings", &s, Some(json!({"version": version, "settings": bad}))).await;
+    assert_eq!(
+        (status, errors(&v)),
+        (400, vec!["settings.layouts.0.tabs.0.sections.0.frame.w", "settings.layouts.0.tabs.0.sections.0.frame.minH"]),
+        "{v}"
+    );
+
+    // A grid tab switched to free without frames: frames from the grid positions, in reading order.
+    let good = free(json!([
+        {"key": "a", "label": "A", "width": 6},
+        {"key": "b", "label": "B", "width": 6, "frame": {"x": 0.25, "y": 40, "w": 0.75, "h": 300, "z": 9, "minH": 100}},
+        {"key": "r", "label": "Relationships", "kind": "relations"},
+    ]));
+    let (status, v, _) =
+        call(&app, "PUT", "/api/v1/ui-settings", &s, Some(json!({"version": version, "settings": good}))).await;
+    assert_eq!(status, 200, "{v}");
+    let version = v["version"].as_i64().unwrap();
+    let v = stored(&app, &s, version).await;
+    let tab = &v["settings"]["layouts"][0]["tabs"][0];
+    assert_eq!(tab["placement"], "free");
+    let got: Vec<(&str, &Value)> =
+        tab["sections"].as_array().unwrap().iter().map(|s| (s["key"].as_str().unwrap(), &s["frame"])).collect();
+    assert_eq!(
+        got,
+        [
+            ("b", &json!({"x": 0.25, "y": 40, "w": 0.75, "h": 300, "z": 1, "minH": 100})),
+            ("a", &json!({"x": 0.0, "y": 356, "w": 0.5, "h": 96, "z": 2})),
+            ("r", &json!({"x": 0.0, "y": 468, "w": 1.0, "h": 320, "z": 3})),
+        ],
+        "{v}"
+    );
+    let saved = v["settings"].clone();
+
+    // The audit row holds the stored form.
+    let (status, log, _) = call(&app, "GET", "/api/v1/audit-log?entityType=ui_settings&limit=1", &s, None).await;
+    assert_eq!(status, 200, "{log}");
+    assert_eq!(log["data"][0]["newValue"]["settings"]["layouts"], saved["layouts"], "{log}");
+
+    // Export, reset, import: the free tab comes back as it was.
+    let (status, file, _) = call(&app, "GET", "/api/v1/admin/config/export", &s, None).await;
+    assert_eq!(status, 200, "{file}");
+    assert_eq!(file["uiSettings"]["settings"]["layouts"], saved["layouts"]);
+    let (status, v, _) =
+        call(&app, "PUT", "/api/v1/ui-settings", &s, Some(json!({"version": version, "settings": {}}))).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&app, "POST", "/api/v1/admin/config/import?mode=apply", &s, Some(file)).await;
+    assert_eq!(status, 200, "{v}");
+    let (_, current, _) = call(&app, "GET", "/api/v1/ui-settings", &s, None).await;
+    let version = current["version"].as_i64().unwrap();
+    assert_eq!(stored(&app, &s, version).await["settings"]["layouts"], saved["layouts"]);
+
+    // Back to the grid: frames dropped, sections in reading order, widths from w.
+    let mut grid = saved.clone();
+    grid["layouts"][0]["tabs"][0]["placement"] = json!("grid");
+    let (status, v, _) =
+        call(&app, "PUT", "/api/v1/ui-settings", &s, Some(json!({"version": version, "settings": grid}))).await;
+    assert_eq!(status, 200, "{v}");
+    let v = stored(&app, &s, v["version"].as_i64().unwrap()).await;
+    let tab = &v["settings"]["layouts"][0]["tabs"][0];
+    assert!(tab.get("placement").is_none(), "{tab}");
+    let got: Vec<(&str, &Value, bool)> = tab["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["key"].as_str().unwrap(), &s["width"], s.get("frame").is_some()))
+        .collect();
+    assert_eq!(got, [("b", &json!(9), false), ("a", &json!(6), false), ("r", &json!(12), false)], "{tab}");
+
+    db.drop().await;
+}

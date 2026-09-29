@@ -208,13 +208,18 @@ the grip on its right edge; **Full width** / **Laptop** / **Tablet** / **Phone**
 
 ```
 layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
-  tabs[]:     { key, label, sections[] }                   key unique among the layout's tabs
+  tabs[]:     { key, label, placement, sections[] }        key unique among the layout's tabs;
+                                                           placement grid (default) or free
   sections[]: { key, label, kind (default fields),         key unique across the whole layout
                 width 1–12 (default 12), newRow, minHeight 1–50,   placement on the tab's 12-column grid
                 columns 1–12 (default 3), collapsed,       columns of the section's own field grid
                 fields[],                                  kind fields only
-                text }                                     kind note only: 1–4,000 characters
+                text,                                      kind note only: 1–4,000 characters
+                frame }                                    free tabs only (see below)
   fields[]:   { field, width 1–12 (default 1) }            field placed once; width ≤ the section's columns
+  frame:      { x 0–0.95, w 0.05–1,                        fractions of the tab's width; x + w ≤ 1
+                y 0–100,000, h 48–4,000,                   px from the top of the tab, px tall
+                z 0–10,000, minH 48–h }                    stacking order (stored 1..n); optional minH
 ```
 
 - **Section kinds.** `kind` says what a section shows. `fields` (the default when `kind` is absent) is a
@@ -236,6 +241,43 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   layout works on every screen. Below the tablet breakpoint (820 px of content width, which includes
   tablets in portrait at 768 px and every phone) sections stack at the full width in their order and
   `newRow` has no effect; the side-by-side arrangement is the desktop layout.
+- **Free tabs (`placement: "free"`).** Sections are windows on a desktop: each has a `frame` and may
+  sit anywhere, at any size, over other windows. `x` and `w` are fractions of the tab's
+  width, so windows scale with the browser window; `y` and `h` are pixels from the top of the tab. The
+  window with the higher `z` is drawn on top. The rendering contract for the detail page and the form:
+  - The tab is as tall as its lowest window (`max(y + h)`); windows are positioned absolutely in it.
+  - Each window scrolls its own content (fields, note or panel), so content under another window or
+    below the window's height is never lost. `collapsed` shrinks a window to its title bar.
+  - **Reading order** is `y`, then `x`, and the API stores a free tab's sections in that order. The
+    page renders them in that order in the document, so keyboard focus and screen readers follow it
+    whatever the stacking order. Below the tablet breakpoint (820 px of tab width, the same as for the
+    grid) and in print, the tab does not position anything: the windows stack at the full width in
+    reading order, each at least `minH` px tall (else as tall as its content).
+  - Fields no section places, and panels the layout does not place, behave as in a grid tab: the
+    General section and attribute groups that follow on the first tab sit at the full width below its
+    lowest window.
+
+  **On save** the API normalises a free tab, so the stored form is always complete: a section without
+  a `frame` gets one from its position on the grid (below the existing windows, on top of them), `x`
+  and `w` are rounded to 4 decimals and kept inside the tab, `z` becomes 1..n in the order of the
+  values sent (equal values keep the section order), and the sections are sorted into reading order.
+  Saving the result again changes nothing.
+
+  **Grid → free:** send the tab with `placement: "free"` and no frames. The frames follow the grid
+  rows: `x` and `w` from the columns (a section of width 6 in the second half is `x` 0.5, `w` 0.5),
+  each row as tall as its tallest section and 16 px between rows. Heights are estimates, since the
+  server does not render: 48 px title bar plus 48 px per row of fields (at least one row, at least
+  `minHeight`), 144 px for a note and 320 px for a built-in panel. Nothing jumps sideways, and each
+  window scrolls if its content is taller than the estimate.
+
+  **Free → grid:** send the tab with `placement: "grid"` (or without `placement`) and its frames. The
+  sections are ordered by `y`, then `x`, each spans the columns nearest its width
+  (`round(w × 12)`), a section that starts below the bottom of the first window of the current row
+  starts a new row, and the frames are dropped. A stored grid tab never has frames.
+
+  Frames are refused with `400 VALIDATION_ERROR` and the path of the offending value (e.g.
+  `settings.layouts.0.tabs.1.sections.2.frame.w`) when they are out of range, when `x + w` exceeds 1
+  (the window must end inside the tab), when `minH` exceeds `h`, or when they carry unknown keys.
 - `field` is a core field (`ident`, `validFrom`, `validUntil`), a detail-page field (`label`, `class`,
   `active`, `createdAt`, `updatedAt`) or `attributes.<key>`. Fields fill a section's grid row by row in
   the order given; `width` is the number of the section's `columns` a field spans. A grid of 12 columns
@@ -256,13 +298,15 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   patterns, section widths, columns and field widths of 1–12, `minHeight` of 1–50, at most 20 tabs, 50 sections per tab, 200 fields per section) and
   the cross-field rules above (unique keys, a field placed once, width within the section's columns,
   core fields not hidden, each built-in panel once, `fields` and `text` only on sections of their kind,
-  note text not blank). References to attributes that do not exist are accepted, dropped from the
+  note text not blank, frames inside the tab). References to attributes that do not exist are accepted, dropped from the
   effective settings and listed as `issues`, like everywhere else in the document.
 
 **Layouts saved before the grid** (no section `width`, `columns` and field widths of 1–4) stay valid
 unchanged and render as before: every section is 12 wide, so they stack at the full width. There is
 no migration; the API fills in `width: 12` when it returns a layout or saves it again. `newRow` and
-`minHeight` are only written when set.
+`minHeight` are only written when set. **Layouts saved before free tabs** need no migration either: a
+tab without `placement` is a grid tab, and the API writes `placement` and `frame` only for free tabs, so
+existing layouts, exports and saved versions read and write back unchanged.
 
 ### Editing a layout on the CI page
 
