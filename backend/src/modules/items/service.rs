@@ -974,6 +974,20 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
 // Graph
 // ---------------------------------------------------------------------------
 
+/// Relationship rows a graph request may read per `maxNodes`, over all hops.
+const GRAPH_EDGES_PER_NODE: usize = 5;
+
+/// Keeps at most `budget` of the rows read (fetched with `budget + 1`) and
+/// flags the graph as truncated when rows had to be dropped.
+fn spend_edge_budget(mut found: Vec<data::EdgeRow>, budget: &mut usize, truncated: &mut bool) -> Vec<data::EdgeRow> {
+    if found.len() > *budget {
+        found.truncate(*budget);
+        *truncated = true;
+    }
+    *budget -= found.len();
+    found
+}
+
 /// Breadth-first expansion from a root CI: one query per hop (not per CI),
 /// then one query for all node summaries. The traversal never enters CIs of
 /// classes the caller may not view.
@@ -1005,9 +1019,17 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
         }
     };
 
+    // Edge rows read from the database over the whole traversal. maxNodes
+    // alone does not bound them: a hub CI can have tens of thousands of
+    // relationships (GH#185).
+    let mut edge_budget = max_nodes * GRAPH_EDGES_PER_NODE;
+
     let mut hop = 1;
     while hop <= q.depth && !frontier.is_empty() {
-        let found = data::edges_touching(&mut conn, &frontier, direction, types, visible).await?;
+        // One row over the budget tells a cut-off result from an exact fit.
+        let found =
+            data::edges_touching(&mut conn, &frontier, direction, types, visible, edge_budget as i64 + 1).await?;
+        let found = spend_edge_budget(found, &mut edge_budget, &mut truncated);
         let mut next = Vec::new();
         for e in &found {
             for other in [e.source_ci_id, e.target_ci_id] {
@@ -1029,7 +1051,9 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
     // Edges between nodes discovered at the last hop (e.g. app -> db when both
     // hang off the same server) are included too, so the picture is complete.
     if !frontier.is_empty() {
-        for e in data::edges_touching(&mut conn, &frontier, Direction::Both, types, visible).await? {
+        let found =
+            data::edges_touching(&mut conn, &frontier, Direction::Both, types, visible, edge_budget as i64 + 1).await?;
+        for e in spend_edge_budget(found, &mut edge_budget, &mut truncated) {
             keep_edge(&e, &depth_of, &mut edges);
         }
     }
@@ -1389,5 +1413,84 @@ mod tests {
 
         one.close().await;
         db.drop().await;
+    }
+
+    /// GH#185: the edges read for a hub CI are capped at 5 × maxNodes over the
+    /// whole traversal, and hitting the cap marks the graph as truncated.
+    #[tokio::test]
+    async fn graph_caps_edges_read_for_a_hub() {
+        let Some(db) = scratch::database("graph_caps_edges_read_for_a_hub").await else { return };
+        crate::seed::install_template(&db.pool, "it_infrastructure").await.unwrap();
+        let new_server = |label: String| {
+            let pool = db.pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO configuration_items (class_id, label)
+                     VALUES ((SELECT id FROM ci_classes WHERE key = 'server'), $1) RETURNING id",
+                )
+                .bind(label)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let hub = new_server("hub".into()).await;
+        for i in 0..12 {
+            let leaf = new_server(format!("leaf-{i:02}")).await;
+            sqlx::query(
+                "INSERT INTO ci_relationships (relationship_type_id, source_ci_id, target_ci_id)
+                 VALUES ((SELECT id FROM relationship_types WHERE key = 'connected_to'), $1, $2)",
+            )
+            .bind(hub)
+            .bind(leaf)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        let ctx = user_ctx(false);
+        let q =
+            |max_nodes| GraphQuery { depth: 6, direction: GraphDirection::Both, relationship_type_id: None, max_nodes };
+
+        // The data layer never returns more rows than asked for.
+        let mut conn = db.pool.acquire().await.unwrap();
+        let rows = data::edges_touching(&mut conn, &[hub], Direction::Both, None, None, 5).await.unwrap();
+        assert_eq!(rows.len(), 5);
+        drop(conn);
+
+        // Budget 10 for 12 edges: cut off and flagged.
+        let g = graph(&db.pool, &ctx, hub, &q(2)).await.unwrap();
+        assert!(g.truncated);
+        assert!(g.nodes.len() <= 2 && g.edges.len() <= 10, "{} nodes, {} edges", g.nodes.len(), g.edges.len());
+
+        // Enough budget: the whole star, not flagged.
+        let g = graph(&db.pool, &ctx, hub, &q(13)).await.unwrap();
+        assert!(!g.truncated);
+        assert_eq!((g.nodes.len(), g.edges.len()), (13, 12));
+
+        db.drop().await;
+    }
+
+    #[test]
+    fn edge_budget_keeps_what_fits_and_flags_the_rest() {
+        let row = |_| data::EdgeRow {
+            id: Uuid::new_v4(),
+            relationship_type_id: Uuid::nil(),
+            source_ci_id: Uuid::nil(),
+            target_ci_id: Uuid::nil(),
+            notes: None,
+            type_key: String::new(),
+            type_name: String::new(),
+            forward_label: String::new(),
+            reverse_label: String::new(),
+            is_directional: false,
+        };
+        let (mut budget, mut truncated) = (3, false);
+        assert_eq!(spend_edge_budget((0..3).map(row).collect(), &mut budget, &mut truncated).len(), 3);
+        assert_eq!((budget, truncated), (0, false));
+        assert!(spend_edge_budget(Vec::new(), &mut budget, &mut truncated).is_empty());
+        assert!(!truncated);
+        let (mut budget, mut truncated) = (3, false);
+        assert_eq!(spend_edge_budget((0..4).map(row).collect(), &mut budget, &mut truncated).len(), 3);
+        assert_eq!((budget, truncated), (0, true));
     }
 }

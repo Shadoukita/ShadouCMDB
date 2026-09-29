@@ -3049,7 +3049,7 @@ export interface components {
                 depth: number;
             }[];
             edges: components["schemas"]["GraphEdge"][];
-            /** @description true when maxNodes stopped the expansion early */
+            /** @description true when maxNodes, or the edge budget of 5 × maxNodes, stopped the expansion early */
             truncated: boolean;
         };
         RelationshipList: {
