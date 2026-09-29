@@ -78,8 +78,9 @@ impl AppState {
 }
 
 /// Bounds the API requests in progress; each route takes a permit in
-/// `api::route` before it authorises the caller or reads the body, and a
-/// request that finds its pool empty is answered 503 SERVER_BUSY instead of
+/// `api::route` after it authorises the caller and before it reads the body,
+/// so a rejected request never holds capacity, and a request that finds its
+/// pool empty is answered 503 SERVER_BUSY instead of
 /// queueing. Public routes that take a body (setup, sign-in) draw from their
 /// own, smaller pool and must deliver the body within
 /// `HTTP_HEADER_READ_TIMEOUT_SECS`: anonymous slow senders can then only
