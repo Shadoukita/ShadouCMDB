@@ -17577,7 +17577,7 @@
           "Identity providers"
         ],
         "summary": "Check the saved settings against the provider (OIDC discovery and keys; LDAP TLS, bind and a user lookup)",
-        "description": "Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to. For OIDC, `details` also warns when the MFA check is unlikely to work: `verify` without `requiredAcr` while the discovery document's `claims_supported` omits `amr`, or a `requiredAcr` value missing from `acr_values_supported`.",
+        "description": "Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to. For OIDC, `details` also warns when the MFA check is unlikely to work: `verify` without `requiredAcr` while the discovery document's `claims_supported` omits `amr`, or a `requiredAcr` value missing from `acr_values_supported`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "testIdentityProvider",
         "parameters": [
           {
@@ -17703,9 +17703,6 @@
           {
             "csrfHeader": [],
             "sessionCookie": []
-          },
-          {
-            "apiToken": []
           }
         ]
       }

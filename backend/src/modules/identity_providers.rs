@@ -1271,6 +1271,7 @@ pub fn routes() -> Vec<Route> {
                 "{ADMIN_ONLY} Answers 200 with `ok: false` and the reason when the provider cannot be used; nothing is changed. When no answer came back over verified TLS (connection, TLS or StartTLS failed), the message is the same whatever the cause and the details go to the server log only. For a directory, `username` looks a user up with the service account (no password) and shows the groups and the profiles they map to. For OIDC, `details` also warns when the MFA check is unlikely to work: `verify` without `requiredAcr` while the discovery document's `claims_supported` omits `amr`, or a `requiredAcr` value missing from `acr_values_supported`."
             ))
             .requires(manage)
+            .session_only()
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<ConnectionTestInput>>| async move {
                 Ok(Json(test(&api.pool, &api.auth, &api.ctx, id, &b).await?))
