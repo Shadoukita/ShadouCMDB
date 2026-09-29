@@ -13,6 +13,7 @@ mod maintenance;
 mod modules;
 mod prune;
 mod schema;
+mod secrets;
 mod seed;
 mod service;
 mod verify;
@@ -84,6 +85,11 @@ enum Command {
     FactoryReset(maintenance::ConfirmArgs),
     /// Remove every ShadouCMDB table, row and setting from the database before retiring it.
     Decommission(maintenance::ConfirmArgs),
+    /// Create a new key for ENCRYPTION_KEY_FILE (offline; never overwrites a file).
+    GenerateEncryptionKey(secrets::cli::GenerateKeyArgs),
+    /// Two-factor authentication maintenance.
+    #[command(subcommand)]
+    Mfa(secrets::cli::MfaCommand),
     /// Print the OpenAPI document generated from the code, or compare it with a file.
     Openapi {
         /// Write the document to this file instead of stdout.
@@ -112,6 +118,8 @@ impl Command {
             Command::Restore(_) => "restore",
             Command::FactoryReset(_) => "factory-reset",
             Command::Decommission(_) => "decommission",
+            Command::GenerateEncryptionKey(_) => "generate-encryption-key",
+            Command::Mfa(_) => "mfa",
             Command::Openapi { .. } => "openapi",
             Command::Service(_) => "service",
         }
@@ -149,6 +157,11 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         return openapi(out.as_deref(), check.as_deref());
     }
 
+    // Nor does making a key, which works offline.
+    if let Command::GenerateEncryptionKey(args) = cli.command {
+        return secrets::cli::generate_key(args);
+    }
+
     // Installing or removing a service needs neither configuration nor a logger.
     if let Command::Service(
         cmd @ (service::ServiceCommand::Install { .. } | service::ServiceCommand::Uninstall { .. }),
@@ -167,8 +180,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             runtime()?.block_on(http::serve(cfg, http::shutdown_signal()))
         }
         Command::Migrate { adopt_drizzle } => {
-            let db = Config::from_env()?.schema_owner_database()?;
-            runtime()?.block_on(db::migrate(&db, adopt_drizzle))
+            let cfg = Config::from_env()?;
+            let encryption = cfg.encryption.clone();
+            let db = cfg.schema_owner_database()?;
+            runtime()?.block_on(db::migrate(&db, &encryption, adopt_drizzle))
         }
         Command::Seed { templates, demo } => {
             let cfg = Config::from_env()?;
@@ -176,7 +191,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Command::Verify => {
             let cfg = Config::from_env()?;
-            runtime()?.block_on(verify::run(&cfg.database))
+            runtime()?.block_on(verify::run(&cfg.database, &cfg.encryption))
         }
         Command::AuditVerify { allow_gaps } => {
             let cfg = Config::from_env()?;
@@ -197,8 +212,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         // These rebuild or drop the schema: like `migrate`, they connect as the
         // schema owner when MIGRATION_DATABASE_URL is set.
         Command::Restore(args) => {
-            let db = Config::from_env()?.schema_owner_database()?;
-            runtime()?.block_on(maintenance::restore::run(&db, args))
+            let cfg = Config::from_env()?;
+            let encryption = cfg.encryption.clone();
+            let db = cfg.schema_owner_database()?;
+            runtime()?.block_on(maintenance::restore::run(&db, &encryption, args))
         }
         Command::FactoryReset(args) => {
             let db = Config::from_env()?.schema_owner_database()?;
@@ -208,8 +225,12 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             let db = Config::from_env()?.schema_owner_database()?;
             runtime()?.block_on(maintenance::reset::decommission_cmd(&db, args))
         }
+        Command::Mfa(cmd) => {
+            let cfg = Config::from_env()?;
+            runtime()?.block_on(secrets::cli::mfa(&cfg, cmd))
+        }
         Command::Service(cmd) => service::run(cmd, launch),
-        Command::Openapi { .. } => unreachable!("handled above"),
+        Command::Openapi { .. } | Command::GenerateEncryptionKey(_) => unreachable!("handled above"),
     }
 }
 

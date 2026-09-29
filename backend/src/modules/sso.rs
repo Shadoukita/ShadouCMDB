@@ -855,15 +855,18 @@ mod tests {
     }
 
     fn auth_state() -> AuthState {
-        AuthState::new(AuthConfig {
-            session_idle: std::time::Duration::from_secs(3600),
-            session_max_age: std::time::Duration::from_secs(3600),
-            cookie_secure: CookieSecure::Never,
-            public_url: Some(PUBLIC_URL.into()),
-            oidc_allowed_hosts: None,
-            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
-            setup_token_file: None,
-        })
+        AuthState::new(
+            AuthConfig {
+                session_idle: std::time::Duration::from_secs(3600),
+                session_max_age: std::time::Duration::from_secs(3600),
+                cookie_secure: CookieSecure::Never,
+                public_url: Some(PUBLIC_URL.into()),
+                oidc_allowed_hosts: None,
+                setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+                setup_token_file: None,
+            },
+            crate::secrets::Keyring::for_tests(),
+        )
     }
 
     async fn add_provider(pool: &PgPool, issuer: &str) -> Uuid {

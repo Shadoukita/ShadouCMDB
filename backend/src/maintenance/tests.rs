@@ -72,6 +72,17 @@ async fn populate(pool: &sqlx::PgPool) {
     .execute(pool)
     .await
     .unwrap();
+    // An authenticator: encrypted (GH#189), restored as the same bytes.
+    let admin: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE username = 'admin'").fetch_one(pool).await.unwrap();
+    let sealed = crate::secrets::sealed::seal_totp_secret(&crate::secrets::Keyring::for_tests(), admin, &[9u8; 20]);
+    sqlx::query("INSERT INTO user_totp (user_id, secret, key_id, confirmed_at) VALUES ($1, $2, $3, now())")
+        .bind(admin)
+        .bind(&sealed.bytes)
+        .bind(sealed.key_id.0)
+        .execute(pool)
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO ui_assets (kind, content_type, data, sha256)
          VALUES ('favicon', 'image/x-icon', '\\x00ff0a0d22'::bytea, encode(sha256('\\x00ff0a0d22'::bytea), 'hex'))",
@@ -128,6 +139,19 @@ async fn a_backup_restores_into_another_database_value_for_value() {
         ["cmdb.mfa_challenges", "cmdb.server_keys", "cmdb.sessions"].map(str::to_owned).to_vec()
     );
     assert!(!header.tables.iter().any(|t| EXCLUDED_TABLES.contains(&t.name.as_str())));
+    // The key ids in use are listed (the key itself is not in the file), and a
+    // restore where another key is configured warns.
+    let key = crate::secrets::Keyring::for_tests().active_id();
+    assert_eq!(
+        header.encryption_keys,
+        vec![archive::EncryptionKeyEntry { key_id: key.to_string(), table: "user_totp".into(), rows: 1 }]
+    );
+    let none = crate::config::EncryptionConfig::default();
+    let warning = restore::key_warning(&header, &none).unwrap();
+    assert!(
+        warning.starts_with(&format!("This backup holds 1 authenticator secret encrypted with key {key}.")),
+        "{warning}"
+    );
     // The system tables, then the type tables of the area.
     assert!(header.tables.iter().any(|t| t.schema == "cmdb" && t.name == "schema_changes" && t.rows > 0));
     let server = header.tables.iter().find(|t| t.schema == "infrastruktur" && t.name == "server").unwrap();

@@ -502,17 +502,23 @@ async fn login_mfa(
     let Some(challenge) = mfa_data::take_challenge(&mut tx, &hash).await? else { return Err(sign_in_expired()) };
     let (user_id, username) = (challenge.user_id, challenge.username.as_str());
     let as_user = ctx.acting_as_user(user_id, username);
-    let Some(method) = mfa::verify_second_factor(&mut tx, user_id, &b.code).await? else {
-        mfa_data::challenge_failed(&mut tx, challenge.id, MFA_CHALLENGE_ATTEMPTS).await?;
-        let locked = attempt.failure();
-        tracing::warn!(user = %username, ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in: wrong second factor");
-        let extra = serde_json::json!({ "stage": "login" });
-        events::mfa(&mut tx, ctx, AuditAction::MfaFailure, user_id, username, extra).await?;
-        if let Some(lock) = locked {
-            events::login_locked(&mut tx, ctx, Uuid::new_v4(), username, lock).await?;
+    let method = match mfa::verify_second_factor(&mut tx, &auth.keyring, user_id, &b.code).await? {
+        mfa::Verdict::Accepted(method) => method,
+        refused => {
+            mfa_data::challenge_failed(&mut tx, challenge.id, MFA_CHALLENGE_ATTEMPTS).await?;
+            let locked = attempt.failure();
+            tracing::warn!(user = %username, ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in: wrong second factor");
+            let mut extra = serde_json::json!({ "stage": "login" });
+            if let Some(reason) = refused.failure_reason() {
+                extra["reason"] = reason.into();
+            }
+            events::mfa(&mut tx, ctx, AuditAction::MfaFailure, user_id, username, extra).await?;
+            if let Some(lock) = locked {
+                events::login_locked(&mut tx, ctx, Uuid::new_v4(), username, lock).await?;
+            }
+            tx.commit().await?;
+            return Err(AppError::new(ErrorCode::Unauthenticated, "The code is wrong or was already used"));
         }
-        tx.commit().await?;
-        return Err(AppError::new(ErrorCode::Unauthenticated, "The code is wrong or was already used"));
     };
     mfa_data::delete_challenge(&mut tx, challenge.id).await?;
     if matches!(method, LoginMethod::RecoveryCode) {
@@ -766,15 +772,18 @@ mod tests {
     use crate::db::scratch;
 
     fn auth_state() -> AuthState {
-        AuthState::new(AuthConfig {
-            session_idle: Duration::from_secs(3600),
-            session_max_age: Duration::from_secs(3600),
-            cookie_secure: CookieSecure::Never,
-            public_url: None,
-            oidc_allowed_hosts: None,
-            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
-            setup_token_file: None,
-        })
+        AuthState::new(
+            AuthConfig {
+                session_idle: Duration::from_secs(3600),
+                session_max_age: Duration::from_secs(3600),
+                cookie_secure: CookieSecure::Never,
+                public_url: None,
+                oidc_allowed_hosts: None,
+                setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+                setup_token_file: None,
+            },
+            crate::secrets::Keyring::for_tests(),
+        )
     }
 
     fn anon() -> RequestContext {
@@ -826,11 +835,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shadoucmdb-setup-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("setup-token");
-        let auth = AuthState::new(AuthConfig {
-            setup_token: None,
-            setup_token_file: Some(file.clone()),
-            ..auth_state().config
-        });
+        let auth = AuthState::new(
+            AuthConfig { setup_token: None, setup_token_file: Some(file.clone()), ..auth_state().config },
+            crate::secrets::Keyring::for_tests(),
+        );
         let (pool, headers) = (&db.pool, HeaderMap::new());
         let with = |token: &str| SetupBody { setup_token: token.into(), ..body("owner") };
 
@@ -1235,7 +1243,12 @@ mod tests {
         };
         let dirk = crate::data::identity_providers::insert_linked(&mut tx, &linked("dirk")).await.unwrap();
         let dora = crate::data::identity_providers::insert_linked(&mut tx, &linked("dora")).await.unwrap();
-        mfa_data::put_pending_totp(&mut tx, dirk, &crate::auth::totp::new_secret()).await.unwrap();
+        let sealed = crate::secrets::sealed::seal_totp_secret(
+            &crate::secrets::Keyring::for_tests(),
+            dirk,
+            &crate::auth::totp::new_secret(),
+        );
+        mfa_data::put_pending_totp(&mut tx, dirk, &sealed).await.unwrap();
         mfa_data::confirm_totp(&mut tx, dirk, 1).await.unwrap();
         tx.commit().await.unwrap();
         let sessions = |id: Uuid| {

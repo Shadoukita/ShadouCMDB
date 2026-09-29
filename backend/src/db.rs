@@ -206,9 +206,18 @@ fn label(m: &sqlx::migrate::Migration) -> String {
     format!("{:04}_{}", m.version, m.description.replace(' ', "_"))
 }
 
-pub async fn migrate(cfg: &DatabaseConfig, adopt_drizzle: bool) -> anyhow::Result<()> {
+pub async fn migrate(
+    cfg: &DatabaseConfig,
+    encryption: &crate::config::EncryptionConfig,
+    adopt_drizzle: bool,
+) -> anyhow::Result<()> {
     let pool = connect(cfg).await?;
-    let result = migrate_with(&pool, cfg, adopt_drizzle).await;
+    let mut result = migrate_with(&pool, cfg, adopt_drizzle).await;
+    if result.is_ok() {
+        // A missing or wrong ENCRYPTION_KEY_FILE shows here, before `serve` refuses to start.
+        println!();
+        result = async { crate::secrets::cli::report(&mut *pool.acquire().await?, encryption).await.map(|_| ()) }.await;
+    }
     pool.close().await;
     result
 }

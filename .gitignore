@@ -4,6 +4,8 @@ target/
 .env
 .env.*
 !.env.example
+# The encryption key (ENCRYPTION_KEY_FILE) never goes into the repository or an image.
+encryption*.key
 *.log
 .DS_Store
 coverage/

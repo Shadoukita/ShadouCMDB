@@ -6,36 +6,45 @@ use std::time::Duration;
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
+use crate::secrets::Sealed;
+
 // ---------------------------------------------------------------------------
 // Authenticator
 // ---------------------------------------------------------------------------
 
 pub struct Totp {
+    /// Sealed with the keyring (see [`crate::secrets::sealed::open_totp_secret`]).
     pub secret: Vec<u8>,
+    /// The key that sealed `secret`; NULL for a seed stored before encryption.
+    pub key_id: Option<i32>,
     pub confirmed: bool,
     pub last_used_step: Option<i64>,
 }
 
+/// secret, key_id, confirmed, last_used_step
+type TotpRow = (Vec<u8>, Option<i32>, bool, Option<i64>);
+
 pub async fn get_totp(conn: &mut PgConnection, user_id: Uuid, for_update: bool) -> sqlx::Result<Option<Totp>> {
     let lock = if for_update { " FOR UPDATE" } else { "" };
-    let row: Option<(Vec<u8>, bool, Option<i64>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT secret, confirmed_at IS NOT NULL, last_used_step FROM user_totp WHERE user_id = $1{lock}"
+    let row: Option<TotpRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT secret, key_id, confirmed_at IS NOT NULL, last_used_step FROM user_totp WHERE user_id = $1{lock}"
     )))
     .bind(user_id)
     .fetch_optional(conn)
     .await?;
-    Ok(row.map(|(secret, confirmed, last_used_step)| Totp { secret, confirmed, last_used_step }))
+    Ok(row.map(|(secret, key_id, confirmed, last_used_step)| Totp { secret, key_id, confirmed, last_used_step }))
 }
 
-/// Starts (or restarts) an enrolment: a new, unconfirmed secret.
-pub async fn put_pending_totp(conn: &mut PgConnection, user_id: Uuid, secret: &[u8]) -> sqlx::Result<()> {
+/// Starts (or restarts) an enrolment: a new, unconfirmed secret, already sealed.
+pub async fn put_pending_totp(conn: &mut PgConnection, user_id: Uuid, secret: &Sealed) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO user_totp (user_id, secret) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET secret = EXCLUDED.secret, confirmed_at = NULL,
-           last_used_step = NULL, created_at = now()",
+        "INSERT INTO user_totp (user_id, secret, key_id) VALUES ($1, $2, $3)
+         ON CONFLICT (user_id) DO UPDATE SET secret = EXCLUDED.secret, key_id = EXCLUDED.key_id,
+           confirmed_at = NULL, last_used_step = NULL, created_at = now()",
     )
     .bind(user_id)
-    .bind(secret)
+    .bind(&secret.bytes)
+    .bind(secret.key_id.0)
     .execute(conn)
     .await?;
     Ok(())

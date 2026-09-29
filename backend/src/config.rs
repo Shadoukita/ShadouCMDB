@@ -170,6 +170,17 @@ impl Default for AuditConfig {
     }
 }
 
+/// The key that encrypts secrets the server reads back (TOTP seeds), kept
+/// outside the database; see [`crate::secrets`]. Only paths here: the files
+/// are read by the commands that need the key.
+#[derive(Debug, Clone, Default)]
+pub struct EncryptionConfig {
+    /// `ENCRYPTION_KEY_FILE`: required by `serve`.
+    pub key_file: Option<PathBuf>,
+    /// `ENCRYPTION_KEY_PREVIOUS_FILE`: set only while rotating to a new key.
+    pub previous_key_file: Option<PathBuf>,
+}
+
 const DEFAULT_SESSION_IDLE_MINUTES: u64 = 12 * 60;
 const DEFAULT_SESSION_MAX_AGE_HOURS: u64 = 7 * 24;
 
@@ -191,6 +202,7 @@ pub struct Config {
     pub maintenance_url: Option<String>,
     pub auth: AuthConfig,
     pub audit: AuditConfig,
+    pub encryption: EncryptionConfig,
 }
 
 /// The env file the variables were read from (`--env-file`, or the `.env` found).
@@ -254,6 +266,7 @@ impl std::fmt::Debug for Config {
             maintenance_url,
             auth,
             audit,
+            encryption,
         } = self;
         f.debug_struct("Config")
             .field("api_host", api_host)
@@ -267,6 +280,7 @@ impl std::fmt::Debug for Config {
             .field("maintenance_url", &redacted(maintenance_url))
             .field("auth", auth)
             .field("audit", audit)
+            .field("encryption", encryption)
             .finish()
     }
 }
@@ -576,6 +590,11 @@ impl Config {
         });
         let setup_token_file = r.raw("SETUP_TOKEN_FILE").map(PathBuf::from);
 
+        let encryption = EncryptionConfig {
+            key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
+            previous_key_file: r.raw("ENCRYPTION_KEY_PREVIOUS_FILE").map(PathBuf::from),
+        };
+
         if !r.errors.is_empty() {
             let detail: Vec<String> = r.errors.iter().map(|e| format!("  - {e}")).collect();
             anyhow::bail!(
@@ -621,6 +640,7 @@ impl Config {
                 setup_token_file,
             },
             audit: AuditConfig { capture_client_ip, capture_user_agent, export },
+            encryption,
         })
     }
 }

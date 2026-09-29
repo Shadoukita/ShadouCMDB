@@ -51,19 +51,45 @@ pub struct AppState {
     pub capture: ClientCapture,
     /// Whether every migration of this build is applied (see `schema_gate`).
     pub schema: Arc<db::SchemaState>,
+    /// Whether the start-up step for encrypted secrets ran (see `schema_gate`).
+    pub sealed: Arc<SealedState>,
     /// Requests the API handles at once (`HTTP_MAX_CONCURRENT_REQUESTS`).
     pub capacity: Capacity,
 }
 
+/// The start-up step for encrypted secrets ([`crate::secrets::sealed::prepare`]):
+/// once the schema is current and before any API request is handled. `serve`
+/// runs it before it listens; when the database was unreachable or not
+/// migrated then, the first API request after that runs it.
+#[derive(Default)]
+pub struct SealedState {
+    done: tokio::sync::OnceCell<()>,
+    /// Rows under a key that is not configured: `serve` stops with this message.
+    refused: std::sync::Mutex<Option<String>>,
+    stop: tokio::sync::Notify,
+}
+
 impl AppState {
-    pub fn new(pool: PgPool, auth: AuthConfig) -> Self {
+    pub fn new(pool: PgPool, auth: AuthConfig, keyring: Arc<crate::secrets::Keyring>) -> Self {
         AppState {
             pool,
-            auth: Arc::new(AuthState::new(auth)),
+            auth: Arc::new(AuthState::new(auth, keyring)),
             capture: ClientCapture { ip: true, user_agent: true },
             schema: Arc::default(),
+            sealed: Arc::default(),
             capacity: Capacity::new(512, Duration::from_secs(10)),
         }
+    }
+
+    /// Runs [`crate::secrets::sealed::prepare`] once; later calls return at once.
+    async fn prepare_sealed(&self) -> Result<(), crate::secrets::sealed::PrepareError> {
+        self.sealed
+            .done
+            .get_or_try_init(|| async {
+                crate::secrets::sealed::prepare(&self.pool, &self.auth.keyring).await.map(|_| ())
+            })
+            .await
+            .map(|_| ())
     }
 
     pub fn capturing(mut self, audit: &AuditConfig) -> Self {
@@ -152,6 +178,26 @@ async fn schema_gate(
             Ok(db::SchemaCheck::Pending { applied, expected }) => {
                 let message = not_migrated(applied, expected);
                 return AppError::new(error::ErrorCode::SchemaNotMigrated, message).into_response();
+            }
+            Ok(db::SchemaCheck::Current) => {
+                use crate::secrets::sealed::PrepareError;
+                match state.prepare_sealed().await {
+                    Ok(()) => {}
+                    Err(PrepareError::Refused(message)) => {
+                        // As at start-up: the server does not run with secrets it cannot read.
+                        tracing::error!("{message}");
+                        state.sealed.refused.lock().expect("not poisoned").get_or_insert(message);
+                        state.sealed.stop.notify_one();
+                        return AppError::internal().into_response();
+                    }
+                    Err(PrepareError::Database(err)) if api::pg_error::is_connection_error(&err) => {
+                        return AppError::from(err).into_response();
+                    }
+                    // Retried on the next request; rows not encrypted yet still open.
+                    Err(PrepareError::Database(err)) => {
+                        tracing::warn!(error = %err, "cannot encrypt the stored authenticator secrets yet")
+                    }
+                }
             }
             Err(err) if api::pg_error::is_connection_error(&err) => return AppError::from(err).into_response(),
             _ => {}
@@ -442,8 +488,24 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
 /// Runs the server until `shutdown` resolves, then drains in-flight requests
 /// and closes the pool.
 pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
+    // No key, no server: checked before anything else, with no database needed.
+    let keyring = Arc::new(crate::secrets::Keyring::load(&cfg.encryption)?);
     let pool = db::lazy_pool(&cfg.database)?;
-    let state = AppState::new(pool.clone(), cfg.auth.clone()).capturing(&cfg.audit).limited(&cfg.http);
+    let state = AppState::new(pool.clone(), cfg.auth.clone(), keyring).capturing(&cfg.audit).limited(&cfg.http);
+    // Before listening: rows under a key that is not configured stop the server
+    // here, and rows not encrypted yet are encrypted. An unreachable or
+    // unmigrated database defers this to the first API request (`schema_gate`).
+    if let Ok(db::SchemaCheck::Current) = state.schema.check(&pool).await {
+        use crate::secrets::sealed::PrepareError;
+        match state.prepare_sealed().await {
+            Ok(()) => {}
+            Err(PrepareError::Refused(message)) => anyhow::bail!(message),
+            Err(PrepareError::Database(err)) => tracing::warn!(
+                error = %err,
+                "cannot encrypt the stored authenticator secrets yet; retried on the first API request"
+            ),
+        }
+    }
     let app = router(state.clone(), &cfg);
     let exporter = cfg.audit.export.clone().map(|export| crate::audit_export::spawn(pool.clone(), export));
 
@@ -459,15 +521,28 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         api_docs = cfg.api_docs.as_str(),
         "server listening"
     );
-    tokio::spawn(log_schema_state(state));
+    tokio::spawn(log_schema_state(state.clone()));
 
-    accept_loop(listener, app, &cfg.http, shutdown).await;
+    let sealed = state.sealed.clone();
+    let stop = {
+        let sealed = sealed.clone();
+        async move {
+            tokio::select! {
+                () = shutdown => {}
+                () = sealed.stop.notified() => {}
+            }
+        }
+    };
+    accept_loop(listener, app, &cfg.http, stop).await;
     if let Some(exporter) = exporter {
         exporter.stop().await;
     }
     tracing::info!("draining complete, closing database pool");
     // Do not let a wedged connection hold up process exit.
     let _ = tokio::time::timeout(Duration::from_secs(5), pool.close()).await;
+    if let Some(message) = sealed.refused.lock().expect("not poisoned").take() {
+        anyhow::bail!(message);
+    }
     tracing::info!("server stopped");
     Ok(())
 }
@@ -632,9 +707,10 @@ mod tests {
             maintenance_url: None,
             auth: auth.clone(),
             audit: AuditConfig::default(),
+            encryption: Default::default(),
         };
         configure(&mut cfg);
-        router(AppState::new(pool, auth), &cfg)
+        router(AppState::new(pool, auth, crate::secrets::Keyring::for_tests()), &cfg)
     }
 
     /// GH#43: `serve` before `migrate` answered every API call with 500 INTERNAL_ERROR.

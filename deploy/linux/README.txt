@@ -58,6 +58,11 @@ Install as a systemd service
   sudo install -d -m 0750 -o root -g shadoucmdb /etc/shadoucmdb
   sudo install -m 0640 -o root -g shadoucmdb shadoucmdb.env.example /etc/shadoucmdb/shadoucmdb.env
   sudoedit /etc/shadoucmdb/shadoucmdb.env     # DATABASE_URL, or PGHOST/PGUSER/PGPASSWORD/..., as shadoucmdb_app
+  # The key that encrypts the authenticator secrets: readable by the service's
+  # group only. Set ENCRYPTION_KEY_FILE=/etc/shadoucmdb/encryption.key in the
+  # env file, and store a copy apart from the database backups (password vault):
+  sudo shadoucmdb generate-encryption-key --out /etc/shadoucmdb/encryption.key
+  sudo chown root:shadoucmdb /etc/shadoucmdb/encryption.key && sudo chmod 0640 /etc/shadoucmdb/encryption.key
   # Migrate as the owner. The password is prompted for, so it stays out of the
   # env file, shell history, the sudo log and `ps`; the variable wins over the
   # env file:
@@ -89,6 +94,14 @@ order given in the header of sql/bootstrap/10_split_roles.sql:
        sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
   2. stop the server and run 10_split_roles.sql as a PostgreSQL admin;
   3. start the server. From then on, migrate as shown below.
+
+Upgrading from a release without ENCRYPTION_KEY_FILE: the server no longer
+starts without it. Create the key once, before the restart below, as under
+"Install as a systemd service" (generate-encryption-key, chown, chmod, the
+env file line, a copy in your password vault). At its first start the server
+encrypts the existing authenticator secrets; nobody has to set up two-factor
+sign-in again. Going back to the previous release afterwards needs a restore of
+a backup taken before the upgrade.
 
   sudo install -m 0755 shadoucmdb /usr/local/bin/shadoucmdb
   read -rsp 'shadoucmdb_owner password: ' PW; echo

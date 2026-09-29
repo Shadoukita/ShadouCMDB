@@ -44,6 +44,20 @@ pub struct Header {
     pub sequences: Vec<SequenceEntry>,
     /// Tables deliberately left out (their rows are not worth restoring, e.g. cmdb.sessions).
     pub excluded_tables: Vec<String>,
+    /// Encrypted rows per table and key (GH#189). The key itself is never in
+    /// a backup: `restore` warns when the configured key does not cover these.
+    /// Absent from backups written before encryption.
+    #[serde(default)]
+    pub encryption_keys: Vec<EncryptionKeyEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncryptionKeyEntry {
+    /// The key id, 8 hex digits (not secret).
+    pub key_id: String,
+    /// System table (`cmdb` schema), e.g. `user_totp`.
+    pub table: String,
+    pub rows: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +203,7 @@ impl<R: Read> Reader<R> {
                 tables: vec![],
                 sequences: vec![],
                 excluded_tables: vec![],
+                encryption_keys: vec![],
             },
         };
         let first = r.read_line(true)?;
@@ -324,6 +339,7 @@ mod tests {
             ],
             sequences: vec![],
             excluded_tables: vec!["cmdb.sessions".into()],
+            encryption_keys: vec![],
         }
     }
 

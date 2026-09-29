@@ -697,7 +697,7 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
     }
 }
 
-pub async fn run(cfg: &DatabaseConfig) -> anyhow::Result<()> {
+pub async fn run(cfg: &DatabaseConfig, encryption: &crate::config::EncryptionConfig) -> anyhow::Result<()> {
     // The checks and the token notice read the current schema: on an older one
     // they would fail with raw SQL errors.
     let pool = crate::db::connect(cfg).await?;
@@ -709,6 +709,8 @@ pub async fn run(cfg: &DatabaseConfig) -> anyhow::Result<()> {
     let mut conn = PgConnection::connect_with(&crate::db::connect_options(cfg)?)
         .await
         .context("could not connect to PostgreSQL")?;
+    crate::secrets::cli::report(&mut conn, encryption).await?;
+    println!();
     if let Some(notice) = crate::data::api_tokens::second_factor_refusal_notice(&mut conn).await? {
         println!("Warning: {notice}\n");
     }

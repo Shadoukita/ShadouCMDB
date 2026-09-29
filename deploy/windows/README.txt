@@ -66,6 +66,13 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
   # settings and write its log, and keep the env file away from other users.
   icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'NT AUTHORITY\LocalService:(OI)(CI)M'
 
+  # The key that encrypts the authenticator secrets: read-only for the service,
+  # outside the Modify grant above. Add ENCRYPTION_KEY_FILE='C:\ProgramData\ShadouCMDB\encryption.key'
+  # to the env file, in single quotes (unquoted, the backslashes are read as escapes and the
+  # service does not start), and store a copy apart from the database backups (password vault):
+  & "$bin\shadoucmdb.exe" generate-encryption-key --out "$data\encryption.key"
+  icacls "$data\encryption.key" /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' 'NT AUTHORITY\LocalService:R'
+
   # Migrate as the owner. The password is prompted for, so it stays out of the
   # env file and the PowerShell history; the variable is set for this session
   # only and wins over the env file:
@@ -104,6 +111,14 @@ order given in the header of sql\bootstrap\10_split_roles.sql:
        & 'C:\Program Files\ShadouCMDB\shadoucmdb.exe' --env-file 'C:\ProgramData\ShadouCMDB\shadoucmdb.env' migrate
   2. run 10_split_roles.sql as a PostgreSQL admin;
   3. start the service. From then on, migrate as shown below.
+
+Upgrading from a release without ENCRYPTION_KEY_FILE: the service no longer
+starts without it. Create the key once, before Start-Service below, as under
+the install steps (generate-encryption-key, icacls, the env file line, a copy
+in your password vault). At its first start the service encrypts the existing
+authenticator secrets; nobody has to set up two-factor sign-in again. Going
+back to the previous release afterwards needs a restore of a backup taken
+before the upgrade.
 
   Stop-Service ShadouCMDB
   Copy-Item .\shadoucmdb.exe 'C:\Program Files\ShadouCMDB' -Force

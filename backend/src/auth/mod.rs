@@ -21,6 +21,7 @@ pub mod throttle;
 pub mod token;
 pub mod totp;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::http::HeaderMap;
@@ -88,12 +89,14 @@ pub struct AuthState {
     oidc_state_key: tokio::sync::OnceCell<sso::login_state::SealingKey>,
     /// Set once the "session cookie without Secure under auto" warning has been logged.
     insecure_cookie_warned: AtomicBool,
+    /// Encrypts and decrypts the TOTP seeds (`ENCRYPTION_KEY_FILE`).
+    pub keyring: Arc<crate::secrets::Keyring>,
     /// The one-time token `POST /api/v1/setup` requires.
     pub setup: setup_token::SetupGate,
 }
 
 impl AuthState {
-    pub fn new(config: AuthConfig) -> Self {
+    pub fn new(config: AuthConfig, keyring: Arc<crate::secrets::Keyring>) -> Self {
         AuthState {
             oidc: sso::oidc::Cache::new(config.oidc_allowed_hosts.clone()),
             setup: setup_token::SetupGate::new(config.setup_token.clone(), config.setup_token_file.clone()),
@@ -102,6 +105,7 @@ impl AuthState {
             password_throttle: LoginThrottle::per_key(),
             oidc_state_key: tokio::sync::OnceCell::new(),
             insecure_cookie_warned: AtomicBool::new(false),
+            keyring,
         }
     }
 
@@ -199,15 +203,18 @@ mod tests {
     use std::time::Duration;
 
     fn state(cookie_secure: CookieSecure) -> AuthState {
-        AuthState::new(AuthConfig {
-            session_idle: Duration::from_secs(60),
-            session_max_age: Duration::from_secs(3600),
-            cookie_secure,
-            public_url: None,
-            oidc_allowed_hosts: None,
-            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
-            setup_token_file: None,
-        })
+        AuthState::new(
+            AuthConfig {
+                session_idle: Duration::from_secs(60),
+                session_max_age: Duration::from_secs(3600),
+                cookie_secure,
+                public_url: None,
+                oidc_allowed_hosts: None,
+                setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+                setup_token_file: None,
+            },
+            crate::secrets::Keyring::for_tests(),
+        )
     }
 
     #[test]

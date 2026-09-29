@@ -239,7 +239,8 @@ jobs:
           $B --version
           $B migrate
           $B seed --demo
-          API_HOST=127.0.0.1 API_PORT=3000 .github/scripts/smoke.sh 3000 $B serve
+          $B generate-encryption-key --out "$RUNNER_TEMP/encryption.key"
+          ENCRYPTION_KEY_FILE="$RUNNER_TEMP/encryption.key" API_HOST=127.0.0.1 API_PORT=3000 .github/scripts/smoke.sh 3000 $B serve
 
       - name: Package
         run: |
@@ -315,6 +316,8 @@ jobs:
           & $exe --version
           & $exe migrate; if ($LASTEXITCODE) { throw 'migrate failed' }
           & $exe seed --demo; if ($LASTEXITCODE) { throw 'seed failed' }
+          & $exe generate-encryption-key --out "$env:RUNNER_TEMP\encryption.key"; if ($LASTEXITCODE) { throw 'generate-encryption-key failed' }
+          $env:ENCRYPTION_KEY_FILE = "$env:RUNNER_TEMP\encryption.key"
           $env:API_HOST = '127.0.0.1'; $env:API_PORT = '3000'
           $p = Start-Process -FilePath $exe -ArgumentList serve -PassThru -NoNewWindow -RedirectStandardOutput serve.log
           try {
@@ -391,11 +394,15 @@ jobs:
       - name: Test each platform's image against PostgreSQL
         run: |
           E="-e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e DATABASE_SSL"
+          # docs/deployment.md: the key as a mounted file owned by the image's nonroot user (65532).
+          K_FILE="$RUNNER_TEMP/encryption.key"
+          openssl rand -base64 32 > "$K_FILE" && chmod 600 "$K_FILE" && sudo chown 65532:65532 "$K_FILE"
+          K="-v $K_FILE:/run/secrets/encryption_key:ro -e ENCRYPTION_KEY_FILE=/run/secrets/encryption_key"
           for arch in amd64 arm64; do
             docker buildx build --load --platform linux/$arch -f deploy/docker/Dockerfile.release -t shadoucmdb:$arch dist/docker
             docker image inspect shadoucmdb:$arch --format "$arch: os/arch={{.Os}}/{{.Architecture}} user={{.Config.User}} size={{.Size}}"
             docker run --rm --network host $E shadoucmdb:$arch migrate
-            .github/scripts/smoke.sh 3000 docker run --rm --init --network host $E shadoucmdb:$arch
+            .github/scripts/smoke.sh 3000 docker run --rm --init --network host $E $K shadoucmdb:$arch
           done
 
       - if: needs.meta.outputs.publish == 'true'
