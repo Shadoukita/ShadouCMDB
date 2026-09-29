@@ -860,6 +860,7 @@ mod tests {
             session_max_age: std::time::Duration::from_secs(3600),
             cookie_secure: CookieSecure::Never,
             public_url: Some(PUBLIC_URL.into()),
+            oidc_allowed_hosts: None,
         })
     }
 

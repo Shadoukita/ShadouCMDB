@@ -142,7 +142,7 @@ pub struct Session {
     pub permissions: EffectivePermissions,
     pub mfa: MfaStatus,
     /// Send as the X-CSRF-Token header on every POST, PUT, PATCH and DELETE
-    /// (also readable from the shadoucmdb_csrf cookie)
+    /// (also readable from the shadoucmdb_csrf cookie, `__Host-shadoucmdb_csrf` behind HTTPS)
     pub csrf_token: String,
 }
 
@@ -173,7 +173,7 @@ pub(crate) async fn open_session(
     let csrf = session::new_token();
     let mut tx = pool.begin().await?;
     // A cookie from an earlier session in this browser is replaced, not kept alive.
-    if let Some(old) = session::cookie(headers, session::SESSION_COOKIE)
+    if let Some((old, _)) = session::session_token(headers)
         && let Some(ended) = data::delete_session_by_token(&mut tx, &session::token_hash(old)).await?
     {
         events::revoked(&mut tx, &ctx, &[ended], RevokeReason::Replaced).await?;
@@ -205,7 +205,10 @@ async fn start_session(
     method: LoginMethod,
 ) -> Result<WithCookies<Json<Session>>, AppError> {
     let (session_id, cookies) = open_session(pool, auth, headers, ctx, user_id, username, method).await?;
-    let csrf = session::cookie_value(&cookies[1], session::CSRF_COOKIE).unwrap_or_default();
+    let csrf = [session::HOST_CSRF_COOKIE, session::CSRF_COOKIE]
+        .into_iter()
+        .find_map(|name| session::cookie_value(&cookies[1], name))
+        .unwrap_or_default();
     Ok(WithCookies(Json(session_dto(pool, user_id, session_id, csrf).await?), cookies))
 }
 
@@ -662,7 +665,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Sign in with username and password")
             .description(
-                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the client address the reverse proxy reports), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
+                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the client address the reverse proxy reports), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
             )
             .public()
             .errors(&[ErrorCode::MfaRequired, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
@@ -732,6 +735,7 @@ mod tests {
             session_max_age: Duration::from_secs(3600),
             cookie_secure: CookieSecure::Never,
             public_url: None,
+            oidc_allowed_hosts: None,
         })
     }
 
@@ -1217,6 +1221,115 @@ mod tests {
             );
         }
         assert!(success[0].3.get("peerIpAddress").is_none(), "no peerIpAddress when it equals ipAddress");
+        db.drop().await;
+    }
+
+    /// Over HTTPS the session lives in `__Host-` cookies (GH-192): a planted
+    /// plain-named cookie never wins, sessions from before move over, and the
+    /// CSRF header must match the session that was actually used.
+    #[tokio::test]
+    async fn host_prefixed_cookies_over_https() {
+        use axum::body::Body as HttpBody;
+        use axum::http::{Request, header};
+        use serde_json::{Value, json};
+        use tower::ServiceExt;
+
+        let Some(db) = scratch::database("host_prefixed_cookies_over_https").await else { return };
+        let app = crate::modules::api_tokens::tests::app_with(db.pool.clone(), CookieSecure::Auto);
+        let send = |method: &str,
+                    path: &str,
+                    https: bool,
+                    cookie: Option<&str>,
+                    csrf: Option<&str>,
+                    body: Option<Value>| {
+            let mut req = Request::builder().method(method).uri(path);
+            if https {
+                req = req.header("x-forwarded-proto", "https");
+            }
+            if let Some(c) = cookie {
+                req = req.header(header::COOKIE, c);
+            }
+            if let Some(c) = csrf {
+                req = req.header("x-csrf-token", c);
+            }
+            let req = match body {
+                Some(b) => req.header(header::CONTENT_TYPE, "application/json").body(HttpBody::from(b.to_string())),
+                None => req.body(HttpBody::empty()),
+            };
+            let app = app.clone();
+            async move {
+                let res = app.oneshot(req.unwrap()).await.unwrap();
+                let status = res.status().as_u16();
+                let set: Vec<String> =
+                    res.headers().get_all(header::SET_COOKIE).iter().map(|v| v.to_str().unwrap().to_owned()).collect();
+                let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+                (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null), set)
+            }
+        };
+        let value = |set: &[String], name: &str| {
+            set.iter().find_map(|c| c.split(';').next()?.strip_prefix(&format!("{name}=")).map(str::to_owned))
+        };
+
+        // Session A: opened over plain HTTP, so under the plain names.
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": OWNER_PASSWORD.as_str() });
+        let (status, a, set) = send("POST", "/api/v1/setup", false, None, None, Some(setup)).await;
+        assert_eq!(status, 201, "{a}");
+        assert!(set.iter().all(|c| !c.starts_with("__Host-")), "{set:?}");
+        let (a_token, a_csrf) =
+            (value(&set, "shadoucmdb_session").unwrap(), a["csrfToken"].as_str().unwrap().to_owned());
+
+        // Session B: signed in over HTTPS, so under __Host- names; the plain ones are deleted.
+        let login = json!({ "username": "owner", "password": OWNER_PASSWORD.as_str() });
+        let (status, b, set) = send("POST", "/api/v1/auth/login", true, None, None, Some(login)).await;
+        assert_eq!(status, 200, "{b}");
+        let b_token = value(&set, "__Host-shadoucmdb_session").unwrap();
+        let b_csrf = b["csrfToken"].as_str().unwrap().to_owned();
+        assert_eq!(value(&set, "__Host-shadoucmdb_csrf").as_deref(), Some(b_csrf.as_str()));
+        for c in &set {
+            assert!(c.contains("; Path=/;") && c.contains("; Secure") && !c.contains("Domain"), "{c}");
+        }
+        assert_eq!(value(&set, "shadoucmdb_session").as_deref(), Some(""));
+        assert_eq!(value(&set, "shadoucmdb_csrf").as_deref(), Some(""));
+
+        // Both names, different sessions, either order: always B.
+        for cookie in [
+            format!("__Host-shadoucmdb_session={b_token}; shadoucmdb_session={a_token}"),
+            format!("shadoucmdb_session={a_token}; __Host-shadoucmdb_session={b_token}"),
+        ] {
+            let (status, me, set) = send("GET", "/api/v1/auth/me", true, Some(&cookie), None, None).await;
+            assert_eq!((status, me["csrfToken"].as_str()), (200, Some(b_csrf.as_str())), "{cookie}");
+            assert!(set.is_empty(), "nothing to move: {set:?}");
+            // The CSRF header must be B's: A's token (the plain cookie's session) is refused.
+            let (status, v, _) =
+                send("PUT", "/api/v1/ui-settings", true, Some(&cookie), Some(&a_csrf), Some(json!({}))).await;
+            assert_eq!((status, v["error"]["code"].as_str()), (403, Some("CSRF_TOKEN_INVALID")));
+            let (status, v, _) =
+                send("PUT", "/api/v1/ui-settings", true, Some(&cookie), Some(&b_csrf), Some(json!({}))).await;
+            assert_ne!(v["error"]["code"].as_str(), Some("CSRF_TOKEN_INVALID"), "{status} {v}");
+        }
+        // A __Host- cookie naming no session is not rescued by the plain one.
+        let dead = format!("shadoucmdb_session={a_token}; __Host-shadoucmdb_session={}", "0".repeat(64));
+        assert_eq!(send("GET", "/api/v1/auth/me", true, Some(&dead), None, None).await.0, 401);
+
+        // Session A over plain HTTP: nothing to move.
+        let plain = format!("shadoucmdb_session={a_token}");
+        let (status, _, set) = send("GET", "/api/v1/auth/me", false, Some(&plain), None, None).await;
+        assert_eq!((status, set.len()), (200, 0));
+        // Session A over HTTPS: still read, and moved to the __Host- names.
+        let (status, _, set) = send("GET", "/api/v1/auth/me", true, Some(&plain), None, None).await;
+        assert_eq!(status, 200);
+        assert_eq!(value(&set, "__Host-shadoucmdb_session"), Some(a_token.clone()));
+        assert_eq!(value(&set, "__Host-shadoucmdb_csrf"), Some(a_csrf.clone()));
+        assert_eq!(value(&set, "shadoucmdb_session").as_deref(), Some(""));
+        assert!(
+            set.iter()
+                .any(|c| c.starts_with("shadoucmdb_session=;") && c.contains("Max-Age=0; ") && c.contains("Path=/"))
+        );
+        // Signing out sets its own cookies (both names deleted), not the move.
+        let (status, _, set) = send("POST", "/api/v1/auth/logout", true, Some(&plain), Some(&a_csrf), None).await;
+        assert_eq!(status, 204);
+        assert_eq!(set.len(), 4, "{set:?}");
+        assert!(set.iter().all(|c| c.contains("Max-Age=0")), "{set:?}");
         db.drop().await;
     }
 }

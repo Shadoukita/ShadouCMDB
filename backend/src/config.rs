@@ -81,6 +81,9 @@ pub struct AuthConfig {
     /// slash. OIDC sign-in builds its redirect URI from it, never from the
     /// request's Host header; unset, OIDC sign-in is unavailable.
     pub public_url: Option<String>,
+    /// `OIDC_ALLOWED_HOSTS`: the only hosts OIDC discovery, key and token
+    /// requests may go to; None (unset) allows any host.
+    pub oidc_allowed_hosts: Option<crate::auth::sso::oidc::AllowedHosts>,
 }
 
 /// Who may read `/openapi.json` and the Swagger UI at `/docs`.
@@ -112,6 +115,8 @@ pub struct HttpConfig {
     pub header_read_timeout: Duration,
     /// Time allowed for a whole request, body upload included, until the response starts.
     pub request_timeout: Duration,
+    /// Requests handled at once; more are answered 503 SERVER_BUSY (bounds buffered bodies).
+    pub max_concurrent_requests: usize,
 }
 
 /// Where exported audit events go.
@@ -458,6 +463,7 @@ impl Config {
         };
         let header_read_timeout_secs = r.int::<u64>("HTTP_HEADER_READ_TIMEOUT_SECS", 1, 3600).unwrap_or(10);
         let request_timeout_secs = r.int::<u64>("HTTP_REQUEST_TIMEOUT_SECS", 1, 86_400).unwrap_or(120);
+        let max_concurrent_requests = r.int::<usize>("HTTP_MAX_CONCURRENT_REQUESTS", 1, 1_000_000).unwrap_or(512);
 
         let url = r.raw("DATABASE_URL");
         let migration_url = r.raw("MIGRATION_DATABASE_URL");
@@ -532,6 +538,11 @@ impl Config {
         let public_url = r
             .raw("PUBLIC_URL")
             .and_then(|s| parse_public_url(&s).map_err(|e| r.errors.push(format!("PUBLIC_URL: {e}"))).ok());
+        let oidc_allowed_hosts = r.raw("OIDC_ALLOWED_HOSTS").and_then(|s| {
+            crate::auth::sso::oidc::AllowedHosts::parse(&s)
+                .map_err(|e| r.errors.push(format!("OIDC_ALLOWED_HOSTS: {e}")))
+                .ok()
+        });
 
         if !r.errors.is_empty() {
             let detail: Vec<String> = r.errors.iter().map(|e| format!("  - {e}")).collect();
@@ -550,6 +561,7 @@ impl Config {
             http: HttpConfig {
                 header_read_timeout: Duration::from_secs(header_read_timeout_secs),
                 request_timeout: Duration::from_secs(request_timeout_secs),
+                max_concurrent_requests,
             },
             database: DatabaseConfig {
                 url,
@@ -572,6 +584,7 @@ impl Config {
                 session_max_age: Duration::from_secs(session_max_age_hours * 3600),
                 cookie_secure,
                 public_url,
+                oidc_allowed_hosts,
             },
             audit: AuditConfig { capture_client_ip, capture_user_agent, export },
         })
@@ -663,6 +676,7 @@ mod tests {
         assert_eq!(cfg.api_docs, ApiDocs::Off);
         assert_eq!(cfg.http.header_read_timeout, Duration::from_secs(10));
         assert_eq!(cfg.http.request_timeout, Duration::from_secs(120));
+        assert_eq!(cfg.http.max_concurrent_requests, 512);
         assert!(cfg.audit.capture_client_ip && cfg.audit.capture_user_agent);
         assert!(cfg.audit.export.is_none());
     }
@@ -672,6 +686,17 @@ mod tests {
         assert_eq!(load_with(&[("API_DOCS", "public")]).unwrap().api_docs, ApiDocs::Public);
         assert_eq!(load_with(&[("API_DOCS", "authenticated")]).unwrap().api_docs, ApiDocs::Authenticated);
         assert!(load_with(&[("API_DOCS", "yes")]).unwrap_err().to_string().contains("API_DOCS"));
+    }
+
+    #[test]
+    fn oidc_allowed_hosts() {
+        assert_eq!(load_with(&[]).unwrap().auth.oidc_allowed_hosts, None, "unset: any host");
+        let cfg = load_with(&[("OIDC_ALLOWED_HOSTS", "login.example.com, idp.corp.example:8443")]).unwrap();
+        let allowed = cfg.auth.oidc_allowed_hosts.unwrap();
+        assert!(allowed.allows(&url::Url::parse("https://login.example.com/x").unwrap()));
+        assert!(!allowed.allows(&url::Url::parse("https://idp.corp.example/x").unwrap()));
+        let err = load_with(&[("OIDC_ALLOWED_HOSTS", "*.example.com")]).unwrap_err().to_string();
+        assert!(err.contains("OIDC_ALLOWED_HOSTS"), "{err}");
     }
 
     #[test]

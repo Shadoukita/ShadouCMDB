@@ -92,10 +92,10 @@ pub struct AuthState {
 impl AuthState {
     pub fn new(config: AuthConfig) -> Self {
         AuthState {
+            oidc: sso::oidc::Cache::new(config.oidc_allowed_hosts.clone()),
             config,
             throttle: LoginThrottle::default(),
             password_throttle: LoginThrottle::per_key(),
-            oidc: sso::oidc::Cache::default(),
             oidc_state_key: tokio::sync::OnceCell::new(),
             insecure_cookie_warned: AtomicBool::new(false),
         }
@@ -143,7 +143,7 @@ pub async fn authenticate(
     headers: &HeaderMap,
     client: &ClientInfo,
 ) -> Result<Option<Principal>, AppError> {
-    let Some(token) = session::cookie(headers, session::SESSION_COOKIE) else { return Ok(None) };
+    let Some((token, _)) = session::session_token(headers) else { return Ok(None) };
     let Some(s) = data::resolve_session(pool, &session::token_hash(token), cfg.session_idle).await? else {
         return Ok(None);
     };
@@ -200,6 +200,7 @@ mod tests {
             session_max_age: Duration::from_secs(3600),
             cookie_secure,
             public_url: None,
+            oidc_allowed_hosts: None,
         })
     }
 

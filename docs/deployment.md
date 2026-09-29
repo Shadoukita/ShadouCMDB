@@ -106,6 +106,10 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
   cannot send that header, set `COOKIE_SECURE=always`. With the default `COOKIE_SECURE=auto`,
   the first session cookie issued without `Secure` logs a one-time warning naming this fix;
   `COOKIE_SECURE=never` is taken as deliberate and is not warned about.
+- With `Secure`, the cookies are named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`
+  (without it, `shadoucmdb_session` and `shadoucmdb_csrf`). Browsers accept a `__Host-` cookie
+  only from the host itself, so another host under your domain cannot plant a session cookie for
+  ShadouCMDB. Do not rewrite cookie names, `Path` or `Domain` at the proxy.
 - Serve the UI and the API from the same origin (the embedded UI does this). A UI on another
   origin needs that origin in `CORS_ORIGINS`, spelled exactly as the browser sends it
   (`https://cmdb.example.com`: no path, no trailing slash); those origins may send the session
@@ -310,6 +314,21 @@ All optional; every variable is in [`.env.example`](../.env.example).
 - **Timeouts:** `HTTP_HEADER_READ_TIMEOUT_SECS` (default 10) closes connections that do not finish
   their headers in time; `HTTP_REQUEST_TIMEOUT_SECS` (default 120) answers `408 REQUEST_TIMEOUT` to a
   request that runs longer. A reverse proxy in front should have its own, shorter limits.
+- **Concurrent requests:** `HTTP_MAX_CONCURRENT_REQUESTS` (default 512) caps the API requests the
+  server handles at once; further requests get `503 SERVER_BUSY` with `Retry-After: 1` until one
+  finishes. Request bodies are read only after the caller is authenticated, at most 64 KiB on setup
+  and sign-in, 1 MiB elsewhere and 16 MiB on configuration import, so the cap also bounds the memory
+  held by uploads. Size it to the memory available: in the worst case every request is a 16 MiB
+  import. The anonymous routes that take a body (setup, sign-in, the MFA step of sign-in) draw from a
+  separate pool of one eighth of the cap (at least 16) and must deliver their body within
+  `HTTP_HEADER_READ_TIMEOUT_SECS`, else `408 REQUEST_TIMEOUT`: a flood of slow anonymous requests
+  can delay sign-in but not signed-in users or API tokens. `/healthz`, `/readyz` and
+  `/api/v1/version` are exempt, so a busy server is not reported as down.
+- **Reverse proxy request buffering:** let the proxy receive the whole request body before it
+  forwards the request (nginx `proxy_request_buffering on`, the default; HAProxy
+  `option http-buffer-request`). Slow clients then tie up the proxy, which is built for many idle
+  connections, rather than the server's request capacity. Keep the proxy's body size limit at or
+  above 16 MiB if configuration import is used (nginx `client_max_body_size 16m`).
 - **Request rate limits:** the server does not limit requests per client address, because it cannot
   tell a real client address from a forged `X-Forwarded-For` without a trusted proxy. Limit the
   anonymous routes (`/api/v1/auth/*`) per client address at the reverse proxy, which sees the real
@@ -319,6 +338,14 @@ All optional; every variable is in [`.env.example`](../.env.example).
   password cannot lock the account holder out from their own network. That works only when the proxy
   overwrites `X-Forwarded-For`; otherwise a client can claim other networks and the per-username
   budget across networks (15 failures) is what locks the account.
+- **OIDC provider hosts:** `OIDC_ALLOWED_HOSTS` limits which hosts the server contacts for OIDC
+  sign-in, as a comma-separated list: `login.example.com,idp.corp.example:8443`. Host names match
+  exactly (case does not matter; `example.com` does not allow `login.example.com`), and an entry
+  with a port allows only that port. Every URL the server fetches is checked: the issuer's discovery
+  document, and the key set and token endpoint that document names. A provider elsewhere fails with
+  "The provider uses a host this server may not contact"; the server log names the URL. Unset (the
+  default), any host is allowed, as before. The server never follows redirects from a provider
+  either way.
 - **Client details:** `AUDIT_CAPTURE_CLIENT_IP=false` and `AUDIT_CAPTURE_USER_AGENT=false` stop the
   server recording the IP address and User-Agent of sign-ins and sessions (for example where a works
   council agreement rules them out). Changes stay attributed to the signed-in user.
