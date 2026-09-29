@@ -1062,6 +1062,9 @@ pub(crate) mod tests {
         assert_eq!(crate::data::api_tokens::count_second_factor_refusals(&mut conn).await.unwrap(), (1, 1));
         let notice = crate::data::api_tokens::second_factor_refusal_notice(&mut conn).await.unwrap().unwrap();
         assert!(notice.starts_with("1 API token of 1 account is refused"), "{notice}");
+        assert!(notice.contains("Administration › API tokens"), "{notice}");
+        assert!(notice.contains("/admin/api-tokens?refusedForMfa=true)"), "{notice}");
+        assert!(notice.contains("GET /api/v1/admin/api-tokens?refusedForMfa=true"), "{notice}");
         drop(conn);
 
         // A sign-in through /auth/login/mfa is a verified session too.

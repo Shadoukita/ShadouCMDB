@@ -213,8 +213,9 @@ pub async fn second_factor_refusal_notice(conn: &mut PgConnection) -> sqlx::Resu
         format!(
             "{refused} API token{} of {accounts} account{} {} refused: their owners must use two-factor \
              authentication and the tokens were not created from a session signed in with a second factor. List \
-             them with GET /api/v1/admin/api-tokens?refusedForMfa=true and create new tokens for the affected \
-             integrations.",
+             them in the web UI under Administration › API tokens with the \"Refused for two-factor only\" \
+             filter (/admin/api-tokens?refusedForMfa=true), or with \
+             GET /api/v1/admin/api-tokens?refusedForMfa=true, and create new tokens for the affected integrations.",
             if refused == 1 { "" } else { "s" },
             if accounts == 1 { "" } else { "s" },
             if refused == 1 { "is" } else { "are" },

@@ -266,7 +266,8 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   a `requireMfa` owner only if it was created from a session that proved a second factor (an
   authenticator or recovery code, OIDC under Verify, or TOTP enrolment confirmed in that session);
   others are refused with `token.use` outcome `mfa_required` while the requirement applies (list them
-  with `GET /api/v1/admin/api-tokens?refusedForMfa=true`). Put automation accounts in profiles
+  under **Administration › API tokens** with the **Refused for two-factor only** filter, or with
+  `GET /api/v1/admin/api-tokens?refusedForMfa=true`). Put automation accounts in profiles
   without `requireMfa`, scope their tokens to the least privileged profile and keep expiries short;
   where an automation account must hold a `requireMfa` profile, an administrator signed in with a
   second factor creates its token. Each `login.success` row of an OIDC sign-in carries `providerMfa`
