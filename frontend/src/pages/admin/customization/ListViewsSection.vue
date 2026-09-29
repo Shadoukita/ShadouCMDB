@@ -39,6 +39,17 @@ const columnOptions = computed(() => [
 const sortOptions = computed(() => [...SORT_FIELDS, ...attributeSortFields(attrDefs.value)]);
 /** A stored sort the class no longer offers (e.g. its attribute was archived); the settings API drops it. */
 const staleSort = computed(() => (attrs.data.value ? unavailableSortLabel(view.value?.defaultSort?.field, sortOptions.value) : null));
+/**
+ * The columns the editor works on. A view stored without columns (migration 0020, the API, an
+ * import) shows the default columns, so the editor lists them and the first change starts from
+ * them: adding a column must not drop Label and the others.
+ */
+const editorColumns = computed({
+  get: () => (view.value?.columns?.length ? view.value.columns : [...DEFAULT_COLUMNS]),
+  set: (v: string[]) => {
+    if (view.value) view.value.columns = v;
+  },
+});
 
 function customize() {
   if (!cls.value) return;
@@ -93,8 +104,9 @@ const columns = computed(() => listColumns(view.value?.columns));
         <div class="editor-row">
           <div class="field">
             <span class="label">Columns, in order</span>
-            <FieldListEditor v-model="view.columns!" :options="columnOptions" label="Columns" id-prefix="lv-col" empty-text="No columns chosen: the default columns are shown." />
-            <p v-if="view.columns?.length && !view.columns.includes('label')" class="hint">
+            <FieldListEditor v-model="editorColumns" :options="columnOptions" label="Columns" id-prefix="lv-col" />
+            <p v-if="!view.columns?.length" class="hint">No columns chosen: the default columns are shown.</p>
+            <p v-else-if="!view.columns.includes('label')" class="hint">
               Label is not chosen: it is shown as the first column anyway, as it is the link that opens each CI.
             </p>
           </div>

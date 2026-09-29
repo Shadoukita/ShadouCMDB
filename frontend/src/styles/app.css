@@ -1204,6 +1204,68 @@ nav.tabs a[aria-current="page"] {
 .layout-panels > :not(.lg-sec) {
   grid-column: 1 / -1;
 }
+/* ---------- Free tabs (docs/data-model.md › Free tabs) ----------
+ * The windows of a free tab (lg-win) sit in the tab's area (lg-free) where their frames say, the higher z
+ * on top, and each scrolls its own content under a title bar that stays in view; a collapsed one is its
+ * title bar. Below 820px of tab width and in print nothing is positioned: the windows stack at the full
+ * width in reading order (the document's order), each at least its minH tall. */
+.lg-free {
+  position: relative;
+  height: var(--free-h, auto);
+  margin-bottom: var(--sp-4);
+}
+.lg-free > .lg-win {
+  position: absolute;
+  left: var(--win-x);
+  top: var(--win-y);
+  width: var(--win-w);
+  height: var(--win-h);
+  z-index: var(--win-z);
+  margin: 0;
+  overflow: auto;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
+}
+.lg-win > .panel-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: inherit;
+}
+.lg-free > details.lg-win:not([open]) {
+  height: auto;
+  overflow: hidden;
+}
+@container layout (max-width: 820px) {
+  .lg-free {
+    height: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+  }
+  .lg-free > .lg-win {
+    position: static;
+    width: auto;
+    height: auto;
+    min-height: var(--win-min-h, auto);
+    overflow: visible;
+  }
+}
+@media print {
+  .lg-free {
+    height: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+  }
+  .lg-free > .lg-win {
+    position: static;
+    width: auto;
+    height: auto;
+    min-height: var(--win-min-h, auto);
+    overflow: visible;
+    box-shadow: none;
+  }
+}
 /* The live "6 / 12" guide on a field or section while its edge is dragged in the layout editors. */
 .lg-size-guide {
   position: absolute;

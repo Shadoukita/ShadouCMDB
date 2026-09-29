@@ -48,11 +48,12 @@ export const keys = {
 
 // ---------- Configuration items ----------
 
-export function useCiList(query: MaybeRefOrGetter<CiListQuery>) {
+export function useCiList(query: MaybeRefOrGetter<CiListQuery>, enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery(() => {
     const q = toValue(query);
     return {
       queryKey: keys.ciList(q),
+      enabled: toValue(enabled),
       queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items", { params: { query: q }, signal })),
       placeholderData: keepPreviousData,
     };

@@ -607,6 +607,11 @@ function setPreview(w: number | null) {
               <button type="button" class="btn btn-sm designer-add-tab" @click="onAddTab">+ Add tab</button>
             </div>
 
+            <div v-if="activeTab?.placement === 'free'" class="alert" role="note" data-testid="designer-free-tab">
+              The tab {{ activeTab.label }} places its sections freely, as windows that may overlap. This preview shows them on the
+              grid in reading order. Move, resize and layer the windows with Edit layout on a CI (Open on a CI). Fields, names and
+              new sections can be changed here; a new section goes below the windows.
+            </div>
             <div class="layout-panels" role="tabpanel" :aria-label="activeTab?.label">
               <SectionShell
                 v-for="(s, j) in activeTab?.sections ?? []"
