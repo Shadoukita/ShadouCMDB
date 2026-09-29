@@ -217,6 +217,26 @@ test("list views: an attribute default sort, and attribute column headers sort t
   await expect(page.getByRole("columnheader", { name: /Label/ })).toHaveAttribute("aria-sort", "ascending");
 });
 
+test("list views: a view without the Label column still shows it first, so every row opens its CI", async ({ page, request }) => {
+  const serverId = await classIdByName(request, "Server");
+  await page.goto("/admin/customization/list-views?class=server");
+  const customize = page.getByRole("button", { name: "Customize the Server list" });
+  if (await customize.isVisible()) await customize.click();
+  await page.getByLabel("Remove Label").click();
+  await expect(page.getByText("Label is not chosen: it is shown as the first column anyway")).toBeVisible();
+  await expect(page.getByLabel("List preview").getByRole("columnheader").first()).toHaveText("Label");
+  await save(page, "e2e list view without label");
+
+  await page.goto(`/cis?classId=${serverId}`);
+  await expect(page.getByRole("columnheader").first()).toHaveText(/^Label/);
+  const rows = page.locator("table.data tbody tr");
+  await expect(rows.first()).toBeVisible();
+  const count = await rows.count();
+  await expect(page.locator("table.data tbody tr td:first-child a")).toHaveCount(count);
+  await page.locator("table.data tbody tr td:first-child a").first().click();
+  await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);
+});
+
 test("layouts: the form designer arranges tabs, sections and widths for the form and the detail page", async ({ page, request }) => {
   // Tall enough that a dragged field and the tab it is dropped on are both in view.
   await page.setViewportSize({ width: 1440, height: 1800 });

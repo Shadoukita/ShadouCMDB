@@ -16,7 +16,7 @@ import { isInAppNavigation } from "../lib/navigation";
 import { groupByArea } from "../lib/areas";
 import { viewableClasses } from "../lib/permissions";
 import { flattenTree } from "../lib/tree";
-import { attributeKey, BUILTIN, DEFAULT_COLUMNS, fieldLabel, hasFilters, isSortableAttribute, listViewFor, lookupValueIds, sortParam } from "../lib/uiSettings";
+import { attributeKey, BUILTIN, fieldLabel, hasFilters, isSortableAttribute, listColumns, listViewFor, lookupValueIds, sortParam } from "../lib/uiSettings";
 import { useSessionStore } from "../stores/session";
 
 /**
@@ -72,7 +72,7 @@ const classTree = computed(() => flattenTree(classOptions.value));
 const classGroups = computed(() => groupByArea(classTree.value, (n) => n.item.areaId, areas.data.value ?? []));
 const currentArea = computed(() => areas.data.value?.find((a) => a.id === currentClass.value?.areaId));
 
-const columns = computed(() => (view.value?.columns?.length ? view.value.columns : DEFAULT_COLUMNS));
+const columns = computed(() => listColumns(view.value?.columns));
 const attrColumns = computed(() => columns.value.some((c) => attributeKey(c) !== null));
 const attrs = useClassAttributes(() => (attrColumns.value ? currentClass.value?.id : undefined));
 const attrDefs = computed(() => attrs.data.value ?? []);

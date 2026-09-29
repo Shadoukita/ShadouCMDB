@@ -12,6 +12,7 @@ import {
   DEFAULT_COLUMNS,
   EMPTY_FILTERS,
   fieldLabel,
+  listColumns,
   SORT_FIELDS,
   sortParam,
   unavailableSortLabel,
@@ -72,7 +73,7 @@ const previewQuery = computed<CiListQuery>(() => ({
   sort: ((staleSort.value ? null : sortParam(view.value?.defaultSort)) ?? "label") as CiListQuery["sort"],
 }));
 const preview = useCiList(previewQuery);
-const columns = computed(() => (view.value?.columns?.length ? view.value.columns : DEFAULT_COLUMNS));
+const columns = computed(() => listColumns(view.value?.columns));
 </script>
 
 <template>
@@ -93,6 +94,9 @@ const columns = computed(() => (view.value?.columns?.length ? view.value.columns
           <div class="field">
             <span class="label">Columns, in order</span>
             <FieldListEditor v-model="view.columns!" :options="columnOptions" label="Columns" id-prefix="lv-col" empty-text="No columns chosen: the default columns are shown." />
+            <p v-if="view.columns?.length && !view.columns.includes('label')" class="hint">
+              Label is not chosen: it is shown as the first column anyway, as it is the link that opens each CI.
+            </p>
           </div>
           <div class="form-grid" style="grid-template-columns: 1fr">
             <div class="field">

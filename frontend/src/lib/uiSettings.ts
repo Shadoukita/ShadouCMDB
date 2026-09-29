@@ -85,6 +85,16 @@ export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUIL
 /** The inventory's columns when no list view says otherwise. */
 export const DEFAULT_COLUMNS = ["label", "ident", "class", "active", "updatedAt"];
 
+/**
+ * The columns a list view shows. The label cell is the row's link to the CI and
+ * the one value every CI has, so a view without it gets it as its first column:
+ * otherwise its rows could not be opened and could all read "—".
+ */
+export function listColumns(columns: readonly string[] | null | undefined): string[] {
+  if (!columns?.length) return [...DEFAULT_COLUMNS];
+  return columns.includes("label") ? [...columns] : ["label", ...columns];
+}
+
 export const ATTRIBUTE_PREFIX = "attributes.";
 export const attributeKey = (field: string) => (field.startsWith(ATTRIBUTE_PREFIX) ? field.slice(ATTRIBUTE_PREFIX.length) : null);
 
