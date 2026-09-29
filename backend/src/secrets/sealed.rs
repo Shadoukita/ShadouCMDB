@@ -683,12 +683,14 @@ mod tests {
         assert_eq!(open(p, ProviderSecret::ClientSecret).as_deref(), Ok(secret));
         assert_eq!(open(q, ProviderSecret::ClientSecret), Err(OpenError::Invalid), "another provider");
         assert_eq!(open(p, ProviderSecret::BindPassword), Err(OpenError::Invalid), "the other column");
-        for i in [0, 12, s.bytes.len() - 1] {
+        // The message names the part flipped, never an index derived from the
+        // ciphertext (CodeQL treats that as logging the secret).
+        for (part, i) in [("nonce", 0), ("ciphertext", 12), ("tag", s.bytes.len() - 1)] {
             let mut bytes = s.bytes.clone();
             bytes[i] ^= 1;
             let tampered = StoredSecret::Encrypted { key_id: s.key_id, bytes };
             let refused = open_provider_secret(&ring, p, ProviderSecret::ClientSecret, &tampered).is_err();
-            assert!(refused, "byte {i}");
+            assert!(refused, "flipped {part} byte");
         }
         // The same AD under the TOTP subkey: another purpose, another key.
         let totp = ring.seal(Purpose::TotpSecret, &provider_ad(p, ProviderSecret::ClientSecret), secret.as_bytes());
