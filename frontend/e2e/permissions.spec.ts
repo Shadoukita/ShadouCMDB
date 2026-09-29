@@ -227,7 +227,7 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
 
   // "New CI" offers only the classes the profile may create.
   await page.goto("/");
-  await page.getByRole("banner").getByRole("link", { name: "+ New CI" }).click();
+  await page.getByRole("banner").getByRole("link", { name: "New CI", exact: true }).click();
   await expect(page.locator("#ci-class option")).toHaveText(["Choose a class…", "Application"]);
   // A class the user may not create in, opened by URL, is refused with an explanation.
   await page.goto(`/cis/new?classId=${databaseId}`);

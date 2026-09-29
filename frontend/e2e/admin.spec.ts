@@ -129,7 +129,7 @@ test("the user sees only the actions their profile allows", async ({ browser, re
   const page = await signInAs(browser, USERNAME, PASSWORD);
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await expect(page.getByRole("banner").getByText(DISPLAY)).toBeVisible();
-  await expect(page.getByRole("link", { name: "+ New CI" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /New CI$/ })).toHaveCount(0);
 
   // Server: may edit, may not delete.
   await page.goto(`/cis/${await ciIdByName(request, "fra1-esx-01")}`);
