@@ -55,6 +55,8 @@ pub struct AppState {
     pub sealed: Arc<SealedState>,
     /// Requests the API handles at once (`HTTP_MAX_CONCURRENT_REQUESTS`).
     pub capacity: Capacity,
+    /// The last `/readyz` check, reused briefly (GH#242).
+    pub readiness: Arc<crate::modules::health::ReadinessCache>,
 }
 
 /// The start-up step for encrypted secrets ([`crate::secrets::sealed::prepare`]):
@@ -78,6 +80,7 @@ impl AppState {
             schema: Arc::default(),
             sealed: Arc::default(),
             capacity: Capacity::new(512, Duration::from_secs(10)),
+            readiness: Arc::default(),
         }
     }
 
@@ -107,12 +110,12 @@ impl AppState {
 /// `api::route` after it authorises the caller and before it reads the body,
 /// so a rejected request never holds capacity, and a request that finds its
 /// pool empty is answered 503 SERVER_BUSY instead of
-/// queueing. Public routes that take a body (setup, sign-in) draw from their
-/// own, smaller pool and must deliver the body within
-/// `HTTP_HEADER_READ_TIMEOUT_SECS`: anonymous slow senders can then only
-/// saturate sign-in, never the capacity signed-in users and API tokens need.
-/// Bodiless public routes (liveness, readiness, version) take no permit, so a
-/// busy server is not mistaken for a dead one.
+/// queueing. Public routes (setup, sign-in, OIDC, branding) draw from their
+/// own, smaller pool and must deliver any body within
+/// `HTTP_HEADER_READ_TIMEOUT_SECS`: anonymous callers can then only saturate
+/// the public routes, never the capacity signed-in users and API tokens need.
+/// Only the health routes (liveness, readiness, version; `RouteBuilder::unlimited`)
+/// take no permit, so a busy server is not mistaken for a dead one.
 #[derive(Clone)]
 pub struct Capacity {
     global: Arc<tokio::sync::Semaphore>,

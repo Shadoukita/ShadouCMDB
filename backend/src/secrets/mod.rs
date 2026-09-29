@@ -104,6 +104,16 @@ impl Drop for Secret {
     }
 }
 
+/// The 32 bytes of a master key; wiped from memory when dropped. No `Debug`,
+/// no `Clone`: it is only borrowed, to derive the subkeys and the key id.
+pub struct MasterKey([u8; KEY_LEN]);
+
+impl Drop for MasterKey {
+    fn drop(&mut self) {
+        wipe(&mut self.0);
+    }
+}
+
 /// Why a stored value did not decrypt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenError {
@@ -120,8 +130,8 @@ struct Key {
 }
 
 impl Key {
-    fn derive(master: &[u8; KEY_LEN]) -> Key {
-        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, &[]).extract(master);
+    fn derive(master: &MasterKey) -> Key {
+        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, &[]).extract(&master.0);
         let mut id = [0u8; 4];
         prk.expand(&[KEY_ID_INFO], Len(4)).and_then(|okm| okm.fill(&mut id)).expect("HKDF output of 4 bytes");
         let subkeys = Purpose::ALL
@@ -186,7 +196,7 @@ impl Keyring {
     }
 
     #[cfg(test)]
-    pub fn from_keys(active: &[u8; KEY_LEN], previous: Option<&[u8; KEY_LEN]>) -> Keyring {
+    pub fn from_keys(active: &MasterKey, previous: Option<&MasterKey>) -> Keyring {
         Keyring { active: Key::derive(active), previous: previous.map(Key::derive) }
     }
 
@@ -279,23 +289,23 @@ pub fn missing_key_message() -> String {
 }
 
 /// 32 bytes from the OS random number generator.
-pub fn new_key() -> [u8; KEY_LEN] {
-    let mut key = [0u8; KEY_LEN];
-    getrandom::fill(&mut key).expect("OS random number generator");
+pub fn new_key() -> MasterKey {
+    let mut key = MasterKey([0u8; KEY_LEN]);
+    getrandom::fill(&mut key.0).expect("OS random number generator");
     key
 }
 
 /// The file content for `key`: base64 and a newline.
-pub fn encode_key(key: &[u8; KEY_LEN]) -> String {
-    format!("{}\n", STANDARD.encode(key))
+pub fn encode_key(key: &MasterKey) -> String {
+    format!("{}\n", STANDARD.encode(key.0))
 }
 
 /// The key id of `key`.
-pub fn key_id(key: &[u8; KEY_LEN]) -> KeyId {
+pub fn key_id(key: &MasterKey) -> KeyId {
     Key::derive(key).id
 }
 
-fn read_key_file(var: &str, path: &Path) -> anyhow::Result<[u8; KEY_LEN]> {
+fn read_key_file(var: &str, path: &Path) -> anyhow::Result<MasterKey> {
     let meta = std::fs::metadata(path).with_context(|| format!("{var}: cannot read {}", path.display()))?;
     check_permissions(var, path, &meta)?;
     let mut content = std::fs::read(path).with_context(|| format!("{var}: cannot read {}", path.display()))?;
@@ -306,14 +316,19 @@ fn read_key_file(var: &str, path: &Path) -> anyhow::Result<[u8; KEY_LEN]> {
 
 /// The base64 of exactly 32 bytes. Surrounding whitespace, CR/LF and a UTF-8
 /// BOM (Notepad adds them) are ignored. The error never repeats the content.
-pub fn parse_key(content: &[u8]) -> Result<[u8; KEY_LEN], &'static str> {
+pub fn parse_key(content: &[u8]) -> Result<MasterKey, &'static str> {
     const EXPECTED: &str = "expected the base64 of 32 bytes";
     let content = content.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(content);
     let text = content.trim_ascii();
     let mut decoded = STANDARD.decode(text).map_err(|_| EXPECTED)?;
-    let key = <[u8; KEY_LEN]>::try_from(decoded.as_slice()).map_err(|_| EXPECTED);
+    // Copied straight into the key, so no loose copy of the bytes is left behind.
+    let key = (decoded.len() == KEY_LEN).then(|| {
+        let mut key = MasterKey([0u8; KEY_LEN]);
+        key.0.copy_from_slice(&decoded);
+        key
+    });
     wipe(&mut decoded);
-    key
+    key.ok_or(EXPECTED)
 }
 
 /// Unix: the key file must not be readable by everyone, nor writable by group
@@ -414,20 +429,20 @@ mod tests {
 
     #[test]
     fn key_id_is_stable_per_key_and_differs_between_keys() {
-        let k = [42u8; 32];
+        let k = MasterKey([42u8; 32]);
         assert_eq!(key_id(&k), key_id(&k));
-        assert_ne!(key_id(&k), key_id(&[43u8; 32]));
+        assert_ne!(key_id(&k), key_id(&MasterKey([43u8; 32])));
         assert_eq!(format!("{}", KeyId(-1)), "ffffffff");
         assert_eq!(format!("{}", KeyId(0x0102_0304)), "01020304");
         // Pinned (HKDF-SHA256, empty salt, computed independently): the id of a
         // key must not change between releases, or every database looks foreign.
-        assert_eq!(key_id(&[0u8; 32]).to_string(), "71809ca9");
+        assert_eq!(key_id(&MasterKey([0u8; 32])).to_string(), "71809ca9");
     }
 
     #[test]
     fn key_file_parsing() {
         let key = new_key();
-        let b64 = STANDARD.encode(key);
+        let b64 = STANDARD.encode(key.0);
         for content in [
             b64.clone(),
             format!("{b64}\n"),
@@ -435,7 +450,7 @@ mod tests {
             format!("  {b64}  \n"),
             format!("\u{FEFF}{b64}\r\n"),
         ] {
-            assert_eq!(parse_key(content.as_bytes()), Ok(key), "{content:?}");
+            assert_eq!(parse_key(content.as_bytes()).map(|k| k.0), Ok(key.0), "{content:?}");
         }
         for bad in [
             STANDARD.encode([0u8; 31]),
@@ -444,9 +459,29 @@ mod tests {
             String::new(),
             format!("{b64}{b64}"),
         ] {
-            let err = parse_key(bad.as_bytes()).unwrap_err();
+            let Err(err) = parse_key(bad.as_bytes()) else { panic!("{bad:?} parsed") };
             assert_eq!(err, "expected the base64 of 32 bytes");
         }
+    }
+
+    /// GH#224: the master key cannot be printed or copied, and is wiped when dropped.
+    #[test]
+    fn the_master_key_has_no_debug_no_clone_and_is_wiped_on_drop() {
+        // Ambiguous, so a compile error, if `MasterKey` implements `Debug` or `Clone`.
+        trait AmbiguousIfImpl<A> {
+            fn check() {}
+        }
+        impl<T> AmbiguousIfImpl<()> for T {}
+        impl<T: fmt::Debug> AmbiguousIfImpl<u8> for T {}
+        impl<T: Clone> AmbiguousIfImpl<u16> for T {}
+        <MasterKey as AmbiguousIfImpl<_>>::check();
+
+        assert!(std::mem::needs_drop::<MasterKey>());
+        let mut key = std::mem::ManuallyDrop::new(new_key());
+        assert_ne!(key.0, [0u8; KEY_LEN]);
+        // SAFETY: dropped once; afterwards only its plain bytes are read.
+        unsafe { std::mem::ManuallyDrop::drop(&mut key) };
+        assert_eq!(key.0, [0u8; KEY_LEN]);
     }
 
     #[cfg(unix)]

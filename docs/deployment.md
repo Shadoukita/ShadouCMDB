@@ -39,10 +39,10 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
                             (backup, restore and reset: see docs/backup-and-reset.md)
   generate-encryption-key --out F
                             Write a new key for ENCRYPTION_KEY_FILE (offline; never overwrites F)
-  mfa reset-undecryptable [--dry-run] [--yes]
+  mfa reset-undecryptable [--dry-run] [--no-key] [--yes]
                             Turn off two-factor sign-in for users whose authenticator secret is
                             encrypted with a key that is lost (audited; see docs/security/hardening.md)
-  identity-providers reset-undecryptable [--dry-run] [--yes]
+  identity-providers reset-undecryptable [--dry-run] [--no-key] [--yes]
                             Disable identity providers whose OIDC client secret or LDAP bind password
                             is encrypted with a key that is lost, and clear it (audited)
   openapi [--out F|--check F]  Print the OpenAPI document, write it, or fail if F is stale
@@ -377,11 +377,15 @@ All optional; every variable is in [`.env.example`](../.env.example).
   finishes. Request bodies are read only after the caller is authenticated, at most 64 KiB on setup
   and sign-in, 1 MiB elsewhere and 16 MiB on configuration import, so the cap also bounds the memory
   held by uploads. Size it to the memory available: in the worst case every request is a 16 MiB
-  import. The anonymous routes that take a body (setup, sign-in, the MFA step of sign-in) draw from a
-  separate pool of one eighth of the cap (at least 16) and must deliver their body within
-  `HTTP_HEADER_READ_TIMEOUT_SECS`, else `408 REQUEST_TIMEOUT`: a flood of slow anonymous requests
-  can delay sign-in but not signed-in users or API tokens. `/healthz`, `/readyz` and
-  `/api/v1/version` are exempt, so a busy server is not reported as down.
+  import. The anonymous routes (setup, sign-in and its MFA step, the sign-in options, OIDC sign-in
+  and its callback, the login page branding) draw from a separate pool of one eighth of the cap (at
+  least 16) and must deliver any body within `HTTP_HEADER_READ_TIMEOUT_SECS`, else
+  `408 REQUEST_TIMEOUT`: a flood of anonymous requests can delay sign-in but not signed-in users or
+  API tokens. Only `/healthz`, `/readyz` and `/api/v1/version` are exempt from both pools, so a
+  busy server is not reported as down. `/readyz` reuses its last database check for up to 1 s, and
+  concurrent probes wait for the one check in flight, so a flood of anonymous probes costs about one
+  database round trip per second. A lost database therefore shows in `/readyz` within about 1 s
+  plus `DATABASE_CONNECT_TIMEOUT_MS`.
 - **Reverse proxy request buffering:** let the proxy receive the whole request body before it
   forwards the request (nginx `proxy_request_buffering on`, the default; HAProxy
   `option http-buffer-request`). Slow clients then tie up the proxy, which is built for many idle

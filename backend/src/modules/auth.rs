@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use axum::http::{HeaderMap, Method, StatusCode};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::ToSchema;
@@ -167,19 +168,31 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, session_id: Uuid, csrf_token:
 }
 
 /// Opens a session for the user and records `login.success`; returns its id and cookies.
+///
+/// `verified`: the `password_changed_at` of the password the sign-in was
+/// checked against, None when an identity provider checked it. The user's row
+/// is locked first; a password changed since, or an account disabled or
+/// deleted since, gets no session but a 401 (GH#209).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_session(
     pool: &PgPool,
     auth: &AuthState,
     headers: &HeaderMap,
-    ctx: &RequestContext,
+    request: &RequestContext,
     user_id: Uuid,
     username: &str,
     method: LoginMethod,
+    verified: Option<DateTime<Utc>>,
 ) -> Result<(Uuid, Vec<axum::http::HeaderValue>), AppError> {
-    let ctx = ctx.acting_as_user(user_id, username);
+    let ctx = request.acting_as_user(user_id, username);
     let token = session::new_token();
     let csrf = session::new_token();
     let mut tx = pool.begin().await?;
+    // First, so the row is locked before anything the reset or disable also takes.
+    if !data::record_login(&mut tx, user_id).await?.is_some_and(|now| now.allows(verified)) {
+        drop(tx);
+        return Err(account_changed(pool, request, username).await?);
+    }
     // A cookie from an earlier session in this browser is replaced, not kept alive.
     if let Some((old, _)) = session::session_token(headers)
         && let Some(ended) = data::delete_session_by_token(&mut tx, &session::token_hash(old)).await?
@@ -202,7 +215,20 @@ pub(crate) async fn open_session(
     Ok((session_id, session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &token, &csrf)))
 }
 
+/// A sign-in whose credentials were right when checked, refused because the
+/// account was disabled, deleted or given a new password since (GH#209):
+/// logged and audited; returns the 401.
+async fn account_changed(pool: &PgPool, ctx: &RequestContext, username: &str) -> Result<AppError, AppError> {
+    tracing::warn!(user = %username, ip = ?ctx.client.ip, "sign-in refused: the account changed while it was checked");
+    record_failure(pool, ctx, username, Some("account_changed"), None).await?;
+    Ok(AppError::new(
+        ErrorCode::Unauthenticated,
+        "The account was changed during the sign-in; enter your username and password again",
+    ))
+}
+
 /// [`open_session`], answering with the session.
+#[allow(clippy::too_many_arguments)]
 async fn start_session(
     pool: &PgPool,
     auth: &AuthState,
@@ -211,8 +237,9 @@ async fn start_session(
     user_id: Uuid,
     username: &str,
     method: LoginMethod,
+    verified: Option<DateTime<Utc>>,
 ) -> Result<WithCookies<Json<Session>>, AppError> {
-    let (session_id, cookies) = open_session(pool, auth, headers, ctx, user_id, username, method).await?;
+    let (session_id, cookies) = open_session(pool, auth, headers, ctx, user_id, username, method, verified).await?;
     let csrf = [session::HOST_CSRF_COOKIE, session::CSRF_COOKIE]
         .into_iter()
         .find_map(|name| session::cookie_value(&cookies[1], name))
@@ -269,8 +296,8 @@ async fn setup(
     attempt.success();
     auth.setup.disarm();
     tracing::info!(user = %user.username, "first-run setup created the first administrator");
-    data::record_login(pool, user.id).await?;
-    start_session(pool, auth, headers, request, user.id, &user.username, LoginMethod::Setup).await
+    let verified = Some(user.password_changed_at);
+    start_session(pool, auth, headers, request, user.id, &user.username, LoginMethod::Setup, verified).await
 }
 
 fn setup_done() -> AppError {
@@ -388,13 +415,15 @@ async fn login(
         record_failure(pool, ctx, &b.username, None, locked).await?;
         return Err(AppError::new(ErrorCode::Unauthenticated, "This account is disabled"));
     }
-    password_accepted(pool, auth, headers, ctx, attempt, user.id, &user.username, LoginMethod::Password).await
+    let verified = Some(user.password_changed_at);
+    password_accepted(pool, auth, headers, ctx, attempt, user.id, &user.username, LoginMethod::Password, verified).await
 }
 
 /// After a right password, local or directory: the second-factor challenge
 /// when the user has set up MFA (401 MFA_REQUIRED and the `shadoucmdb_mfa`
 /// cookie), otherwise the session. `attempt`: the throttle reservation for
 /// the name signed in with, counted a success only once the sign-in is complete.
+/// `verified`: as for [`open_session`]; the challenge is refused alike.
 #[allow(clippy::too_many_arguments)]
 async fn password_accepted(
     pool: &PgPool,
@@ -405,6 +434,7 @@ async fn password_accepted(
     user_id: Uuid,
     username: &str,
     method: LoginMethod,
+    verified: Option<DateTime<Utc>>,
 ) -> Result<LoginAnswer, AppError> {
     if mfa_data::get_totp(&mut *pool.acquire().await?, user_id, false).await?.is_some_and(|t| t.confirmed) {
         // The username's failure count is left alone (the attempt is dropped):
@@ -412,13 +442,15 @@ async fn password_accepted(
         // guesses at the code.
         mfa_data::purge_challenges(pool).await?;
         let token = session::new_token();
-        mfa_data::create_challenge(
-            &mut *pool.acquire().await?,
-            user_id,
-            &session::token_hash(&token),
-            MFA_CHALLENGE_TTL,
-        )
-        .await?;
+        let mut tx = pool.begin().await?;
+        // A reset or disable deletes the user's challenges under its lock on
+        // the row: one committed after this check finds the challenge.
+        if !data::lock_sign_in(&mut tx, user_id).await?.is_some_and(|now| now.allows(verified)) {
+            drop(tx);
+            return Err(account_changed(pool, ctx, username).await?);
+        }
+        mfa_data::create_challenge(&mut tx, user_id, &session::token_hash(&token), MFA_CHALLENGE_TTL).await?;
+        tx.commit().await?;
         tracing::info!(user = %username, ip = ?ctx.client.ip, method = ?method, "password accepted, second factor due");
         let err = AppError::new(
             ErrorCode::MfaRequired,
@@ -427,11 +459,11 @@ async fn password_accepted(
         let cookie = session::mfa_cookie(auth.session_cookie_secure(headers), &token, MFA_CHALLENGE_TTL);
         return Ok(Either::Right(ErrorWithCookies(err, vec![cookie])));
     }
-    attempt.success();
     let purged = data::purge_sessions(pool, auth.config.session_idle).await?;
-    data::record_login(pool, user_id).await?;
+    let session = start_session(pool, auth, headers, ctx, user_id, username, method, verified).await?;
+    attempt.success();
     tracing::info!(user = %username, ip = ?ctx.client.ip, method = ?method, purged_sessions = purged, "signed in");
-    Ok(Either::Left(start_session(pool, auth, headers, ctx, user_id, username, method).await?))
+    Ok(Either::Left(session))
 }
 
 /// A wrong password (or unknown name): counted, logged and audited; returns the 401.
@@ -460,7 +492,7 @@ async fn directory_login(
 ) -> Result<LoginAnswer, AppError> {
     match sso::directory_sign_in(pool, &auth.keyring, ctx, &b.username, &b.password, linked).await? {
         sso::DirectoryAnswer::SignedIn { user_id, username } => {
-            password_accepted(pool, auth, headers, ctx, attempt, user_id, &username, LoginMethod::Ldap).await
+            password_accepted(pool, auth, headers, ctx, attempt, user_id, &username, LoginMethod::Ldap, None).await
         }
         sso::DirectoryAnswer::NoMatch => {
             // A local account's wrong password costs an argon2 verify; so does
@@ -504,6 +536,10 @@ async fn login_mfa(
         throttle_gate(&auth.throttle, &pending.username, ctx.client.net, "sign-ins for this username").await?;
 
     let mut tx = pool.begin().await?;
+    // The user's row before the challenge's, in the order of a reset or
+    // disable. While the challenge is there, neither has committed since the
+    // password was checked: the session is opened only if none has until then.
+    let Some(verified) = data::lock_sign_in(&mut tx, pending.user_id).await? else { return Err(sign_in_expired()) };
     let Some(challenge) = mfa_data::take_challenge(&mut tx, &hash).await? else { return Err(sign_in_expired()) };
     let (user_id, username) = (challenge.user_id, challenge.username.as_str());
     let as_user = ctx.acting_as_user(user_id, username);
@@ -530,11 +566,12 @@ async fn login_mfa(
         mfa::audit_recovery_code_used(&mut tx, &as_user, user_id, username, "login").await?;
     }
     tx.commit().await?;
-    attempt.success();
     let purged = data::purge_sessions(pool, auth.config.session_idle).await?;
-    data::record_login(pool, user_id).await?;
+    let verified = Some(verified.password_changed_at);
+    let WithCookies(session, mut cookies) =
+        start_session(pool, auth, headers, ctx, user_id, username, method, verified).await?;
+    attempt.success();
     tracing::info!(user = %username, ip = ?ctx.client.ip, purged_sessions = purged, "signed in with a second factor");
-    let WithCookies(session, mut cookies) = start_session(pool, auth, headers, ctx, user_id, username, method).await?;
     cookies.push(session::clear_mfa_cookie(session::secure_cookies(&auth.config, headers)));
     Ok(WithCookies(session, cookies))
 }
@@ -1326,7 +1363,7 @@ mod tests {
             auth.throttle.failure("Dirk", Net::default());
         }
         let answer =
-            password_accepted(pool, &auth, &headers, &anon(), attempt("Dirk"), dirk, "dirk", LoginMethod::Ldap)
+            password_accepted(pool, &auth, &headers, &anon(), attempt("Dirk"), dirk, "dirk", LoginMethod::Ldap, None)
                 .await
                 .unwrap();
         let Either::Right(ErrorWithCookies(err, cookies)) = answer else { panic!("a session was opened") };
@@ -1349,11 +1386,169 @@ mod tests {
         assert!(auth.throttle.failure("Dirk", Net::default()).is_some(), "the failure count was not cleared");
 
         let answer =
-            password_accepted(pool, &auth, &headers, &anon(), attempt("dora"), dora, "dora", LoginMethod::Ldap)
+            password_accepted(pool, &auth, &headers, &anon(), attempt("dora"), dora, "dora", LoginMethod::Ldap, None)
                 .await
                 .unwrap();
         assert!(matches!(answer, Either::Left(_)), "no authenticator: signed in");
         assert_eq!(sessions(dora).await.unwrap(), 1);
+        db.drop().await;
+    }
+
+    /// A local account `name` and its password, generated per run as
+    /// `OWNER_PASSWORD` is, with an authenticator when `secret` is given.
+    async fn account(pool: &PgPool, name: &str, secret: Option<&[u8]>) -> (Uuid, String) {
+        let password = format!("passphrase {}", Uuid::new_v4());
+        let input = UserCreate {
+            username: name.into(),
+            display_name: name.into(),
+            email: None,
+            password: password.clone().into(),
+            is_active: Some(true),
+            profile_ids: vec![],
+        };
+        let id = users::create(pool, &RequestContext::system("test", "test"), &input).await.unwrap().id;
+        if let Some(secret) = secret {
+            let sealed = crate::secrets::sealed::seal_totp_secret(&crate::secrets::Keyring::for_tests(), id, secret);
+            let mut conn = pool.acquire().await.unwrap();
+            mfa_data::put_pending_totp(&mut conn, id, &sealed).await.unwrap();
+            mfa_data::confirm_totp(&mut conn, id, 1).await.unwrap();
+        }
+        (id, password)
+    }
+
+    /// An administrator's password reset (`disable`: disabling) of `user`,
+    /// with the row already locked as `users::set_password` and
+    /// `users::update` lock it. Its changes are made and committed once a
+    /// sign-in waits for that lock, so the sign-in had checked the password
+    /// before the reset committed.
+    async fn change_account_under(pool: &PgPool, mut tx: sqlx::PgTransaction<'_>, user: Uuid, disable: bool) {
+        let mut waiting = false;
+        for _ in 0..400 {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if n > 0 {
+                waiting = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(waiting, "the sign-in waits for the lock on the user's row");
+        if disable {
+            sqlx::query("UPDATE users SET is_active = false WHERE id = $1").bind(user).execute(&mut *tx).await.unwrap();
+        } else {
+            let hash = password::hash(&format!("reset {}", Uuid::new_v4())).await.unwrap();
+            data::set_password(&mut tx, user, &hash).await.unwrap();
+        }
+        mfa_data::delete_challenges_of_user(&mut tx, user).await.unwrap();
+        data::delete_user_sessions(&mut tx, user, None).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    async fn locked_user(pool: &PgPool, user: Uuid) -> sqlx::PgTransaction<'_> {
+        let mut tx = pool.begin().await.unwrap();
+        data::get_user(&mut tx, user, true).await.unwrap().expect("the user");
+        tx
+    }
+
+    async fn rows_of(pool: &PgPool, table: &str, user: Uuid) -> i64 {
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table} WHERE user_id = $1")))
+            .bind(user)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// A right password checked just before a reset or disable commits gets
+    /// neither a session nor, with MFA set up, a second-factor step (GH#209).
+    #[tokio::test]
+    async fn a_password_checked_before_a_reset_or_disable_gets_no_session_or_challenge() {
+        let Some(db) =
+            scratch::database("a_password_checked_before_a_reset_or_disable_gets_no_session_or_challenge").await
+        else {
+            return;
+        };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &anon(), body("owner")).await.unwrap();
+        let secret = crate::auth::totp::new_secret();
+        for (name, mfa, disable) in
+            [("reset", false, false), ("disabled", false, true), ("resetmfa", true, false), ("disabledmfa", true, true)]
+        {
+            let (user, password) = account(pool, name, mfa.then_some(secret.as_slice())).await;
+            let tx = locked_user(pool, user).await;
+            let ctx = anon();
+            let (answer, ()) = tokio::join!(
+                login(pool, &auth, &headers, &ctx, login_body(name, &password)),
+                change_account_under(pool, tx, user, disable)
+            );
+            let e = answer.err().unwrap_or_else(|| panic!("{name}: signed in"));
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "{name}: {}", e.message);
+            assert_eq!(rows_of(pool, "sessions", user).await, 0, "{name}: no session");
+            assert_eq!(rows_of(pool, "mfa_challenges", user).await, 0, "{name}: no second-factor step");
+            let last_login: Option<chrono::DateTime<chrono::Utc>> =
+                sqlx::query_scalar("SELECT last_login_at FROM users WHERE id = $1")
+                    .bind(user)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            assert_eq!(last_login, None, "{name}: not recorded as a sign-in");
+        }
+        let refused = auth_rows(pool, "login.failure").await;
+        assert_eq!(refused.len(), 4);
+        assert!(refused.iter().all(|r| r.3["reason"] == "account_changed"), "{refused:?}");
+        db.drop().await;
+    }
+
+    /// The second factor entered while a reset or disable is under way gets no
+    /// session, nor does a session opened for a password changed since it was
+    /// checked (GH#209).
+    #[tokio::test]
+    async fn a_second_factor_during_a_reset_or_disable_gets_no_session() {
+        let Some(db) = scratch::database("a_second_factor_during_a_reset_or_disable_gets_no_session").await else {
+            return;
+        };
+        let (pool, auth) = (&db.pool, auth_state());
+        setup(pool, &auth, &HeaderMap::new(), &anon(), body("owner")).await.unwrap();
+        let secret = crate::auth::totp::new_secret();
+        for (name, disable) in [("reset", false), ("disabled", true)] {
+            let (user, password) = account(pool, name, Some(&secret)).await;
+            let answer = login(pool, &auth, &HeaderMap::new(), &anon(), login_body(name, &password)).await.unwrap();
+            let Either::Right(ErrorWithCookies(_, cookies)) = answer else { panic!("{name}: no second factor asked") };
+            let token = session::cookie_value(&cookies[0], session::MFA_COOKIE).unwrap();
+            let mut headers = HeaderMap::new();
+            headers.insert(axum::http::header::COOKIE, format!("{}={token}", session::MFA_COOKIE).parse().unwrap());
+
+            let tx = locked_user(pool, user).await;
+            let code = crate::auth::totp::code_at(&secret, crate::auth::totp::current_step());
+            let ctx = anon();
+            let (answer, ()) = tokio::join!(
+                login_mfa(pool, &auth, &headers, &ctx, MfaLoginBody { code }),
+                change_account_under(pool, tx, user, disable)
+            );
+            let e = answer.err().unwrap_or_else(|| panic!("{name}: signed in"));
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "{name}: {}", e.message);
+            assert_eq!(rows_of(pool, "sessions", user).await, 0, "{name}: no session");
+            assert_eq!(rows_of(pool, "mfa_challenges", user).await, 0, "{name}: no second-factor step");
+        }
+
+        // The window after the second factor's transaction: the stamp it
+        // was checked with no longer matches the row.
+        let (user, _) = account(pool, "late", None).await;
+        let mut conn = pool.acquire().await.unwrap();
+        let checked = data::get_user(&mut conn, user, false).await.unwrap().unwrap();
+        let hash = password::hash(&format!("reset {}", Uuid::new_v4())).await.unwrap();
+        data::set_password(&mut conn, user, &hash).await.unwrap();
+        drop(conn);
+        let method = LoginMethod::Totp;
+        let verified = Some(checked.password_changed_at);
+        let e = open_session(pool, &auth, &HeaderMap::new(), &anon(), user, "late", method, verified)
+            .await
+            .expect_err("a session for the old password");
+        assert_eq!(e.code, ErrorCode::Unauthenticated);
+        assert_eq!(rows_of(pool, "sessions", user).await, 0);
         db.drop().await;
     }
 
