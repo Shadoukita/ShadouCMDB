@@ -633,7 +633,7 @@ pub async fn list(
         visible_class_ids: ctx.class_scope(ClassOp::View),
         ..filters(&mut conn, &model, q).await?
     };
-    let (rows, total) = data::list(pool, &f, sort, q.sort.desc, q.limit, q.offset).await?;
+    let (rows, total) = data::list(&mut conn, &f, sort, q.sort.desc, q.limit, q.offset).await?;
     let data = with_attributes(&mut conn, &model, rows, f.visible_class_ids.as_deref()).await?;
     Ok(Page { data, page: q.page_meta(total) })
 }
@@ -642,7 +642,7 @@ pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Res
     let mut conn = pool.acquire().await?;
     let model = Model::load(&mut conn).await?;
     let f = ItemFilters { visible_class_ids: ctx.class_scope(ClassOp::View), ..filters(&mut conn, &model, q).await? };
-    let (rows, total) = data::search(pool, &q.q, &f, q.limit, q.offset).await?;
+    let (rows, total) = data::search(&mut conn, &q.q, &f, q.limit, q.offset).await?;
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
     let values = data::values(&mut conn, &model, &ids).await?;
 
@@ -1007,7 +1007,7 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
 
     let mut hop = 1;
     while hop <= q.depth && !frontier.is_empty() {
-        let found = data::edges_touching(pool, &frontier, direction, types, visible).await?;
+        let found = data::edges_touching(&mut conn, &frontier, direction, types, visible).await?;
         let mut next = Vec::new();
         for e in &found {
             for other in [e.source_ci_id, e.target_ci_id] {
@@ -1029,7 +1029,7 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
     // Edges between nodes discovered at the last hop (e.g. app -> db when both
     // hang off the same server) are included too, so the picture is complete.
     if !frontier.is_empty() {
-        for e in data::edges_touching(pool, &frontier, Direction::Both, types, visible).await? {
+        for e in data::edges_touching(&mut conn, &frontier, Direction::Both, types, visible).await? {
             keep_edge(&e, &depth_of, &mut edges);
         }
     }
@@ -1345,6 +1345,49 @@ mod tests {
         assert_eq!(code("attributes.cpu_cores", &[server, switch]).await, "unknown_attribute");
         // virtual_machine defines its own hostname: not the same attribute as the servers'.
         assert_eq!(code("attributes.hostname", &[server, vm]).await, "ambiguous_attribute");
+        db.drop().await;
+    }
+
+    /// GH#177: a request holds at most one pooled connection, so list, search
+    /// and graph still answer on a pool of one instead of waiting on themselves.
+    #[tokio::test]
+    async fn list_search_and_graph_need_one_connection() {
+        let Some(db) = scratch::database("list_search_and_graph_need_one_connection").await else { return };
+        crate::seed::install_template(&db.pool, "it_infrastructure").await.unwrap();
+        crate::seed::seed_demo_data(&db.pool).await.unwrap();
+        let server = id_of(&db.pool, "ci_classes", "server").await;
+        let root: Uuid = sqlx::query_scalar("SELECT id FROM configuration_items WHERE class_id = $1 LIMIT 1")
+            .bind(server)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        let one = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .connect_with((*db.pool.connect_options()).clone())
+            .await
+            .unwrap();
+        let ctx = user_ctx(false);
+
+        let q: ListItemsQuery = serde_json::from_value(json!({
+            "limit": 50, "offset": 0, "sort": "label", "includeSubclasses": "true", "deleted": "exclude", "active": "true"
+        }))
+        .unwrap();
+        let page = list(&one, &ctx, &q).await.unwrap();
+        assert!(!page.data.is_empty());
+        assert_eq!(page.page.total, page.data.len() as i64);
+
+        let q: SearchQuery = serde_json::from_value(json!({
+            "limit": 10, "offset": 0, "q": "CI-", "includeSubclasses": "true", "deleted": "exclude", "active": "true"
+        }))
+        .unwrap();
+        search(&one, &ctx, &q).await.unwrap();
+
+        let q = GraphQuery { depth: 3, direction: GraphDirection::Both, relationship_type_id: None, max_nodes: 250 };
+        let g = graph(&one, &ctx, root, &q).await.unwrap();
+        assert!(g.nodes.len() > 1 && !g.edges.is_empty(), "{} nodes, {} edges", g.nodes.len(), g.edges.len());
+
+        one.close().await;
         db.drop().await;
     }
 }

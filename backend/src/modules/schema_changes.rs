@@ -106,7 +106,7 @@ pub async fn list(pool: &PgPool, q: &SchemaChangeList) -> Result<Page<SchemaChan
     };
     let order = format!("occurred_at {}, id {}", q.sort.dir(), q.sort.dir());
     let (rows, total) = crud::select_page::<SchemaChange>(
-        pool,
+        &mut *pool.acquire().await?,
         "cmdb.schema_changes",
         CHANGE_COLUMNS,
         &filter,

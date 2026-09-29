@@ -2,7 +2,7 @@
 //! filtered lists, and the writes.
 
 use chrono::{DateTime, Utc};
-use sqlx::{AssertSqlSafe, PgConnection, PgPool};
+use sqlx::{AssertSqlSafe, PgConnection};
 use uuid::Uuid;
 
 use super::crud::{self, Where};
@@ -59,7 +59,7 @@ fn sort_column(field: &str) -> &'static str {
 }
 
 pub async fn list(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     filter: crud::Filter<'_>,
     sort_field: &str,
     sort_dir: &str,
@@ -67,7 +67,7 @@ pub async fn list(
     offset: i64,
 ) -> sqlx::Result<(Vec<RelationshipRow>, i64)> {
     let order = format!("{} {sort_dir}, r.id ASC", sort_column(sort_field));
-    crud::select_page(pool, FROM, COLUMNS, filter, &order, limit, offset).await
+    crud::select_page(conn, FROM, COLUMNS, filter, &order, limit, offset).await
 }
 
 pub async fn get(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<RelationshipRow>> {

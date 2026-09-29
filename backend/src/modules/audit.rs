@@ -207,8 +207,16 @@ pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &AuditQuery) -> Result
     };
     let dir = q.sort.dir();
     let order = format!("occurred_at {dir}, id {dir}");
-    let (mut rows, total) =
-        crud::select_page::<AuditEntry>(pool, "audit_log", COLUMNS, &filter, &order, q.limit, q.offset).await?;
+    let (mut rows, total) = crud::select_page::<AuditEntry>(
+        &mut *pool.acquire().await?,
+        "audit_log",
+        COLUMNS,
+        &filter,
+        &order,
+        q.limit,
+        q.offset,
+    )
+    .await?;
     if let Some(visible) = ctx.class_scope(ClassOp::View) {
         let classes = ci_classes(pool, &referenced_cis(&rows)).await?;
         redact(&mut rows, &classes, &visible.into_iter().collect());

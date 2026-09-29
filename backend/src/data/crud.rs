@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 use sqlx::postgres::PgRow;
-use sqlx::{AssertSqlSafe, FromRow, PgConnection, PgPool, Postgres, QueryBuilder};
+use sqlx::{AssertSqlSafe, FromRow, PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::api::context::RequestContext;
@@ -40,9 +40,9 @@ impl<'q> Where<'q> {
 /// A filter callback: called once for the page query and once for its count.
 pub type Filter<'f> = &'f (dyn for<'q> Fn(&mut Where<'q>) + Sync);
 
-/// One page of rows plus the total matching the same filter (queried concurrently).
+/// One page of rows plus the total matching the same filter.
 pub async fn select_page<T>(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     from: &str,
     columns: &str,
     filter: Filter<'_>,
@@ -53,13 +53,17 @@ pub async fn select_page<T>(
 where
     T: for<'r> FromRow<'r, PgRow> + Send + Unpin,
 {
-    select_page_counted(pool, from, from, columns, filter, order_by, limit, offset).await
+    select_page_counted(conn, from, from, columns, filter, order_by, limit, offset).await
 }
 
 /// Like [`select_page`], counting over `count_from` (e.g. without joins the filter does not need).
+///
+/// Both queries run one after the other on the caller's connection: a list
+/// request never needs more than the one connection it already holds, so a
+/// burst of lists cannot starve the pool (GH#177).
 #[allow(clippy::too_many_arguments)]
 pub async fn select_page_counted<T>(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     from: &str,
     count_from: &str,
     columns: &str,
@@ -78,7 +82,9 @@ where
     let mut count = QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {count_from}"));
     filter(&mut Where::new(&mut count));
 
-    tokio::try_join!(rows.build_query_as::<T>().fetch_all(pool), count.build_query_scalar::<i64>().fetch_one(pool))
+    let page = rows.build_query_as::<T>().fetch_all(&mut *conn).await?;
+    let total = count.build_query_scalar::<i64>().fetch_one(&mut *conn).await?;
+    Ok((page, total))
 }
 
 // ---------------------------------------------------------------------------

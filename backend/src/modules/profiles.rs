@@ -338,7 +338,7 @@ pub async fn list(pool: &PgPool, q: &ProfileList) -> Result<Page<PermissionProfi
     // The built-in profile first, then the requested order.
     let order = format!("p.is_builtin DESC, {column} {}, p.id", q.sort.dir());
     let (rows, total) = crud::select_page::<ProfileRow>(
-        pool,
+        &mut *pool.acquire().await?,
         "permission_profiles p",
         data::PROFILE_COLUMNS,
         &filter,

@@ -237,8 +237,16 @@ pub async fn list(pool: &PgPool, q: &ApiTokenList) -> Result<Page<ApiToken>, App
         _ => "t.created_at",
     };
     let order = format!("{column} {} NULLS LAST, t.id", q.sort.dir());
-    let (rows, total) =
-        crud::select_page::<TokenRow>(pool, data::FROM, data::COLUMNS, &filter, &order, q.limit, q.offset).await?;
+    let (rows, total) = crud::select_page::<TokenRow>(
+        &mut *pool.acquire().await?,
+        data::FROM,
+        data::COLUMNS,
+        &filter,
+        &order,
+        q.limit,
+        q.offset,
+    )
+    .await?;
     Ok(Page { data: rows.into_iter().map(ApiToken::from).collect(), page: q.page_meta(total) })
 }
 
