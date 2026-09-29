@@ -217,6 +217,34 @@ test("list views: an attribute default sort, and attribute column headers sort t
   await expect(page.getByRole("columnheader", { name: /Label/ })).toHaveAttribute("aria-sort", "ascending");
 });
 
+test("list views: adding a column to a view without columns keeps the default columns", async ({ page, request }) => {
+  const serverId = await classIdByName(request, "Server");
+  // What migration 0020 writes for an rc.1 default sort, and what an API client or an import may send (GH#168).
+  const s = await apiGet<Settings>(request, "/ui-settings");
+  const view = { classKey: "server", columns: [], defaultSort: { field: "attributes.ip_address", direction: "asc" } };
+  const res = await request.put("/api/v1/ui-settings", {
+    data: { version: s.version, settings: { ...s.settings, listViews: [view] }, comment: `e2e view without columns ${stamp}` },
+    headers: { "X-CSRF-Token": await csrf(request) },
+  });
+  expect(res.ok(), `put → ${res.status()} ${await res.text()}`).toBeTruthy();
+
+  await page.goto("/admin/customization/list-views?class=server");
+  const list = page.getByRole("list", { name: "Columns" });
+  const defaults = ["Label", "Ident", "Class", "Active", "Updated"];
+  await expect(page.getByText("No columns chosen: the default columns are shown.")).toBeVisible();
+  await expect(list.getByRole("listitem")).toHaveCount(defaults.length);
+  await page.getByLabel("Add to Columns").selectOption({ label: "Hostname (attribute)" });
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(list.getByRole("listitem")).toHaveCount(defaults.length + 1);
+  await expect(page.getByText("No columns chosen: the default columns are shown.")).toHaveCount(0);
+  await save(page, "e2e add column to default view");
+
+  await page.goto(`/cis?classId=${serverId}`);
+  await expect(page.locator("table.data thead th")).toHaveText([...defaults, "Hostname"].map((h) => new RegExp(`^${h}`)));
+  // The label column still opens the CI.
+  await expect(page.locator("table.data tbody tr a").first()).toBeVisible();
+});
+
 test("layouts: the form designer arranges tabs, sections and widths for the form and the detail page", async ({ page, request }) => {
   // Tall enough that a dragged field and the tab it is dropped on are both in view.
   await page.setViewportSize({ width: 1440, height: 1800 });
