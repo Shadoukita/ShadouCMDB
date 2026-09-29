@@ -200,14 +200,35 @@ async fn find(ldap: &mut Ldap, s: &Settings, username: &str) -> Result<Result<Di
 
 /// Checks `username` and `password` against the directory.
 pub async fn authenticate(s: &Settings, username: &str, password: &str) -> Result<Outcome, DirectoryError> {
+    check(s, username, None, password).await
+}
+
+/// Checks the password of one known entry: the one `username` finds must have
+/// `external_id`, or it counts as not found and no bind is attempted (another
+/// entry that now has the name is someone else).
+pub async fn reauthenticate(
+    s: &Settings,
+    username: &str,
+    external_id: &str,
+    password: &str,
+) -> Result<Outcome, DirectoryError> {
+    check(s, username, Some(external_id), password).await
+}
+
+async fn check(
+    s: &Settings,
+    username: &str,
+    expected: Option<&str>,
+    password: &str,
+) -> Result<Outcome, DirectoryError> {
     if password.is_empty() {
         return Ok(Outcome::WrongPassword);
     }
     let mut ldap = connect(s).await?;
     service_bind(&mut ldap, s).await?;
     let user = match find(&mut ldap, s, username).await? {
-        Ok(user) => user,
-        Err(0) => return Ok(Outcome::NotFound),
+        Ok(user) if expected.is_none_or(|id| id == user.external_id) => user,
+        Ok(_) | Err(0) => return Ok(Outcome::NotFound),
         Err(n) => return Ok(Outcome::Ambiguous(n)),
     };
     let outcome = match ldap.with_timeout(TIMEOUT).simple_bind(&user.dn, password).await {
