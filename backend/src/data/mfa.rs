@@ -193,6 +193,13 @@ pub async fn challenge_failed(conn: &mut PgConnection, id: Uuid, max: i32) -> sq
     Ok(())
 }
 
+/// Every pending second-factor step of the user: a password reset or disabling
+/// the account must not leave one started before it usable (GH#191).
+pub async fn delete_challenges_of_user(conn: &mut PgConnection, user_id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM mfa_challenges WHERE user_id = $1").bind(user_id).execute(conn).await?;
+    Ok(())
+}
+
 pub async fn delete_challenge(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM mfa_challenges WHERE id = $1").bind(id).execute(conn).await?;
     Ok(())
