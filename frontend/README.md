@@ -214,6 +214,11 @@ token are refused, signing out, disabling the account or resetting its password 
 and repeated wrong passwords lock the username with `429`.
 Any page error or Vue warning fails the test.
 
+`a11y.spec.ts` runs axe-core (WCAG 2.1 A and AA rules) on sign-in, the inventory, a CI detail page with its delete
+dialog and edit form, the class and attribute editor, users and profiles, My account and the two-factor enrolment
+step. Critical and serious violations fail it; the rest is reported. What it covers and what it does not is in
+[docs/accessibility.md](../docs/accessibility.md).
+
 `first-run.spec.ts` walks the real first-run setup, nothing mocked, and only runs when `E2E_FRESH_BASE_URL` points
 at a second API whose database is migrated but has no user. It creates the first administrator there, so give it
 a newly migrated database for each run (CI starts one on port 3001).

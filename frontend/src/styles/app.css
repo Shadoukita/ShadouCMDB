@@ -26,6 +26,11 @@ a {
 a:hover {
   text-decoration: underline;
 }
+/* A link inside running text is told apart by more than its colour (WCAG 1.4.1). */
+p a:not(.btn),
+.hint a:not(.btn) {
+  text-decoration: underline;
+}
 :focus-visible {
   outline: 2px solid var(--c-focus);
   outline-offset: 1px;

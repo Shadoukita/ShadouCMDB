@@ -81,7 +81,7 @@ const describedBy = computed(() => [shownError.value ? `${props.id}-err` : "", `
 
 <template>
   <div class="field technical-name">
-    <label :for="id">{{ label }}<span v-if="editable" class="req" aria-label="required">*</span></label>
+    <label :for="id">{{ label }}<span v-if="editable" class="req" aria-hidden="true">*</span></label>
     <div class="inline-control">
       <input
         :id="id"
@@ -92,6 +92,7 @@ const describedBy = computed(() => [shownError.value ? `${props.id}-err` : "", `
         autocomplete="off"
         maxlength="63"
         :readonly="!editable"
+        :aria-required="editable || undefined"
         :aria-invalid="!!shownError || undefined"
         :aria-describedby="describedBy"
         @input="onInput"
