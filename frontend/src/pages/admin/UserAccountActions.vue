@@ -77,7 +77,7 @@ function resetPassword() {
   pwDone.value = false;
   setPassword.reset();
   const errs: Record<string, string> = {};
-  if (pw.value.length < 12) errs.password = "Too short";
+  if ([...pw.value].length < 12) errs.password = "Too short";
   if (pw.value !== pw2.value) errs.confirm = "The passwords do not match";
   pwLocal.value = errs;
   if (Object.keys(errs).length > 0) return;

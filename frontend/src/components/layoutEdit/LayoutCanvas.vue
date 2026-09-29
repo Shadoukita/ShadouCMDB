@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { clampFrame, GUIDE_PX, isFreeTab, LAYER_ICONS, layerOf, LAYER_MOVES, readingOrder, STACK_BELOW_PX, tabHeight, toBox, type Frame, type LayerMove, type SnapLine } from "../../lib/freeLayout";
 import type { EffectiveAttribute } from "../../api/queries";
 import {
   addNote,
@@ -59,6 +60,7 @@ import {
 import ConfirmDialog from "../ConfirmDialog.vue";
 import NoteText from "../NoteText.vue";
 import EditableField, { type SectionOption } from "./EditableField.vue";
+import FreeWindow from "./FreeWindow.vue";
 import PreviewResizeHandle from "./PreviewResizeHandle.vue";
 import SectionShell, { type DropSide } from "./SectionShell.vue";
 
@@ -78,7 +80,10 @@ import SectionShell, { type DropSide } from "./SectionShell.vue";
  * audit trail), each once per layout; the page draws a placed panel through the
  * `panel` slot. Notes and panels sit on the grid like any section. When the API
  * refuses a save, its messages about a section are listed in that section.
- * Every change goes through the editor (undo, save).
+ * A free tab (the edit bar's Grid / Free) shows its sections as windows
+ * (FreeWindow): moved and resized anywhere, overlapping, stacked in layers; the
+ * unplaced fields and + Section follow below the lowest window. Every change
+ * goes through the editor (undo, save).
  */
 const props = defineProps<{
   editor: LayoutEditor;
@@ -103,8 +108,12 @@ const shownFields = (s: LayoutSection) => (s.fields ?? []).filter((f) => known(f
 const isReadOnly = (f: string) => !!layout.value?.readOnlyFields?.includes(f);
 
 const tabs = computed<LayoutTab[]>(() => layout.value?.tabs ?? []);
-const activeTabKey = ref("");
-const activeTab = computed(() => tabs.value.find((t) => t.key === activeTabKey.value) ?? tabs.value[0]);
+/** The tab in view is the editor's, so the edit bar's Grid / Free applies to it. */
+const activeTabKey = computed({
+  get: () => props.editor.tabKey,
+  set: (key: string) => (props.editor.tabKey = key),
+});
+const activeTab = computed(() => props.editor.tab);
 const onFirstTab = computed(() => !!activeTab.value && activeTab.value === tabs.value[0]);
 /** What the layout leaves to the built-in placement: automatic sections at the end of the first tab. */
 const autoSections = computed(() => (layout.value ? (resolveLayout(layout.value, props.attrs, CORE_FIELDS, [], true)[0]?.sections ?? []).filter((s) => s.auto) : []));
@@ -122,11 +131,7 @@ const errorsOf = (s: LayoutSection) => props.editor.sectionErrors[s.key] ?? [];
 
 // ---------- Announcements and focus ----------
 
-const announcement = ref("");
-function say(text: string) {
-  announcement.value = "";
-  void nextTick(() => (announcement.value = text));
-}
+const say = (text: string) => props.editor.say(text);
 function focus(id: string) {
   void nextTick(() => document.getElementById(id)?.focus());
 }
@@ -412,6 +417,72 @@ watch(
   () => (activeTabKey.value = ""),
 );
 
+// ---------- Free tabs: windows ----------
+
+const isFree = computed(() => isFreeTab(activeTab.value));
+const areaEl = ref<HTMLElement>();
+const areaWidth = ref(0);
+const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => (areaWidth.value = e.contentRect.width));
+watch(areaEl, (el, old) => {
+  if (old) observer?.unobserve(old);
+  if (el) {
+    observer?.observe(el);
+    areaWidth.value = el.getBoundingClientRect().width;
+  }
+});
+onBeforeUnmount(() => observer?.disconnect());
+/** Below the tablet breakpoint a free tab stacks its windows, as the page does: nothing to drag there. */
+const stacked = computed(() => areaWidth.value > 0 && areaWidth.value < STACK_BELOW_PX);
+/** The sections of the tab in view: in reading order on a free tab (kept while a window moves, so it stays under the pointer). */
+const frozen = ref<string[] | null>(null);
+const shownSections = computed(() => {
+  const list = activeTab.value?.sections ?? [];
+  if (!isFree.value) return list;
+  if (frozen.value) return frozen.value.map((k) => list.find((s) => s.key === k)).filter((s): s is LayoutSection => !!s);
+  return readingOrder(list);
+});
+/** Room below the lowest window to drag windows into. */
+const freeHeight = computed(() => (activeTab.value ? tabHeight(activeTab.value) : 0) + 160);
+const guides = ref<SnapLine[]>([]);
+const moving = ref(false);
+const othersOf = (s: LayoutSection) => (activeTab.value?.sections ?? []).filter((o) => o !== s && o.frame).map((o) => toBox(o.frame!, areaWidth.value));
+const layerAt = (s: LayoutSection) => (activeTab.value ? layerOf(activeTab.value, s) : { index: 0, count: 0 });
+
+/** A window moved or resized: dragged (one undo step per drag, with the bring-to-front that started it) or by a key. */
+function onFrame(s: LayoutSection, frame: Frame, drag: boolean) {
+  onSection(s.key, (_, own) => (own.frame = clampFrame(frame)), drag ? `win:${s.key}` : undefined);
+}
+function onWindowStart() {
+  frozen.value = shownSections.value.map((s) => s.key);
+  moving.value = true;
+}
+function onWindowEnd(s: LayoutSection, text: string | null) {
+  frozen.value = null;
+  moving.value = false;
+  props.editor.endGesture();
+  if (text) say(text);
+  focusGripIfFocused(s);
+}
+/** A key on a window's grip re-renders the tab in reading order: the grip keeps the focus. */
+function focusGripIfFocused(s: LayoutSection) {
+  const id = `le-wgrip-${s.key}`;
+  if (document.activeElement?.id === id) focus(id);
+}
+/** Pressing on a window selects it and brings it to the front (the same undo step as the drag that may follow). */
+function onSelect(s: LayoutSection) {
+  props.editor.selected = s.key;
+  const tab = activeTab.value;
+  if (!tab) return;
+  const at = layerOf(tab, s);
+  if (at.index < at.count) props.editor.layer("front", s.key);
+  props.editor.endGesture();
+}
+function onLayer(s: LayoutSection, move: LayerMove) {
+  props.editor.selected = s.key;
+  props.editor.layer(move, s.key);
+  focusGripIfFocused(s);
+}
+
 // ---------- Drag and drop ----------
 
 const dragField = ref<string | null>(null);
@@ -568,26 +639,47 @@ function onHiddenDrop(e: DragEvent) {
           <button type="button" class="btn btn-sm le-add" @click="onAddTab">+ Tab</button>
         </div>
 
-        <div class="layout-panels" role="region" :aria-label="`Tab ${activeTab?.label ?? ''}`">
-          <SectionShell
-            v-for="(s, j) in activeTab?.sections ?? []"
+        <div
+          ref="areaEl"
+          :class="isFree ? ['le-free', { stacked, 'le-guides': moving && editor.snap }] : 'layout-panels'"
+          :style="isFree && !stacked ? { '--free-h': `${freeHeight}px`, '--guide': `${GUIDE_PX}px` } : undefined"
+          role="region"
+          :aria-label="`Tab ${activeTab?.label ?? ''}`"
+          data-le-area
+          :data-placement="isFree ? 'free' : 'grid'"
+        >
+          <!-- One section, as a window of a free tab or on the grid: the same content either way. -->
+          <component
+            :is="isFree ? FreeWindow : SectionShell"
+            v-for="(s, j) in shownSections"
             :key="s.key"
-            :section="s"
-            :has-left="hasLeft(s)"
-            :start="places[j]?.start ?? 0"
-            :dragging="dragSection === s.key"
-            :drop="dropSection?.key === s.key ? dropSection.side : null"
-            id-prefix="le"
-            keys-id="le-keys"
-            @width="(w, drag) => resizeSection(s, w, drag)"
-            @border="(line) => moveBorder(s, line)"
-            @gesture-end="editor.endGesture()"
-            @move="(d) => onMoveSection(s, d)"
-            @add="(where) => (where === 'beside' ? insertSection(j + 1, s) : insertSection(j + 1))"
-            @dragstart="onSectionDragStart(s)"
-            @dragend="onSectionDragEnd"
-            @dropside="(side) => (dropSection = side ? { key: s.key, side } : null)"
-            @dropped="(side) => onSectionDrop(s, side)"
+            v-bind="
+              isFree
+                ? { section: s, frame: s.frame!, areaWidth, others: othersOf(s), layer: layerAt(s), selected: editor.selected === s.key, snap: editor.snap, stacked, idPrefix: 'le', keysId: 'le-keys' }
+                : { section: s, hasLeft: hasLeft(s), start: places[j]?.start ?? 0, dragging: dragSection === s.key, drop: dropSection?.key === s.key ? dropSection.side : null, idPrefix: 'le', keysId: 'le-keys' }
+            "
+            v-on="
+              isFree
+                ? {
+                    frame: (f: Frame, drag: boolean) => onFrame(s, f, drag),
+                    gestureStart: onWindowStart,
+                    gestureEnd: (text: string | null) => onWindowEnd(s, text),
+                    select: () => onSelect(s),
+                    layer: (m: LayerMove) => onLayer(s, m),
+                    guides: (lines: SnapLine[]) => (guides = lines),
+                  }
+                : {
+                    width: (w: number, drag: boolean) => resizeSection(s, w, drag),
+                    border: (line: number) => moveBorder(s, line),
+                    gestureEnd: () => editor.endGesture(),
+                    move: (d: -1 | 1) => onMoveSection(s, d),
+                    add: (where: 'beside' | 'after') => (where === 'beside' ? insertSection(j + 1, s) : insertSection(j + 1)),
+                    dragstart: () => onSectionDragStart(s),
+                    dragend: onSectionDragEnd,
+                    dropside: (side: DropSide | null) => (dropSection = side ? { key: s.key, side } : null),
+                    dropped: (side: DropSide) => onSectionDrop(s, side),
+                  }
+            "
           >
             <section :class="['panel', 'layout-panel', 'le-section', { 'le-block': kindOf(s) !== 'fields', invalid: errorsOf(s).length > 0 }]" :aria-label="`Section ${s.label}`">
               <div class="panel-header">
@@ -605,35 +697,52 @@ function onHiddenDrop(e: DragEvent) {
                   />
                   <button v-else :id="`le-section-${s.key}`" type="button" class="le-section-label" title="Click to rename" @click="startRename('section', s.key, s.label)">{{ s.label }}</button>
                 </h2>
-                <span v-if="kindOf(s) === 'note'" class="muted"><span class="badge">Note</span> · {{ sectionWidth(s) }} / {{ SECTION_GRID }} wide<template v-if="s.collapsed"> · starts collapsed</template></span>
-                <span v-else-if="isPanelKind(kindOf(s))" class="muted"><span class="badge">{{ panelLabel(kindOf(s) as PanelKind) }} panel</span> · {{ sectionWidth(s) }} / {{ SECTION_GRID }} wide<template v-if="s.collapsed"> · starts collapsed</template></span>
+                <span v-if="kindOf(s) === 'note'" class="muted"><span class="badge">Note</span><template v-if="!isFree"> · {{ sectionWidth(s) }} / {{ SECTION_GRID }} wide</template><template v-if="s.collapsed"> · starts collapsed</template></span>
+                <span v-else-if="isPanelKind(kindOf(s))" class="muted"><span class="badge">{{ panelLabel(kindOf(s) as PanelKind) }} panel</span><template v-if="!isFree"> · {{ sectionWidth(s) }} / {{ SECTION_GRID }} wide</template><template v-if="s.collapsed"> · starts collapsed</template></span>
+                <span v-else-if="isFree" class="muted" data-testid="le-section-size">{{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · starts collapsed</template></span>
                 <span v-else class="muted" data-testid="le-section-size">{{ sectionWidth(s) }} / {{ SECTION_GRID }} wide · {{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · starts collapsed</template></span>
                 <span class="le-section-tools" role="toolbar" :aria-label="`Section ${s.label}: layout`">
-                  <button type="button" class="btn btn-sm" :aria-label="`Move section ${s.label} up`" title="Move up" :disabled="sectionIndex(s) <= 0" @click="onMoveSection(s, -1)">↑</button>
-                  <button
-                    type="button"
-                    class="btn btn-sm"
-                    :aria-label="`Move section ${s.label} down`"
-                    title="Move down"
-                    :disabled="sectionIndex(s) >= (activeTab?.sections?.length ?? 0) - 1"
-                    @click="onMoveSection(s, 1)"
-                  >
-                    ↓
-                  </button>
-                  <select :aria-label="`Width of ${s.label}`" title="Width on the tab's 12-column grid" :value="sectionWidth(s)" @change="resizeSection(s, Number(($event.target as HTMLSelectElement).value))">
-                    <option v-for="n in SECTION_GRID" :key="n" :value="n">{{ n }} / {{ SECTION_GRID }}</option>
-                  </select>
-                  <button
-                    v-if="j > 0"
-                    type="button"
-                    class="btn btn-sm"
-                    :aria-pressed="!!s.newRow"
-                    :aria-label="`Section ${s.label} starts a new row`"
-                    title="Start a new row even if it fits next to the section before"
-                    @click="onNewRow(s, !s.newRow)"
-                  >
-                    New row
-                  </button>
+                  <template v-if="isFree">
+                    <button
+                      v-for="m in LAYER_MOVES"
+                      :key="m.move"
+                      type="button"
+                      class="btn btn-sm"
+                      :aria-label="`${m.label}: ${s.label}`"
+                      :title="`${m.label} (${m.keys} on the window's grip)`"
+                      :disabled="m.move === 'front' || m.move === 'forward' ? layerAt(s).index >= layerAt(s).count : layerAt(s).index <= 1"
+                      @click="onLayer(s, m.move)"
+                    >
+                      {{ LAYER_ICONS[m.move] }}
+                    </button>
+                  </template>
+                  <template v-else>
+                    <button type="button" class="btn btn-sm" :aria-label="`Move section ${s.label} up`" title="Move up" :disabled="sectionIndex(s) <= 0" @click="onMoveSection(s, -1)">↑</button>
+                    <button
+                      type="button"
+                      class="btn btn-sm"
+                      :aria-label="`Move section ${s.label} down`"
+                      title="Move down"
+                      :disabled="sectionIndex(s) >= (activeTab?.sections?.length ?? 0) - 1"
+                      @click="onMoveSection(s, 1)"
+                    >
+                      ↓
+                    </button>
+                    <select :aria-label="`Width of ${s.label}`" title="Width on the tab's 12-column grid" :value="sectionWidth(s)" @change="resizeSection(s, Number(($event.target as HTMLSelectElement).value))">
+                      <option v-for="n in SECTION_GRID" :key="n" :value="n">{{ n }} / {{ SECTION_GRID }}</option>
+                    </select>
+                    <button
+                      v-if="j > 0"
+                      type="button"
+                      class="btn btn-sm"
+                      :aria-pressed="!!s.newRow"
+                      :aria-label="`Section ${s.label} starts a new row`"
+                      title="Start a new row even if it fits next to the section before"
+                      @click="onNewRow(s, !s.newRow)"
+                    >
+                      New row
+                    </button>
+                  </template>
                   <button type="button" class="btn btn-sm" :aria-pressed="!!s.collapsed" :aria-label="`Section ${s.label} starts collapsed on the detail page`" @click="onSection(s.key, (_, own) => (own.collapsed = !own.collapsed))">
                     Collapsed
                   </button>
@@ -719,59 +828,63 @@ function onHiddenDrop(e: DragEvent) {
                 </div>
               </div>
             </section>
-          </SectionShell>
-          <div class="le-insert">
-            <button type="button" class="btn btn-sm le-add" :aria-label="`Add a section to ${activeTab?.label}`" @click="insertSection(activeTab?.sections?.length ?? 0)">+ Section</button>
-            <button type="button" class="btn btn-sm le-add" :aria-label="`Add a note to ${activeTab?.label}`" @click="insertNote(activeTab?.sections?.length ?? 0)">+ Note</button>
-            <select
-              class="btn btn-sm le-add"
-              :aria-label="`Add a panel to ${activeTab?.label}`"
-              :disabled="freePanels.length === 0"
-              :title="freePanels.length === 0 ? 'Every panel is placed' : undefined"
-              @change="insertPanel(activeTab?.sections?.length ?? 0, $event)"
-            >
-              <option value="">+ Panel</option>
-              <option v-for="p in freePanels" :key="p.kind" :value="p.kind">{{ p.label }}</option>
-            </select>
-          </div>
+          </component>
+          <span v-for="(g, k) in isFree && !stacked ? guides : []" :key="k" :class="['le-snap', g.axis]" :style="g.axis === 'x' ? { left: `${g.at}px` } : { top: `${g.at}px` }" aria-hidden="true" />
+          <!-- After the windows of a free tab (below the lowest one), or on the grid after its sections. -->
+          <div :class="isFree ? 'layout-panels le-tail' : 'le-tail-grid'">
+            <div class="le-insert">
+              <button type="button" class="btn btn-sm le-add" :aria-label="`Add a section to ${activeTab?.label}`" @click="insertSection(activeTab?.sections?.length ?? 0)">+ Section</button>
+              <button type="button" class="btn btn-sm le-add" :aria-label="`Add a note to ${activeTab?.label}`" @click="insertNote(activeTab?.sections?.length ?? 0)">+ Note</button>
+              <select
+                class="btn btn-sm le-add"
+                :aria-label="`Add a panel to ${activeTab?.label}`"
+                :disabled="freePanels.length === 0"
+                :title="freePanels.length === 0 ? 'Every panel is placed' : undefined"
+                @change="insertPanel(activeTab?.sections?.length ?? 0, $event)"
+              >
+                <option value="">+ Panel</option>
+                <option v-for="p in freePanels" :key="p.kind" :value="p.kind">{{ p.label }}</option>
+              </select>
+            </div>
 
-          <template v-if="onFirstTab">
-            <section v-for="a in autoSections" :key="a.key" class="panel layout-panel le-section auto" :aria-label="`Not placed: ${a.label}`">
-              <div class="panel-header">
-                <h2>{{ a.label }}</h2>
-                <span class="muted">Not placed by this layout: shown here automatically</span>
-                <button type="button" class="btn btn-sm" @click="makeSection(a.label, a.fields.map((f) => f.field))">Make this a section</button>
-              </div>
-              <div class="panel-body">
-                <div :class="[gridClass(a.columns), 'le-grid']">
-                  <EditableField
-                    v-for="f in a.fields"
-                    :key="f.field"
-                    :field="f.field"
-                    :label="labelOf(f.field)"
-                    :width="1"
-                    :columns="a.columns"
-                    :core="isCore(f.field)"
-                    :required="defFor(f.field)?.isRequired"
-                    :read-only="isReadOnly(f.field)"
-                    :can-read-only="form"
-                    :show-label="!form"
-                    auto
-                    :sections="sectionOptions"
-                    :dragging="dragField === f.field"
-                    @hide="hide(f.field)"
-                    @place="(k) => place(f.field, k)"
-                    @read-only="(on) => setReadOnly(f.field, on)"
-                    @dragstart="(e) => onDragStart(f.field, e)"
-                    @dragend="onDragEnd"
-                  >
-                    <slot name="field" :field="f.field" />
-                  </EditableField>
+            <template v-if="onFirstTab">
+              <section v-for="a in autoSections" :key="a.key" class="panel layout-panel le-section auto" :aria-label="`Not placed: ${a.label}`">
+                <div class="panel-header">
+                  <h2>{{ a.label }}</h2>
+                  <span class="muted">Not placed by this layout: shown here automatically</span>
+                  <button type="button" class="btn btn-sm" @click="makeSection(a.label, a.fields.map((f) => f.field))">Make this a section</button>
                 </div>
-              </div>
-            </section>
-            <slot name="first-tab-end" />
-          </template>
+                <div class="panel-body">
+                  <div :class="[gridClass(a.columns), 'le-grid']">
+                    <EditableField
+                      v-for="f in a.fields"
+                      :key="f.field"
+                      :field="f.field"
+                      :label="labelOf(f.field)"
+                      :width="1"
+                      :columns="a.columns"
+                      :core="isCore(f.field)"
+                      :required="defFor(f.field)?.isRequired"
+                      :read-only="isReadOnly(f.field)"
+                      :can-read-only="form"
+                      :show-label="!form"
+                      auto
+                      :sections="sectionOptions"
+                      :dragging="dragField === f.field"
+                      @hide="hide(f.field)"
+                      @place="(k) => place(f.field, k)"
+                      @read-only="(on) => setReadOnly(f.field, on)"
+                      @dragstart="(e) => onDragStart(f.field, e)"
+                      @dragend="onDragEnd"
+                    >
+                      <slot name="field" :field="f.field" />
+                    </EditableField>
+                  </div>
+                </div>
+              </section>
+              <slot name="first-tab-end" />
+            </template>
+          </div>
         </div>
       </div>
     </div>
@@ -781,8 +894,15 @@ function onHiddenDrop(e: DragEvent) {
       the tab's 12 columns. Drag the grip on the preview's right edge to try any screen width. Keyboard: on a field's or a
       section's grip, Alt+↑ / Alt+↓ move it, Alt+← / Alt+→ make it narrower or wider, Delete hides a field; the toolbars
       have the rest.
+      <template v-if="isFree">
+        This tab is free: drag a window by its title bar anywhere, and its edges or corners to resize it; windows may overlap.
+        Pressing on a window brings it to the front; right-click it for the layers. Edges snap to other windows and an 8 px
+        grid: hold Alt, or turn Snap off in the bar, to place freely. Keyboard, on a window's grip: arrows move it (Shift:
+        further, Alt: 1 px), Ctrl+arrows resize it, Ctrl+PageUp / Ctrl+PageDown move it a layer up or down (with Shift: to
+        the front or the back), Shift+F10 opens the layers menu.
+      </template>
     </p>
-    <div class="sr-only" aria-live="assertive">{{ announcement }}</div>
+    <div class="sr-only" aria-live="assertive">{{ editor.announcement }}</div>
   </div>
 
   <ConfirmDialog :open="!!confirmRemove" :title="removeTitle" confirm-label="Remove" @confirm="doRemove" @cancel="confirmRemove = null">
@@ -791,6 +911,50 @@ function onHiddenDrop(e: DragEvent) {
 </template>
 
 <style scoped>
+/* A free tab: the windows sit in the room above its tail (+ Section, the unplaced fields). */
+.le-free {
+  position: relative;
+  padding-top: var(--free-h);
+}
+.le-free.stacked {
+  padding-top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.le-free:not(.stacked) {
+  background-image: linear-gradient(to bottom, transparent calc(var(--free-h) - 1px), var(--c-border) calc(var(--free-h) - 1px), var(--c-border) var(--free-h), transparent var(--free-h));
+}
+/* The fine guide grid, while a window moves with snapping on. */
+.le-free.le-guides {
+  background-image:
+    linear-gradient(to right, var(--c-row-hover) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--c-row-hover) 1px, transparent 1px);
+  background-size: var(--guide) var(--guide);
+}
+.le-free > .le-tail {
+  margin-top: var(--sp-4);
+}
+.le-tail-grid {
+  display: contents;
+}
+/* A line a moving window's edge snapped to. */
+.le-snap {
+  position: absolute;
+  z-index: 9999;
+  background: var(--c-primary);
+  pointer-events: none;
+}
+.le-snap.x {
+  top: 0;
+  width: 1px;
+  height: var(--free-h);
+}
+.le-snap.y {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
 .le-canvas {
   display: flex;
   flex-direction: column;

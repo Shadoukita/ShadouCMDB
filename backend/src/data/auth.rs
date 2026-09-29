@@ -131,6 +131,11 @@ pub async fn delete_user_sessions(
         .await
 }
 
+/// Whether the session still exists (it was not ended since the request was authenticated).
+pub async fn session_exists(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)").bind(id).fetch_one(conn).await
+}
+
 /// Expired and idle sessions; called on login so the table stays small.
 pub async fn purge_sessions(pool: &PgPool, idle: Duration) -> sqlx::Result<u64> {
     let done = sqlx::query("DELETE FROM sessions WHERE expires_at <= now() OR last_seen_at <= now() - $1::interval")
@@ -227,6 +232,14 @@ pub async fn get_user(conn: &mut PgConnection, id: Uuid, for_update: bool) -> sq
         .bind(id)
         .fetch_optional(conn)
         .await
+}
+
+/// Share-locks the users' rows (in id order) until the transaction ends: a
+/// password change, disable or delete of any of them (`FOR UPDATE`) waits
+/// for it, or it waits for them.
+pub async fn share_lock_users(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<()> {
+    sqlx::query("SELECT id FROM users WHERE id = ANY($1) ORDER BY id FOR SHARE").bind(ids).fetch_all(conn).await?;
+    Ok(())
 }
 
 pub struct LoginRow {

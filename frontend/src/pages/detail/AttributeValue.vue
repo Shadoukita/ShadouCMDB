@@ -8,7 +8,7 @@ import type { TrailStep } from "../../lib/trail";
 
 /**
  * Read-only rendering of one attribute value by dataType. Reference values are links,
- * except into a class the caller cannot view: that CI would answer 403, so no link.
+ * except into a class the caller cannot view: that CI would answer 404, so no link.
  */
 defineProps<{
   def: EffectiveAttribute;

@@ -205,15 +205,12 @@ async fn load(conn: &mut PgConnection, id: Uuid) -> Result<Relationship, AppErro
 }
 
 /// Relationships are read with view on both endpoints' classes and changed
-/// with edit on the source's class (plus view on the target's).
-fn require_endpoints(
-    ctx: &RequestContext,
-    source_class: Uuid,
-    target_class: Uuid,
-    op: ClassOp,
-) -> Result<(), AppError> {
-    ctx.require_class(source_class, op)?;
-    ctx.require_class(target_class, ClassOp::View)
+/// with edit on the source's class (plus view on the target's). An edge with
+/// an endpoint the caller may not view answers 404, like a missing one.
+fn require_endpoints(ctx: &RequestContext, row: &RelationshipRow, op: ClassOp) -> Result<(), AppError> {
+    ctx.require_class_visible(row.source_class_id, "Relationship", row.id)?;
+    ctx.require_class_visible(row.target_class_id, "Relationship", row.id)?;
+    ctx.require_class(row.source_class_id, op)
 }
 
 /// Only edges whose both endpoints are in classes the caller may view.
@@ -258,7 +255,7 @@ pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &RelationshipList) -> 
 
 pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Relationship, AppError> {
     let row = load_row(&mut *pool.acquire().await?, id).await?;
-    require_endpoints(ctx, row.source_class_id, row.target_class_id, ClassOp::View)?;
+    require_endpoints(ctx, &row, ClassOp::View)?;
     Ok(row.into())
 }
 
@@ -268,7 +265,14 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, input: &RelationshipCre
     // (duplicates, endpoint class rules, deleted CIs) is enforced by the
     // database and its errors map to field-level 400/409s.
     let found = data::existing_items(&mut tx, &[input.source_ci_id, input.target_ci_id]).await?;
-    let class_of = |ci: Uuid| found.iter().find(|(id, _)| *id == ci).map(|(_, class)| *class);
+    // A CI in a class the caller may not view "does not exist" here too, so
+    // the answer is no existence oracle.
+    let class_of = |ci: Uuid| {
+        found
+            .iter()
+            .find(|(id, class)| *id == ci && ctx.require_class(*class, ClassOp::View).is_ok())
+            .map(|(_, class)| *class)
+    };
     let missing: Vec<FieldError> = [("sourceCiId", input.source_ci_id), ("targetCiId", input.target_ci_id)]
         .into_iter()
         .filter(|(_, id)| class_of(*id).is_none())
@@ -279,8 +283,8 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, input: &RelationshipCre
             code: "not_found".into(),
         })
         .collect();
-    if let (Some(source_class), Some(target_class)) = (class_of(input.source_ci_id), class_of(input.target_ci_id)) {
-        require_endpoints(ctx, source_class, target_class, ClassOp::Edit)?;
+    if let (Some(source_class), Some(_)) = (class_of(input.source_ci_id), class_of(input.target_ci_id)) {
+        ctx.require_class(source_class, ClassOp::Edit)?;
     }
     if !missing.is_empty() {
         return Err(AppError::validation(missing));
@@ -313,13 +317,15 @@ pub async fn update(
     input: &RelationshipUpdate,
 ) -> Result<Relationship, AppError> {
     let mut tx = pool.begin().await?;
-    match data::lock(&mut tx, id).await? {
+    let removed = match data::lock(&mut tx, id).await? {
         None => return Err(AppError::missing("Relationship", id)),
-        Some(Some(_)) => return Err(AppError::conflict("This relationship was removed and cannot be modified")),
-        Some(None) => {}
-    }
+        Some(deleted_at) => deleted_at.is_some(),
+    };
     let row = load_row(&mut tx, id).await?;
-    require_endpoints(ctx, row.source_class_id, row.target_class_id, ClassOp::Edit)?;
+    require_endpoints(ctx, &row, ClassOp::Edit)?;
+    if removed {
+        return Err(AppError::conflict("This relationship was removed and cannot be modified"));
+    }
     let before = Relationship::from(row);
     data::update(&mut tx, id, input.relationship_type_id, input.notes.as_ref().map(|n| n.as_deref())).await?;
     let dto = load(&mut tx, id).await?;
@@ -341,7 +347,7 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
         return Err(AppError::missing("Relationship", id));
     }
     let row = load_row(&mut tx, id).await?;
-    require_endpoints(ctx, row.source_class_id, row.target_class_id, ClassOp::Edit)?;
+    require_endpoints(ctx, &row, ClassOp::Edit)?;
     let before = Relationship::from(row);
     data::soft_delete(&mut tx, id).await?;
     let entry = AuditEntry {

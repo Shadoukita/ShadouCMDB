@@ -171,8 +171,8 @@ export interface paths {
         };
         get?: never;
         /**
-         * Change your own password (ends your other sessions)
-         * @description 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * Change your own password (ends your other sessions and revokes your API tokens)
+         * @description Every API token you own that still works is revoked; create new ones after the change. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["changeOwnPassword"];
         post?: never;
@@ -614,7 +614,7 @@ export interface paths {
         };
         /**
          * What still refers to a ci class
-         * @description Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getCiClassUsage"];
         put?: never;
@@ -723,7 +723,7 @@ export interface paths {
         };
         /**
          * What still refers to a attribute definition
-         * @description Counts of attributeValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of attributeValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getAttributeDefinitionUsage"];
         put?: never;
@@ -812,7 +812,7 @@ export interface paths {
         };
         /**
          * What still refers to a relationship type
-         * @description Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getRelationshipTypeUsage"];
         put?: never;
@@ -878,7 +878,7 @@ export interface paths {
         };
         /**
          * What still refers to a relationship rule
-         * @description Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getRelationshipRuleUsage"];
         put?: never;
@@ -1056,7 +1056,7 @@ export interface paths {
         /**
          * What still refers to a status
          * @deprecated
-         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getStatusUsage"];
         put?: never;
@@ -1134,7 +1134,7 @@ export interface paths {
         /**
          * What still refers to a environment
          * @deprecated
-         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getEnvironmentUsage"];
         put?: never;
@@ -1212,7 +1212,7 @@ export interface paths {
         /**
          * What still refers to a location
          * @deprecated
-         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getLocationUsage"];
         put?: never;
@@ -1290,7 +1290,7 @@ export interface paths {
         /**
          * What still refers to a owner
          * @deprecated
-         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getOwnerUsage"];
         put?: never;
@@ -1359,7 +1359,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list
-         * @description Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getLookupListUsage"];
         put?: never;
@@ -1428,7 +1428,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list value
-         * @description Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.
+         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
          */
         get: operations["getLookupListValueUsage"];
         put?: never;
@@ -1692,8 +1692,8 @@ export interface paths {
         };
         get?: never;
         /**
-         * Set a new password for a user and end their sessions
-         * @description Requires `users.manage`. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * Set a new password for a user, end their sessions and revoke their API tokens
+         * @description Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["resetUserPassword"];
         post?: never;
@@ -1718,7 +1718,7 @@ export interface paths {
         put?: never;
         /**
          * Create a permission profile
-         * @description Requires `profiles.manage`. A non-administrator can only grant permissions they hold themselves (403 otherwise).
+         * @description Requires `profiles.manage`. A non-administrator can only grant permissions they hold themselves (403 otherwise). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createPermissionProfile"];
         delete?: never;
@@ -1743,14 +1743,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a permission profile (users holding it lose it)
-         * @description Requires `profiles.manage`. The built-in Administrator profile cannot be deleted (409).
+         * @description Requires `profiles.manage`. The built-in Administrator profile cannot be deleted (409). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["deletePermissionProfile"];
         options?: never;
         head?: never;
         /**
          * Update a permission profile (partial; permission lists replace the current ones)
-         * @description Requires `profiles.manage`. The built-in Administrator profile accepts only `requireMfa` (409 for anything else). Takes effect on the holders' next request.
+         * @description Requires `profiles.manage`. The built-in Administrator profile accepts only `requireMfa` (409 for anything else). Takes effect on the holders' next request. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updatePermissionProfile"];
         trace?: never;
@@ -1766,7 +1766,7 @@ export interface paths {
         put?: never;
         /**
          * Copy a profile (including the built-in one) into a new, editable profile
-         * @description Requires `profiles.manage`.
+         * @description Requires `profiles.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["clonePermissionProfile"];
         delete?: never;
@@ -1783,7 +1783,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List API tokens (paginated, searchable, filterable by owner and status); never their secrets
+         * List API tokens (paginated, searchable, filterable by owner, creator and status); never their secrets
          * @description Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["listApiTokens"];
@@ -1926,7 +1926,7 @@ export interface paths {
         put?: never;
         /**
          * Import a configuration file (dry run or apply)
-         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited.
+         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["importConfig"];
         delete?: never;
@@ -1965,7 +1965,15 @@ export interface components {
             lastUsedAt: string | null;
             /** @description Client address of the last accepted request (evidence only) */
             lastUsedIp: string | null;
+            /** @description The creator's name, for display */
             createdBy: string | null;
+            /**
+             * Format: uuid
+             * @description The user who created the token; null when the CLI created it, the
+             *     creator was deleted, or (for a token older than this field) the
+             *     creator is unknown
+             */
+            createdByUserId: string | null;
             /** Format: date-time */
             createdAt: string;
         };
@@ -3444,12 +3452,22 @@ export interface components {
             text?: string;
             /** @description Start collapsed on the detail page */
             collapsed?: boolean;
+            /**
+             * @description Where the section sits in a tab with `placement` free. Sent in a grid tab, it converts the tab back to
+             *     the grid on save (see the tab's `placement`); a stored grid tab never has frames.
+             */
+            frame?: components["schemas"]["UiSectionFrame"];
         };
         /** @description A tab of the detail page and the form */
         UiLayoutTab: {
             /** @description Stable machine key, lower_snake_case */
             key: string;
             label: string;
+            /**
+             * @description How the tab arranges its sections (absent: grid). grid: sections fill the 12-column grid row by row. free: each section is a window placed by its `frame`, and windows may overlap. On save, a free tab's sections without a frame get one from their grid position (below the existing windows), z becomes 1..n and the sections are ordered by y, then x: the reading order, used on narrow screens, in print and by screen readers. A grid tab sent with frames is converted back: sections ordered by y, then x, width from w, and the frames dropped.
+             * @enum {string}
+             */
+            placement?: "grid" | "free";
             sections?: components["schemas"]["UiLayoutSection"][];
         };
         /** @description Inventory filters, by key */
@@ -3550,6 +3568,45 @@ export interface components {
                 /** @enum {string} */
                 direction?: "asc" | "desc";
             } | null;
+        };
+        /**
+         * @description A window on a free tab: position and size, and its place in the stacking order. `x` and `w` are
+         *     fractions of the tab's width, so windows scale with the browser window; `y` and `h` are px from the top
+         *     of the tab. The window scrolls its own content, so an overlapped window loses nothing.
+         */
+        UiSectionFrame: {
+            /**
+             * Format: double
+             * @description Left edge, as a fraction of the tab's width (0: the left edge). `x + w` is at most 1.
+             */
+            x: number;
+            /**
+             * Format: int32
+             * @description Top edge in px from the top of the tab
+             */
+            y: number;
+            /**
+             * Format: double
+             * @description Width, as a fraction of the tab's width (1: the full width)
+             */
+            w: number;
+            /**
+             * Format: int32
+             * @description Height in px
+             */
+            h: number;
+            /**
+             * Format: int32
+             * @description Stacking order: a higher z is drawn on top. Saved as 1..n per tab, in the order given (ties: the
+             *     section order).
+             */
+            z: number;
+            /**
+             * Format: int32
+             * @description Smallest height in px the window may be resized to, and its least height when the tab stacks the
+             *     windows on a narrow screen; at most `h`
+             */
+            minH?: number;
         };
         /** @description The current UI settings as the web UI applies them */
         UiSettings: {
@@ -3907,7 +3964,10 @@ export interface operations {
                     username: string;
                     displayName: string;
                     email?: string | null;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                 };
             };
@@ -4252,7 +4312,10 @@ export interface operations {
             content: {
                 "application/json": {
                     currentPassword: string;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     newPassword: string;
                 };
             };
@@ -13154,7 +13217,10 @@ export interface operations {
                     username: string;
                     displayName: string;
                     email?: string | null;
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                     /** @description Default true */
                     isActive?: boolean;
@@ -13515,7 +13581,10 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description At least 12 characters */
+                    /**
+                     * Format: password
+                     * @description At least 12 characters
+                     */
                     password: string;
                 };
             };
@@ -14178,6 +14247,8 @@ export interface operations {
                 sort?: "createdAt" | "-createdAt" | "name" | "-name" | "expiresAt" | "-expiresAt" | "lastUsedAt" | "-lastUsedAt";
                 /** @description One or more ids, comma-separated */
                 userId?: string;
+                /** @description One or more ids, comma-separated */
+                createdBy?: string;
                 status?: "active" | "expired" | "revoked";
             };
             header?: never;

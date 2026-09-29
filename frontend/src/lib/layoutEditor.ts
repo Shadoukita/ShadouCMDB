@@ -1,10 +1,11 @@
 import { useQueryClient, type QueryClient } from "@tanstack/vue-query";
-import { computed, onBeforeUnmount, onMounted, reactive, ref, toValue, watch, type MaybeRefOrGetter } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toValue, watch, type MaybeRefOrGetter } from "vue";
 import { useRoute, useRouter, type LocationQueryRaw, type Router } from "vue-router";
 import { ApiError } from "../api/client";
 import { fetchCurrentStoredSettings, uiKeys, useSaveUiSettings, useUiSettings, type UiClassLayout, type UiSettingsDocument } from "../api/uiSettings";
 import { useSessionStore } from "../stores/session";
-import { materialize } from "./layoutDesign";
+import { isFreeTab, layerOf, LAYER_MOVES, measureGrid, moveLayer, settleFrames, toFree, toGrid, type LayerMove } from "./freeLayout";
+import { findSection, materialize, type LayoutTab } from "./layoutDesign";
 import { normalizeDocument, type AttributeLike } from "./uiSettings";
 
 /**
@@ -23,7 +24,9 @@ import { normalizeDocument, type AttributeLike } from "./uiSettings";
  * the API checks that again on save. A class without a layout of its own is shown as its
  * built-in layout made explicit (lib/layoutDesign materialize); it becomes part
  * of the draft at the first change. Every change goes through `apply`, which
- * keeps the undo history.
+ * keeps the undo history. A tab is on the 12-column grid or free (lib/freeLayout):
+ * `setPlacement` switches the tab in view, and on a free tab the selected window
+ * moves up and down the stack with `layer`.
  */
 
 /** The editor's route: the CI page's path plus this suffix. */
@@ -135,6 +138,12 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
   /** The built-in layout made explicit while the class has none in the draft. */
   const scratch = ref<UiClassLayout | null>(null);
   const previewWidth = ref<number | null>(null);
+  /** The tab in view (its key; the first tab when empty or gone), the window selected on a free tab, and whether windows snap. */
+  const tabKey = ref("");
+  const selected = ref<string | null>(null);
+  const snap = ref(true);
+  /** What the last change did, for screen readers (the canvas's live region). */
+  const announcement = ref("");
 
   const classKey = computed(() => toValue(opts.classKey));
   const attrs = computed(() => toValue(opts.attrs));
@@ -143,6 +152,13 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
   const layout = computed<UiClassLayout | undefined>(() => own.value ?? scratch.value ?? undefined);
   /** Whether the class uses the built-in layout in the draft (nothing of its own). */
   const builtIn = computed(() => !!doc.value && !own.value);
+  const tab = computed<LayoutTab | undefined>(() => layout.value?.tabs?.find((t) => t.key === tabKey.value) ?? layout.value?.tabs?.[0]);
+  watch(tabKey, () => (selected.value = null));
+
+  function say(text: string) {
+    announcement.value = "";
+    void nextTick(() => (announcement.value = text));
+  }
 
   function refreshScratch() {
     scratch.value = doc.value && classKey.value && attrs.value && !own.value ? materialize(classKey.value, attrs.value) : null;
@@ -182,6 +198,7 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
     saveError.value = null;
     saved.value = null;
     previewWidth.value = null;
+    selected.value = null;
   }
   watch(active, (on) => (on ? void load() : unload()), { immediate: true });
 
@@ -201,7 +218,9 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
       d.layouts.push(l);
       scratch.value = null;
     }
-    change(own.value ?? l);
+    const target = own.value ?? l;
+    change(target);
+    settleFrames(target.tabs);
     if (JSON.stringify(d) === before) return;
     if (!group || group !== gesture) past.value.push(before);
     gesture = group ?? null;
@@ -247,6 +266,44 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
     d.layouts = d.layouts.filter((l) => l.classKey !== classKey.value);
     refreshScratch();
     saved.value = null;
+  }
+
+  /**
+   * Puts the tab in view on the grid or free. To free, each section becomes a
+   * window where it is on screen now (measured on the canvas); back to the grid,
+   * the windows are ordered by position as the API does it.
+   */
+  function setPlacement(placement: "grid" | "free") {
+    const t = tab.value;
+    if (!t || (placement === "free") === isFreeTab(t)) return;
+    const measured = placement === "free" ? measureGrid(document.querySelector("[data-le-area]")) : undefined;
+    apply((l) => {
+      const own = l.tabs?.find((x) => x.key === t.key);
+      if (own && placement === "free") toFree(own, measured);
+      else if (own) toGrid(own);
+    });
+    selected.value = null;
+    say(
+      placement === "free"
+        ? `Tab ${t.label} is free: drag each section by its title bar, resize it from its edges, and overlap them.`
+        : `Tab ${t.label} is on the grid again: sections in reading order, widths from their windows.`,
+    );
+  }
+  /** Moves the selected window (or `key`) up or down its tab's stack. */
+  function layer(move: LayerMove, key = selected.value) {
+    const t = tab.value;
+    if (!t || !key || !isFreeTab(t)) return;
+    let moved = false;
+    apply((l) => {
+      const own = l.tabs?.find((x) => x.key === t.key);
+      const s = findSection(l, key)?.section;
+      if (own && s) moved = moveLayer(own, s, move);
+    });
+    const now = tab.value && layout.value && findSection(layout.value, key);
+    if (!now) return;
+    const at = layerOf(now.tab, now.section);
+    const name = LAYER_MOVES.find((m) => m.move === move)!.label;
+    say(moved ? `${name}: ${now.section.label} is layer ${at.index} of ${at.count}.` : `${now.section.label} is already layer ${at.index} of ${at.count}.`);
   }
 
   async function save(comment: string): Promise<boolean> {
@@ -334,6 +391,14 @@ export function useLayoutEditor(opts: { classKey: MaybeRefOrGetter<string | unde
     canUndo: computed(() => past.value.length > 0),
     canRedo: computed(() => future.value.length > 0),
     previewWidth,
+    tabKey,
+    tab,
+    selected,
+    snap,
+    announcement,
+    say,
+    setPlacement,
+    layer,
     apply,
     endGesture,
     undo,

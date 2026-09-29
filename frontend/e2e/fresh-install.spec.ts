@@ -168,13 +168,14 @@ test.describe("a bare install", () => {
     await expect(nav.getByRole("heading", { name: "Power" })).toBeVisible();
     await nav.getByRole("link", { name: new RegExp(`^${CLASS}`) }).click();
     await expect(page).toHaveURL(new RegExp(`classId=${classId}`));
-    await expect(page.locator("table.data thead th")).toHaveText([/Name/, /Status/, /Tier/, /Outlets/]);
+    // The view leaves out Label, so the inventory shows it first: it is the link that opens the CI.
+    await expect(page.locator("table.data thead th")).toHaveText([/Label/, /Name/, /Status/, /Tier/, /Outlets/]);
     const rows = page.locator("table.data tbody tr");
     // Default sort: label (the name), descending.
     await expect(rows).toHaveCount(2);
-    await expect(rows.nth(0)).toContainText(CIS[1].name);
-    await expect(rows.nth(0).getByRole("cell").nth(2)).toHaveText(CIS[1].tier);
-    await expect(rows.nth(1).getByRole("cell").nth(3)).toHaveText(CIS[0].outlets);
+    await expect(rows.nth(0).getByRole("cell").nth(0).getByRole("link")).toHaveText(CIS[1].name);
+    await expect(rows.nth(0).getByRole("cell").nth(3)).toHaveText(CIS[1].tier);
+    await expect(rows.nth(1).getByRole("cell").nth(4)).toHaveText(CIS[0].outlets);
     await snap(page, "52-own-class-inventory");
 
     // The inventory filter and the API agree.
@@ -269,8 +270,8 @@ test.describe("imported into a fresh install", () => {
     await expect(page.locator(".layout-panels > details > summary h2").first()).toHaveText(/Power feed/);
 
     await page.goto(`/cis?classId=${classId}`);
-    await expect(page.locator("table.data thead th")).toHaveText([/Name/, /Status/, /Tier/, /Outlets/]);
-    await expect(page.locator("table.data tbody tr").first().getByRole("cell").nth(2)).toHaveText("Gold");
+    await expect(page.locator("table.data thead th")).toHaveText([/Label/, /Name/, /Status/, /Tier/, /Outlets/]);
+    await expect(page.locator("table.data tbody tr").first().getByRole("cell").nth(3)).toHaveText("Gold");
     await snap(page, "54-imported-class-inventory");
 
     // The imported dashboard (an empty inventory shows a welcome instead, so only now).

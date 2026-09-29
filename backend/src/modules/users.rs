@@ -14,7 +14,7 @@ use axum::http::{Method, StatusCode};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool};
-use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
+use utoipa::openapi::schema::{ArrayBuilder, KnownFormat, ObjectBuilder, Schema, SchemaFormat, Type};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
@@ -99,6 +99,8 @@ pub fn username_schema() -> Schema {
 pub fn password_schema() -> Schema {
     ObjectBuilder::new()
         .schema_type(Type::String)
+        // The request validator applies the password policy to this format.
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::Password)))
         .min_length(Some(password::MIN_LENGTH))
         .max_length(Some(password::MAX_LENGTH))
         .description(Some("At least 12 characters"))
@@ -448,7 +450,10 @@ pub async fn update(pool: &PgPool, ctx: &RequestContext, id: Uuid, b: &UserUpdat
     Ok(dto)
 }
 
-/// Sets a new password and ends the user's sessions (all but the caller's own).
+/// Sets a new password, ends the user's sessions (all but the caller's own)
+/// and revokes their API tokens. An administrator's reset (not the user's own
+/// change) also revokes the tokens the user created for other owners: the
+/// account may have been compromised (GH#145).
 pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_password: &str) -> Result<User, AppError> {
     let hash = password::hash(new_password).await?;
     let mut tx = pool.begin().await?;
@@ -462,6 +467,9 @@ pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_pas
     must_cover_user(&mut tx, ctx, id).await?;
     data::set_password(&mut tx, id, &hash).await?;
     let own = ctx.principal().filter(|p| p.user_id == id);
+    // Tokens first: their rows must be locked before the first audit insert
+    // takes the chain head (GH#166).
+    api_tokens::revoke_all_of_user(&mut tx, ctx, id, own.is_none()).await?;
     let ended = data::delete_user_sessions(&mut tx, id, own.and_then(|p| p.session_id())).await?;
     let reason = if own.is_some() { RevokeReason::PasswordChanged } else { RevokeReason::PasswordReset };
     events::revoked(&mut tx, ctx, &ended, reason).await?;
@@ -563,8 +571,8 @@ pub fn routes() -> Vec<Route> {
             }),
         route(Method::PUT, "/api/v1/admin/users/{id}/password", "resetUserPassword")
             .tag(TAG)
-            .summary("Set a new password for a user and end their sessions")
-            .description("409 for an account that signs in through an identity provider (it has no password here).")
+            .summary("Set a new password for a user, end their sessions and revoke their API tokens")
+            .description("Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here).")
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])

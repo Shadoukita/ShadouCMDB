@@ -388,9 +388,10 @@ pub fn routes<R: Resource>() -> Vec<Route> {
                 .tag(R::TAG)
                 .summary(format!("What still refers to a {label}"))
                 .description(format!(
-                    "Counts of {}. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE.",
+                    "Counts of {}. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.",
                     kinds.join(", ")
                 ))
+                .requires(GlobalPermission::DatamodelManage)
                 .errors(&[ErrorCode::NotFound])
                 .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                     Ok(Json(usage::<R>(&api.pool, id).await?))

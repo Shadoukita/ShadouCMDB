@@ -350,9 +350,10 @@ pub async fn save_in(
     {
         return Err(version_conflict(current.version, current.updated_by_name.as_deref()));
     }
-    let new_value = serde_json::to_value(doc).map_err(|_| AppError::internal())?;
+    let doc = doc.clone().normalized();
+    let new_value = serde_json::to_value(&doc).map_err(|_| AppError::internal())?;
     let old_doc = parse_stored(&current.settings);
-    if old_doc == *doc {
+    if old_doc == doc {
         return Ok(false);
     }
     let version = data::save(conn, ctx, current.version, &new_value, comment).await?;

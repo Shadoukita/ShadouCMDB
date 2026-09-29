@@ -8,7 +8,11 @@ import type {
   UiSettingsDocument,
   UiWidgetType,
 } from "../api/uiSettings";
+import type { components } from "../api/schema";
 import { GENERAL_SECTION, groupAttributes } from "./attributes";
+import { readingOrder } from "./freeLayout";
+
+type UiSectionFrame = components["schemas"]["UiSectionFrame"];
 
 /**
  * The UI settings document (Administration › Customization) as the screens
@@ -76,7 +80,7 @@ export const BUILTIN_FIELDS: BuiltinField[] = [
 ];
 export const BUILTIN = new Map(BUILTIN_FIELDS.map((f) => [f.key, f]));
 
-/** Sort fields the list API accepts, with labels. */
+/** Built-in sort fields the list API accepts, with labels (attributes.<key> needs a class). */
 export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUILTIN_FIELDS.filter((f) => f.sort).map((f) => ({
   field: f.sort!,
   label: f.label,
@@ -84,6 +88,16 @@ export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUIL
 
 /** The inventory's columns when no list view says otherwise. */
 export const DEFAULT_COLUMNS = ["label", "ident", "class", "active", "updatedAt"];
+
+/**
+ * The columns a list view shows. The label cell is the row's link to the CI and
+ * the one value every CI has, so a view without it gets it as its first column:
+ * otherwise its rows could not be opened and could all read "—".
+ */
+export function listColumns(columns: readonly string[] | null | undefined): string[] {
+  if (!columns?.length) return [...DEFAULT_COLUMNS];
+  return columns.includes("label") ? [...columns] : ["label", ...columns];
+}
 
 export const ATTRIBUTE_PREFIX = "attributes.";
 export const attributeKey = (field: string) => (field.startsWith(ATTRIBUTE_PREFIX) ? field.slice(ATTRIBUTE_PREFIX.length) : null);
@@ -93,6 +107,67 @@ export interface AttributeLike {
   label: string;
   groupName: string | null;
   sortOrder: number;
+}
+
+/** An attribute as far as sorting is concerned: the list API sorts by any but a reference. */
+export interface SortableAttribute {
+  key: string;
+  label: string;
+  dataType: string;
+  isActive: boolean;
+}
+export const isSortableAttribute = (a: SortableAttribute) => a.dataType !== "reference";
+
+/** Sort choices for a class's active, sortable attributes (`attributes.<key>`). */
+export function attributeSortFields(attrs: readonly SortableAttribute[]): { field: string; label: string }[] {
+  return attrs.filter((a) => a.isActive && isSortableAttribute(a)).map((a) => ({ field: `${ATTRIBUTE_PREFIX}${a.key}`, label: `${a.label} (attribute)` }));
+}
+
+/**
+ * The attributes every one of several classes can be sorted by: the same key and
+ * data type on each (the first class's order and labels). Lookups sort by their
+ * list's order, which only the API knows, so rows of several classes could not be
+ * merged by them: they are left out when there is more than one class.
+ */
+export function sharedSortAttributes<T extends SortableAttribute>(perClass: readonly (readonly T[])[]): T[] {
+  if (perClass.length === 0) return [];
+  const [first, ...rest] = perClass;
+  return first.filter(
+    (a) =>
+      a.isActive &&
+      isSortableAttribute(a) &&
+      (rest.length === 0 || a.dataType !== "lookup") &&
+      rest.every((attrs) => attrs.some((b) => b.key === a.key && b.dataType === a.dataType && b.isActive)),
+  );
+}
+
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/;
+const ipv4Number = (s: string) => {
+  const m = IPV4.exec(s);
+  // The address, then the prefix length (a bare address counts as /32).
+  return m ? (((+m[1] * 256 + +m[2]) * 256 + +m[3]) * 256 + +m[4]) * 64 + (m[5] ? +m[5] : 32) : null;
+};
+
+/**
+ * Orders two field values of rows merged from several list requests the way the
+ * list API does: numbers by value, IPv4 addresses by address, text
+ * case-insensitively (digits by number), and missing values last in either direction.
+ */
+export function compareValues(a: unknown, b: unknown, dir = 1): number {
+  const none = (v: unknown) => v === null || v === undefined || v === "";
+  if (none(a) || none(b)) return none(a) === none(b) ? 0 : none(a) ? 1 : -1;
+  if (typeof a === "number" && typeof b === "number") return dir * (a - b);
+  const [x, y] = [String(a), String(b)];
+  const [ix, iy] = [ipv4Number(x), ipv4Number(y)];
+  if (ix !== null && iy !== null) return dir * (ix - iy);
+  return dir * x.localeCompare(y, undefined, { numeric: true, sensitivity: "base" });
+}
+
+/** A sort's field, whether or not it is an attribute, among the choices offered; a label for one that is not. */
+export function unavailableSortLabel(field: string | undefined, offered: readonly { field: string }[]): string | null {
+  if (!field || offered.some((s) => s.field === field)) return null;
+  const a = attributeKey(field);
+  return a === null ? `${field} (not a sort field)` : `${a} (not available: pick another sort)`;
 }
 
 export function fieldLabel(field: string, attrs: readonly AttributeLike[]): string {
@@ -349,6 +424,8 @@ export function normalizeLayout(l: UiClassLayout): UiClassLayout {
     tabs: (l.tabs ?? []).map((t) => ({
       key: t.key,
       label: t.label,
+      // Kept with the sections' frames: a free tab saved without it would go back on the grid.
+      ...(t.placement ? { placement: t.placement } : {}),
       // Content blocks (a `kind` other than fields: notes, panels) are kept as stored (a copy: the draft is edited), without fields.
       sections: (t.sections ?? []).map((s) =>
         sectionKind(s) !== "fields"
@@ -391,10 +468,14 @@ export interface ResolvedSection {
   /** A grid of `fields`, or a content block (a note's `text`, a built-in panel) without fields. */
   kind: SectionKind;
   text?: string;
+  /** Where the section sits as a window of a free tab (lib/freeLayout); absent on the grid and for the automatic sections. */
+  frame?: UiSectionFrame;
 }
 export interface ResolvedTab {
   key: string;
   label: string;
+  /** Free: the framed sections are windows (in reading order), the rest follow below them at the full width. */
+  placement: "grid" | "free";
   sections: ResolvedSection[];
 }
 
@@ -438,9 +519,11 @@ export function resolveLayout(
   const tabs: ResolvedTab[] = (layout.tabs ?? []).map((t) => ({
     key: t.key,
     label: t.label,
-    sections: (t.sections ?? []).map((s): ResolvedSection => {
+    placement: t.placement === "free" ? "free" : "grid",
+    // A free tab's windows in reading order (y, then x): the order of the page, the keyboard and screen readers.
+    sections: (t.placement === "free" ? readingOrder(t.sections ?? []) : (t.sections ?? [])).map((s): ResolvedSection => {
       const kind = sectionKind(s);
-      const place = { width: sectionWidth(s), newRow: !!s.newRow, minHeight: s.minHeight ?? undefined };
+      const place = { width: sectionWidth(s), newRow: !!s.newRow, minHeight: s.minHeight ?? undefined, ...(t.placement === "free" && s.frame ? { frame: s.frame } : {}) };
       if (kind !== "fields") return { key: s.key, label: s.label, collapsed: !!s.collapsed, columns: GRID_COLUMNS, ...place, fields: [], auto: false, kind, text: s.text };
       const columns = Math.min(Math.max(s.columns ?? GRID_COLUMNS, 1), MAX_COLUMNS);
       const fields: ResolvedField[] = [];
@@ -487,7 +570,7 @@ export function resolveLayout(
     ...groups.map((g) => auto(`_group:${g.group}`, g.group, g.fields)),
     auto("_record", "Record", record.filter((f) => usable(f) && !taken.has(f))),
   ];
-  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, sections: [] });
+  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, placement: "grid", sections: [] });
   tabs[0].sections.push(...trailing);
   if (keepEmpty) return tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => !s.auto || s.fields.length > 0) }));
   const shown = tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => s.kind !== "fields" || s.fields.length > 0) })).filter((t) => t.sections.length > 0);
@@ -520,6 +603,29 @@ export function sectionClass(s: { width?: number | null; newRow?: boolean | null
   return ["lg-sec", `lg-s-${sectionWidth(s)}`, ...(s.newRow ? ["lg-new-row"] : [])];
 }
 export const sectionStyle = (s: { minHeight?: number | null }) => (s.minHeight ? { "--lg-min-h": String(s.minHeight) } : undefined);
+
+/**
+ * A window of a free tab (lg-win) inside its tab's area (lg-free, as tall as
+ * `freeAreaStyle` says): position, size and stacking order as CSS variables,
+ * which the stylesheet ignores below the tablet breakpoint and in print (the
+ * windows stack in reading order there, at least `minH` tall).
+ */
+export const windowClass = "lg-win";
+export function windowStyle(f: UiSectionFrame): Record<string, string> {
+  return {
+    "--win-x": `${f.x * 100}%`,
+    "--win-y": `${f.y}px`,
+    "--win-w": `${f.w * 100}%`,
+    "--win-h": `${f.h}px`,
+    "--win-z": String(f.z),
+    ...(f.minH ? { "--win-min-h": `${f.minH}px` } : {}),
+  };
+}
+/** The area of a free tab's windows: as tall as the lowest one reaches. */
+export function freeAreaStyle(sections: readonly { frame?: UiSectionFrame }[]): Record<string, string> {
+  const bottom = Math.max(0, ...sections.flatMap((s) => (s.frame ? [s.frame.y + s.frame.h] : [])));
+  return { "--free-h": `${bottom}px` };
+}
 
 /** The core fields of every CI, which the form edits: the General section starts with them. */
 export const CORE_FIELDS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key);

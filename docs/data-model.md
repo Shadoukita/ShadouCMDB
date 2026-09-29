@@ -16,7 +16,7 @@ Migrations: [`sql/migrations/`](../sql/migrations/)
 `0007_audit_retention`, `0008_cmdb_schema_and_areas`, `0009_type_tables`, `0010_api_tokens` …
 `0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`,
 `0018_audit_hash_chain`, `0019_multiline_notes`, `0020_attribute_sorts`,
-`0021_stateless_oidc_start`).
+`0021_stateless_oidc_start`, `0022_api_token_creator`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -78,7 +78,7 @@ ui_assets (logo, favicon)
 | `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
 | `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
-| `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by`. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted |
+| `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by` (the creator's name, for display) and `created_by_user_id` (the creating user; NULL for the CLI, a deleted creator, or an older token whose audit `create` row was purged). An administrator's password reset revokes the working tokens they created for other users. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted, `created_by_user_id` set NULL when the creator is deleted |
 | `user_totp` | A user's authenticator: the 160-bit TOTP `secret` (stored as is: checking a code needs it; whoever reads it still needs the password), `confirmed_at` (NULL while the set-up is unconfirmed, which does not count as MFA), `last_used_step` (the last accepted 30 s step, so no code works twice). | PK `user_id`, cascades with the user; secret exactly 20 bytes |
 | `user_recovery_codes` | Ten one-time codes per confirmed authenticator: SHA-256 of each (`code_hash`, 80 random bits per code), `used_at`. | unique (`user_id`, `code_hash`); 32-byte hash; cascades with the user |
 | `mfa_challenges` | A sign-in whose password was right and whose code is due: SHA-256 of the `shadoucmdb_mfa` cookie token, `expires_at` (5 minutes), `failed_attempts`. Never backed up. | unique `token_hash` (32 bytes); cascades with the user |
@@ -208,13 +208,18 @@ the grip on its right edge; **Full width** / **Laptop** / **Tablet** / **Phone**
 
 ```
 layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
-  tabs[]:     { key, label, sections[] }                   key unique among the layout's tabs
+  tabs[]:     { key, label, placement, sections[] }        key unique among the layout's tabs;
+                                                           placement grid (default) or free
   sections[]: { key, label, kind (default fields),         key unique across the whole layout
                 width 1–12 (default 12), newRow, minHeight 1–50,   placement on the tab's 12-column grid
                 columns 1–12 (default 3), collapsed,       columns of the section's own field grid
                 fields[],                                  kind fields only
-                text }                                     kind note only: 1–4,000 characters
+                text,                                      kind note only: 1–4,000 characters
+                frame }                                    free tabs only (see below)
   fields[]:   { field, width 1–12 (default 1) }            field placed once; width ≤ the section's columns
+  frame:      { x 0–0.95, w 0.05–1,                        fractions of the tab's width; x + w ≤ 1
+                y 0–100,000, h 48–4,000,                   px from the top of the tab, px tall
+                z 0–10,000, minH 48–h }                    stacking order (stored 1..n); optional minH
 ```
 
 - **Section kinds.** `kind` says what a section shows. `fields` (the default when `kind` is absent) is a
@@ -236,6 +241,43 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   layout works on every screen. Below the tablet breakpoint (820 px of content width, which includes
   tablets in portrait at 768 px and every phone) sections stack at the full width in their order and
   `newRow` has no effect; the side-by-side arrangement is the desktop layout.
+- **Free tabs (`placement: "free"`).** Sections are windows on a desktop: each has a `frame` and may
+  sit anywhere, at any size, over other windows. `x` and `w` are fractions of the tab's
+  width, so windows scale with the browser window; `y` and `h` are pixels from the top of the tab. The
+  window with the higher `z` is drawn on top. The rendering contract for the detail page and the form:
+  - The tab is as tall as its lowest window (`max(y + h)`); windows are positioned absolutely in it.
+  - Each window scrolls its own content (fields, note or panel), so content under another window or
+    below the window's height is never lost. `collapsed` shrinks a window to its title bar.
+  - **Reading order** is `y`, then `x`, and the API stores a free tab's sections in that order. The
+    page renders them in that order in the document, so keyboard focus and screen readers follow it
+    whatever the stacking order. Below the tablet breakpoint (820 px of tab width, the same as for the
+    grid) and in print, the tab does not position anything: the windows stack at the full width in
+    reading order, each at least `minH` px tall (else as tall as its content).
+  - Fields no section places, and panels the layout does not place, behave as in a grid tab: the
+    General section and attribute groups that follow on the first tab sit at the full width below its
+    lowest window.
+
+  **On save** the API normalises a free tab, so the stored form is always complete: a section without
+  a `frame` gets one from its position on the grid (below the existing windows, on top of them), `x`
+  and `w` are rounded to 4 decimals and kept inside the tab, `z` becomes 1..n in the order of the
+  values sent (equal values keep the section order), and the sections are sorted into reading order.
+  Saving the result again changes nothing.
+
+  **Grid → free:** send the tab with `placement: "free"` and no frames. The frames follow the grid
+  rows: `x` and `w` from the columns (a section of width 6 in the second half is `x` 0.5, `w` 0.5),
+  each row as tall as its tallest section and 16 px between rows. Heights are estimates, since the
+  server does not render: 48 px title bar plus 48 px per row of fields (at least one row, at least
+  `minHeight`), 144 px for a note and 320 px for a built-in panel. Nothing jumps sideways, and each
+  window scrolls if its content is taller than the estimate.
+
+  **Free → grid:** send the tab with `placement: "grid"` (or without `placement`) and its frames. The
+  sections are ordered by `y`, then `x`, each spans the columns nearest its width
+  (`round(w × 12)`), a section that starts below the bottom of the first window of the current row
+  starts a new row, and the frames are dropped. A stored grid tab never has frames.
+
+  Frames are refused with `400 VALIDATION_ERROR` and the path of the offending value (e.g.
+  `settings.layouts.0.tabs.1.sections.2.frame.w`) when they are out of range, when `x + w` exceeds 1
+  (the window must end inside the tab), when `minH` exceeds `h`, or when they carry unknown keys.
 - `field` is a core field (`ident`, `validFrom`, `validUntil`), a detail-page field (`label`, `class`,
   `active`, `createdAt`, `updatedAt`) or `attributes.<key>`. Fields fill a section's grid row by row in
   the order given; `width` is the number of the section's `columns` a field spans. A grid of 12 columns
@@ -256,13 +298,15 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   patterns, section widths, columns and field widths of 1–12, `minHeight` of 1–50, at most 20 tabs, 50 sections per tab, 200 fields per section) and
   the cross-field rules above (unique keys, a field placed once, width within the section's columns,
   core fields not hidden, each built-in panel once, `fields` and `text` only on sections of their kind,
-  note text not blank). References to attributes that do not exist are accepted, dropped from the
+  note text not blank, frames inside the tab). References to attributes that do not exist are accepted, dropped from the
   effective settings and listed as `issues`, like everywhere else in the document.
 
 **Layouts saved before the grid** (no section `width`, `columns` and field widths of 1–4) stay valid
 unchanged and render as before: every section is 12 wide, so they stack at the full width. There is
 no migration; the API fills in `width: 12` when it returns a layout or saves it again. `newRow` and
-`minHeight` are only written when set.
+`minHeight` are only written when set. **Layouts saved before free tabs** need no migration either: a
+tab without `placement` is a grid tab, and the API writes `placement` and `frame` only for free tabs, so
+existing layouts, exports and saved versions read and write back unchanged.
 
 ### Editing a layout on the CI page
 
@@ -298,6 +342,22 @@ the editor opens in the same tab with a notice, and **Done** returns to the page
 Placing a section beside another fits it into the row: it takes the columns the row leaves free (a 6
 next to a 6), and when the row is full the section it is dropped on gives up half of its width. Every
 drag is one undo step, however far the edge travelled.
+
+**Free tabs in the editor.** **Grid** / **Free** in the bar switches the tab in view (Grid is the
+default). To Free, each section becomes a window where it is on screen, so nothing moves; back to Grid,
+the sections are ordered by position with widths from their windows, as the API converts them (see
+*Free tabs* above). On a free tab:
+
+| To… | With the mouse | From the keyboard (on the window's grip) |
+|---|---|---|
+| Move a window | drag its title bar (its name too: a click renames, a drag moves); a readout shows `x, y · w × h px` | ← → ↑ ↓: 8 px (Shift: 64 px, Alt: 1 px) |
+| Resize a window | drag any edge or corner | Ctrl+→ / Ctrl+←: width, Ctrl+↓ / Ctrl+↑: height |
+| Place without snapping | hold **Alt** while dragging, or **Snap off** in the bar (edges otherwise snap to other windows within 6 px, else to an 8 px grid) | keys never snap |
+| Change the layers | pressing on a window brings it to the front; right-click it, its toolbar or the bar for **Bring to front** / **Bring forward** / **Send backward** / **Send to back** | Ctrl+PageUp / Ctrl+PageDown (with Shift: front / back); Shift+F10 opens the layers menu |
+
+A new section, note or panel, and one moved in from another tab, starts below the lowest window at the
+full width, on top of the stack. Below 820 px of preview width the windows stack as they do on a phone,
+and cannot be moved there. Every drag is one undo step, and each key press or layer change is one.
 
 **Undo** / **Redo** (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y outside text fields), **Desktop** / **Tablet** /
 **Phone** as shortcuts for the preview width, **Reset to built-in layout** (drops the class's own layout from the draft; undoable),

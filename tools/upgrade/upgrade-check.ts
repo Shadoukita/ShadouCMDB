@@ -382,7 +382,13 @@ async function check() {
   // 4. The restricted user signs in and sees exactly what they saw before.
   const view: ViewerView = await viewerView(ids);
   const found: string[] = [];
-  diff(snap.viewer, view, 'restricted user', found);
+  // A CI in a hidden class answers 404 since #123 (403 before, an existence
+  // oracle): both refuse it, so compare what was refused, not the status code.
+  const refused = (v: ViewerView) => ({
+    ...v,
+    getStatus: Object.fromEntries(Object.entries(v.getStatus).map(([id, s]) => [id, s === 403 ? 404 : s])),
+  });
+  diff(refused(snap.viewer), refused(view), 'restricted user', found);
   for (const f of found) failures.push(f);
   console.error(`${found.length ? 'FAIL' : 'ok  '} restricted user: sees ${view.visibleCiIds.length} CIs, GET ${JSON.stringify(Object.values(view.getStatus))}, create ${view.createStatus}, audit ${view.auditStatus}`);
 
