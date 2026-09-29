@@ -176,7 +176,33 @@ jobs:
             curl -sf http://127.0.0.1:300$i/api/v1/setup | grep -q '"setupRequired":true'
           done
 
+      # SHAA-492 load proof (throwaway branch, never merged): 2x nproc busy loops for CPU contention,
+      # then mfa.spec.ts ten times, first as on main (control), then with the fix.
+      - name: CPU contention
+        run: |
+          nproc
+          for i in $(seq $(( $(nproc) * 2 ))); do nohup sh -c 'while :; do :; done' >/dev/null 2>&1 & done
+          sleep 5; uptime
+      - name: "control: mfa.spec.ts from main, --repeat-each=10 under load"
+        continue-on-error: true
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://127.0.0.1:3000
+        run: |
+          uptime
+          npx playwright test e2e/mfa-main.spec.ts --repeat-each=10
+      - name: "fix: mfa.spec.ts --repeat-each=10 under load"
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://127.0.0.1:3000
+        run: |
+          rm -f e2e/mfa-main.spec.ts
+          uptime
+          npx playwright test e2e/mfa.spec.ts --repeat-each=10
+          uptime
+
       - name: npx playwright test
+        if: false
         working-directory: frontend
         env:
           E2E_BASE_URL: http://127.0.0.1:3000
