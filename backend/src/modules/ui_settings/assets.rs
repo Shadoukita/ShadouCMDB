@@ -266,7 +266,12 @@ fn has_internal_dtd_subset(text: &str) -> bool {
             }
             i += 1;
         }
-        from += pos + 9;
+        // Unterminated: the XML parser refuses it as malformed. Resuming after
+        // the `>` keeps the scan linear (GitHub #228).
+        if i >= b.len() {
+            return false;
+        }
+        from = i + 1;
     }
     false
 }
@@ -531,5 +536,21 @@ mod tests {
         }
         // the error names the problem, not just the type
         assert!(svg("<svg><rect></svg>").unwrap_err().2.contains("well-formed"));
+    }
+
+    /// GitHub #228: the DOCTYPE pre-scan is linear. Many unterminated
+    /// `<!doctype` used to rescan to the end of the file once each.
+    #[test]
+    fn doctype_prescan_is_linear() {
+        let mut body = "<!doctype".repeat(58_000);
+        body.push_str("<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+        assert!(body.len() <= 512 * 1024);
+        let start = std::time::Instant::now();
+        assert!(!has_internal_dtd_subset(&body));
+        assert!(start.elapsed() < std::time::Duration::from_secs(1), "took {:?}", start.elapsed());
+        assert_eq!(svg(&body).unwrap_err().1, "invalid_format");
+        // Resuming after one DOCTYPE still finds a subset in the next.
+        assert!(has_internal_dtd_subset("<!doctype a><!DOCTYPE b [<!ENTITY x \"y\">]>"));
+        assert!(has_internal_dtd_subset("<!doctype a \"q>q\"><!doctype b ["));
     }
 }
