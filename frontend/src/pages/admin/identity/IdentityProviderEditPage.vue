@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../../api/client";
 import {
@@ -27,6 +27,7 @@ import GroupMappingsEditor, { type MappingRow } from "./GroupMappingsEditor.vue"
 import ProviderAccessPanel from "./ProviderAccessPanel.vue";
 import ProviderTestPanel from "./ProviderTestPanel.vue";
 import SecretInput from "./SecretInput.vue";
+import { reentryHint, secretMissing, secretReentryField, secretRequiredFields, syncSecret, type SecretField } from "./secretReentry";
 
 /**
  * Create or edit an identity provider: an OpenID Connect provider (a "Sign in with …" button) or an
@@ -135,10 +136,13 @@ const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
 const saved = ref<string | null>(null);
 const copyState = ref<"" | "copied" | "failed">("");
+/** Secrets the API asked for again (422 secret_required), whatever the form thinks; until the next load or save. */
+const apiRequired = ref<SecretField[]>([]);
 
 function seed(f: Form) {
   form.value = f;
   baseline.value = JSON.stringify(f);
+  apiRequired.value = [];
 }
 watch(
   () => provider.data.value,
@@ -152,6 +156,19 @@ watch(id, () => {
   saved.value = null;
 });
 const dirty = computed(() => JSON.stringify(form.value) !== baseline.value);
+
+/** A changed server address sends the stored secret nowhere: it has to be entered again (GH#238). */
+const reentry = computed(() => secretReentryField(provider.data.value, form.value));
+const secretRequired = (field: SecretField) => reentry.value === field || apiRequired.value.includes(field);
+const SECRET_KEYS = { "oidc.clientSecret": "clientSecret", "ldap.bindPassword": "bindPassword" } as const;
+watch(
+  () => `${secretRequired("oidc.clientSecret")} ${secretRequired("ldap.bindPassword")}`,
+  () => {
+    for (const [field, key] of Object.entries(SECRET_KEYS) as [SecretField, (typeof SECRET_KEYS)[SecretField]][]) {
+      form.value[key] = syncSecret(form.value[key], secretRequired(field));
+    }
+  },
+);
 
 const p = computed(() => provider.data.value);
 const isOidc = computed(() => form.value.kind === "oidc");
@@ -214,6 +231,7 @@ function validate(f: Form): Record<string, string> {
     need("oidc.clientId", f.clientId);
     need("oidc.usernameClaim", f.usernameClaim);
     need("oidc.groupsClaim", f.groupsClaim);
+    if (secretRequired("oidc.clientSecret") && secretMissing(f.clientSecret)) errs["oidc.clientSecret"] = "Required";
     if (f.mfaAssurance === "verify") {
       const acr = acrValues(f.requiredAcr);
       const bad = acr.find((v) => !ACR_VALUE.test(v));
@@ -230,7 +248,8 @@ function validate(f: Form): Record<string, string> {
     need("ldap.emailAttribute", f.emailAttribute);
     need("ldap.groupAttribute", f.groupAttribute);
     const hasPassword = typeof f.bindPassword === "string" ? f.bindPassword !== "" : f.bindPassword === undefined && !!p.value?.ldap?.bindPasswordSet;
-    if (f.bindDn.trim() && !hasPassword) errs["ldap.bindPassword"] = "A bind DN needs its password";
+    if (secretRequired("ldap.bindPassword") && secretMissing(f.bindPassword)) errs["ldap.bindPassword"] = "Required";
+    else if (f.bindDn.trim() && !hasPassword) errs["ldap.bindPassword"] = "A bind DN needs its password";
     if (!f.bindDn.trim() && typeof f.bindPassword === "string" && f.bindPassword) errs["ldap.bindPassword"] = "A bind password needs a bind DN";
   }
   f.mappings.forEach((m, i) => {
@@ -315,6 +334,13 @@ async function submit() {
     saved.value = `Saved ${next?.name ?? "the provider"}. Mapping changes apply at each account's next sign-in.`;
   } catch (e) {
     error.value = e;
+    // The API wants the secret again (the stored address may have changed meanwhile): open its input.
+    const asked = secretRequiredFields(e);
+    if (asked.length) {
+      apiRequired.value = [...new Set([...apiRequired.value, ...asked])];
+      await nextTick();
+      document.getElementById(fieldId(asked[0]))?.focus();
+    }
   }
 }
 
@@ -469,8 +495,9 @@ const notFound = computed(() => {
                 label="Client secret"
                 :is-set="!!p?.oidc?.clientSecretSet"
                 removable
+                :required="secretRequired('oidc.clientSecret')"
                 :error="fieldErrors['oidc.clientSecret']"
-                hint="Leave empty for a public client (PKCE only). Never shown again after saving."
+                :hint="secretRequired('oidc.clientSecret') ? reentryHint('oidc.clientSecret') : 'Leave empty for a public client (PKCE only). Never shown again after saving.'"
               />
               <FormField id="idp-oidc-scopes" label="Scopes" :error="fieldErrors['oidc.scopes']" hint="Space-separated; openid is always added">
                 <template #default="{ id: fid, invalid, describedBy }">
@@ -549,8 +576,9 @@ const notFound = computed(() => {
                 v-model="form.bindPassword"
                 label="Service account password"
                 :is-set="!!p?.ldap?.bindPasswordSet"
+                :required="secretRequired('ldap.bindPassword')"
                 :error="fieldErrors['ldap.bindPassword']"
-                hint="Never shown again after saving. Clearing the bind DN removes it."
+                :hint="secretRequired('ldap.bindPassword') ? reentryHint('ldap.bindPassword') : 'Never shown again after saving. Clearing the bind DN removes it.'"
               />
               <FormField id="idp-ldap-userBaseDn" label="User search base" required wide :error="fieldErrors['ldap.userBaseDn']">
                 <template #default="{ id: fid, invalid, describedBy }">

@@ -14,6 +14,7 @@ const LDAP_NAME = `E2E Directory ${stamp}`;
 const SECRET = `e2e-client-secret-${stamp}`;
 const SECRET_2 = `e2e-client-secret-2-${stamp}`;
 const BIND_PASSWORD = `e2e-bind-password-${stamp}`;
+const BIND_PASSWORD_2 = `e2e-bind-password-2-${stamp}`;
 const MANAGER = `e2e-user-manager-${stamp}`;
 const MANAGER_PASSWORD = "user-manager-password-123";
 
@@ -405,6 +406,65 @@ test("create an LDAP directory: StartTLS follows the URL, a bind DN needs its pa
   await expect(row).toContainText("LDAP / Active Directory");
   await expect(row).toContainText("Disabled");
   await expect(row.getByRole("cell", { name: "ldaps://127.0.0.1:9" })).toBeVisible();
+});
+
+test("a changed server address asks for the bind password again; the API's secret_required opens the input too", async ({ page, request }) => {
+  await page.goto(`/admin/identity-providers/${ldapId}`);
+  const state = page.locator("#idp-ldap-bindPassword-state");
+  const url = page.getByLabel("Server URL");
+  const bindDn = page.getByLabel("Service account (bind DN)");
+  const password = page.getByLabel("Service account password");
+  const hint = page.locator("#idp-ldap-bindPassword-hint");
+  const reentry = "The server address changed. Enter the bind password again.";
+  await expect(state).toHaveText("Stored — never shown");
+
+  // Another port: the stored password would go to a different server, so it has to be typed again.
+  await url.fill("ldaps://127.0.0.1:10");
+  await expect(password).toHaveValue("");
+  await expect(password).toHaveAttribute("aria-required", "true");
+  await expect(hint).toHaveText(reentry);
+  await expect(page.getByRole("button", { name: "Keep stored" })).toHaveCount(0);
+  // The stored address typed back (written differently) keeps the stored password.
+  await url.fill("ldaps://127.0.0.1:9/");
+  await expect(state).toHaveText("Stored — never shown");
+  await expect(hint).not.toHaveText(reentry);
+  // So does the bind DN.
+  await bindDn.fill("CN=someone-else,DC=example,DC=com");
+  await expect(hint).toHaveText(reentry);
+  await bindDn.fill("CN=svc-cmdb,OU=Service Accounts,DC=example,DC=com");
+  await expect(state).toHaveText("Stored — never shown");
+
+  // Saving the new address without the password is refused before any request.
+  await url.fill("ldaps://127.0.0.1:10");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.locator("#idp-ldap-bindPassword-err")).toHaveText("Required");
+  await expect(password).toBeFocused();
+  await password.fill(BIND_PASSWORD_2);
+  let patch = page.waitForRequest((r) => r.method() === "PATCH" && r.url().endsWith(`/identity-providers/${ldapId}`));
+  await page.getByRole("button", { name: "Save changes" }).click();
+  expect((await patch).postDataJSON().ldap).toMatchObject({ url: "ldaps://127.0.0.1:10", bindPassword: BIND_PASSWORD_2 });
+  await expect(page.getByRole("status").filter({ hasText: `Saved ${LDAP_NAME}` })).toBeVisible();
+  await expect(state).toHaveText("Stored — never shown");
+  expect(await page.content()).not.toContain(BIND_PASSWORD_2);
+
+  // Meanwhile another administrator moves the directory. This page still holds the old address, so
+  // its next save would move it back without the password: the API refuses with secret_required, and
+  // the form opens the password input with the server's message instead of a generic error.
+  await apiSend(request, "PATCH", `/admin/identity-providers/${ldapId}`, { ldap: { url: "ldaps://127.0.0.1:11", bindPassword: BIND_PASSWORD } });
+  await page.getByLabel("User search base").fill("OU=People,DC=example,DC=com");
+  patch = page.waitForRequest((r) => r.method() === "PATCH" && r.url().endsWith(`/identity-providers/${ldapId}`));
+  await page.getByRole("button", { name: "Save changes" }).click();
+  expect((await patch).postDataJSON().ldap).not.toHaveProperty("bindPassword");
+  await expect(page.getByRole("alert").first()).toContainText("Not saved");
+  await expect(page.locator("#idp-ldap-bindPassword-err")).toContainText("again");
+  await expect(password).toBeFocused();
+  await expect(hint).toHaveText(reentry);
+  await password.fill(BIND_PASSWORD);
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status").filter({ hasText: `Saved ${LDAP_NAME}` })).toBeVisible();
+  const saved = await provider(request, ldapId);
+  expect(saved.ldap?.bindPasswordSet).toBe(true);
+  await expect(state).toHaveText("Stored — never shown");
 });
 
 test("deleting a provider that still has accounts (409 IN_USE) offers to disable it instead", async ({ page, request }) => {
