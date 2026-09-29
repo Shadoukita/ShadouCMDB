@@ -23031,7 +23031,7 @@
               "type": "string",
               "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             },
-            "description": "Fields not shown on the detail page or the form",
+            "description": "Fields not shown on the detail page or the form. Presentation only: the API still returns them; restrict access with permission profiles",
             "maxItems": 200,
             "uniqueItems": true
           },
@@ -23041,7 +23041,7 @@
               "type": "string",
               "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             },
-            "description": "Fields shown but not editable on the form",
+            "description": "Fields shown but not editable on the form. Presentation only: the API still accepts writes to them; restrict access with permission profiles",
             "maxItems": 200,
             "uniqueItems": true
           },

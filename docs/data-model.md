@@ -290,6 +290,10 @@ layouts[]: { classKey, tabs[], hiddenFields[], readOnlyFields[] }
   attribute added to the class later, for example) follows at the end of the first tab: a General
   section with the core fields and the attributes without a group, then the attribute groups. The
   detail page's "Active" follows "Valid until" wherever that is placed.
+- **Layouts are presentation, not access control.** The web UI applies `hiddenFields` and
+  `readOnlyFields`; the API does not. A hidden attribute is still in the CI's API response and a
+  read-only one can still be written through the API, by anyone whose permission profile allows it.
+  Restrict data with permission profiles.
 - **Core fields can be moved, not hidden.** `hiddenFields` may not contain `ident`, `validFrom` or
   `validUntil` (the API answers `400` with the path, e.g. `settings.layouts.0.hiddenFields.1`).
   They can still be read-only on the form. A required attribute that a layout hides or makes read-only

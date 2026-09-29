@@ -82,10 +82,16 @@ fn panel_fields_schema() -> Schema {
     field_list("Fields in display order (built-in fields or attributes.<key>)")
 }
 fn hidden_fields_schema() -> Schema {
-    field_list("Fields not shown on the detail page or the form")
+    field_list(
+        "Fields not shown on the detail page or the form. Presentation only: the API still returns them; restrict \
+         access with permission profiles",
+    )
 }
 fn read_only_fields_schema() -> Schema {
-    field_list("Fields shown but not editable on the form")
+    field_list(
+        "Fields shown but not editable on the form. Presentation only: the API still accepts writes to them; \
+         restrict access with permission profiles",
+    )
 }
 
 fn label_schema() -> Schema {
