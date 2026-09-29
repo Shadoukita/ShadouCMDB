@@ -30,7 +30,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use crate::api;
 use crate::auth::AuthState;
 use crate::auth::session::{CSRF_HEADER, request_is_https};
-use crate::config::{ApiDocs, AuditConfig, AuthConfig, Config};
+use crate::config::{ApiDocs, AuditConfig, AuthConfig, Config, HttpConfig};
 use crate::db;
 use error::{AppError, ErrorCode};
 
@@ -51,6 +51,8 @@ pub struct AppState {
     pub capture: ClientCapture,
     /// Whether every migration of this build is applied (see `schema_gate`).
     pub schema: Arc<db::SchemaState>,
+    /// Requests the API handles at once (`HTTP_MAX_CONCURRENT_REQUESTS`).
+    pub capacity: Capacity,
 }
 
 impl AppState {
@@ -60,12 +62,67 @@ impl AppState {
             auth: Arc::new(AuthState::new(auth)),
             capture: ClientCapture { ip: true, user_agent: true },
             schema: Arc::default(),
+            capacity: Capacity::new(512, Duration::from_secs(10)),
         }
     }
 
     pub fn capturing(mut self, audit: &AuditConfig) -> Self {
         self.capture = ClientCapture { ip: audit.capture_client_ip, user_agent: audit.capture_user_agent };
         self
+    }
+
+    pub fn limited(mut self, http: &HttpConfig) -> Self {
+        self.capacity = Capacity::new(http.max_concurrent_requests, http.header_read_timeout);
+        self
+    }
+}
+
+/// Bounds the API requests in progress; each route takes a permit in
+/// `api::route` before it authorises the caller or reads the body, and a
+/// request that finds its pool empty is answered 503 SERVER_BUSY instead of
+/// queueing. Public routes that take a body (setup, sign-in) draw from their
+/// own, smaller pool and must deliver the body within
+/// `HTTP_HEADER_READ_TIMEOUT_SECS`: anonymous slow senders can then only
+/// saturate sign-in, never the capacity signed-in users and API tokens need.
+/// Bodiless public routes (liveness, readiness, version) take no permit, so a
+/// busy server is not mistaken for a dead one.
+#[derive(Clone)]
+pub struct Capacity {
+    global: Arc<tokio::sync::Semaphore>,
+    public: Arc<tokio::sync::Semaphore>,
+    /// Time a public route may take to receive its body.
+    pub public_body_timeout: Duration,
+}
+
+impl Capacity {
+    /// `max` requests for authenticated routes, and `max / 8` (at least 16) for public ones.
+    pub fn new(max: usize, public_body_timeout: Duration) -> Self {
+        Capacity::with_sizes(max, (max / 8).max(16), public_body_timeout)
+    }
+
+    pub fn with_sizes(global: usize, public: usize, public_body_timeout: Duration) -> Self {
+        Capacity {
+            global: Arc::new(tokio::sync::Semaphore::new(global)),
+            public: Arc::new(tokio::sync::Semaphore::new(public)),
+            public_body_timeout,
+        }
+    }
+
+    /// A permit from the public or the global pool, or 503 SERVER_BUSY.
+    pub fn acquire(&self, public: bool) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+        let pool = if public { &self.public } else { &self.global };
+        pool.clone().try_acquire_owned().map_err(|_| {
+            tracing::warn!(public, "request refused: HTTP_MAX_CONCURRENT_REQUESTS reached");
+            let mut err =
+                AppError::new(ErrorCode::ServerBusy, "The server is handling too many requests; retry shortly");
+            err.retry_after = Some(1);
+            err
+        })
+    }
+
+    #[cfg(test)]
+    pub fn available(&self, public: bool) -> usize {
+        if public { self.public.available_permits() } else { self.global.available_permits() }
     }
 }
 
@@ -351,7 +408,7 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(cfg.http.request_timeout, request_timeout))
         .layer(CatchPanicLayer::custom(panic_response))
-        .layer(DefaultBodyLimit::max(1024 * 1024));
+        .layer(DefaultBodyLimit::max(api::route::BODY_LIMIT));
 
     if !cfg.cors_origins.is_empty() {
         let origins: Vec<HeaderValue> = cfg.cors_origins.iter().filter_map(|o| HeaderValue::from_str(o).ok()).collect();
@@ -380,7 +437,7 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
 /// and closes the pool.
 pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
     let pool = db::lazy_pool(&cfg.database)?;
-    let state = AppState::new(pool.clone(), cfg.auth.clone()).capturing(&cfg.audit);
+    let state = AppState::new(pool.clone(), cfg.auth.clone()).capturing(&cfg.audit).limited(&cfg.http);
     let app = router(state.clone(), &cfg);
     let exporter = cfg.audit.export.clone().map(|export| crate::audit_export::spawn(pool.clone(), export));
 
@@ -546,6 +603,7 @@ mod tests {
             http: crate::config::HttpConfig {
                 header_read_timeout: Duration::from_secs(10),
                 request_timeout: Duration::from_secs(120),
+                max_concurrent_requests: 512,
             },
             database: crate::config::DatabaseConfig {
                 url: Some("postgres://nobody@127.0.0.1:1/none".into()),
@@ -858,6 +916,7 @@ mod tests {
         let http = crate::config::HttpConfig {
             header_read_timeout: Duration::from_millis(200),
             request_timeout: Duration::from_secs(5),
+            max_concurrent_requests: 512,
         };
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {

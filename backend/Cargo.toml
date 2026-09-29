@@ -23,6 +23,8 @@ futures-util = { version = "0.3", default-features = false }
 # Session and CSRF tokens straight from the OS random number generator.
 getrandom = "0.4"
 hex = "0.4"
+# Caps a streamed request body (LengthLimitError); already in the tree through axum and hyper.
+http-body-util = "0.1"
 # The accept loop is hyper-util's, not axum::serve, so HTTP/1 header reads get a timeout (slowloris).
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "server-graceful", "service", "http1", "http2"] }

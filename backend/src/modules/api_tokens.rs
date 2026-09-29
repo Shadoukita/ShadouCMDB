@@ -494,6 +494,11 @@ pub(crate) mod tests {
 
     /// The real router on a scratch database (also used by the MFA tests).
     pub(crate) fn app(pool: sqlx::PgPool) -> Router {
+        app_with_capacity(pool, crate::http::Capacity::new(512, StdDuration::from_secs(10)))
+    }
+
+    /// The real router with `capacity` (HTTP_MAX_CONCURRENT_REQUESTS) in place of the default.
+    pub(crate) fn app_with_capacity(pool: sqlx::PgPool, capacity: crate::http::Capacity) -> Router {
         let auth = AuthConfig {
             session_idle: StdDuration::from_secs(3600),
             session_max_age: StdDuration::from_secs(3600),
@@ -509,6 +514,7 @@ pub(crate) mod tests {
             http: HttpConfig {
                 header_read_timeout: StdDuration::from_secs(10),
                 request_timeout: StdDuration::from_secs(120),
+                max_concurrent_requests: 512,
             },
             database: DatabaseConfig {
                 url: Some("postgres://unused".into()),
@@ -529,7 +535,7 @@ pub(crate) mod tests {
             auth: auth.clone(),
             audit: Default::default(),
         };
-        router(AppState::new(pool, auth), &cfg)
+        router(AppState { capacity, ..AppState::new(pool, auth) }, &cfg)
     }
 
     #[derive(Default, Clone)]
