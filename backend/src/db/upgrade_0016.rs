@@ -324,7 +324,30 @@ async fn fixed_columns_become_class_fields_without_losing_a_value() {
 
     // The engine rebuilds the reporting views on the new registry columns (after
     // the newer migrations, as `shadoucmdb migrate` does: it records into their columns).
+    // Two more legacy records: the 0009 note and an engine purge of no stored value.
+    let legacy = json!([
+        {"kind": "not_null_skipped", "rows": 3, "message": "server.os stays nullable: 3 CIs (deleted ones included) have no value"},
+        {"kind": "drop_column", "rows": 0, "message": "0 stored values of Server.code are deleted"},
+        {"kind": "drop_table", "rows": 0, "message": "Table Secrets and its 0 rows are deleted"},
+    ]);
+    sqlx::query(
+        "INSERT INTO schema_changes (actor_type, actor_name, summary, statements, impact)
+         VALUES ('system', 'legacy', 'Legacy change', ARRAY['SELECT 1'], $1)",
+    )
+    .bind(&legacy)
+    .execute(pool)
+    .await
+    .unwrap();
     MIGRATOR.run(pool).await.expect("the newer migrations");
+    let redacted: Value = scalar(pool, "SELECT redacted_impact FROM schema_changes WHERE actor_name = 'legacy'").await;
+    assert_eq!(
+        redacted,
+        json!([
+            {"kind": "not_null_skipped", "rows": null, "message": "server.os stays nullable: some CIs (deleted ones included) have no value"},
+            {"kind": "drop_column", "rows": null, "message": "The stored values of Server.code are deleted"},
+            {"kind": "drop_table", "rows": null, "message": "Table Secrets and its rows are deleted"},
+        ])
+    );
     // 0028 (GH#252): the record gets a variant without its counts, shown to readers who may not view every type.
     let (summary, redacted, classes): (String, Value, Option<Vec<uuid::Uuid>>) = sqlx::query_as(
         "SELECT redacted_summary, redacted_impact, count_classes FROM schema_changes WHERE actor_name = 'migration 0016'",

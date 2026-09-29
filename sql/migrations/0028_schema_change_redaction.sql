@@ -37,12 +37,13 @@ WITH redacted AS (
            ' \(\d+ values\)$', '') AS summary,
          COALESCE((
            SELECT jsonb_agg(CASE
-                    WHEN e ? 'rows' AND jsonb_typeof(e->'rows') = 'number' AND (e->>'rows')::bigint <> 0
+                    WHEN e->>'kind' IN ('drop_column', 'drop_table', 'rewrite', 'warning', 'data_moved', 'not_null_skipped')
+                         AND jsonb_typeof(e->'rows') = 'number'
                     THEN e || jsonb_build_object('rows', NULL, 'message',
                            regexp_replace(regexp_replace(regexp_replace(e->>'message',
                              '^\d+ (stored values of|values of|values moved)', 'The \1'),
                              ' and its \d+ rows are deleted$', ' and its rows are deleted'),
-                             ': \d+ (assets|CIs) have no value$', ': some \1 have no value'))
+                             ': \d+ (assets|CIs)( \(deleted ones included\))? have no value$', ': some \1\2 have no value'))
                     ELSE e END ORDER BY n)
            FROM jsonb_array_elements(s.impact) WITH ORDINALITY AS x(e, n)), '[]'::jsonb) AS impact
   FROM cmdb.schema_changes s
