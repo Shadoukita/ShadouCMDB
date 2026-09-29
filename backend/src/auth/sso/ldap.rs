@@ -21,6 +21,7 @@ use std::time::Duration;
 use ldap3::{Ldap, LdapConnAsync, LdapConnSettings, LdapError, Scope, SearchEntry, ldap_escape};
 
 use super::tls;
+use crate::auth::secret::Secret;
 
 /// Timeout for connecting and for each operation.
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -32,7 +33,7 @@ pub struct Settings {
     pub url: String,
     pub start_tls: bool,
     pub bind_dn: Option<String>,
-    pub bind_password: Option<String>,
+    pub bind_password: Option<Secret>,
     pub user_base_dn: String,
     pub user_filter: String,
     pub username_attribute: String,

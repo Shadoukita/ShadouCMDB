@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 use super::jose::{self, JwkSet, JwsError};
 use super::tls;
+use crate::auth::secret::Secret;
 
 /// Timeout for each call to the provider.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -43,7 +44,7 @@ const LEEWAY_SECS: i64 = 120;
 pub struct Settings {
     pub issuer_url: String,
     pub client_id: String,
-    pub client_secret: Option<String>,
+    pub client_secret: Option<Secret>,
     pub scopes: String,
     pub username_claim: String,
     pub groups_claim: String,

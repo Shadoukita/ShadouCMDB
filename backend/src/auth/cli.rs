@@ -70,7 +70,7 @@ pub async fn create_admin(cfg: &DatabaseConfig, args: CreateAdminArgs) -> anyhow
             display_name: args.display_name.clone().unwrap_or_else(|| args.username.clone()).trim().to_owned(),
             username: args.username.clone(),
             email: args.email.clone(),
-            password,
+            password: password.into(),
             is_active: Some(true),
             profile_ids: vec![admin],
         };

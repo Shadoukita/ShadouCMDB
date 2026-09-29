@@ -27,6 +27,7 @@ use crate::api::schemas::{
 use crate::auth::events::{self, RevokeReason};
 use crate::auth::password;
 use crate::auth::permissions::GlobalPermission;
+use crate::auth::secret::Secret;
 use crate::data::auth::{self as data, UserRow};
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Where};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
@@ -128,7 +129,7 @@ pub struct UserCreate {
     #[serde(default)]
     pub email: Option<String>,
     #[schema(schema_with = password_schema)]
-    pub password: String,
+    pub password: Secret,
     /// Default true
     #[schema(nullable = false)]
     pub is_active: Option<bool>,
@@ -183,7 +184,7 @@ impl Check for UserUpdate {
 pub struct PasswordReset {
     /// The new password
     #[schema(schema_with = password_schema)]
-    password: String,
+    password: Secret,
 }
 
 impl Check for PasswordReset {

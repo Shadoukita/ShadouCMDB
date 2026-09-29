@@ -32,6 +32,7 @@ use crate::api::schemas::{self, name_schema, sort_order_schema, trimmed, ts};
 use crate::auth::AuthState;
 use crate::auth::events::{self, RevokeReason};
 use crate::auth::permissions::GlobalPermission;
+use crate::auth::secret::Secret;
 use crate::auth::sso::{ldap, oidc, tls};
 use crate::data::auth as auth_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
@@ -266,7 +267,7 @@ pub struct OidcInput {
     /// Null or left out for a public client
     #[schema(schema_with = secret_schema)]
     #[serde(default)]
-    client_secret: Option<String>,
+    client_secret: Option<Secret>,
     #[schema(schema_with = scopes_schema)]
     #[serde(default)]
     scopes: Option<String>,
@@ -302,7 +303,7 @@ pub struct LdapInput {
     bind_dn: Option<String>,
     #[schema(schema_with = secret_schema)]
     #[serde(default)]
-    bind_password: Option<String>,
+    bind_password: Option<Secret>,
     #[schema(schema_with = long_text)]
     #[serde(deserialize_with = "trimmed")]
     user_base_dn: String,
@@ -404,7 +405,7 @@ pub struct OidcPatch {
     /// A string replaces the secret, null removes it, left out keeps it
     #[schema(schema_with = secret_schema)]
     #[serde(default, deserialize_with = "schemas::patch")]
-    client_secret: Option<Option<String>>,
+    client_secret: Option<Option<Secret>>,
     #[schema(schema_with = scopes_schema)]
     #[serde(default)]
     scopes: Option<String>,
@@ -438,7 +439,7 @@ pub struct LdapPatch {
     /// A string replaces the password, null removes it, left out keeps it
     #[schema(schema_with = secret_schema)]
     #[serde(default, deserialize_with = "schemas::patch")]
-    bind_password: Option<Option<String>>,
+    bind_password: Option<Option<Secret>>,
     #[schema(schema_with = long_text)]
     #[serde(default, deserialize_with = "schemas::trimmed_opt")]
     user_base_dn: Option<String>,
@@ -567,6 +568,11 @@ struct Draft {
     group_attribute: Option<String>,
 }
 
+/// A secret from a request body as stored: an empty string is no secret.
+fn non_empty_secret(secret: Option<&Secret>) -> Option<String> {
+    secret.map(Secret::expose).filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
 impl Draft {
     fn from_row(r: &ProviderRow) -> Draft {
         Draft {
@@ -625,7 +631,7 @@ impl Draft {
         if let Some(o) = &b.oidc {
             d.issuer_url = Some(o.issuer_url.clone());
             d.client_id = Some(o.client_id.clone());
-            d.client_secret = o.client_secret.clone().filter(|s| !s.is_empty());
+            d.client_secret = non_empty_secret(o.client_secret.as_ref());
             d.scopes = Some(o.scopes.clone().unwrap_or_else(|| "profile email".into()));
             d.username_claim = Some(o.username_claim.clone().unwrap_or_else(|| "preferred_username".into()));
             d.groups_claim = Some(o.groups_claim.clone().unwrap_or_else(|| "groups".into()));
@@ -637,7 +643,7 @@ impl Draft {
             d.start_tls = Some(l.start_tls.unwrap_or_else(|| !l.url.to_ascii_lowercase().starts_with("ldaps://")));
             d.ldap_url = Some(l.url.clone());
             d.bind_dn = l.bind_dn.clone().filter(|s| !s.is_empty());
-            d.bind_password = l.bind_password.clone().filter(|s| !s.is_empty());
+            d.bind_password = non_empty_secret(l.bind_password.as_ref());
             d.user_base_dn = Some(l.user_base_dn.clone());
             d.user_filter = Some(
                 l.user_filter.clone().unwrap_or_else(|| "(&(objectClass=user)(sAMAccountName={username}))".into()),
@@ -671,7 +677,7 @@ impl Draft {
                 set(&mut self.issuer_url, &o.issuer_url);
                 set(&mut self.client_id, &o.client_id);
                 if let Some(secret) = &o.client_secret {
-                    self.client_secret = secret.clone().filter(|s| !s.is_empty());
+                    self.client_secret = non_empty_secret(secret.as_ref());
                 }
                 set(&mut self.scopes, &o.scopes);
                 set(&mut self.username_claim, &o.username_claim);
@@ -709,7 +715,7 @@ impl Draft {
                     }
                 }
                 if let Some(pw) = &l.bind_password {
-                    self.bind_password = pw.clone().filter(|s| !s.is_empty());
+                    self.bind_password = non_empty_secret(pw.as_ref());
                 }
                 set(&mut self.user_base_dn, &l.user_base_dn);
                 set(&mut self.user_filter, &l.user_filter);
@@ -1332,5 +1338,77 @@ mod tests {
         assert_eq!(ldap_url_problem("http://dc1.example.com", true).map(|p| p.0), Some("ldap.url"));
         assert_eq!(ldap_url_problem("ldaps://dc1.example.com/dc=x", false).map(|p| p.0), Some("ldap.url"));
         assert_eq!(ldap_url_problem("ldaps://", false).map(|p| p.0), Some("ldap.url"));
+    }
+
+    /// GitHub #192: `{:?}` of a request body, a stored provider or the
+    /// settings built from it never shows a client secret or bind password.
+    #[test]
+    fn debug_output_redacts_provider_secrets() {
+        const OIDC_SECRET: &str = "oidc-client-secret-value";
+        const LDAP_SECRET: &str = "ldap-bind-password-value";
+        let hidden = |debug: String| {
+            assert!(!debug.contains(OIDC_SECRET) && !debug.contains(LDAP_SECRET), "{debug}");
+            assert!(debug.contains("<redacted>"), "{debug}");
+        };
+
+        let oidc_create: IdentityProviderCreate = serde_json::from_value(serde_json::json!({
+            "kind": "oidc", "name": "Entra ID",
+            "oidc": { "issuerUrl": "https://login.example.com", "clientId": "cmdb", "clientSecret": OIDC_SECRET },
+        }))
+        .unwrap();
+        hidden(format!("{oidc_create:?}"));
+        let ldap_create: IdentityProviderCreate = serde_json::from_value(serde_json::json!({
+            "kind": "ldap", "name": "Corporate AD",
+            "ldap": { "url": "ldaps://dc1.example.com", "userBaseDn": "dc=example,dc=com",
+                      "bindDn": "cn=svc,dc=example,dc=com", "bindPassword": LDAP_SECRET },
+        }))
+        .unwrap();
+        hidden(format!("{ldap_create:?}"));
+        let update: IdentityProviderUpdate = serde_json::from_value(serde_json::json!({
+            "oidc": { "clientSecret": OIDC_SECRET },
+            "ldap": { "bindPassword": LDAP_SECRET },
+        }))
+        .unwrap();
+        hidden(format!("{update:?}"));
+
+        let mut draft = Draft::from_create(&oidc_create);
+        draft.bind_password = non_empty_secret(ldap_create.ldap.as_ref().unwrap().bind_password.as_ref());
+        assert_eq!(draft.client_secret.as_deref(), Some(OIDC_SECRET));
+        let row = ProviderRow {
+            id: Uuid::nil(),
+            kind: draft.kind,
+            name: draft.name,
+            is_enabled: draft.is_enabled,
+            sort_order: draft.sort_order,
+            ca_certificate: None,
+            issuer_url: draft.issuer_url,
+            client_id: draft.client_id,
+            client_secret: draft.client_secret,
+            scopes: draft.scopes,
+            username_claim: draft.username_claim,
+            groups_claim: draft.groups_claim,
+            mfa_assurance: draft.mfa_assurance,
+            required_acr: draft.required_acr,
+            ldap_url: Some("ldaps://dc1.example.com".into()),
+            start_tls: Some(false),
+            bind_dn: Some("cn=svc,dc=example,dc=com".into()),
+            bind_password: draft.bind_password,
+            user_base_dn: None,
+            user_filter: None,
+            username_attribute: None,
+            display_name_attribute: None,
+            email_attribute: None,
+            group_attribute: None,
+            user_count: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        hidden(format!("{row:?}"));
+        let oidc_settings = crate::modules::sso::oidc_settings(&row);
+        assert_eq!(oidc_settings.client_secret.as_deref(), Some(OIDC_SECRET));
+        hidden(format!("{oidc_settings:?}"));
+        let ldap_settings = crate::modules::sso::ldap_settings(&row);
+        assert_eq!(ldap_settings.bind_password.as_deref(), Some(LDAP_SECRET));
+        hidden(format!("{ldap_settings:?}"));
     }
 }
