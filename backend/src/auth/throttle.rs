@@ -200,6 +200,9 @@ pub struct LoginThrottle {
     global_budget: Option<usize>,
     slow_lane: Semaphore,
     queue: Mutex<Queue>,
+    /// Set by [`LoginThrottle::freeze`]: the time every check and failure sees.
+    #[cfg(test)]
+    frozen: Mutex<Option<Instant>>,
 }
 
 impl Default for LoginThrottle {
@@ -310,7 +313,29 @@ impl LoginThrottle {
     }
 
     fn new(global_budget: Option<usize>) -> Self {
-        LoginThrottle { state: Mutex::default(), global_budget, slow_lane: Semaphore::new(1), queue: Mutex::default() }
+        LoginThrottle {
+            state: Mutex::default(),
+            global_budget,
+            slow_lane: Semaphore::new(1),
+            queue: Mutex::default(),
+            #[cfg(test)]
+            frozen: Mutex::default(),
+        }
+    }
+
+    /// Stops the throttle's clock, so a lock stays in force however long the
+    /// test's database round trips take.
+    #[cfg(test)]
+    pub fn freeze(&self) {
+        *self.frozen.lock().unwrap() = Some(Instant::now());
+    }
+
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = *self.frozen.lock().unwrap() {
+            return now;
+        }
+        Instant::now()
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -320,7 +345,7 @@ impl LoginThrottle {
     /// Whether an attempt for `key` from `net` may go ahead right now, without reserving it.
     #[cfg(test)]
     pub fn check(&self, key: &str, net: Net) -> Gate {
-        self.check_at(key, net, Instant::now())
+        self.check_at(key, net, self.now())
     }
 
     #[cfg(test)]
@@ -332,7 +357,7 @@ impl LoginThrottle {
     /// for an attempt that has had its turn in the slow lane: over the global
     /// budget, it goes ahead instead of being sent to the slow lane again.
     pub fn begin(&self, key: &str, net: Net, slowed: bool) -> Result<Attempt<'_>, Gate> {
-        self.begin_at(key, net, slowed, Instant::now())
+        self.begin_at(key, net, slowed, self.now())
     }
 
     fn begin_at(&self, k: &str, net: Net, slowed: bool, now: Instant) -> Result<Attempt<'_>, Gate> {
@@ -398,7 +423,7 @@ impl LoginThrottle {
 
     /// Records a failed attempt; returns the lock it triggered for the key, if any.
     pub fn failure(&self, key: &str, net: Net) -> Option<Duration> {
-        self.failure_at(key, net, Instant::now())
+        self.failure_at(key, net, self.now())
     }
 
     fn failure_at(&self, k: &str, net: Net, now: Instant) -> Option<Duration> {
