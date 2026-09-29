@@ -14,7 +14,7 @@ use super::simple_resource::{self as simple, Writable};
 use crate::api::context::RequestContext;
 use crate::api::route::{Body, BodyInput, Check, IdPath, In, Json, NoBody, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{self, Page, Paged, Sort, like_pattern};
-use crate::auth::permissions::GlobalPermission;
+use crate::auth::permissions::{ClassOp, GlobalPermission};
 use crate::data::crud::{self, AuditAction, AuditEntry, Where};
 use crate::http::error::{AppError, ErrorCode};
 use crate::paged;
@@ -89,15 +89,49 @@ pub struct SchemaChangeList {
 }
 paged!(SchemaChangeList);
 
-const CHANGE_COLUMNS: &str =
-    "id, occurred_at, actor_type, actor_id, actor_name, request_id, summary, statements, impact";
+const CHANGE_COLUMNS: &str = "id, occurred_at, actor_type, actor_id, actor_name, request_id, summary, statements, impact, \
+                              count_classes, redacted_summary, redacted_impact";
 
-pub async fn list(pool: &PgPool, q: &SchemaChangeList) -> Result<Page<SchemaChange>, AppError> {
+/// A recorded schema change with the count-free variant kept for readers who
+/// may not view every type whose data it counts (GH#252).
+#[derive(sqlx::FromRow)]
+struct StoredChange {
+    #[sqlx(flatten)]
+    change: SchemaChange,
+    /// NULL: not known (recorded before migration 0028)
+    count_classes: Option<Vec<Uuid>>,
+    redacted_summary: Option<String>,
+    redacted_impact: Option<sqlx::types::Json<Vec<Impact>>>,
+}
+
+impl StoredChange {
+    /// The record as a reader who may view `visible` (`None`: every type) sees it.
+    fn visible_to(self, visible: Option<&[Uuid]>) -> SchemaChange {
+        let (Some(summary), Some(impact)) = (self.redacted_summary, self.redacted_impact) else { return self.change };
+        let reveals =
+            visible.is_none_or(|v| self.count_classes.is_some_and(|classes| classes.iter().all(|id| v.contains(id))));
+        if reveals { self.change } else { SchemaChange { summary, impact, ..self.change } }
+    }
+}
+
+pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &SchemaChangeList) -> Result<Page<SchemaChange>, AppError> {
+    let visible = ctx.class_scope(ClassOp::View);
     let filter = |w: &mut Where<'_>| {
         if let Some(q) = &q.q {
             let p = like_pattern(q);
-            w.and()
-                .push("(summary ILIKE ")
+            let qb = w.and().push("(");
+            // Search the summary the reader sees: never match on a count they may not learn.
+            match &visible {
+                None => qb.push("summary"),
+                Some(v) => qb
+                    .push(
+                        "CASE WHEN redacted_summary IS NOT NULL \
+                         AND NOT (count_classes IS NOT NULL AND count_classes <@ ",
+                    )
+                    .push_bind(v.clone())
+                    .push("::uuid[]) THEN redacted_summary ELSE summary END"),
+            };
+            qb.push(" ILIKE ")
                 .push_bind(p.clone())
                 .push(" OR array_to_string(statements, ' ') ILIKE ")
                 .push_bind(p)
@@ -105,7 +139,7 @@ pub async fn list(pool: &PgPool, q: &SchemaChangeList) -> Result<Page<SchemaChan
         }
     };
     let order = format!("occurred_at {}, id {}", q.sort.dir(), q.sort.dir());
-    let (rows, total) = crud::select_page::<SchemaChange>(
+    let (rows, total) = crud::select_page::<StoredChange>(
         &mut *pool.acquire().await?,
         "cmdb.schema_changes",
         CHANGE_COLUMNS,
@@ -115,14 +149,16 @@ pub async fn list(pool: &PgPool, q: &SchemaChangeList) -> Result<Page<SchemaChan
         q.offset,
     )
     .await?;
-    Ok(Page { data: rows, page: q.page_meta(total) })
+    let data = rows.into_iter().map(|r| r.visible_to(visible.as_deref())).collect();
+    Ok(Page { data, page: q.page_meta(total) })
 }
 
-pub async fn get(pool: &PgPool, id: Uuid) -> Result<SchemaChange, AppError> {
+pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<SchemaChange, AppError> {
     let mut conn = pool.acquire().await?;
-    crud::select_by_id(&mut conn, "cmdb.schema_changes", CHANGE_COLUMNS, id, false)
+    let row: StoredChange = crud::select_by_id(&mut conn, "cmdb.schema_changes", CHANGE_COLUMNS, id, false)
         .await?
-        .ok_or_else(|| AppError::missing("Schema change", id))
+        .ok_or_else(|| AppError::missing("Schema change", id))?;
+    Ok(row.visible_to(ctx.class_scope(ClassOp::View).as_deref()))
 }
 
 // ---------------------------------------------------------------------------
@@ -452,17 +488,27 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, "/api/v1/schema-changes", "listSchemaChanges")
             .tag(TAG)
             .summary("History of the DDL the data model administration ran (newest first)")
+            .description(
+                "A change that counted stored data (values deleted by a purge, converted by a type change, missing \
+                 for a required field) shows those counts only to a reader with the view right on every type they \
+                 describe and every type below it. Other readers get `impact[].rows` null and a summary and messages \
+                 without the counts; `q` searches the summary as the reader sees it.",
+            )
             .requires(GlobalPermission::DatamodelManage)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<SchemaChangeList>, NoBody>| async move {
-                Ok(Json(list(&api.pool, &q).await?))
+                Ok(Json(list(&api.pool, &api.ctx, &q).await?))
             }),
         route(Method::GET, "/api/v1/schema-changes/{id}", "getSchemaChange")
             .tag(TAG)
             .summary("One schema change")
+            .description(
+                "Counts of stored data are shown only to a reader with the view right on every type they describe \
+                 (see listSchemaChanges).",
+            )
             .requires(GlobalPermission::DatamodelManage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(get(&api.pool, id).await?))
+                Ok(Json(get(&api.pool, &api.ctx, id).await?))
             }),
         route(Method::POST, "/api/v1/schema-changes/preview", "previewSchemaChange")
             .tag(TAG)

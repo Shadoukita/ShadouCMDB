@@ -322,7 +322,25 @@ async fn fixed_columns_become_class_fields_without_losing_a_value() {
     assert_eq!(layout["hiddenFields"], json!(["attributes.notes"]));
     assert_eq!(layout["readOnlyFields"], json!(["attributes.owner"]));
 
-    // The engine rebuilds the reporting views on the new registry columns.
+    // The engine rebuilds the reporting views on the new registry columns (after
+    // the newer migrations, as `shadoucmdb migrate` does: it records into their columns).
+    MIGRATOR.run(pool).await.expect("the newer migrations");
+    // 0028 (GH#252): the record gets a variant without its counts, shown to readers who may not view every type.
+    let (summary, redacted, classes): (String, Value, Option<Vec<uuid::Uuid>>) = sqlx::query_as(
+        "SELECT redacted_summary, redacted_impact, count_classes FROM schema_changes WHERE actor_name = 'migration 0016'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(summary, "Migration 0016: fixed CI columns moved into class fields");
+    assert_eq!(classes, None);
+    let moved: Vec<&Value> = redacted.as_array().unwrap().iter().filter(|i| i["kind"] == "data_moved").collect();
+    assert!(!moved.is_empty(), "{redacted}");
+    for i in moved {
+        assert_eq!(i["rows"], Value::Null, "{i}");
+        let message = i["message"].as_str().unwrap();
+        assert!(message.starts_with("The values of configuration_items.") && message.ends_with("and verified"), "{i}");
+    }
     let ctx = RequestContext::system("test", "test");
     let mut tx = pool.begin().await.unwrap();
     crate::schema::reconcile(&mut tx, &ctx, "after 0016").await.expect("reconcile");
