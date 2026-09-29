@@ -305,6 +305,9 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
 - **Leavers.** Disable the person in the provider. Their next sign-in is refused; a session they
   already have lasts until it idles out (`SESSION_IDLE_TIMEOUT_MINUTES`) or ends. To end it at
   once, disable the account in ShadouCMDB too, or disable the provider (ends all its sessions).
+  Disabling or deleting an account in ShadouCMDB also revokes its API tokens and every token it
+  created for another owner, such as a service account. Before an administrator leaves, mint new
+  tokens for the service accounts they looked after, so the integrations keep running.
 
 ## Backup and restore
 

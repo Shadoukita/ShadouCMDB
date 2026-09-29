@@ -327,6 +327,10 @@ All optional; every variable is in [`.env.example`](../.env.example).
   (32473 is the RFC 5612 documentation enterprise number) and the full event as JSON in `MSG`. There is
   no TLS: for an encrypted link to a remote SIEM, point it at a local relay (rsyslog, Vector, Fluent
   Bit). A failed send is retried from the same row; delivery is at least once while the server runs.
+  UDP is unacknowledged, so datagrams the network or collector drops are lost without notice (the server
+  warns at startup); prefer `tcp://`. A row too large for one UDP datagram (65,507 bytes) is sent as a
+  stub with `oldValue` and `newValue` null, `oversize` true and `originalBytes`, keeping `chainSeq` and
+  `rowHash`; the full row stays in the database.
   Export starts at the newest row when the server starts, so rows written while it was stopped (for
   example by `create-admin`) are not sent; the `chainSeq` gap shows it. Run export on one instance only.
 - **Audit integrity:** run `shadoucmdb audit-verify` on a schedule and compare the printed chain head

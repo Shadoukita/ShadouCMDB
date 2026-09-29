@@ -550,7 +550,11 @@ creating session proved a second factor) and revoking it an `update` row (old an
 hash). **Every request made with a known token** is a
 `token.use` row whose `new_value` has `tokenName`, `tokenPrefix`, `userId`, `username`, `outcome` (`accepted`,
 `revoked`, `expired`, `owner_disabled`, `mfa_required`, `no_scope`, `session_only` or `forbidden`), `method`, `path`,
-`operationId`, `ipAddress` and `userAgent`. Its actor is the owner with `actor_type = 'api_client'`, as for the
+`operationId`, `ipAddress` and `userAgent`. `path` is kept to its first 512 characters, then `…`, with
+`pathLength` holding the full length. Refusals of a token that can no longer authenticate (`revoked`, `expired`,
+`owner_disabled`, `mfa_required`, `no_scope`) are recorded at most once a minute per token and outcome in each server process: the
+next such row carries `unrecordedRefusals`, the count left out since the last one. `session_only` and `forbidden`
+refusals, like accepted uses, are one row per request. Its actor is the owner with `actor_type = 'api_client'`, as for the
 changes the request makes, which share its `request_id`. A made-up token matches no row and is not recorded
 (anyone could grow the table that way); the server logs a warning instead. A class-permission refusal inside a
 service is recorded as `accepted` (the route let the token in); the response says `403`.

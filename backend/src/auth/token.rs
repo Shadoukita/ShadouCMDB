@@ -7,14 +7,23 @@
 //!
 //! A request carrying a Bearer header is authenticated by the token alone:
 //! its cookies are ignored, and a bad token is 401 rather than a fallback to
-//! the session. Every request made with a known token, accepted or refused,
-//! writes a `token.use` audit row; an unknown token writes none (anyone could
-//! grow the table with made-up tokens).
+//! the session. Every accepted request writes a `token.use` audit row; an
+//! unknown token writes none (anyone could grow the table with made-up
+//! tokens). A token that can no longer authenticate (revoked, expired, owner
+//! disabled, owner's MFA requirement unmet, profile deleted) is recorded at most once a minute per outcome,
+//! and the next row counts the uses left out (`unrecordedRefusals`): a dead
+//! token replayed in a loop must not grow the table, or queue on the audit
+//! chain, at the caller's pace (GH#179). A live token refused a route
+//! (`session_only`, `forbidden`) writes a row per request, as its accepted
+//! uses do.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, Method, header};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use super::permissions::{GlobalPermission, Permissions};
 use super::{Credential, Principal, events, session};
@@ -82,6 +91,14 @@ impl Refusal {
         }
     }
 
+    /// The token itself is refused, whatever the route: its uses are rate-limited in the audit log.
+    fn is_dead_token(self) -> bool {
+        matches!(
+            self,
+            Refusal::Revoked | Refusal::Expired | Refusal::OwnerDisabled | Refusal::MfaRequired | Refusal::NoScope
+        )
+    }
+
     fn error(self) -> AppError {
         let unauthenticated = |m: &str| AppError::new(ErrorCode::Unauthenticated, m);
         match self {
@@ -96,6 +113,38 @@ impl Refusal {
             Refusal::NoScope => unauthenticated("The permission profile of this API token was deleted"),
             Refusal::SessionOnly => forbidden("This endpoint needs a signed-in session; API tokens cannot call it"),
             Refusal::Forbidden(p) => forbidden(format!("This requires the {} permission", p.as_str())),
+        }
+    }
+}
+
+/// How long the refused uses of a dead token, for one outcome, share a `token.use` row.
+const REFUSAL_WINDOW: Duration = Duration::from_secs(60);
+
+struct Window {
+    since: Instant,
+    unrecorded: u64,
+}
+
+type RefusalKey = (Uuid, &'static str);
+
+/// Per process: each replica records its own refusals.
+static REFUSALS: LazyLock<Mutex<HashMap<RefusalKey, Window>>> = LazyLock::new(Default::default);
+
+/// Whether to record this refused use: Some(uses left out since the last row), or None to leave it out.
+fn record_refusal(key: RefusalKey, now: Instant) -> Option<u64> {
+    let mut windows = REFUSALS.lock().unwrap_or_else(PoisonError::into_inner);
+    if windows.len() >= 4_096 {
+        windows.retain(|_, w| now.duration_since(w.since) < REFUSAL_WINDOW);
+    }
+    match windows.get_mut(&key) {
+        Some(w) if now.duration_since(w.since) < REFUSAL_WINDOW => {
+            w.unrecorded += 1;
+            None
+        }
+        Some(w) => Some(std::mem::replace(w, Window { since: now, unrecorded: 0 }).unrecorded),
+        None => {
+            windows.insert(key, Window { since: now, unrecorded: 0 });
+            Some(0)
         }
     }
 }
@@ -151,19 +200,21 @@ pub async fn authenticate(
     let principal =
         Principal { user_id: t.user_id, username: t.username.clone(), credential: Credential::Token, permissions };
     let ctx = RequestContext::token(Arc::new(principal), request_id).with_client(client);
-    let mut tx = pool.begin().await?;
-    events::token_use(&mut tx, &ctx, &t, refusal, &used).await?;
-    if refusal.is_none() {
+    let Some(r) = refusal else {
+        let mut tx = pool.begin().await?;
+        events::token_use(&mut tx, &ctx, &t, None, &used, 0).await?;
         data::record_use(&mut tx, t.id, ctx.client.ip).await?;
+        tx.commit().await?;
+        return Ok(ctx);
+    };
+    let unrecorded = if r.is_dead_token() { record_refusal((t.id, r.outcome()), Instant::now()) } else { Some(0) };
+    if let Some(unrecorded) = unrecorded {
+        tracing::warn!(token = %t.token_prefix, outcome = r.outcome(), unrecorded, "API token refused");
+        let mut tx = pool.begin().await?;
+        events::token_use(&mut tx, &ctx, &t, refusal, &used, unrecorded).await?;
+        tx.commit().await?;
     }
-    tx.commit().await?;
-    match refusal {
-        None => Ok(ctx),
-        Some(r) => {
-            tracing::warn!(token = %t.token_prefix, outcome = r.outcome(), "API token refused");
-            Err(r.error())
-        }
-    }
+    Err(r.error())
 }
 
 #[cfg(test)]
@@ -186,6 +237,26 @@ mod tests {
         assert_ne!(s, new_secret());
         assert_eq!(shown_prefix(&s).len(), SHOWN_PREFIX_LEN);
         assert!(s.starts_with(&shown_prefix(&s)));
+    }
+
+    #[test]
+    fn refused_uses_are_recorded_once_a_window() {
+        let (token, t0) = (Uuid::new_v4(), Instant::now());
+        assert_eq!(record_refusal((token, "revoked"), t0), Some(0));
+        for _ in 0..5 {
+            assert_eq!(record_refusal((token, "revoked"), t0 + Duration::from_secs(30)), None);
+        }
+        // Another outcome, or another token, has its own row.
+        assert_eq!(record_refusal((token, "expired"), t0), Some(0));
+        assert_eq!(record_refusal((Uuid::new_v4(), "revoked"), t0), Some(0));
+        // A minute on, the next row counts the five left out.
+        assert_eq!(record_refusal((token, "revoked"), t0 + REFUSAL_WINDOW), Some(5));
+        assert_eq!(record_refusal((token, "revoked"), t0 + REFUSAL_WINDOW), None);
+        assert!(
+            !Refusal::SessionOnly.is_dead_token() && !Refusal::Forbidden(GlobalPermission::UsersManage).is_dead_token()
+        );
+        // An unmet MFA requirement refuses the token on every route, so a replay loop is rate-limited too.
+        assert!(Refusal::MfaRequired.is_dead_token());
     }
 
     #[test]

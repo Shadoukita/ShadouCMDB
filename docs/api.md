@@ -287,7 +287,9 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
   creates the token. Creating a token that would be refused answers `403 MFA_REQUIRED_FOR_TOKEN`.
   `GET /admin/api-tokens?refusedForMfa=true` lists the working tokens refused this way (`refusedForMfa`).
 - Every request made with a known token, accepted or refused, writes a `token.use` audit row; creating and revoking
-  write `create` and `update` rows (see [data model](data-model.md#auditing)).
+  write `create` and `update` rows (see [data model](data-model.md#auditing)). A token that can no longer
+  authenticate (revoked, expired, owner disabled, profile deleted) is recorded at most once a minute per outcome;
+  the next row counts the requests left out in `unrecordedRefusals`.
 
 **First run.** While there are no users, `GET /api/v1/setup` returns `{"setupRequired": true}` and
 `POST /api/v1/setup` creates the first administrator and signs them in. `shadoucmdb create-admin` does the same

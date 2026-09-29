@@ -391,11 +391,13 @@ pub async fn revoke(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
 }
 
 /// Revokes every token of the user that still works, in the transaction that
-/// sets their password: a token minted with a stolen password must not
-/// outlive the reset. With `created_for_others` (an administrator's reset),
-/// also every working token the user created for another owner: the account
-/// may have been compromised, and such a token would otherwise outlive the
-/// reset (GH#145). Each gets an update row; returns how many were revoked.
+/// sets their password, disables or deletes them: a token minted with a stolen
+/// password must not outlive the reset. With `created_for_others` (an
+/// administrator's reset, disabling, deleting), also every working token the
+/// user created for another owner: the account may have been compromised or
+/// its holder has left, and such a token would otherwise outlive the change
+/// (GH#145, GH#183). `because` names the change in the log ("password reset").
+/// Each gets an update row; returns how many were revoked.
 ///
 /// Call it before anything else in the transaction writes to the audit log:
 /// every audit insert takes the chain head, and taking it before these token
@@ -405,9 +407,10 @@ pub async fn revoke_all_of_user(
     ctx: &RequestContext,
     user_id: Uuid,
     created_for_others: bool,
+    because: &str,
 ) -> Result<usize, AppError> {
     let rows = data::active_of_user(conn, user_id, created_for_others).await?;
-    revoke_rows(conn, ctx, user_id, rows).await
+    revoke_rows(conn, ctx, user_id, rows, because).await
 }
 
 async fn revoke_rows(
@@ -415,6 +418,7 @@ async fn revoke_rows(
     ctx: &RequestContext,
     user_id: Uuid,
     rows: Vec<TokenRow>,
+    because: &str,
 ) -> Result<usize, AppError> {
     let by = ctx.actor.name.clone().unwrap_or_else(|| ctx.actor.actor_type.as_str().to_owned());
     let mut entries = Vec::new();
@@ -422,12 +426,8 @@ async fn revoke_rows(
         let before = ApiToken::from(row);
         data::revoke(conn, before.id, &by).await?;
         let after = load(conn, before.id, false).await?;
-        let message = if after.user_id == user_id {
-            "API token revoked with the password change"
-        } else {
-            "API token revoked with its creator's password reset"
-        };
-        tracing::info!(token = %after.token_prefix, owner = %after.username, "{message}");
+        let whose = if after.user_id == user_id { "its owner's" } else { "its creator's" };
+        tracing::info!(token = %after.token_prefix, owner = %after.username, "API token revoked with {whose} {because}");
         entries.push(AuditEntry {
             action: AuditAction::Update,
             entity_type: TOKEN_ENTITY,
@@ -719,8 +719,15 @@ pub(crate) mod tests {
         assert_eq!(status, 204);
         let (status, v, _) = call(&app, "DELETE", &by_id, &session, None).await;
         assert_eq!(status, 204, "revoking twice is a no-op: {v}");
-        let (status, v, _) = call(&app, "GET", "/api/v1/audit-log", &tok, None).await;
+        // GH#179: the path is recorded before it is validated, so it is kept bounded;
+        // replaying the token adds no row within the minute.
+        let long = format!("/api/v1/configuration-items/{}", "x".repeat(65_000));
+        let (status, v, _) = call(&app, "GET", &long, &tok, None).await;
         assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
+        for _ in 0..3 {
+            let (status, _, _) = call(&app, "GET", "/api/v1/audit-log", &tok, None).await;
+            assert_eq!(status, 401);
+        }
         let (_, got, _) = call(&app, "GET", &by_id, &session, None).await;
         assert_eq!((got["status"].as_str(), got["revokedBy"].as_str()), (Some("revoked"), Some("owner")));
 
@@ -760,6 +767,11 @@ pub(crate) mod tests {
                 ("token.use", "api_client", "revoked"),
             ]
         );
+        let refused = &rows[7].3;
+        let kept = refused["path"].as_str().unwrap();
+        assert_eq!(kept.chars().count(), crate::auth::events::TOKEN_PATH_MAX + 1, "{kept:.80}");
+        assert!(kept.starts_with("/api/v1/configuration-items/xxx") && kept.ends_with('…'));
+        assert_eq!((refused["pathLength"].as_u64(), refused.get("unrecordedRefusals")), (Some(65_028), None));
         let used = &rows[1].3;
         assert_eq!((used["method"].as_str(), used["path"].as_str()), (Some("GET"), Some("/api/v1/audit-log")));
         assert_eq!(
@@ -1070,7 +1082,7 @@ pub(crate) mod tests {
         assert_eq!(status, 200, "{v}");
         let (status, v, _) = works(alices_for_bob).await;
         assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
-        assert_eq!(works(admins_for_bob).await.0, 200, "Bob's token from another creator keeps working");
+        assert_eq!(works(admins_for_bob.clone()).await.0, 200, "Bob's token from another creator keeps working");
         let revoked: Vec<(String, Option<String>)> =
             sqlx::query_as("SELECT name, revoked_by FROM api_tokens WHERE revoked_at IS NOT NULL ORDER BY name")
                 .fetch_all(pool)
@@ -1088,18 +1100,109 @@ pub(crate) mod tests {
             audited.iter().map(|(a, v)| (a.as_str(), v["name"].as_str(), v["status"].as_str())).collect();
         assert_eq!(summary, vec![("admin", Some("minted by alice"), Some("revoked"))]);
 
-        // A deleted creator is forgotten; the token stays with its owner.
+        // Deleting the creator revokes the token too (GH#183); the creator is
+        // forgotten, the revoked token stays with its owner.
         let alice = sign_in("alice third password").await;
         let again = mint(alice, bob_id.clone(), "minted before deletion").await;
         let (status, v, _) = call(&app, "DELETE", &format!("/api/v1/admin/users/{alice_id}"), &admin, None).await;
         assert_eq!(status, 204, "{v}");
-        assert_eq!(works(again).await.0, 200);
-        let (creator,): (Option<uuid::Uuid>,) =
-            sqlx::query_as("SELECT created_by_user_id FROM api_tokens WHERE name = 'minted before deletion'")
+        let (status, v, _) = works(again).await;
+        assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
+        assert_eq!(works(admins_for_bob).await.0, 200);
+        let (creator, revoked_by): (Option<uuid::Uuid>, Option<String>) = sqlx::query_as(
+            "SELECT created_by_user_id, revoked_by FROM api_tokens WHERE name = 'minted before deletion'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!((creator, revoked_by.as_deref()), (None, Some("admin")));
+
+        db.drop().await;
+    }
+
+    /// The issue's repro (GH#183): Alice mints a token for the service account
+    /// Bob and leaves. Disabling her revokes it with her own tokens, while
+    /// Bob's token from another creator keeps working; enabling her again
+    /// brings neither back.
+    #[tokio::test]
+    async fn disabling_a_user_revokes_the_tokens_they_minted_for_others() {
+        let Some(db) = scratch::database("disabling_a_user_revokes_tokens_minted_for_others").await else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        assert_eq!(creator, None);
+        let mut ids = Vec::new();
+        for name in ["alice", "bob"] {
+            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+                "profileIds": [administrators] });
+            let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            ids.push(v["id"].as_str().unwrap().to_owned());
+        }
+        let (alice_id, bob_id) = (ids[0].clone(), ids[1].clone());
+        let login = json!({ "username": "alice", "password": "alice first password" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+        assert_eq!(status, 200, "{me}");
+        let alice = session_of(&me, &headers);
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let mint = |session: Creds, owner: String, name: &'static str| {
+            let app = app.clone();
+            let expires = expires.clone();
+            async move {
+                let body = json!({ "name": name, "userId": owner, "profileId": administrators, "expiresAt": expires });
+                let (status, created, _) = call(&app, "POST", super::BASE, &session, Some(body)).await;
+                assert_eq!(status, 201, "{created}");
+                Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() }
+            }
+        };
+        let works = |tok: Creds| {
+            let app = app.clone();
+            async move { call(&app, "GET", "/api/v1/audit-log?limit=1", &tok, None).await }
+        };
+        let alices_for_bob = mint(alice.clone(), bob_id.clone(), "minted by alice").await;
+        let alices_own = mint(alice, alice_id.clone(), "alice's own").await;
+        let admins_for_bob = mint(admin.clone(), bob_id.clone(), "minted by admin").await;
+
+        let user = format!("/api/v1/admin/users/{alice_id}");
+        let (status, v, _) = call(&app, "PATCH", &user, &admin, Some(json!({ "isActive": false }))).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = works(alices_for_bob.clone()).await;
+        assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
+        assert_eq!(works(admins_for_bob.clone()).await.0, 200, "Bob's token from another creator keeps working");
+
+        let (status, v, _) = call(&app, "PATCH", &user, &admin, Some(json!({ "isActive": true }))).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(works(alices_for_bob).await.0, 401, "enabling her again does not bring it back");
+        assert_eq!(works(alices_own).await.0, 401);
+        let revoked: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT name, revoked_by FROM api_tokens WHERE revoked_at IS NOT NULL ORDER BY name")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        let admin_name = Some("admin".to_owned());
+        assert_eq!(
+            revoked,
+            vec![("alice's own".to_owned(), admin_name.clone()), ("minted by alice".to_owned(), admin_name)]
+        );
+        let audited: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM audit_log
+             WHERE entity_type = 'api_tokens' AND action = 'update' AND new_value->>'status' = 'revoked'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(audited, 2, "each revocation has its audit row");
 
         db.drop().await;
     }
@@ -1140,7 +1243,7 @@ pub(crate) mod tests {
         crate::data::auth::get_user(&mut reset, alice_id, true).await.unwrap();
         crate::data::auth::delete_user_sessions(&mut reset, alice_id, None).await.unwrap();
         let ctx = crate::api::context::RequestContext::system("admin", "reset");
-        super::revoke_all_of_user(&mut reset, &ctx, alice_id, true).await.unwrap();
+        super::revoke_all_of_user(&mut reset, &ctx, alice_id, true, "password reset").await.unwrap();
 
         // Her session passed authentication before the reset commits.
         let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();

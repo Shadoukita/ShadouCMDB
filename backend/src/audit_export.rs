@@ -11,6 +11,11 @@
 //! from the same row on the next poll. The position is not persisted; after a
 //! restart export resumes at the newest row, and rows written while the server
 //! was down stay in the database only (their gap shows in `chainSeq`).
+//!
+//! A row that can never be sent (larger than one UDP datagram) must not hold
+//! the export up: it leaves as a stub without `oldValue` and `newValue`, with
+//! `oversize` set, keeping `chainSeq` and `rowHash` so the collector still has
+//! the chain (GH#179).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -30,6 +35,8 @@ const APP_NAME: &str = "shadoucmdb";
 /// RFC 5424 SD-ID. 32473 is the enterprise number RFC 5612 reserves for
 /// documentation and examples; ShadouCMDB has none of its own.
 const SD_ID: &str = "audit@32473";
+/// Largest UDP payload over IPv4 (65,535 - 8 byte UDP header - 20 byte IP header).
+const UDP_MAX: usize = 65_507;
 
 /// One audit_log row, as exported.
 #[derive(Debug, Clone)]
@@ -98,7 +105,17 @@ fn header_field(v: &str, max: usize) -> String {
     if s.is_empty() { "-".into() } else { s }
 }
 
-pub fn format_rfc5424(e: &Event, facility: u8, hostname: &str) -> String {
+/// The row as sent when the whole of it cannot be: its values are left out.
+fn oversize_stub(e: &Event, bytes: usize) -> Value {
+    let mut v = e.to_json();
+    v["oldValue"] = Value::Null;
+    v["newValue"] = Value::Null;
+    v["oversize"] = json!(true);
+    v["originalBytes"] = json!(bytes);
+    v
+}
+
+fn rfc5424(e: &Event, body: &Value, facility: u8, hostname: &str) -> String {
     let pri = u16::from(facility) * 8 + u16::from(e.severity());
     let mut sd = format!(
         "[{SD_ID} seq=\"{}\" id=\"{}\" actorType=\"{}\" entityType=\"{}\" entityId=\"{}\" hash=\"{}\"",
@@ -119,7 +136,7 @@ pub fn format_rfc5424(e: &Event, facility: u8, hostname: &str) -> String {
         header_field(hostname, 255),
         std::process::id(),
         header_field(&e.action, 32),
-        e.to_json()
+        body
     )
 }
 
@@ -172,18 +189,32 @@ impl Sink {
         })
     }
 
-    fn render(&self, e: &Event) -> String {
+    fn render(&self, e: &Event, body: &Value) -> String {
         match self.format {
-            AuditFormat::Json => e.to_json().to_string(),
-            AuditFormat::Rfc5424 => format_rfc5424(e, self.facility, &self.hostname),
+            AuditFormat::Json => body.to_string(),
+            AuditFormat::Rfc5424 => rfc5424(e, body, self.facility, &self.hostname),
         }
+    }
+
+    /// The message for `e`, or its stub when the sink cannot carry it whole.
+    fn message(&self, e: &Event) -> String {
+        let msg = self.render(e, &e.to_json());
+        if !matches!(self.target, AuditSink::Udp(_)) || msg.len() <= UDP_MAX {
+            return msg;
+        }
+        tracing::warn!(
+            chain_seq = e.chain_seq,
+            bytes = msg.len(),
+            "audit export: row larger than a UDP datagram; sent without oldValue and newValue"
+        );
+        self.render(e, &oversize_stub(e, msg.len()))
     }
 
     async fn send(&mut self, e: &Event) -> std::io::Result<()> {
         if self.conn.is_none() {
             self.conn = Some(Self::open(&self.target).await?);
         }
-        let msg = self.render(e);
+        let msg = self.message(e);
         let result = match self.conn.as_mut().expect("opened above") {
             Conn::Stdout(out) => write_line(out, &msg).await,
             Conn::File(f) => write_line(f, &msg).await,
@@ -349,6 +380,13 @@ impl Exporter {
 
 pub fn spawn(pool: PgPool, cfg: AuditExportConfig) -> Exporter {
     tracing::info!(target = ?cfg.sink, format = ?cfg.format, "audit export enabled");
+    if matches!(cfg.sink, AuditSink::Udp(_)) {
+        tracing::warn!(
+            "AUDIT_EXPORT uses UDP: delivery is not acknowledged, so datagrams the network or the collector drops \
+             are lost without notice, and a row larger than {UDP_MAX} bytes is sent without its values. \
+             Use tcp:// where the collector supports it."
+        );
+    }
     let (stop, rx) = watch::channel(false);
     Exporter { stop, task: tokio::spawn(run(pool, cfg, rx)) }
 }
@@ -356,6 +394,10 @@ pub fn spawn(pool: PgPool, cfg: AuditExportConfig) -> Exporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn format_rfc5424(e: &Event, facility: u8, hostname: &str) -> String {
+        rfc5424(e, &e.to_json(), facility, hostname)
+    }
 
     fn event(action: &str) -> Event {
         Event {
@@ -396,5 +438,70 @@ mod tests {
         assert!(format_rfc5424(&event("login.failure"), 13, "h").starts_with("<108>1 "));
         assert!(format_rfc5424(&event("login.success"), 4, "h").starts_with("<37>1 "));
         assert!(format_rfc5424(&event("create"), 13, "").contains(" - shadoucmdb "), "empty host is -");
+    }
+
+    async fn udp_sink(format: AuditFormat) -> (Sink, tokio::net::UdpSocket) {
+        let collector = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let target = AuditSink::Udp(collector.local_addr().unwrap().to_string());
+        (Sink { target, format, facility: 13, hostname: "h".into(), conn: None }, collector)
+    }
+
+    async fn receive(collector: &tokio::net::UdpSocket) -> Value {
+        let mut buf = vec![0u8; 70_000];
+        let n = tokio::time::timeout(Duration::from_secs(5), collector.recv(&mut buf)).await.unwrap().unwrap();
+        let msg = std::str::from_utf8(&buf[..n]).unwrap();
+        let body = msg.split_once(" \u{feff}").map_or(msg, |(_, body)| body);
+        serde_json::from_str(body).unwrap()
+    }
+
+    /// GH#179: a row larger than a datagram goes as a stub, and the next row follows.
+    #[tokio::test]
+    async fn oversize_rows_leave_as_a_stub_over_udp() {
+        for format in [AuditFormat::Rfc5424, AuditFormat::Json] {
+            let (mut sink, collector) = udp_sink(format).await;
+            let mut big = event("token.use");
+            big.new_value = Some(json!({ "path": "/".repeat(70_000) }));
+            sink.send(&big).await.expect("an oversize row is not an error");
+            let mut next = event("create");
+            next.chain_seq = 43;
+            sink.send(&next).await.unwrap();
+
+            let stub = receive(&collector).await;
+            assert_eq!((stub["chainSeq"].as_i64(), stub["oversize"].as_bool()), (Some(42), Some(true)), "{stub}");
+            assert_eq!(stub["rowHash"].as_str(), Some("ab".repeat(32).as_str()));
+            assert_eq!((stub["newValue"].clone(), stub["action"].as_str()), (Value::Null, Some("token.use")));
+            assert!(stub["originalBytes"].as_u64().unwrap() > 70_000, "{stub}");
+            let v = receive(&collector).await;
+            assert_eq!((v["chainSeq"].as_i64(), v.get("oversize")), (Some(43), None), "{v}");
+            assert_eq!(v["newValue"]["name"], "web-01\nline");
+        }
+    }
+
+    /// GH#179: `drain` moves past an oversize row instead of retrying it forever.
+    #[tokio::test]
+    async fn drain_does_not_stop_at_an_oversize_row() {
+        let Some(db) = crate::db::scratch::database("drain_does_not_stop_at_an_oversize_row").await else { return };
+        let (mut sink, collector) = udp_sink(AuditFormat::Rfc5424).await;
+        let start = head(&db.pool).await.unwrap();
+        let ctx = crate::api::context::RequestContext::system("test", "req-179");
+        let entry = |value: Value| crate::data::crud::AuditEntry {
+            action: crate::data::crud::AuditAction::Create,
+            entity_type: "configuration_items",
+            entity_id: Uuid::new_v4(),
+            old_value: None,
+            new_value: Some(value),
+        };
+        let mut conn = db.pool.acquire().await.unwrap();
+        let rows = vec![entry(json!({ "notes": "x".repeat(66_000) })), entry(json!({ "name": "after" }))];
+        crate::data::crud::write_audit(&mut conn, &ctx, rows).await.unwrap();
+        drop(conn);
+
+        let mut health = Health::default();
+        let cursor = drain(&db.pool, &mut sink, start, &mut health).await;
+        assert_eq!(cursor, head(&db.pool).await.unwrap(), "the cursor passed both rows");
+        assert!(health.failing.is_none());
+        assert_eq!(receive(&collector).await["oversize"], json!(true));
+        assert_eq!(receive(&collector).await["newValue"]["name"], "after");
+        db.drop().await;
     }
 }
