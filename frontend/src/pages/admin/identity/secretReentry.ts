@@ -35,6 +35,17 @@ export function ldapEndpoint(url: string): string {
   }
 }
 
+/** What the API compares for an issuer URL: scheme, host, port and path, a trailing slash aside. */
+export function issuerKey(url: string): string {
+  const u = url.trim();
+  try {
+    const parsed = new URL(u);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return u;
+  }
+}
+
 /**
  * The secret field that must be entered again, or null: the provider has a stored secret and the
  * form changes the address it would be sent to (OIDC issuer URL; LDAP URL or bind DN).
@@ -44,7 +55,7 @@ export function secretReentryField(stored: StoredAddress | undefined, form: Type
   if (!stored) return null;
   if (form.kind === "oidc") {
     const o = stored.oidc;
-    return o?.clientSecretSet && form.issuerUrl.trim() !== o.issuerUrl.trim() ? "oidc.clientSecret" : null;
+    return o?.clientSecretSet && issuerKey(form.issuerUrl) !== issuerKey(o.issuerUrl) ? "oidc.clientSecret" : null;
   }
   const l = stored.ldap;
   if (!l?.bindPasswordSet) return null;

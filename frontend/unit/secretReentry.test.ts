@@ -26,6 +26,10 @@ describe("secretReentryField", () => {
     assert.equal(secretReentryField(oidc, oidcForm("https://evil.example.net/realms/cmdb")), "oidc.clientSecret");
     assert.equal(secretReentryField(oidc, oidcForm("https://login.example.com/realms/cmdb")), null);
     assert.equal(secretReentryField(oidc, oidcForm("  https://login.example.com/realms/cmdb ")), null);
+    // Like the API: host case, the default port and a trailing slash are not a change; the path is.
+    assert.equal(secretReentryField(oidc, oidcForm("https://LOGIN.example.com:443/realms/cmdb/")), null);
+    assert.equal(secretReentryField(oidc, oidcForm("https://login.example.com/realms/other")), "oidc.clientSecret");
+    assert.equal(secretReentryField(oidc, oidcForm("https://login.example.com:8443/realms/cmdb")), "oidc.clientSecret");
   });
 
   test("OIDC: without a stored secret (public client) nothing is asked", () => {
