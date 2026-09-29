@@ -1747,11 +1747,12 @@ pub(crate) mod tests {
         );
         let (pool, headers) = (&db.pool, HeaderMap::new());
         setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        let gone_password = format!("gone passphrase {}", Uuid::new_v4());
         let disabled = UserCreate {
             username: "gone".into(),
             display_name: "Gone".into(),
             email: None,
-            password: "gone correct horse".into(),
+            password: gone_password.as_str().into(),
             is_active: Some(false),
             profile_ids: vec![],
         };
@@ -1773,7 +1774,7 @@ pub(crate) mod tests {
             ("owner", wrong.as_str()),
             ("nobody", wrong.as_str()),
             ("erin", wrong.as_str()),
-            ("gone", "gone correct horse"),
+            ("gone", gone_password.as_str()),
         ] {
             let start = tokio::time::Instant::now();
             let e =
