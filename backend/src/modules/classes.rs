@@ -30,7 +30,7 @@ use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::paged;
 use crate::schema::model::Model;
 use crate::schema::naming::{self, Ident, NameKind};
-use crate::schema::{self as engine, Purge, SchemaChange, Scope};
+use crate::schema::{self as engine, Purge, SchemaChange, Scope, Summary};
 
 fn custom(field: &str, message: impl Into<String>) -> FieldError {
     FieldError { location: FieldLocation::Body, field: field.into(), message: message.into(), code: "custom".into() }
@@ -656,13 +656,16 @@ pub async fn purge_class_in(
     sqlx::query("DELETE FROM cmdb.ci_attribute_definitions WHERE class_id = $1").bind(id).execute(&mut *conn).await?;
     crud::delete_row(conn, CiClasses::TABLE, id).await?;
     let purge = Purge { tables: vec![table], classes: model.subtree(id), ..Purge::default() };
+    let without = format!("Purge type {} (its CIs and their relationships deleted)", row.table_name);
     let summary = if purge.reveals(ctx.class_scope(ClassOp::View).as_deref()) {
-        format!("Purge type {} ({} CIs, {} relationships deleted)", row.table_name, items.len(), edge_count)
+        let counted =
+            format!("Purge type {} ({} CIs, {} relationships deleted)", row.table_name, items.len(), edge_count);
+        Summary::counted(counted, without)
     } else {
-        format!("Purge type {} (its CIs and their relationships deleted)", row.table_name)
+        Summary::from(&without)
     };
     let parent_scope = row.parent_id.map(|p| vec![p]).unwrap_or_default();
-    let change = engine::apply(conn, ctx, &summary, Scope::Classes(parent_scope), purge).await?;
+    let change = engine::apply(conn, ctx, summary, Scope::Classes(parent_scope), purge).await?;
     let entry = AuditEntry {
         action: AuditAction::Delete,
         entity_type: CiClasses::TABLE,
@@ -2308,6 +2311,160 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(class_entries, 1);
+        db.drop().await;
+    }
+
+    /// GH#252: the schema change history shows the counts a change recorded
+    /// (values purged or converted, assets without a value) only to a reader
+    /// who may view every type counted, and `q` never matches on them.
+    #[tokio::test]
+    async fn the_history_counts_values_only_for_readers_who_may_view_them() {
+        use crate::auth::permissions::{ClassRights, Permissions};
+        use crate::modules::schema_changes::{self, SchemaChangeList};
+        let Some(db) = scratch::database("the_history_counts_values_only_for_readers_who_may_view_them").await else {
+            return;
+        };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("gh252-test", "gh252-test");
+        let manager = |view: &[Uuid]| {
+            let permissions = Permissions {
+                global: [GlobalPermission::DatamodelManage].into(),
+                classes: view.iter().map(|id| (*id, ClassRights { view: true, ..Default::default() })).collect(),
+                ..Default::default()
+            };
+            let principal = crate::auth::Principal {
+                user_id: Uuid::new_v4(),
+                username: "modeller".into(),
+                credential: crate::auth::Credential::Token,
+                permissions,
+            };
+            RequestContext::user(std::sync::Arc::new(principal), "gh252".into())
+        };
+
+        // An unrestricted writer: Secrets with 12 codes (one CI below it), a
+        // field converted to a number, then the codes and the subtype purged.
+        let secrets: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Secrets"}))).await.unwrap();
+        let vault: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Vault Secrets", "parentId": secrets.id})))
+                .await
+                .unwrap();
+        for (key, data_type) in [("code", "text"), ("rank", "text"), ("owner_hint", "text")] {
+            let def = json!({"classId": secrets.id, "key": key, "label": key, "dataType": data_type});
+            simple::create::<AttributeDefinitions>(pool, &ctx, &body(def)).await.unwrap();
+        }
+        for i in 0..12 {
+            let class = if i == 0 { vault.id } else { secrets.id };
+            let item = body::<CreateItemBody>(
+                json!({"classId": class, "attributes": {"code": "x", "rank": "7", "owner_hint": "y"}}),
+            );
+            items_service::create(pool, &ctx, &item).await.unwrap();
+        }
+        let defs: Vec<(String, Uuid)> =
+            sqlx::query_as("SELECT key, id FROM cmdb.ci_attribute_definitions WHERE class_id = $1")
+                .bind(secrets.id)
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        let def = |key: &str| defs.iter().find(|(k, _)| k == key).unwrap().1;
+        simple::update::<AttributeDefinitions>(pool, &ctx, def("rank"), &body(json!({"dataType": "number"})))
+            .await
+            .unwrap();
+        simple::update::<AttributeDefinitions>(pool, &ctx, def("code"), &body(json!({"isActive": false})))
+            .await
+            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        purge_attribute_in(&mut tx, &ctx, def("code"), "code").await.unwrap();
+        tx.commit().await.unwrap();
+        simple::update::<CiClasses>(pool, &ctx, vault.id, &body(json!({"isActive": false}))).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        purge_class_in(&mut tx, &ctx, vault.id, &vault.key).await.unwrap();
+        tx.commit().await.unwrap();
+        // A required field that 11 assets lack, kept nullable by a lenient reconcile.
+        let hint = def("owner_hint");
+        simple::update::<AttributeDefinitions>(pool, &ctx, hint, &body(json!({"isRequired": true}))).await.unwrap();
+        let table: String =
+            sqlx::query_scalar("SELECT cmdb.type_table($1)").bind(secrets.id).fetch_one(pool).await.unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "ALTER TABLE {table} ALTER COLUMN owner_hint DROP NOT NULL; UPDATE {table} SET owner_hint = NULL"
+        )))
+        .execute(pool)
+        .await
+        .unwrap();
+        // Each reconcile has a view to rebuild, so that it records a change.
+        let view: String = sqlx::query_scalar(
+            "SELECT format('%I.%I', a.key, 'v_' || c.key) FROM cmdb.ci_classes c JOIN cmdb.areas a ON a.id = c.area_id
+             WHERE c.id = $1",
+        )
+        .bind(secrets.id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let drop_view = format!("DROP VIEW {view}");
+        // A restricted writer's own reconcile never counts what it may not view.
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(drop_view.clone())).execute(&mut *tx).await.unwrap();
+        let own = engine::reconcile(&mut tx, &manager(&[]), "reconcile").await.unwrap().unwrap();
+        tx.rollback().await.unwrap();
+        let warning = own.impact.0.iter().find(|i| i.message.contains("owner_hint")).unwrap();
+        assert_eq!(warning.rows, None, "{warning:?}");
+        assert!(warning.message.contains("some assets have no value"), "{}", warning.message);
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(drop_view)).execute(&mut *tx).await.unwrap();
+        engine::reconcile(&mut tx, &ctx, "reconcile").await.unwrap().unwrap();
+        tx.commit().await.unwrap();
+
+        let list = async |reader: &RequestContext, q: Option<&str>| {
+            let query: SchemaChangeList = body(json!({"limit": 200, "offset": 0, "sort": "-occurredAt", "q": q}));
+            schema_changes::list(pool, reader, &query).await.unwrap().data
+        };
+        let find = |changes: &[SchemaChange], kind: &str, text: &str| {
+            changes
+                .iter()
+                .flat_map(|c| c.impact.0.iter().map(move |i| (c, i)))
+                .find(|(_, i)| i.kind == kind && i.message.contains(text))
+                .map(|(c, i)| (c.clone(), i.clone()))
+                .unwrap_or_else(|| panic!("no {kind} impact on {text}"))
+        };
+
+        let subtree = [secrets.id, vault.id];
+        for view in [Some(vec![]), Some(vec![secrets.id]), Some(vec![vault.id]), Some(subtree.to_vec()), None] {
+            let reader = match &view {
+                Some(v) => manager(v),
+                None => ctx.clone(),
+            };
+            let sees = |classes: &[Uuid]| view.as_ref().is_none_or(|v| classes.iter().all(|id| v.contains(id)));
+            let changes = list(&reader, None).await;
+            let (purge, column) = find(&changes, "drop_column", "code");
+            let (_, rewrite) = find(&changes, "rewrite", "rank");
+            let (_, warning) = find(&changes, "warning", "owner_hint");
+            // The subtype was purged before the reconcile: then only Secrets held the field.
+            for (impact, n, counted) in
+                [(&column, 12, &subtree[..]), (&rewrite, 12, &subtree), (&warning, 11, &[secrets.id])]
+            {
+                if sees(counted) {
+                    assert_eq!(impact.rows, Some(n), "{view:?} {impact:?}");
+                    assert!(impact.message.contains(&n.to_string()), "{}", impact.message);
+                } else {
+                    assert_eq!(impact.rows, None, "{view:?} {impact:?}");
+                    assert!(!impact.message.contains(char::is_numeric), "{}", impact.message);
+                }
+            }
+            let got = schema_changes::get(pool, &reader, purge.id).await.unwrap();
+            assert_eq!(got.impact.0.iter().find(|i| i.kind == "drop_column").unwrap().rows, column.rows);
+
+            let type_purge = changes.iter().find(|c| c.summary.starts_with("Purge type")).unwrap();
+            let shown = sees(&[vault.id]);
+            assert_eq!(
+                type_purge.summary.contains("(1 CIs, 0 relationships deleted)"),
+                shown,
+                "{}",
+                type_purge.summary
+            );
+            let found = list(&reader, Some("1 CIs")).await;
+            assert_eq!(found.iter().any(|c| c.id == type_purge.id), shown, "{view:?}: q matched a hidden count");
+            assert!(list(&reader, Some("Purge type")).await.iter().any(|c| c.id == type_purge.id));
+        }
         db.drop().await;
     }
 }

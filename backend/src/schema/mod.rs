@@ -93,6 +93,33 @@ pub struct SchemaChange {
     pub impact: sqlx::types::Json<Vec<Impact>>,
 }
 
+/// The one-line summary of a schema change, and the same line without the
+/// counts it tells (for readers who may not view the types counted, GH#252).
+#[derive(Debug, Clone)]
+pub struct Summary {
+    pub text: String,
+    /// Set when `text` carries counts of the purged types' data ([`Purge::classes`]).
+    pub without_counts: Option<String>,
+}
+
+impl Summary {
+    pub fn counted(text: String, without_counts: String) -> Self {
+        Self { text, without_counts: Some(without_counts) }
+    }
+}
+
+impl From<&str> for Summary {
+    fn from(text: &str) -> Self {
+        Self { text: text.to_owned(), without_counts: None }
+    }
+}
+
+impl From<&String> for Summary {
+    fn from(text: &String) -> Self {
+        text.as_str().into()
+    }
+}
+
 /// Which types to compare with the catalog.
 #[derive(Debug, Clone)]
 pub enum Scope {
@@ -131,8 +158,10 @@ struct Plan {
     ddl: Vec<String>,
     /// Views (re)created and grants, after the table changes.
     post: Vec<String>,
-    /// (index into ddl, impact)
-    impact: Vec<(Option<usize>, Impact)>,
+    /// (index into ddl, impact, its message without the count when it tells one)
+    impact: Vec<(Option<usize>, Impact, Option<String>)>,
+    /// The types (with every type below them) whose stored data the counts describe.
+    counted: BTreeSet<Uuid>,
     /// Tables whose dependent views must be rebuilt (a column type changed or was dropped).
     rebuild: HashSet<TableName>,
 }
@@ -144,7 +173,26 @@ impl Plan {
     }
 
     fn note(&mut self, statement: Option<usize>, kind: &str, rows: Option<i64>, message: String) {
-        self.impact.push((statement, Impact { statement: None, kind: kind.into(), rows, message }));
+        self.impact.push((statement, Impact { statement: None, kind: kind.into(), rows, message }, None));
+    }
+
+    /// A note that counts stored data of `classes`; `without` is its message
+    /// for a reader who may not view them all.
+    fn counted(
+        &mut self,
+        statement: Option<usize>,
+        kind: &str,
+        rows: i64,
+        message: String,
+        without: String,
+        classes: &[Uuid],
+    ) {
+        self.impact.push((
+            statement,
+            Impact { statement: None, kind: kind.into(), rows: Some(rows), message },
+            Some(without),
+        ));
+        self.counted.extend(classes);
     }
 
     fn is_empty(&self) -> bool {
@@ -157,7 +205,21 @@ impl Plan {
 
     fn impacts(&self) -> Vec<Impact> {
         let offset = self.pre.len();
-        self.impact.iter().map(|(i, imp)| Impact { statement: i.map(|i| i + offset), ..imp.clone() }).collect()
+        self.impact.iter().map(|(i, imp, _)| Impact { statement: i.map(|i| i + offset), ..imp.clone() }).collect()
+    }
+
+    /// The impact without any count (None: it tells none).
+    fn redacted_impacts(&self) -> Option<Vec<Impact>> {
+        self.impact.iter().any(|(_, _, without)| without.is_some()).then(|| {
+            self.impacts()
+                .into_iter()
+                .zip(&self.impact)
+                .map(|(imp, (_, _, without))| match without {
+                    Some(message) => Impact { rows: None, message: message.clone(), ..imp },
+                    None => imp,
+                })
+                .collect()
+        })
     }
 }
 
@@ -307,13 +369,14 @@ enum Guard {
 
 /// `ALTER COLUMN .. TYPE .. USING ..` for a type change, after a dry run of the
 /// conversion over every stored value. A change must be lossless or it is refused
-/// with up to five offending values.
+/// with up to five offending values. `classes`: the types whose assets the table holds.
 async fn type_change(
     conn: &mut PgConnection,
     plan: &mut Plan,
     table: &TableName,
     f: &Field,
     from: &str,
+    classes: &[Uuid],
 ) -> Result<(), AppError> {
     let col = f.column();
     let to = pg_type(f.data_type);
@@ -394,16 +457,14 @@ async fn type_change(
         }
     }
     let i = plan.ddl(format!("ALTER TABLE {} ALTER COLUMN {col} TYPE {to} USING {using}", table.sql()));
-    plan.note(
+    let converted = format!("{}.{} converted from {from} to {to} (dry run: all convert)", table.display(), f.key);
+    plan.counted(
         Some(i),
         "rewrite",
-        Some(rows),
-        format!(
-            "{} values of {}.{} converted from {from} to {to} (dry run: all convert)",
-            rows,
-            table.display(),
-            f.key
-        ),
+        rows,
+        format!("{rows} values of {converted}"),
+        format!("The values of {converted}"),
+        classes,
     );
     plan.rebuild.insert(table.clone());
     Ok(())
@@ -493,7 +554,7 @@ impl Planner<'_> {
             plan.note(Some(i), "add_column", None, format!("New column {}.{} ({to})", table.display(), f.key));
         } else if current_type != to {
             self.may_check_values(f, "dataType")?;
-            type_change(conn, plan, table, f, &current_type).await?;
+            type_change(conn, plan, table, f, &current_type, &self.model.subtree(f.class_id)).await?;
         }
 
         // Enum: the CHECK carries a hash of the allowed values, so a changed list gets a new constraint.
@@ -557,12 +618,14 @@ impl Planner<'_> {
                 let i = plan.ddl(format!("ALTER TABLE {} ALTER COLUMN {col} SET NOT NULL", table.sql()));
                 plan.note(Some(i), "not_null", Some(0), format!("{}.{} becomes required", table.display(), f.key));
             } else if self.lenient_not_null {
-                plan.note(
-                    None,
-                    "warning",
-                    Some(nulls),
-                    format!("{}.{} stays nullable: {nulls} assets have no value", table.display(), f.key),
-                );
+                let field = format!("{}.{} stays nullable", table.display(), f.key);
+                let without = format!("{field}: some assets have no value");
+                if self.reveals(f) {
+                    let message = format!("{field}: {nulls} assets have no value");
+                    plan.counted(None, "warning", nulls, message, without, &self.model.subtree(f.class_id));
+                } else {
+                    plan.note(None, "warning", None, without);
+                }
             } else {
                 // How many assets lack a value is theirs to know who may view them all.
                 let which = if self.reveals(f) { format!("{nulls} assets") } else { "Some assets".to_owned() };
@@ -716,13 +779,13 @@ async fn build(
             continue;
         }
         let i = plan.ddl(format!("ALTER TABLE {} DROP COLUMN {column}", table.sql()));
+        let without = format!("The stored values of {}.{column} are deleted", table.display());
         if counts {
             let n = count(conn, format!("SELECT count(*) FROM {} WHERE {column} IS NOT NULL", table.sql())).await?;
             let message = format!("{n} stored values of {}.{column} are deleted", table.display());
-            plan.note(Some(i), "drop_column", Some(n), message);
+            plan.counted(Some(i), "drop_column", n, message, without, &purge.classes);
         } else {
-            let message = format!("The stored values of {}.{column} are deleted", table.display());
-            plan.note(Some(i), "drop_column", None, message);
+            plan.note(Some(i), "drop_column", None, without);
         }
         plan.rebuild.insert(table.clone());
     }
@@ -741,16 +804,13 @@ async fn build(
             continue;
         }
         let i = plan.ddl(format!("DROP TABLE {}", table.sql()));
+        let without = format!("Table {} and its rows are deleted", table.display());
         if counts {
             let n = count(conn, format!("SELECT count(*) FROM {}", table.sql())).await?;
-            plan.note(
-                Some(i),
-                "drop_table",
-                Some(n),
-                format!("Table {} and its {n} rows are deleted", table.display()),
-            );
+            let message = format!("Table {} and its {n} rows are deleted", table.display());
+            plan.counted(Some(i), "drop_table", n, message, without, &purge.classes);
         } else {
-            plan.note(Some(i), "drop_table", None, format!("Table {} and its rows are deleted", table.display()));
+            plan.note(Some(i), "drop_table", None, without);
         }
         plan.rebuild.insert(table.clone());
     }
@@ -882,21 +942,25 @@ async fn execute(conn: &mut PgConnection, sql: &str) -> Result<(), AppError> {
 pub async fn apply(
     conn: &mut PgConnection,
     ctx: &RequestContext,
-    summary: &str,
+    summary: impl Into<Summary>,
     scope: Scope,
     purge: Purge,
 ) -> Result<Option<SchemaChange>, AppError> {
     apply_with(conn, ctx, summary, scope, purge, false).await
 }
 
+/// The record keeps, next to what the caller sees, the types its counts
+/// describe and a variant without them: GET /schema-changes shows that variant
+/// to a reader who may not view every type counted (GH#252).
 pub async fn apply_with(
     conn: &mut PgConnection,
     ctx: &RequestContext,
-    summary: &str,
+    summary: impl Into<Summary>,
     scope: Scope,
     purge: Purge,
     lenient_not_null: bool,
 ) -> Result<Option<SchemaChange>, AppError> {
+    let summary = summary.into();
     lock(conn).await?;
     let model = Model::load(conn).await?;
     let visible = ctx.class_scope(ClassOp::View);
@@ -912,18 +976,34 @@ pub async fn apply_with(
     }
     sqlx::query("SET LOCAL lock_timeout = DEFAULT").execute(&mut *conn).await?;
 
+    let mut counted = plan.counted.clone();
+    if summary.without_counts.is_some() {
+        counted.extend(&purge.classes);
+    }
+    let redacted_impact = plan.redacted_impacts();
+    let redacted_summary = match (&summary.without_counts, &redacted_impact) {
+        (Some(s), _) => Some(s.clone()),
+        (None, Some(_)) => Some(summary.text.clone()),
+        (None, None) => None,
+    };
+    let redacted_impact =
+        redacted_summary.as_ref().map(|_| sqlx::types::Json(redacted_impact.unwrap_or_else(|| plan.impacts())));
     let change: SchemaChange = sqlx::query_as(
-        "INSERT INTO cmdb.schema_changes (actor_type, actor_id, actor_name, request_id, summary, statements, impact)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "INSERT INTO cmdb.schema_changes (actor_type, actor_id, actor_name, request_id, summary, statements, impact,
+                                          count_classes, redacted_summary, redacted_impact)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING id, occurred_at, actor_type, actor_id, actor_name, request_id, summary, statements, impact",
     )
     .bind(ctx.actor.actor_type.as_str())
     .bind(&ctx.actor.id)
     .bind(&ctx.actor.name)
     .bind(&ctx.request_id)
-    .bind(summary)
+    .bind(&summary.text)
     .bind(&statements)
     .bind(sqlx::types::Json(plan.impacts()))
+    .bind(counted.into_iter().collect::<Vec<_>>())
+    .bind(redacted_summary)
+    .bind(redacted_impact)
     .fetch_one(&mut *conn)
     .await?;
     let entry = AuditEntry {
@@ -1116,7 +1196,7 @@ mod tests {
         };
         let run = async |conn: &mut PgConnection, f: &Field, from: &str| {
             let mut plan = Plan::default();
-            type_change(conn, &mut plan, &table, f, from).await?;
+            type_change(conn, &mut plan, &table, f, from, &[]).await?;
             for sql in &plan.ddl {
                 execute(conn, sql).await?;
             }

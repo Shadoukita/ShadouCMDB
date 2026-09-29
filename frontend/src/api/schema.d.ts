@@ -898,7 +898,7 @@ export interface paths {
         };
         /**
          * History of the DDL the data model administration ran (newest first)
-         * @description Requires `datamodel.manage`.
+         * @description Requires `datamodel.manage`. A change that counted stored data (values deleted by a purge, converted by a type change, missing for a required field) shows those counts only to a reader with the view right on every type they describe and every type below it. Other readers get `impact[].rows` null and a summary and messages without the counts; `q` searches the summary as the reader sees it.
          */
         get: operations["listSchemaChanges"];
         put?: never;
@@ -918,7 +918,7 @@ export interface paths {
         };
         /**
          * One schema change
-         * @description Requires `datamodel.manage`.
+         * @description Requires `datamodel.manage`. Counts of stored data are shown only to a reader with the view right on every type they describe (see listSchemaChanges).
          */
         get: operations["getSchemaChange"];
         put?: never;
