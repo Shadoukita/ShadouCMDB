@@ -30,7 +30,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use crate::api;
 use crate::auth::AuthState;
 use crate::auth::session::{CSRF_HEADER, request_is_https};
-use crate::config::{ApiDocs, AuditConfig, AuthConfig, Config};
+use crate::config::{ApiDocs, AuditConfig, AuthConfig, Config, HttpConfig};
 use crate::db;
 use error::{AppError, ErrorCode};
 
@@ -53,6 +53,8 @@ pub struct AppState {
     pub schema: Arc<db::SchemaState>,
     /// Whether the start-up step for encrypted secrets ran (see `schema_gate`).
     pub sealed: Arc<SealedState>,
+    /// Requests the API handles at once (`HTTP_MAX_CONCURRENT_REQUESTS`).
+    pub capacity: Capacity,
 }
 
 /// The start-up step for encrypted secrets ([`crate::secrets::sealed::prepare`]):
@@ -75,6 +77,7 @@ impl AppState {
             capture: ClientCapture { ip: true, user_agent: true },
             schema: Arc::default(),
             sealed: Arc::default(),
+            capacity: Capacity::new(512, Duration::from_secs(10)),
         }
     }
 
@@ -92,6 +95,61 @@ impl AppState {
     pub fn capturing(mut self, audit: &AuditConfig) -> Self {
         self.capture = ClientCapture { ip: audit.capture_client_ip, user_agent: audit.capture_user_agent };
         self
+    }
+
+    pub fn limited(mut self, http: &HttpConfig) -> Self {
+        self.capacity = Capacity::new(http.max_concurrent_requests, http.header_read_timeout);
+        self
+    }
+}
+
+/// Bounds the API requests in progress; each route takes a permit in
+/// `api::route` after it authorises the caller and before it reads the body,
+/// so a rejected request never holds capacity, and a request that finds its
+/// pool empty is answered 503 SERVER_BUSY instead of
+/// queueing. Public routes that take a body (setup, sign-in) draw from their
+/// own, smaller pool and must deliver the body within
+/// `HTTP_HEADER_READ_TIMEOUT_SECS`: anonymous slow senders can then only
+/// saturate sign-in, never the capacity signed-in users and API tokens need.
+/// Bodiless public routes (liveness, readiness, version) take no permit, so a
+/// busy server is not mistaken for a dead one.
+#[derive(Clone)]
+pub struct Capacity {
+    global: Arc<tokio::sync::Semaphore>,
+    public: Arc<tokio::sync::Semaphore>,
+    /// Time a public route may take to receive its body.
+    pub public_body_timeout: Duration,
+}
+
+impl Capacity {
+    /// `max` requests for authenticated routes, and `max / 8` (at least 16) for public ones.
+    pub fn new(max: usize, public_body_timeout: Duration) -> Self {
+        Capacity::with_sizes(max, (max / 8).max(16), public_body_timeout)
+    }
+
+    pub fn with_sizes(global: usize, public: usize, public_body_timeout: Duration) -> Self {
+        Capacity {
+            global: Arc::new(tokio::sync::Semaphore::new(global)),
+            public: Arc::new(tokio::sync::Semaphore::new(public)),
+            public_body_timeout,
+        }
+    }
+
+    /// A permit from the public or the global pool, or 503 SERVER_BUSY.
+    pub fn acquire(&self, public: bool) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+        let pool = if public { &self.public } else { &self.global };
+        pool.clone().try_acquire_owned().map_err(|_| {
+            tracing::warn!(public, "request refused: HTTP_MAX_CONCURRENT_REQUESTS reached");
+            let mut err =
+                AppError::new(ErrorCode::ServerBusy, "The server is handling too many requests; retry shortly");
+            err.retry_after = Some(1);
+            err
+        })
+    }
+
+    #[cfg(test)]
+    pub fn available(&self, public: bool) -> usize {
+        if public { self.public.available_permits() } else { self.global.available_permits() }
     }
 }
 
@@ -152,7 +210,12 @@ async fn schema_gate(
 /// (and reports not-ready) while the database is unreachable.
 async fn log_schema_state(state: AppState) {
     match state.schema.check(&state.pool).await {
-        Ok(db::SchemaCheck::Current) => {}
+        // A fresh install logs its setup token now; an installed one deletes a leftover token file.
+        Ok(db::SchemaCheck::Current) => match crate::modules::auth::setup_required(&state.pool).await {
+            Ok(true) => state.auth.setup.arm(),
+            Ok(false) => state.auth.setup.disarm(),
+            Err(err) => tracing::warn!(error = %err.message, "cannot check whether first-run setup is needed"),
+        },
         Ok(db::SchemaCheck::Pending { applied, expected }) => tracing::warn!(
             applied,
             expected,
@@ -397,7 +460,7 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(cfg.http.request_timeout, request_timeout))
         .layer(CatchPanicLayer::custom(panic_response))
-        .layer(DefaultBodyLimit::max(1024 * 1024));
+        .layer(DefaultBodyLimit::max(api::route::BODY_LIMIT));
 
     if !cfg.cors_origins.is_empty() {
         let origins: Vec<HeaderValue> = cfg.cors_origins.iter().filter_map(|o| HeaderValue::from_str(o).ok()).collect();
@@ -428,7 +491,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     // No key, no server: checked before anything else, with no database needed.
     let keyring = Arc::new(crate::secrets::Keyring::load(&cfg.encryption)?);
     let pool = db::lazy_pool(&cfg.database)?;
-    let state = AppState::new(pool.clone(), cfg.auth.clone(), keyring).capturing(&cfg.audit);
+    let state = AppState::new(pool.clone(), cfg.auth.clone(), keyring).capturing(&cfg.audit).limited(&cfg.http);
     // Before listening: rows under a key that is not configured stop the server
     // here, and rows not encrypted yet are encrypted. An unreachable or
     // unmigrated database defers this to the first API request (`schema_gate`).
@@ -611,6 +674,9 @@ mod tests {
             session_max_age: Duration::from_secs(3600),
             cookie_secure: CookieSecure::Auto,
             public_url: None,
+            oidc_allowed_hosts: None,
+            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+            setup_token_file: None,
         };
         let mut cfg = Config {
             api_host: "127.0.0.1".into(),
@@ -621,6 +687,7 @@ mod tests {
             http: crate::config::HttpConfig {
                 header_read_timeout: Duration::from_secs(10),
                 request_timeout: Duration::from_secs(120),
+                max_concurrent_requests: 512,
             },
             database: crate::config::DatabaseConfig {
                 url: Some("postgres://nobody@127.0.0.1:1/none".into()),
@@ -934,6 +1001,7 @@ mod tests {
         let http = crate::config::HttpConfig {
             header_read_timeout: Duration::from_millis(200),
             request_timeout: Duration::from_secs(5),
+            max_concurrent_requests: 512,
         };
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {

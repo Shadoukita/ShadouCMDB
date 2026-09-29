@@ -90,6 +90,9 @@ jobs:
           $B verify
 
       - name: serve, /healthz, /readyz, smoke suite (every operation), graceful shutdown
+        env:
+          # Throwaway first-run setup token: the smoke suite completes setup with it.
+          SETUP_TOKEN: ci-only-setup-token-not-a-secret-0123456789
         run: |
           API_HOST=127.0.0.1 API_PORT=3000 API_DOCS=public ./target/release/shadoucmdb serve > serve.log &
           PID=$!
@@ -110,6 +113,7 @@ jobs:
         env:
           ADMIN_URL: postgres://ci:ci-only-password@127.0.0.1:5432/postgres
           U: 127.0.0.1:5432/invqa-cmdb
+          SETUP_TOKEN: ci-only-setup-token-not-a-secret-0123456789
         run: |
           psql "$ADMIN_URL" -X -v ON_ERROR_STOP=1 \
             -v owner_role=invqa-owner -v app_role=invqa.api -v maintenance_role=Invqa-Maint -v db_name=invqa-cmdb \

@@ -660,8 +660,11 @@ pub fn routes() -> Vec<Route> {
             .summary("Upload or replace the logo or favicon")
             .description(
                 "JSON body with the content type and the base64 file. Logo: PNG, JPEG, WebP or SVG up to 512 KiB. \
-                 Favicon: PNG, ICO or SVG up to 128 KiB. The content must match the declared type; SVGs with scripts, \
-                 event handlers or embedded HTML are refused.",
+                 Favicon: PNG, ICO or SVG up to 128 KiB. The content must match the declared type. SVGs must be \
+                 well-formed and use only allowlisted drawing elements and attributes: no scripts, event handlers, \
+                 animation, links, foreign content, DTD subsets or processing instructions, and references only \
+                 within the file (`#id`) or to embedded PNG, JPEG, GIF or WebP data. Anything else is refused with \
+                 `unsafe_content`.",
             )
             .requires(GlobalPermission::CustomizationManage)
             .handle(
@@ -694,7 +697,7 @@ mod tests {
     async fn layouts_place_notes_and_built_in_panels() {
         let Some(db) = scratch::database("layouts_place_notes_and_built_in_panels").await else { return };
         let app = app(db.pool.clone());
-        let body = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let body = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(body)).await;
         assert_eq!(status, 201, "{me}");
         let cookie = headers

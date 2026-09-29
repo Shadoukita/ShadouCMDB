@@ -2,11 +2,13 @@
 //! the accounts identity providers created (see [`super::sso`]).
 //!
 //! Disabling (`isActive: false`) is the normal way to remove access; it ends
-//! the user's sessions at once. Deleting is allowed too (the audit log keeps
-//! the user's id and name as text). Nobody can disable or delete themselves,
-//! the database refuses any change that leaves no active Administrator, and a
-//! non-administrator user manager can only act on accounts, and assign
-//! profiles, whose permissions they hold themselves.
+//! the user's sessions, drops their pending second-factor steps and revokes
+//! their API tokens and the tokens they created for others at once. Deleting
+//! is allowed too (the audit log keeps the user's id and name as text).
+//! Nobody can disable or delete themselves, the database refuses any change
+//! that leaves no active Administrator, and a non-administrator user manager
+//! can only act on accounts, and assign profiles, whose permissions they hold
+//! themselves.
 
 use std::collections::HashSet;
 
@@ -27,8 +29,10 @@ use crate::api::schemas::{
 use crate::auth::events::{self, RevokeReason};
 use crate::auth::password;
 use crate::auth::permissions::GlobalPermission;
+use crate::auth::secret::Secret;
 use crate::data::auth::{self as data, UserRow};
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Where};
+use crate::data::mfa;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::lookups::email_schema;
 use crate::modules::simple_resource::non_empty;
@@ -128,7 +132,7 @@ pub struct UserCreate {
     #[serde(default)]
     pub email: Option<String>,
     #[schema(schema_with = password_schema)]
-    pub password: String,
+    pub password: Secret,
     /// Default true
     #[schema(nullable = false)]
     pub is_active: Option<bool>,
@@ -183,7 +187,7 @@ impl Check for UserUpdate {
 pub struct PasswordReset {
     /// The new password
     #[schema(schema_with = password_schema)]
-    password: String,
+    password: Secret,
 }
 
 impl Check for PasswordReset {
@@ -432,6 +436,14 @@ pub async fn update(pool: &PgPool, ctx: &RequestContext, id: Uuid, b: &UserUpdat
     let mut tx = pool.begin().await?;
     let before = lock(&mut tx, id).await?;
     must_cover_user(&mut tx, ctx, id).await?;
+    let disabling = before.is_active && b.is_active == Some(false);
+    if disabling {
+        // Tokens first: their rows must be locked before the first audit
+        // insert takes the chain head (GH#166). A leaver's tokens for service
+        // accounts go too (GH#183).
+        api_tokens::revoke_all_of_user(&mut tx, ctx, id, true, "account disabled").await?;
+        mfa::delete_challenges_of_user(&mut tx, id).await?;
+    }
     if let Some(ids) = &b.profile_ids {
         check_profiles(&mut tx, ctx, ids).await?;
         data::set_user_profiles(&mut tx, id, ids).await?;
@@ -440,7 +452,7 @@ pub async fn update(pool: &PgPool, ctx: &RequestContext, id: Uuid, b: &UserUpdat
     if !columns.is_empty() {
         crud::update_row::<UserRow>(&mut tx, TABLE, data::USER_COLUMNS, id, columns).await?;
     }
-    if before.is_active && b.is_active == Some(false) {
+    if disabling {
         let ended = data::delete_user_sessions(&mut tx, id, None).await?;
         events::revoked(&mut tx, ctx, &ended, RevokeReason::UserDisabled).await?;
     }
@@ -458,10 +470,11 @@ pub async fn update(pool: &PgPool, ctx: &RequestContext, id: Uuid, b: &UserUpdat
     Ok(dto)
 }
 
-/// Sets a new password, ends the user's sessions (all but the caller's own)
-/// and revokes their API tokens. An administrator's reset (not the user's own
-/// change) also revokes the tokens the user created for other owners: the
-/// account may have been compromised (GH#145).
+/// Sets a new password, ends the user's sessions (all but the caller's own),
+/// drops their pending second-factor steps (GH#191) and revokes their API
+/// tokens. An administrator's reset (not the user's own change) also revokes
+/// the tokens the user created for other owners: the account may have been
+/// compromised (GH#145).
 pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_password: &str) -> Result<User, AppError> {
     let hash = password::hash(new_password).await?;
     let mut tx = pool.begin().await?;
@@ -477,7 +490,9 @@ pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_pas
     let own = ctx.principal().filter(|p| p.user_id == id);
     // Tokens first: their rows must be locked before the first audit insert
     // takes the chain head (GH#166).
-    api_tokens::revoke_all_of_user(&mut tx, ctx, id, own.is_none()).await?;
+    let because = if own.is_some() { "password change" } else { "password reset" };
+    api_tokens::revoke_all_of_user(&mut tx, ctx, id, own.is_none(), because).await?;
+    mfa::delete_challenges_of_user(&mut tx, id).await?;
     let ended = data::delete_user_sessions(&mut tx, id, own.and_then(|p| p.session_id())).await?;
     let reason = if own.is_some() { RevokeReason::PasswordChanged } else { RevokeReason::PasswordReset };
     events::revoked(&mut tx, ctx, &ended, reason).await?;
@@ -499,6 +514,9 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     let mut tx = pool.begin().await?;
     let before = lock(&mut tx, id).await?;
     must_cover_user(&mut tx, ctx, id).await?;
+    // Tokens first (GH#166): the ones they created for other owners are
+    // revoked, as for disabling (GH#183); their own are then deleted with them.
+    api_tokens::revoke_all_of_user(&mut tx, ctx, id, true, "account deletion").await?;
     // Ended explicitly (not by the foreign key's cascade) so each gets an audit row.
     let ended = data::delete_user_sessions(&mut tx, id, None).await?;
     events::revoked(&mut tx, ctx, &ended, RevokeReason::UserDeleted).await?;

@@ -251,7 +251,7 @@ pub struct Graph {
     #[schema(inline)]
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
-    /// true when maxNodes stopped the expansion early
+    /// true when maxNodes, or the edge budget of 5 × maxNodes, stopped the expansion early
     pub truncated: bool,
 }
 

@@ -27,6 +27,7 @@ use crate::api::route::{In, Json, NoBody, NoPath, NoQuery, PathInput, QueryInput
 use crate::api::schemas::USERNAME_PATTERN;
 use crate::api::validate;
 use crate::auth::events::{self, LoginMethod, ProviderMfa};
+use crate::auth::secret::Secret;
 use crate::auth::sso::login_state::LoginState;
 use crate::auth::sso::{ldap, oidc};
 use crate::auth::{AuthState, session};
@@ -51,7 +52,7 @@ pub fn oidc_settings(p: &ProviderRow) -> oidc::Settings {
     oidc::Settings {
         issuer_url: p.issuer_url.clone().unwrap_or_default(),
         client_id: p.client_id.clone().unwrap_or_default(),
-        client_secret: p.client_secret.clone(),
+        client_secret: p.client_secret.clone().map(Secret::from),
         scopes: p.scopes.clone().unwrap_or_default(),
         username_claim: p.username_claim.clone().unwrap_or_default(),
         groups_claim: p.groups_claim.clone().unwrap_or_default(),
@@ -65,7 +66,7 @@ pub fn ldap_settings(p: &ProviderRow) -> ldap::Settings {
         url: p.ldap_url.clone().unwrap_or_default(),
         start_tls: p.start_tls.unwrap_or(true),
         bind_dn: p.bind_dn.clone(),
-        bind_password: p.bind_password.clone(),
+        bind_password: p.bind_password.clone().map(Secret::from),
         user_base_dn: p.user_base_dn.clone().unwrap_or_default(),
         user_filter: p.user_filter.clone().unwrap_or_default(),
         username_attribute: p.username_attribute.clone().unwrap_or_default(),
@@ -860,6 +861,9 @@ mod tests {
                 session_max_age: std::time::Duration::from_secs(3600),
                 cookie_secure: CookieSecure::Never,
                 public_url: Some(PUBLIC_URL.into()),
+                oidc_allowed_hosts: None,
+                setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+                setup_token_file: None,
             },
             crate::secrets::Keyring::for_tests(),
         )

@@ -104,7 +104,10 @@ users ──HTTPS──▶ reverse proxy ──HTTP──▶ shadoucmdb ──TL
   can't be switched off yet (planned: SHAA-77 workstream 3); they reveal the API surface, not data.
   If users reach the server from the internet, block both paths at the proxy.
 - **No outbound internet is needed.** The server only connects to PostgreSQL ([telemetry](telemetry.md)),
-  so deny its outbound traffic apart from the database and your log collector.
+  so deny its outbound traffic apart from the database and your log collector. With enterprise sign-in
+  it also connects to your OIDC providers and LDAP/AD directories: allow those, and set
+  `OIDC_ALLOWED_HOSTS` to the OIDC provider hosts so the server contacts no others, even if a
+  provider's discovery document names them.
 - **Administration from a management network.** Run `migrate`, `create-admin` and database
   maintenance from a jump host in the management zone, not from user workstations.
 
@@ -293,9 +296,12 @@ process exposes it, and the previous key widens the exposure while a rotation is
 
 ## First run
 
-Until the first administrator exists, anyone who can reach the server can create it through the
-first-run setup in the UI. Either create it with `shadoucmdb create-admin` before the server is
-reachable, or make sure only you can reach it until you have completed the setup.
+Until the first administrator exists, first-run setup in the UI creates it. Setup needs the one-time
+setup token the server writes to its log and to its setup token file (or the `SETUP_TOKEN` you set),
+so someone who can only reach the server over the network cannot claim it
+([details](../deployment.md#the-setup-token)). Still, create the first administrator with
+`shadoucmdb create-admin` before the server is reachable, or keep it reachable only by you until
+setup is done: whoever can read the log (a log collector, a shared container host) can read the token too.
 
 Then: give each person their own account, grant the smallest permission profile that fits
 their job, and keep the number of administrators small. Deactivate accounts of people who leave
@@ -367,8 +373,8 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   and review the mappings like any other admin rights: whoever controls a mapped group in the
   provider controls who holds that profile here. Only holders of the Administrator profile can
   change providers and mappings, and only from a signed-in session: API tokens, even with the
-  Administrator profile, can read providers and run the connection test but get `403` on every
-  change, so a leaked token cannot add a provider or remap a group that keeps signing people in
+  Administrator profile, can read providers but get `403` on every change and on the connection
+  test (it makes the server connect out with the stored secret), so a leaked token cannot add a provider or remap a group that keeps signing people in
   after the token is revoked.
 - **Directory service account read-only.** It only searches for users; it needs no write rights.
   Prefer `ldaps://`; `ldap://` is accepted only with StartTLS, and certificates are always
@@ -384,6 +390,9 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
 - **Leavers.** Disable the person in the provider. Their next sign-in is refused; a session they
   already have lasts until it idles out (`SESSION_IDLE_TIMEOUT_MINUTES`) or ends. To end it at
   once, disable the account in ShadouCMDB too, or disable the provider (ends all its sessions).
+  Disabling or deleting an account in ShadouCMDB also revokes its API tokens and every token it
+  created for another owner, such as a service account. Before an administrator leaves, mint new
+  tokens for the service accounts they looked after, so the integrations keep running.
 
 ## Backup and restore
 

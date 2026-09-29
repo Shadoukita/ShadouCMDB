@@ -127,15 +127,19 @@ impl Command {
 }
 
 fn load_env_file(path: Option<&PathBuf>) -> anyhow::Result<()> {
-    match path {
+    let loaded = match path {
         Some(p) => {
             dotenvy::from_path(p).with_context(|| format!("cannot read env file {}", p.display()))?;
+            Some(p.clone())
         }
         None => match dotenvy::dotenv() {
-            Ok(_) => {}
-            Err(e) if e.not_found() => {}
+            Ok(p) => Some(p),
+            Err(e) if e.not_found() => None,
             Err(e) => return Err(e).context("cannot read .env"),
         },
+    };
+    if let Some(p) = loaded {
+        config::set_env_file(p);
     }
     Ok(())
 }

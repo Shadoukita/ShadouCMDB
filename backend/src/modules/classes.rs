@@ -214,7 +214,7 @@ fn class_parent_schema() -> Schema {
 }
 
 fn class_sort() -> Schema {
-    schemas::sort_schema(&["name", "key", "sortOrder", "createdAt", "updatedAt"], "name")
+    schemas::sort_schema(CiClassList::SORT_FIELDS, "name")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -245,6 +245,7 @@ pub struct CiClassList {
 paged!(CiClassList);
 
 impl ListQuery for CiClassList {
+    const SORT_FIELDS: &'static [&'static str] = &["name", "key", "sortOrder", "createdAt", "updatedAt"];
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -1178,7 +1179,7 @@ fn defined_on_schema() -> Schema {
 }
 
 fn attribute_sort() -> Schema {
-    schemas::sort_schema(&["sortOrder", "key", "label", "createdAt", "updatedAt"], "sortOrder")
+    schemas::sort_schema(AttributeDefinitionList::SORT_FIELDS, "sortOrder")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -1209,6 +1210,7 @@ pub struct AttributeDefinitionList {
 paged!(AttributeDefinitionList);
 
 impl ListQuery for AttributeDefinitionList {
+    const SORT_FIELDS: &'static [&'static str] = &["sortOrder", "key", "label", "createdAt", "updatedAt"];
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -1549,7 +1551,7 @@ impl Check for RelationshipTypeUpdate {
 }
 
 fn relationship_type_sort() -> Schema {
-    schemas::sort_schema(&["sortOrder", "name", "key", "createdAt", "updatedAt"], "sortOrder")
+    schemas::sort_schema(RelationshipTypeList::SORT_FIELDS, "sortOrder")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -1591,6 +1593,7 @@ fn push_pair(w: &mut sqlx::QueryBuilder<sqlx::Postgres>, a: Option<Uuid>, b: Opt
 }
 
 impl ListQuery for RelationshipTypeList {
+    const SORT_FIELDS: &'static [&'static str] = &["sortOrder", "name", "key", "createdAt", "updatedAt"];
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -1715,7 +1718,7 @@ impl Check for RelationshipRuleUpdate {
 }
 
 fn rule_sort() -> Schema {
-    schemas::sort_schema(&["createdAt", "updatedAt"], "createdAt")
+    schemas::sort_schema(RelationshipRuleList::SORT_FIELDS, "createdAt")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -1740,6 +1743,7 @@ pub struct RelationshipRuleList {
 paged!(RelationshipRuleList);
 
 impl ListQuery for RelationshipRuleList {
+    const SORT_FIELDS: &'static [&'static str] = &["createdAt", "updatedAt"];
     fn sort(&self) -> &Sort {
         &self.sort
     }
@@ -1953,6 +1957,94 @@ mod tests {
         items_service::update(pool, &ctx, id, &update).await.unwrap();
         let stored = items_service::get(pool, &ctx, id).await.unwrap();
         assert_eq!(serde_json::to_value(&stored).unwrap()["attributes"]["remarks"], json!("a\r\nb\n"));
+        db.drop().await;
+    }
+
+    /// GH#180: a refused field change quotes stored values only to a caller who
+    /// may view every type whose assets store the field (the type and its subtypes).
+    #[tokio::test]
+    async fn refused_field_changes_quote_values_only_to_callers_who_may_view_them() {
+        use crate::auth::permissions::{ClassRights, Permissions};
+        use crate::modules::schema_changes::{self, PreviewRequest};
+        let Some(db) = scratch::database("refused_field_changes_quote_values_only_to_callers_who_may_view_them").await
+        else {
+            return;
+        };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("gh180-test", "gh180-test");
+
+        let secrets: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Secrets"}))).await.unwrap();
+        let vault: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Vault Secrets", "parentId": secrets.id})))
+                .await
+                .unwrap();
+        let field: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": secrets.id, "key": "code", "label": "Code", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        for (class, code) in [(secrets.id, "s3cr3t-alpha"), (vault.id, "s3cr3t-vault")] {
+            let item = body::<CreateItemBody>(json!({"classId": class, "attributes": {"code": code}}));
+            items_service::create(pool, &ctx, &item).await.unwrap();
+        }
+
+        let manager = |view: &[Uuid]| {
+            let permissions = Permissions {
+                global: [GlobalPermission::DatamodelManage].into(),
+                classes: view.iter().map(|id| (*id, ClassRights { view: true, ..Default::default() })).collect(),
+                ..Default::default()
+            };
+            let principal = crate::auth::Principal {
+                user_id: Uuid::new_v4(),
+                username: "modeller".into(),
+                credential: crate::auth::Credential::Token,
+                permissions,
+            };
+            RequestContext::user(std::sync::Arc::new(principal), "gh180".into())
+        };
+        let refusal = |err: AppError| {
+            assert_eq!(err.code, ErrorCode::SchemaChangeRefused, "{err:?}");
+            let detail = &err.details.as_ref().expect("details")[0];
+            (detail.code.clone(), err.message.clone())
+        };
+        let changes = [
+            (json!({"dataType": "enum", "enumValues": ["~"]}), "enum_value_in_use"),
+            (json!({"dataType": "integer"}), "type_change_failed"),
+            (json!({"dataType": "date"}), "type_change_failed"),
+        ];
+
+        // Datamodel managers who may not view every type storing the field (here:
+        // the subtype, or neither type) learn how many values fail, not which.
+        for scope in [vec![secrets.id], vec![]] {
+            let caller = manager(&scope);
+            for (change, code) in &changes {
+                let preview: PreviewRequest =
+                    body(json!({"operation": "updateField", "id": field.id, "body": change.clone()}));
+                let via_preview = refusal(schema_changes::preview(pool, &caller, &preview).await.unwrap_err());
+                let via_patch = refusal(
+                    simple::update::<AttributeDefinitions>(pool, &caller, field.id, &body(change.clone()))
+                        .await
+                        .unwrap_err(),
+                );
+                for (got, message) in [via_preview, via_patch] {
+                    assert_eq!(got, *code, "{message}");
+                    assert!(message.starts_with("2 "), "{message}");
+                    assert!(!message.contains("s3cr3t"), "{scope:?} {change}: {message}");
+                }
+            }
+        }
+
+        // A caller who may view both types still gets the values to correct.
+        let caller = manager(&[secrets.id, vault.id]);
+        for (change, code) in &changes {
+            let preview: PreviewRequest = body(json!({"operation": "updateField", "id": field.id, "body": change}));
+            let (got, message) = refusal(schema_changes::preview(pool, &caller, &preview).await.unwrap_err());
+            assert_eq!(got, *code);
+            assert!(message.contains("\"s3cr3t-alpha\", \"s3cr3t-vault\""), "{message}");
+        }
         db.drop().await;
     }
 

@@ -159,7 +159,7 @@ impl Check for AreaUpdate {
 }
 
 fn area_sort() -> utoipa::openapi::schema::Schema {
-    schemas::sort_schema(&["sortOrder", "name", "key", "createdAt", "updatedAt"], "sortOrder")
+    schemas::sort_schema(AreaList::SORT_FIELDS, "sortOrder")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -182,6 +182,7 @@ pub struct AreaList {
 paged!(AreaList);
 
 impl ListQuery for AreaList {
+    const SORT_FIELDS: &'static [&'static str] = &["sortOrder", "name", "key", "createdAt", "updatedAt"];
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }

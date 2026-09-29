@@ -15,6 +15,11 @@ The backend is the only database client. Everything the UI needs goes through th
   version, the API major version (`v1`) and the number of migrations the build ships.
 - **Timeouts:** a request not answered within `HTTP_REQUEST_TIMEOUT_SECS` (default 120) gets
   `408 REQUEST_TIMEOUT` and its transaction is rolled back.
+- **Request bodies:** at most 1 MiB (16 MiB on `POST /api/v1/admin/config/import`, 64 KiB on the public
+  routes), else `413 PAYLOAD_TOO_LARGE`. The body is read only after authentication and permission checks.
+- **Busy server:** past `HTTP_MAX_CONCURRENT_REQUESTS` requests in progress the server answers
+  `503 SERVER_BUSY` with a `Retry-After` header. Setup and sign-in have their own, smaller pool and
+  must send their body within `HTTP_HEADER_READ_TIMEOUT_SECS`, else `408 REQUEST_TIMEOUT`.
 - **Regenerate the contract** after changing a route: `shadoucmdb openapi --out backend/openapi.json`
   (or `cargo run -- openapi --out openapi.json` in `backend/`). `shadoucmdb openapi --check backend/openapi.json`
   fails if the committed file is stale; CI runs it. Then refresh the UI types with `npm run api:types -w frontend`.
@@ -96,10 +101,10 @@ Every non-2xx response has this shape:
 | UI settings | `GET/PUT /ui-settings`, `GET /ui-settings/branding`, `GET /ui-settings/versions`, `GET /ui-settings/versions/{version}`, `POST /ui-settings/versions/{version}/restore`, `GET/PUT/DELETE /ui-settings/assets/{logo\|favicon}` | One settings document for every user: branding, navigation, dashboard widgets, list views and detail/form layouts per class. Any signed-in user reads it; writes need `customization.manage`. `branding` and the images are public (login page). See [Customization](#customization-and-configuration-exportimport). |
 | Configuration export/import | `GET /admin/config/export`, `POST /admin/config/import?mode=dry_run\|apply` | Needs `config.export_import`; importing a non-empty `dataModel` or `lookups` section also needs `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Import needs a session (API tokens get `403`); export accepts tokens. One JSON file with the data model, lookups, permission profiles and UI settings (no users, passwords or CIs). See [Customization](#customization-and-configuration-exportimport). |
 | Audit log | `GET /audit-log` | Read-only, needs `audit.view`. Filters: `entityType`, `entityId`, `action`, `actorId`, `actorName`, `requestId`, `from`, `to`. Also records authentication events (`entityType=sessions`; actions `login.success`, `login.failure`, `login.locked`, `logout`, `session.revoke`) with the client `ipAddress` and `userAgent` in `newValue` (plus `peerIpAddress` when the TCP peer differs from the forwarded address); a failed sign-in has no actor id and stores only the attempted username. See [data model](data-model.md#auditing). |
-| Setup | `GET /setup`, `POST /setup` | `setupRequired` is true while no user exists. `POST` creates the first user with the Administrator profile and signs them in; `409` once any user exists. |
+| Setup | `GET /setup`, `POST /setup` | `setupRequired` is true while no user exists. `POST` creates the first user with the Administrator profile and signs them in; it needs `setupToken`, the one-time setup token from the server log (`403` if wrong); `409` once any user exists. |
 | Authentication | `POST /auth/login`, `POST /auth/login/mfa`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` | `login` and `me` return `{ user, permissions, mfa, csrfToken }`. `permissions` is the union of the user's profiles: `administrator`, `global[]`, `allClasses` and per-class `classes[]`. Changing your own password needs `currentPassword`, ends your other sessions and revokes your API tokens. |
 | Enterprise sign-in | `GET /auth/providers`, `GET /auth/oidc/{id}/start`, `GET /auth/oidc/callback` | Public. The sign-in page's OIDC buttons and whether a directory is enabled; the OIDC redirect flow (browser navigations, not fetches). See [Enterprise sign-in](#enterprise-sign-in). |
-| Identity providers | `GET/POST /admin/identity-providers`, `GET/PATCH/DELETE /admin/identity-providers/{id}`, `POST /admin/identity-providers/{id}/test` | Administrator profile only (`users.manage` alone is `403`); `POST`, `PATCH` and `DELETE` also need a session (API tokens get `403`). OIDC providers and LDAP/AD directories with their group-to-profile mappings; secrets are write-only. See [Enterprise sign-in](#enterprise-sign-in). |
+| Identity providers | `GET/POST /admin/identity-providers`, `GET/PATCH/DELETE /admin/identity-providers/{id}`, `POST /admin/identity-providers/{id}/test` | Administrator profile only (`users.manage` alone is `403`); `POST`, `PATCH`, `DELETE` and the connection test also need a session (API tokens get `403`). OIDC providers and LDAP/AD directories with their group-to-profile mappings; secrets are write-only. See [Enterprise sign-in](#enterprise-sign-in). |
 | Two-factor authentication | `GET /auth/mfa`, `POST/DELETE /auth/mfa/totp`, `POST /auth/mfa/totp/confirm`, `POST /auth/mfa/recovery-codes` | One's own TOTP set-up; needs a session. See [Two-factor authentication](#two-factor-authentication). |
 | Users | `GET/POST /admin/users`, `GET/PATCH/DELETE /admin/users/{id}`, `PUT /admin/users/{id}/password`, `DELETE /admin/users/{id}/mfa` | Needs `users.manage`. `PATCH` renames, disables (`isActive: false`, which ends the user's sessions) and assigns profiles (`profileIds` replaces the set). `PUT …/password` sets a new password, ends the user's sessions and revokes their API tokens (`revokedBy` is the administrator), and also the working tokens the user created for other owners. `DELETE …/mfa` turns off a user's two-factor authentication (lost device). A user shows `mfaEnabled` and `identityProvider` (null for a local account). Filters: `q`, `isActive`, `profileId`. |
 | API tokens | `GET/POST /admin/api-tokens`, `GET/DELETE /admin/api-tokens/{id}` | Needs `users.manage` and a session. `POST {name, profileId, expiresAt, userId?}` answers `201 { token, secret }`; the secret is in that response only. `DELETE` revokes (the token stays listed with `status: revoked`). Filters: `q`, `userId` (owner), `createdBy` (the creating user, `createdByUserId`), `status` (`active`, `expired`, `revoked`). See [API tokens](#api-tokens). |
@@ -115,6 +120,14 @@ Every non-2xx response has this shape:
 | --- | --- | --- |
 | `shadoucmdb_session` | `HttpOnly; SameSite=Lax; Path=/`, `Secure` behind HTTPS | 256-bit random token. The server stores only its SHA-256 in `sessions`. |
 | `shadoucmdb_csrf` | `SameSite=Lax; Path=/`, `Secure` behind HTTPS, readable by the UI | The session's CSRF token (also `csrfToken` in the login and `/auth/me` responses). |
+
+Behind HTTPS (whenever the cookies get `Secure`) they are named `__Host-shadoucmdb_session` and
+`__Host-shadoucmdb_csrf`. A browser keeps a `__Host-` cookie only if it is `Secure`, has `Path=/` and no `Domain`,
+so another host under the same domain cannot plant one ("cookie tossing"). When a request carries both names, the
+server reads only the `__Host-` cookie, whatever the order. A client that reads the CSRF cookie must likewise prefer
+`__Host-shadoucmdb_csrf`, or use `csrfToken` from the response. Sessions opened under the plain names before this
+change keep working over HTTPS for one more release: the first answer to such a session sets the `__Host-` cookies
+and deletes the plain ones.
 
 Every `POST`, `PUT`, `PATCH` and `DELETE` must echo the token in `X-CSRF-Token`, or it is rejected with `403
 CSRF_TOKEN_INVALID` before anything else happens. Login and setup need no token: they accept only
@@ -280,10 +293,15 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
   deleting a user does not revoke the tokens they created for others, and single sign-on accounts have no password
   to reset: revoke those tokens by listing them with `createdBy` first.
 - Every request made with a known token, accepted or refused, writes a `token.use` audit row; creating and revoking
-  write `create` and `update` rows (see [data model](data-model.md#auditing)).
+  write `create` and `update` rows (see [data model](data-model.md#auditing)). A token that can no longer
+  authenticate (revoked, expired, owner disabled, profile deleted) is recorded at most once a minute per outcome;
+  the next row counts the requests left out in `unrecordedRefusals`.
 
 **First run.** While there are no users, `GET /api/v1/setup` returns `{"setupRequired": true}` and
-`POST /api/v1/setup` creates the first administrator and signs them in. `shadoucmdb create-admin` does the same
+`POST /api/v1/setup` creates the first administrator and signs them in. Its body carries `setupToken`: the
+one-time token the server writes to its log and setup token file, or the operator's `SETUP_TOKEN`
+(see [deployment](deployment.md#the-setup-token)); a missing or wrong token answers `403 FORBIDDEN` with a
+`setupToken` field detail. `shadoucmdb create-admin` does the same
 from the command line, and also works later to regain access (see [deployment](deployment.md#the-first-administrator)).
 
 **Permission profiles.** There are no fixed roles. A profile is a named set of permissions, and a user can hold
@@ -390,7 +408,10 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
   again. Every save has an `audit_log` row (`entity_type = ui_settings`) with the old and new version.
 - **Logo and favicon.** `PUT /ui-settings/assets/{logo|favicon}` with `{ contentType, data }` (base64). Logo: PNG,
   JPEG, WebP or SVG up to 512 KiB; favicon: PNG, ICO or SVG up to 128 KiB. The bytes must match the declared type;
-  SVGs with scripts, event handlers, `javascript:` URLs or embedded HTML are refused. `GET` serves them without a
+  an SVG is parsed and must use only allowlisted drawing elements and attributes (shapes, text, gradients,
+  patterns, masks, filters, CSS). Scripts, event handlers, animation, links, `<foreignObject>`, DTD subsets,
+  processing instructions, CSS `@import`/escapes, and any reference outside the file (other than embedded PNG,
+  JPEG, GIF or WebP data on `<image>`) are refused with `unsafe_content`. `GET` serves them without a
   session, with an ETag (`If-None-Match` answers 304), `nosniff` and a sandboxing Content-Security-Policy. The
   `url` in the settings carries a content hash (`?v=`). Uploads and removals are audited (`entity_type = ui_assets`).
 

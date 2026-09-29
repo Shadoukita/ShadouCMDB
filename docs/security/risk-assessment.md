@@ -62,12 +62,12 @@ controls.
 
 | # | Threat (STRIDE) | Controls in place | L | I | Risk | Further treatment |
 | --- | --- | --- | --- | --- | --- | --- |
-| T1 | Credential stuffing / brute force on sign-in (S) | argon2id, 12+ char passwords, per-user backoff, global failure budget, sign-in audit | 2 | 3 | 6 high | MFA (workstream 5), OIDC/LDAP (6); throttle state per process only |
+| T1 | Credential stuffing / brute force on sign-in (S) | argon2id, 12+ char passwords, per-user backoff per client network plus a per-user budget across networks, global failure budget with a per-network share of the slow lane, the same argon2 cost for unknown names (also when a directory answers), sign-in audit | 2 | 3 | 6 high | MFA (workstream 5), OIDC/LDAP (6); throttle state per process only; lockout by forged client addresses (see §6) |
 | T2 | Session theft or fixation (S) | random tokens hashed at rest, HttpOnly/Secure/SameSite=Lax, idle + absolute timeout, rotation on sign-in, revocation on logout/password change/deactivation | 1 | 3 | 3 medium | — |
 | T3 | CSRF on state-changing requests (T) | double-submit CSRF token, SameSite=Lax, strict CORS allowlist, `*` rejected | 1 | 3 | 3 medium | — |
 | T4 | Broken access control / IDOR across classes (E, I) | permission declared per route and checked server-side; list, search and graph filtered by class grants | 2 | 3 | 6 high | pentest pass before `v0.1.0` (workstream 8); authz regression tests per route |
 | T5 | SQL injection (T, I) | parameterised queries, escaped LIKE wildcards, quoted identifiers | 1 | 3 | 3 medium | Runtime DDL for type tables (SHAA-56) raises likelihood: identifier handling must stay centralised and fuzz-tested |
-| T6 | Stored XSS via CI attributes or UI settings (T, E) | Vue escaping, no `v-html`, strict CSP without `unsafe-inline`, uploaded images type-checked (scripted SVGs refused) and served with a sandboxing CSP | 1 | 3 | 3 medium | ZAP baseline (workstream 8) |
+| T6 | Stored XSS via CI attributes or UI settings (T, E) | Vue escaping, no `v-html`, strict CSP without `unsafe-inline`, uploaded images type-checked (SVGs checked against an element/attribute allowlist) and served with a sandboxing CSP | 1 | 3 | 3 medium | ZAP baseline (workstream 8) |
 | T7 | Information disclosure via API docs (I) | none: `/docs`, `/openapi.json` public | 3 | 1 | 3 medium | Config switch, default off/authenticated (workstream 3) |
 | T8 | Resource exhaustion (D) | 1 MiB body limit, page size ≤ 200, 30 s statement timeout, connection pool bound | 2 | 2 | 4 medium | HTTP read/request timeouts (workstream 3) |
 | T9 | Audit log tampering by a DB-level attacker (T, R) | append-only by application design and triggers | 2 | 2 | 4 medium | Block TRUNCATE, hash chain, syslog/SIEM export (workstream 3) |
@@ -75,7 +75,7 @@ controls.
 | T11 | Compromised dependency (T, E) | lockfiles, `--locked`/`npm ci`, small dependency set, no OpenSSL | 2 | 3 | 6 high | cargo-deny, npm audit, Dependabot, CodeQL (workstream 1) |
 | T12 | Tampered release or image (T) | release only from tagged `main` by CI, `SHA256SUMS`, `contents: read` defaults | 2 | 3 | 6 high | cosign signatures, SLSA provenance, SBOM, SHA-pinned actions (workstream 1); [IR plan](incident-response.md) |
 | T13 | Compromised maintainer or AI agent account (S, E) | PR workflow, CI gates | 2 | 3 | 6 high | MFA, branch protection, mandatory human review of security changes ([SDL](sdl.md)) |
-| T14 | First-run takeover: attacker creates the first admin (E) | setup only while the user table is empty; `create-admin` CLI documented | 1 | 3 | 3 medium | Hardening guide first-run section |
+| T14 | First-run takeover: attacker creates the first admin (E) | setup only while the user table is empty; setup needs a one-time token that only the operator can read (server log, 0600 token file) or set (`SETUP_TOKEN`), dropped once the first admin exists (GH#192); `create-admin` CLI documented | 1 | 3 | 3 medium | Residual: whoever can read the server log during first run; hardening guide first-run section |
 | T15 | Forged client IP in audit log (R) | peer IP recorded alongside forwarded IP; documented as evidence, not access control | 2 | 1 | 2 low | — |
 | T16 | Sensitive data in logs (I) | no secrets or tokens logged; SQL statements only at `trace` | 1 | 2 | 2 low | — |
 | T17 | Data loss / ransomware on the DB (D) | customer's PostgreSQL backups | 2 | 3 | 6 high | Backup guidance (hardening guide); `backup`/`restore` commands (workstream 7) |
@@ -111,6 +111,22 @@ T11–T13 and T4 are addressed by the work required before `v0.1.0` (workstreams
 accepted for `v0.1.0` on the basis that installations run on internal networks behind a proxy, and
 reduced by MFA in a later release. T10 and T17 depend on the operator following the hardening
 guide.
+
+T1 lockout (GH#187): the sign-in lock is kept per username *and* client network (IPv4 /24, IPv6
+/64), so wrong passwords from one network no longer lock the account holder out from another, and
+one network gets at most 4 places in the server-wide slow lane. The client network comes from the
+forwarding headers, which only a reverse proxy that overwrites them makes trustworthy. Without one,
+or with guesses from three or more real networks, an attacker who knows a username can still add up
+the per-user budget across networks (15 failures) and lock that name for every network, with the
+same backoff up to 15 minutes, and 16 or more networks can still fill the slow lane. IPv6 makes
+distinct networks cheap (a single /48 holds 65,536 /64s), and a user on the account holder's own
+network (for example behind the same office NAT) still locks them out. Mitigations for
+the operator: run behind a proxy that sets `X-Forwarded-For`, rate-limit `/api/v1/auth/*` per client
+address there, and keep a break-glass administrator whose username is not guessable. Timing (GH#190):
+a name that no local account has and that the directory does not match now costs the same argon2
+verify as a wrong local password, but also a directory round trip, so a patient attacker can still
+tell local accounts from other names by latency when a directory is enabled; padding every failed
+sign-in to a fixed minimum would close that and is not done.
 
 T20 (GH#131) is residual by design for OIDC providers set to **Trust the provider**: ShadouCMDB
 cannot tell whether such a provider used a second factor, so a password-only policy at the

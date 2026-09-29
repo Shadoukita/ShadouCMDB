@@ -30,7 +30,9 @@ impl SslMode {
     }
 }
 
-#[derive(Debug, Clone)]
+/// `Debug` shows `url` and `password` only as set or unset: a connection
+/// string carries the password, and a stray `{:?}` must not log it.
+#[derive(Clone)]
 pub struct DatabaseConfig {
     /// Full connection string; takes precedence over the discrete PG* values.
     pub url: Option<String>,
@@ -79,6 +81,15 @@ pub struct AuthConfig {
     /// slash. OIDC sign-in builds its redirect URI from it, never from the
     /// request's Host header; unset, OIDC sign-in is unavailable.
     pub public_url: Option<String>,
+    /// `OIDC_ALLOWED_HOSTS`: the only hosts OIDC discovery, key and token
+    /// requests may go to; None (unset) allows any host.
+    pub oidc_allowed_hosts: Option<crate::auth::sso::oidc::AllowedHosts>,
+    /// `SETUP_TOKEN`: the first-run setup token chosen by the operator; None
+    /// generates one (see `auth::setup_token`).
+    pub setup_token: Option<crate::auth::secret::Secret>,
+    /// `SETUP_TOKEN_FILE`: where a generated setup token is written. `main`
+    /// defaults it to `setup-token` next to the env file.
+    pub setup_token_file: Option<PathBuf>,
 }
 
 /// Who may read `/openapi.json` and the Swagger UI at `/docs`.
@@ -110,6 +121,8 @@ pub struct HttpConfig {
     pub header_read_timeout: Duration,
     /// Time allowed for a whole request, body upload included, until the response starts.
     pub request_timeout: Duration,
+    /// Requests handled at once; more are answered 503 SERVER_BUSY (bounds buffered bodies).
+    pub max_concurrent_requests: usize,
 }
 
 /// Where exported audit events go.
@@ -171,7 +184,8 @@ pub struct EncryptionConfig {
 const DEFAULT_SESSION_IDLE_MINUTES: u64 = 12 * 60;
 const DEFAULT_SESSION_MAX_AGE_HOURS: u64 = 7 * 24;
 
-#[derive(Debug, Clone)]
+/// `Debug` redacts the connection strings (see [`DatabaseConfig`]).
+#[derive(Clone)]
 pub struct Config {
     pub api_host: String,
     pub api_port: u16,
@@ -189,6 +203,86 @@ pub struct Config {
     pub auth: AuthConfig,
     pub audit: AuditConfig,
     pub encryption: EncryptionConfig,
+}
+
+/// The env file the variables were read from (`--env-file`, or the `.env` found).
+static ENV_FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Records the env file `main` loaded: a generated setup token is written next to it.
+pub fn set_env_file(path: PathBuf) {
+    let _ = ENV_FILE.set(path);
+}
+
+/// A secret as it appears in `Debug` output: whether it is set, never its value.
+fn redacted(secret: &Option<String>) -> Option<&'static str> {
+    secret.as_ref().map(|_| "<redacted>")
+}
+
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Destructured so a new field has to be placed here, redacted or not.
+        let DatabaseConfig {
+            url,
+            host,
+            port,
+            database,
+            user,
+            password,
+            ssl,
+            ssl_ca_file,
+            pool_max,
+            statement_timeout,
+            connect_timeout,
+            roles,
+        } = self;
+        f.debug_struct("DatabaseConfig")
+            .field("url", &redacted(url))
+            .field("host", host)
+            .field("port", port)
+            .field("database", database)
+            .field("user", user)
+            .field("password", &redacted(password))
+            .field("ssl", ssl)
+            .field("ssl_ca_file", ssl_ca_file)
+            .field("pool_max", pool_max)
+            .field("statement_timeout", statement_timeout)
+            .field("connect_timeout", connect_timeout)
+            .field("roles", roles)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Config {
+            api_host,
+            api_port,
+            cors_origins,
+            csp_report_uri,
+            api_docs,
+            http,
+            database,
+            migration_url,
+            maintenance_url,
+            auth,
+            audit,
+            encryption,
+        } = self;
+        f.debug_struct("Config")
+            .field("api_host", api_host)
+            .field("api_port", api_port)
+            .field("cors_origins", cors_origins)
+            .field("csp_report_uri", csp_report_uri)
+            .field("api_docs", api_docs)
+            .field("http", http)
+            .field("database", database)
+            .field("migration_url", &redacted(migration_url))
+            .field("maintenance_url", &redacted(maintenance_url))
+            .field("auth", auth)
+            .field("audit", audit)
+            .field("encryption", encryption)
+            .finish()
+    }
 }
 
 impl DatabaseConfig {
@@ -379,7 +473,11 @@ impl Config {
     }
 
     pub fn from_env() -> anyhow::Result<Config> {
-        Config::from_lookup(&|key| std::env::var(key).ok())
+        let mut cfg = Config::from_lookup(&|key| std::env::var(key).ok())?;
+        if cfg.auth.setup_token_file.is_none() {
+            cfg.auth.setup_token_file = ENV_FILE.get().and_then(|p| p.parent()).map(|dir| dir.join("setup-token"));
+        }
+        Ok(cfg)
     }
 
     /// `from_env` with the environment supplied by the caller, so tests need not mutate the process environment.
@@ -397,6 +495,7 @@ impl Config {
         };
         let header_read_timeout_secs = r.int::<u64>("HTTP_HEADER_READ_TIMEOUT_SECS", 1, 3600).unwrap_or(10);
         let request_timeout_secs = r.int::<u64>("HTTP_REQUEST_TIMEOUT_SECS", 1, 86_400).unwrap_or(120);
+        let max_concurrent_requests = r.int::<usize>("HTTP_MAX_CONCURRENT_REQUESTS", 1, 1_000_000).unwrap_or(512);
 
         let url = r.raw("DATABASE_URL");
         let migration_url = r.raw("MIGRATION_DATABASE_URL");
@@ -471,6 +570,25 @@ impl Config {
         let public_url = r
             .raw("PUBLIC_URL")
             .and_then(|s| parse_public_url(&s).map_err(|e| r.errors.push(format!("PUBLIC_URL: {e}"))).ok());
+        let oidc_allowed_hosts = r.raw("OIDC_ALLOWED_HOSTS").and_then(|s| {
+            crate::auth::sso::oidc::AllowedHosts::parse(&s)
+                .map_err(|e| r.errors.push(format!("OIDC_ALLOWED_HOSTS: {e}")))
+                .ok()
+        });
+        let setup_token = r.raw("SETUP_TOKEN").and_then(|token| {
+            let length = token.chars().count();
+            if length < crate::auth::setup_token::MIN_PRESET_LENGTH {
+                r.errors.push(format!(
+                    "SETUP_TOKEN: must be at least {} characters, got {length}; generate one with e.g. \
+                     `openssl rand -hex 32`, or leave it unset and the server generates one",
+                    crate::auth::setup_token::MIN_PRESET_LENGTH
+                ));
+                None
+            } else {
+                Some(crate::auth::secret::Secret::from(token))
+            }
+        });
+        let setup_token_file = r.raw("SETUP_TOKEN_FILE").map(PathBuf::from);
 
         let encryption = EncryptionConfig {
             key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
@@ -494,6 +612,7 @@ impl Config {
             http: HttpConfig {
                 header_read_timeout: Duration::from_secs(header_read_timeout_secs),
                 request_timeout: Duration::from_secs(request_timeout_secs),
+                max_concurrent_requests,
             },
             database: DatabaseConfig {
                 url,
@@ -516,6 +635,9 @@ impl Config {
                 session_max_age: Duration::from_secs(session_max_age_hours * 3600),
                 cookie_secure,
                 public_url,
+                oidc_allowed_hosts,
+                setup_token,
+                setup_token_file,
             },
             audit: AuditConfig { capture_client_ip, capture_user_agent, export },
             encryption,
@@ -585,11 +707,30 @@ mod tests {
     }
 
     #[test]
+    fn debug_output_redacts_database_secrets() {
+        let cfg = Config::from_lookup(&|key| match key {
+            "DATABASE_URL" => Some("postgres://cmdb:url-secret@db/cmdb".into()),
+            "MIGRATION_DATABASE_URL" => Some("postgres://owner:migration-secret@db/cmdb".into()),
+            "MAINTENANCE_DATABASE_URL" => Some("postgres://maint:maintenance-secret@db/cmdb".into()),
+            "PGPASSWORD" => Some("pg-secret".into()),
+            _ => None,
+        })
+        .unwrap();
+        let shown = format!("{cfg:?} {:#?}", cfg.database);
+        // The failure message names only the fixture, never the Debug output that would carry it.
+        for fixture in ["url-secret", "migration-secret", "maintenance-secret", "pg-secret"] {
+            assert!(!shown.contains(fixture), "Debug output leaks the {fixture} fixture");
+        }
+        assert!(shown.contains("<redacted>"));
+    }
+
+    #[test]
     fn hardened_defaults() {
         let cfg = load_with(&[]).unwrap();
         assert_eq!(cfg.api_docs, ApiDocs::Off);
         assert_eq!(cfg.http.header_read_timeout, Duration::from_secs(10));
         assert_eq!(cfg.http.request_timeout, Duration::from_secs(120));
+        assert_eq!(cfg.http.max_concurrent_requests, 512);
         assert!(cfg.audit.capture_client_ip && cfg.audit.capture_user_agent);
         assert!(cfg.audit.export.is_none());
     }
@@ -599,6 +740,17 @@ mod tests {
         assert_eq!(load_with(&[("API_DOCS", "public")]).unwrap().api_docs, ApiDocs::Public);
         assert_eq!(load_with(&[("API_DOCS", "authenticated")]).unwrap().api_docs, ApiDocs::Authenticated);
         assert!(load_with(&[("API_DOCS", "yes")]).unwrap_err().to_string().contains("API_DOCS"));
+    }
+
+    #[test]
+    fn oidc_allowed_hosts() {
+        assert_eq!(load_with(&[]).unwrap().auth.oidc_allowed_hosts, None, "unset: any host");
+        let cfg = load_with(&[("OIDC_ALLOWED_HOSTS", "login.example.com, idp.corp.example:8443")]).unwrap();
+        let allowed = cfg.auth.oidc_allowed_hosts.unwrap();
+        assert!(allowed.allows(&url::Url::parse("https://login.example.com/x").unwrap()));
+        assert!(!allowed.allows(&url::Url::parse("https://idp.corp.example/x").unwrap()));
+        let err = load_with(&[("OIDC_ALLOWED_HOSTS", "*.example.com")]).unwrap_err().to_string();
+        assert!(err.contains("OIDC_ALLOWED_HOSTS"), "{err}");
     }
 
     #[test]

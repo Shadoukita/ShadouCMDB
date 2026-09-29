@@ -83,7 +83,8 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" seed
   # Optional starter data model (or install it later under Administration > Templates):
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" seed --template it_infrastructure
-  # First administrator (or skip this and use first-run setup in the web UI):
+  # First administrator (or skip this and use first-run setup in the web UI, with the setup token from
+  # "$data\setup-token" or the log file):
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" create-admin --username admin
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
   Start-Service ShadouCMDB

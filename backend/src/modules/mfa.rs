@@ -19,13 +19,14 @@ use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
 use crate::auth::events::{self, LoginMethod};
 use crate::auth::permissions::GlobalPermission;
+use crate::auth::secret::Secret;
 use crate::auth::throttle::Attempt;
 use crate::auth::{AuthState, Principal, totp};
 use crate::data::auth as auth_data;
 use crate::data::crud::AuditAction;
 use crate::data::mfa as data;
 use crate::http::error::{AppError, ErrorCode};
-use crate::secrets::{Keyring, Secret, sealed};
+use crate::secrets::{self, Keyring, sealed};
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -103,7 +104,7 @@ fn totp_code_schema() -> Schema {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasswordConfirmation {
     #[schema(schema_with = login_field_schema)]
-    current_password: String,
+    current_password: Secret,
 }
 impl Check for PasswordConfirmation {}
 
@@ -120,7 +121,7 @@ impl Check for TotpConfirmation {}
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MfaReauthentication {
     #[schema(schema_with = login_field_schema)]
-    current_password: String,
+    current_password: Secret,
     #[schema(schema_with = code_schema)]
     code: String,
 }
@@ -154,7 +155,7 @@ impl Verdict {
 }
 
 /// The user's authenticator secret, decrypted. Logs an undecryptable one (no secret in the log).
-fn open_secret(keyring: &Keyring, user_id: Uuid, t: &data::Totp) -> Option<Secret> {
+fn open_secret(keyring: &Keyring, user_id: Uuid, t: &data::Totp) -> Option<secrets::Secret> {
     match sealed::open_totp_secret(keyring, user_id, t.key_id, &t.secret) {
         Ok(secret) => Some(secret),
         Err(err) => {
@@ -503,7 +504,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn setup(app: &Router) -> (Creds, Value) {
-        let body = json!({ "username": "owner", "displayName": "Owner", "password": PASSWORD });
+        let body = json!({ "username": "owner", "displayName": "Owner", "password": PASSWORD, "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(app, "POST", "/api/v1/setup", &Creds::default(), Some(body)).await;
         assert_eq!(status, 201, "{me}");
         (session_of(&me, &headers), me)
@@ -722,6 +723,65 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
+    /// A second-factor step started before an administrator resets the
+    /// password or disables the account is refused afterwards, even with the
+    /// right code and the account enabled again (GH#191).
+    #[tokio::test]
+    async fn a_reset_or_disable_drops_pending_second_factor_steps() {
+        let Some(db) = scratch::database("a_reset_or_disable_drops_pending_second_factor_steps").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, _) = setup(&app).await;
+        let step = settled_step().await;
+        let (secret, _) = enrol(&app, pool, &session, step).await;
+        let administrators: Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let body = json!({ "username": "second", "displayName": "Second", "password": PASSWORD,
+            "profileIds": [administrators] });
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+        let body = json!({ "username": "second", "password": PASSWORD });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(body)).await;
+        assert_eq!(status, 200, "{me}");
+        let second = session_of(&me, &headers);
+        let owner: Uuid =
+            sqlx::query_scalar("SELECT id FROM users WHERE username = 'owner'").fetch_one(pool).await.unwrap();
+        let user = format!("/api/v1/admin/users/{owner}");
+        let pending = || {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mfa_challenges WHERE user_id = $1")
+                .bind(owner)
+                .fetch_one(pool)
+        };
+
+        // Disabled and enabled again while the second step is pending.
+        let challenge = password_step(&app).await;
+        assert_eq!(pending().await.unwrap(), 1);
+        let (status, v, _) = call(&app, "PATCH", &user, &second, Some(json!({ "isActive": false }))).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(pending().await.unwrap(), 0);
+        let (status, v, _) = call(&app, "PATCH", &user, &second, Some(json!({ "isActive": true }))).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+
+        // Reset (to the same password, so the test can sign in again) while it is pending.
+        let challenge = password_step(&app).await;
+        let reset = json!({ "password": PASSWORD });
+        let (status, v, _) = call(&app, "PUT", &format!("{user}/password"), &second, Some(reset)).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(pending().await.unwrap(), 0);
+        let (status, v, _) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+
+        // A step started afterwards goes through with the same code.
+        let challenge = password_step(&app).await;
+        let (status, v, _) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!(status, 200, "{v}");
+        db.drop().await;
+    }
+
     /// With the session and the password, guessing the code to turn MFA off
     /// or get new recovery codes locks like guessing the password: a right
     /// password does not clear the count, not even on a password-only
@@ -862,6 +922,9 @@ pub(crate) mod tests {
                 session_max_age: std::time::Duration::from_secs(3600),
                 cookie_secure: crate::config::CookieSecure::Never,
                 public_url: None,
+                oidc_allowed_hosts: None,
+                setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+                setup_token_file: None,
             },
             crate::secrets::Keyring::for_tests(),
         );
