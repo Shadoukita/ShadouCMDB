@@ -145,6 +145,7 @@ pub struct StatusList {
 paged!(StatusList);
 
 impl ListQuery for StatusList {
+    const SORT_FIELDS: &'static [&'static str] = LOOKUP_SORT_FIELDS;
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -294,6 +295,7 @@ pub struct EnvironmentList {
 paged!(EnvironmentList);
 
 impl ListQuery for EnvironmentList {
+    const SORT_FIELDS: &'static [&'static str] = LOOKUP_SORT_FIELDS;
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -507,6 +509,7 @@ pub struct LocationList {
 paged!(LocationList);
 
 impl ListQuery for LocationList {
+    const SORT_FIELDS: &'static [&'static str] = LOOKUP_SORT_FIELDS;
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -692,7 +695,7 @@ fn owner_ids_schema() -> utoipa::openapi::schema::Schema {
 }
 
 fn owner_sort() -> utoipa::openapi::schema::Schema {
-    schemas::sort_schema(&["name", "kind", "email", "createdAt", "updatedAt"], "name")
+    schemas::sort_schema(OwnerList::SORT_FIELDS, "name")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -719,6 +722,7 @@ pub struct OwnerList {
 paged!(OwnerList);
 
 impl ListQuery for OwnerList {
+    const SORT_FIELDS: &'static [&'static str] = &["name", "kind", "email", "createdAt", "updatedAt"];
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -889,6 +893,7 @@ fn list_parent_schema() -> utoipa::openapi::schema::Schema {
 }
 
 impl ListQuery for LookupListList {
+    const SORT_FIELDS: &'static [&'static str] = LOOKUP_SORT_FIELDS;
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -1177,6 +1182,7 @@ fn value_parent_schema() -> utoipa::openapi::schema::Schema {
 }
 
 impl ListQuery for LookupListValueList {
+    const SORT_FIELDS: &'static [&'static str] = LOOKUP_SORT_FIELDS;
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
