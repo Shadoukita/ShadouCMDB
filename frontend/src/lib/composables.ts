@@ -1,4 +1,4 @@
-import { ref, toValue, watch, watchEffect, type MaybeRefOrGetter, type Ref } from "vue";
+import { onBeforeUnmount, ref, toValue, watch, watchEffect, type MaybeRefOrGetter, type Ref } from "vue";
 import { useBrandingStore } from "../stores/branding";
 
 export function useDebounced<T>(source: MaybeRefOrGetter<T>, ms = 250): Ref<T> {
@@ -22,4 +22,14 @@ export function useDocumentTitle(title: MaybeRefOrGetter<string | undefined>) {
     const app = branding.effective.appName;
     document.title = t ? `${t} · ${app}` : app;
   });
+}
+
+/** Whether a CSS media query matches, kept live as the window resizes. */
+export function useMediaQuery(query: string): Ref<boolean> {
+  const mql = window.matchMedia(query);
+  const matches = ref(mql.matches);
+  const onChange = (e: MediaQueryListEvent) => (matches.value = e.matches);
+  mql.addEventListener("change", onChange);
+  onBeforeUnmount(() => mql.removeEventListener("change", onChange));
+  return matches;
 }

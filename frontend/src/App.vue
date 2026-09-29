@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { watchEffect } from "vue";
+import { ref, watch, watchEffect } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 import BrandMark from "./components/BrandMark.vue";
 import ErrorAlert from "./components/ErrorAlert.vue";
@@ -7,6 +7,7 @@ import GlobalSearch from "./components/GlobalSearch.vue";
 import LoadingState from "./components/LoadingState.vue";
 import MainNav from "./components/MainNav.vue";
 import UserMenu from "./components/UserMenu.vue";
+import { useMediaQuery } from "./lib/composables";
 import { applyBranding, useBrandingStore } from "./stores/branding";
 import { useSessionStore } from "./stores/session";
 
@@ -15,6 +16,17 @@ const session = useSessionStore();
 const branding = useBrandingStore();
 // Theme, brand colours and favicon follow the saved branding (or the editor's live preview).
 watchEffect(() => applyBranding(branding.effective, branding.theme));
+
+// Below 820 px the sidebar becomes a drawer behind a toggle in the brand cell (breakpoint also in app.css).
+const narrow = useMediaQuery("(max-width: 820px)");
+const navOpen = ref(false);
+watch([() => route.fullPath, narrow], () => (navOpen.value = false));
+function onShellKey(e: KeyboardEvent) {
+  if (e.key === "Escape" && navOpen.value) {
+    navOpen.value = false;
+    document.getElementById("nav-toggle")?.focus();
+  }
+}
 
 function retry() {
   window.location.reload();
@@ -29,20 +41,35 @@ function retry() {
     </div>
   </div>
   <RouterView v-else-if="route.meta.public || route.meta.bare" />
-  <div v-else-if="session.status === 'signedIn'" class="shell">
+  <div v-else-if="session.status === 'signedIn'" class="shell" :class="{ 'nav-open': narrow && navOpen }" @keydown="onShellKey">
     <div class="shell-brand">
+      <button
+        v-if="narrow"
+        id="nav-toggle"
+        type="button"
+        class="nav-toggle"
+        aria-controls="shell-nav"
+        :aria-expanded="navOpen"
+        :aria-label="navOpen ? 'Close navigation' : 'Open navigation'"
+        @click="navOpen = !navOpen"
+      >
+        <span aria-hidden="true">☰</span>
+      </button>
       <RouterLink to="/" :aria-label="`${branding.effective.appName} home`"><BrandMark /></RouterLink>
     </div>
     <header class="shell-header">
       <GlobalSearch />
-      <div class="actions" style="margin-left: auto">
-        <RouterLink v-if="session.canOnAnyClass('create')" class="btn btn-primary" to="/cis/new">+ New CI</RouterLink>
+      <div class="shell-actions">
+        <RouterLink v-if="session.canOnAnyClass('create')" class="btn btn-primary new-ci" to="/cis/new" title="New CI">
+          <span aria-hidden="true">+</span><span class="btn-label">New CI</span>
+        </RouterLink>
         <UserMenu />
       </div>
     </header>
-    <nav class="shell-nav" aria-label="Main">
+    <nav id="shell-nav" class="shell-nav" aria-label="Main">
       <MainNav />
     </nav>
+    <div v-if="narrow && navOpen" class="nav-scrim" aria-hidden="true" @click="navOpen = false"></div>
     <main id="main" class="shell-main">
       <RouterView />
     </main>
