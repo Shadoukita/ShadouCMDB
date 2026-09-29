@@ -1790,7 +1790,7 @@ export interface paths {
         put?: never;
         /**
          * Create an API token; the response carries its secret, shown this once
-         * @description Requires `users.manage`. The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not. 400 when the owner is disabled or the owner or profile does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not, and 403 `MFA_REQUIRED_FOR_TOKEN` when the owner must use two-factor authentication and your session did not sign in with a second factor (the token would be refused). The token records that as `mfaVerified`. 400 when the owner is disabled or the owner or profile does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createApiToken"];
         delete?: never;
@@ -1974,6 +1974,16 @@ export interface components {
              *     creator is unknown
              */
             createdByUserId: string | null;
+            /**
+             * @description Created from a session signed in with a second factor. When the owner
+             *     must use two-factor authentication, only such tokens are accepted
+             */
+            mfaVerified: boolean;
+            /**
+             * @description A working token that is refused because its owner must use two-factor
+             *     authentication and `mfaVerified` is false; create a new token for it
+             */
+            refusedForMfa: boolean;
             /** Format: date-time */
             createdAt: string;
         };
@@ -2503,7 +2513,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
                 message: string;
                 details?: {
                     /** @enum {string} */
@@ -14257,6 +14267,11 @@ export interface operations {
                 /** @description One or more ids, comma-separated */
                 createdBy?: string;
                 status?: "active" | "expired" | "revoked";
+                /**
+                 * @description true: only the working tokens refused because their owner must use
+                 *     two-factor authentication (`refusedForMfa`); false: all others
+                 */
+                refusedForMfa?: "true" | "false";
             };
             header?: never;
             path?: never;

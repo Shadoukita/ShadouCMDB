@@ -138,6 +138,12 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up \
              first (code MFA_ENROLMENT_REQUIRED)",
         ),
+        ErrorCode::MfaRequiredForToken => (
+            403,
+            "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first \
+             (code MFA_ENROLMENT_REQUIRED), or the token's owner must use two-factor authentication and this session \
+             did not sign in with a second factor (code MFA_REQUIRED_FOR_TOKEN)",
+        ),
         ErrorCode::NotFound => (404, "Not found (code NOT_FOUND)"),
         ErrorCode::Gone => (410, "The operation was removed (code GONE); the message names its replacement"),
         ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => (

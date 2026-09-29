@@ -16265,6 +16265,19 @@
                 "revoked"
               ]
             }
+          },
+          {
+            "name": "refusedForMfa",
+            "in": "query",
+            "description": "true: only the working tokens refused because their owner must use\ntwo-factor authentication (`refusedForMfa`); false: all others",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
           }
         ],
         "responses": {
@@ -16340,7 +16353,7 @@
           "API tokens"
         ],
         "summary": "Create an API token; the response carries its secret, shown this once",
-        "description": "Requires `users.manage`. The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not. 400 when the owner is disabled or the owner or profile does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `users.manage`. The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not, and 403 `MFA_REQUIRED_FOR_TOKEN` when the owner must use two-factor authentication and your session did not sign in with a second factor (the token would be refused). The token records that as `mfaVerified`. 400 when the owner is disabled or the owner or profile does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "createApiToken",
         "parameters": [],
         "requestBody": {
@@ -18091,6 +18104,8 @@
           "lastUsedIp",
           "createdBy",
           "createdByUserId",
+          "mfaVerified",
+          "refusedForMfa",
           "createdAt"
         ],
         "properties": {
@@ -18181,6 +18196,14 @@
             ],
             "format": "uuid",
             "description": "The user who created the token; null when the CLI created it, the\ncreator was deleted, or (for a token older than this field) the\ncreator is unknown"
+          },
+          "mfaVerified": {
+            "type": "boolean",
+            "description": "Created from a session signed in with a second factor. When the owner\nmust use two-factor authentication, only such tokens are accepted"
+          },
+          "refusedForMfa": {
+            "type": "boolean",
+            "description": "A working token that is refused because its owner must use two-factor\nauthentication and `mfaVerified` is false; create a new token for it"
           },
           "createdAt": {
             "type": "string",
@@ -20078,6 +20101,7 @@
                   "RATE_LIMITED",
                   "MFA_REQUIRED",
                   "MFA_ENROLMENT_REQUIRED",
+                  "MFA_REQUIRED_FOR_TOKEN",
                   "IDENTITY_PROVIDER_UNAVAILABLE",
                   "UNSUPPORTED_MEDIA_TYPE",
                   "PAYLOAD_TOO_LARGE",

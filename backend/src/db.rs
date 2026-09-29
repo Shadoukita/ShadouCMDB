@@ -311,6 +311,9 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
         }
         None => false,
     };
+    if let Some(notice) = crate::data::api_tokens::refused_for_mfa_notice(&mut *pool.acquire().await?).await? {
+        println!("Warning: {notice}");
+    }
     println!(
         "Database is at migration {after}/{expected}{}",
         if pending.is_empty() && !reconciled { " (nothing to do)" } else { "" }
@@ -503,3 +506,5 @@ mod upgrade_0020;
 mod upgrade_0022;
 #[cfg(test)]
 mod upgrade_0023;
+#[cfg(test)]
+mod upgrade_0024;

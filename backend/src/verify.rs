@@ -701,6 +701,9 @@ pub async fn run(cfg: &DatabaseConfig) -> anyhow::Result<()> {
     let mut conn = PgConnection::connect_with(&crate::db::connect_options(cfg)?)
         .await
         .context("could not connect to PostgreSQL")?;
+    if let Some(notice) = crate::data::api_tokens::refused_for_mfa_notice(&mut conn).await? {
+        println!("Warning: {notice}\n");
+    }
     let mut failed = 0;
     conn.execute("BEGIN").await?;
     // The checks build on the IT infrastructure data model. A bare install gets
