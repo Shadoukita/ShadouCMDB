@@ -53,6 +53,11 @@ pub const MFA_REQUIRED: &str =
 const OIDC_ACCOUNT: &str =
     "EXISTS (SELECT 1 FROM identity_providers ip WHERE ip.id = u.identity_provider_id AND ip.kind = 'oidc')";
 
+/// The account signs in locally, or through a provider that is still enabled:
+/// a session left over from a disabled provider is refused (GH#250).
+const PROVIDER_ENABLED: &str = "(u.identity_provider_id IS NULL OR EXISTS (SELECT 1 FROM identity_providers ip
+     WHERE ip.id = u.identity_provider_id AND ip.is_enabled))";
+
 /// `mfa_verified`: the sign-in proved a second factor (an authenticator or
 /// recovery code, or an OIDC ID token under `verify`).
 #[allow(clippy::too_many_arguments)]
@@ -88,7 +93,8 @@ pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -
                 {MFA_REQUIRED}, {OIDC_ACCOUNT},
                 EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL)
          FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval AND u.is_active"
+         WHERE s.token_hash = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval AND u.is_active
+           AND {PROVIDER_ENABLED}"
     )))
     .bind(token_hash)
     .bind(interval(idle))
@@ -283,10 +289,12 @@ pub async fn share_lock_users(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Re
 /// The state of an account a sign-in depends on: a session or second-factor
 /// step is only created while it still matches what the credentials were
 /// checked against (GH#209).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, sqlx::FromRow)]
 pub struct SignInStamp {
     pub password_changed_at: DateTime<Utc>,
     pub is_active: bool,
+    /// The identity provider the account signs in through (GH#250).
+    pub identity_provider_id: Option<Uuid>,
 }
 
 impl SignInStamp {
@@ -299,24 +307,34 @@ impl SignInStamp {
 /// The user's [`SignInStamp`], share-locked until the transaction ends so a
 /// password change, disable or delete waits for it (or it for them).
 pub async fn lock_sign_in(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<SignInStamp>> {
-    let row: Option<(DateTime<Utc>, bool)> =
-        sqlx::query_as("SELECT password_changed_at, is_active FROM users WHERE id = $1 FOR SHARE")
-            .bind(id)
-            .fetch_optional(conn)
-            .await?;
-    Ok(row.map(|(password_changed_at, is_active)| SignInStamp { password_changed_at, is_active }))
+    sqlx::query_as("SELECT password_changed_at, is_active, identity_provider_id FROM users WHERE id = $1 FOR SHARE")
+        .bind(id)
+        .fetch_optional(conn)
+        .await
 }
 
 /// Records the sign-in and returns the user's [`SignInStamp`] as of now. The
 /// update locks the row until the transaction ends, and waits for a password
 /// change, disable or delete in progress, so what it returns is committed.
 pub async fn record_login(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<SignInStamp>> {
-    let row: Option<(DateTime<Utc>, bool)> =
-        sqlx::query_as("UPDATE users SET last_login_at = now() WHERE id = $1 RETURNING password_changed_at, is_active")
-            .bind(id)
-            .fetch_optional(conn)
-            .await?;
-    Ok(row.map(|(password_changed_at, is_active)| SignInStamp { password_changed_at, is_active }))
+    sqlx::query_as(
+        "UPDATE users SET last_login_at = now() WHERE id = $1
+         RETURNING password_changed_at, is_active, identity_provider_id",
+    )
+    .bind(id)
+    .fetch_optional(conn)
+    .await
+}
+
+/// Whether the identity provider exists and is enabled, share-locked until the
+/// transaction ends so disabling or deleting it (`FOR UPDATE`, then ending its
+/// accounts' sessions) waits for it, or it for them (GH#250).
+pub async fn lock_provider_enabled(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<bool> {
+    let enabled: Option<bool> = sqlx::query_scalar("SELECT is_enabled FROM identity_providers WHERE id = $1 FOR SHARE")
+        .bind(id)
+        .fetch_optional(conn)
+        .await?;
+    Ok(enabled == Some(true))
 }
 
 pub struct LoginRow {

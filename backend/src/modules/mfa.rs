@@ -989,23 +989,32 @@ pub(crate) mod tests {
     }
 
     /// Setting up MFA confirms the password first. An OIDC account has none
-    /// here, and a disabled directory cannot be asked: 409 for both. A
-    /// directory that cannot be reached: 503. Nothing is set up in any case.
+    /// here: 409. A directory that cannot be reached: 503. A session left from
+    /// a directory disabled since is no session at all (GH#250): 401. Nothing
+    /// is set up in any case.
     #[tokio::test]
     async fn enrolment_needs_a_password_that_can_be_confirmed() {
         let Some(db) = scratch::database("enrolment_needs_a_password_that_can_be_confirmed").await else { return };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
         let oidc = provider(pool, "oidc", true, "").await;
-        let disabled = provider(pool, "ldap", false, "ldaps://dc.example.test").await;
+        let disabled = provider(pool, "ldap", true, "ldaps://dc.example.test").await;
         // Nothing listens on port 1: the connection is refused at once.
         let unreachable = provider(pool, "ldap", true, "ldaps://127.0.0.1:1").await;
         let body = json!({ "currentPassword": PASSWORD });
         for (name, linked, status_code, error, says) in [
             ("olga", oidc, 409, "CONFLICT", "identity provider"),
-            ("dirk", disabled, 409, "CONFLICT", "directory is disabled"),
+            ("dirk", disabled, 401, "UNAUTHENTICATED", "Sign in"),
             ("dana", unreachable, 503, "IDENTITY_PROVIDER_UNAVAILABLE", "could not be reached"),
         ] {
             let creds = mfa_required_user(pool, name, Some(linked)).await;
+            if linked == disabled {
+                // Its sessions are not ended here, as if one were left over.
+                sqlx::query("UPDATE identity_providers SET is_enabled = false WHERE id = $1")
+                    .bind(linked)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
             let (status, v, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &creds, Some(body.clone())).await;
             assert_eq!((status, code(&v)), (status_code, error), "{name}: {v}");
             assert!(v["error"]["message"].as_str().unwrap().contains(says), "{name}: {v}");
