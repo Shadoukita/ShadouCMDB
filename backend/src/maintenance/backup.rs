@@ -85,9 +85,22 @@ pub async fn run(cfg: &DatabaseConfig, args: BackupArgs) -> anyhow::Result<()> {
         .into_iter()
         .collect();
     if !keys.is_empty() {
+        // Per table, summed over keys: "2 authenticator secrets and 1 identity provider secret".
+        let mut per_table = std::collections::BTreeMap::<&str, u64>::new();
+        for k in &header.encryption_keys {
+            *per_table.entry(k.table.as_str()).or_default() += k.rows;
+        }
+        let what: Vec<String> = per_table
+            .into_iter()
+            .map(|(table, rows)| match crate::secrets::sealed::SealedTable::from_name(table) {
+                Some(t) => t.describe(rows as i64),
+                None => format!("{rows} secrets in {table}"),
+            })
+            .collect();
         println!(
-            "Authenticator secrets in it are encrypted with key {}, which is not in the file: keep that key (and its \
-             copy in escrow) as long as you keep this backup.",
+            "Secrets in it ({}) are encrypted with key {}, which is not in the file: keep that key (and its copy in \
+             escrow) as long as you keep this backup.",
+            what.join(" and "),
             keys.join(", ")
         );
     }

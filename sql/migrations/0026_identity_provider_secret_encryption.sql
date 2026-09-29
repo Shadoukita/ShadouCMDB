@@ -24,13 +24,16 @@
 -- configured ("shadoucmdb identity-providers reset-undecryptable" gives such
 -- providers up: disabled, secret cleared, audited).
 --
--- The text columns stay for one release; a later release drops them. They do
--- not make a mixed-version rolling upgrade work: once an instance of this
--- release has encrypted a row at start-up, an instance of the previous release
--- finds the text column NULL, so its OIDC and LDAP sign-in fails closed, and
--- its PATCH of a secret violates identity_providers_secrets_form (a 500).
--- Stop the previous release before starting this one. The 0014 comment ("stored as is") no longer holds; 0014
--- itself stays unchanged (applied migrations are checksummed).
+-- The text columns stay for one release so that a later release can drop
+-- them; they do not let the previous release work on this schema. Once this
+-- release has encrypted a row, an instance of the previous release sees the
+-- secret as unset: its OIDC sign-in sends no client secret, its LDAP sign-in
+-- skips the service bind, it rejects every change to that provider (the
+-- identity_providers_secrets_form and _bind_pair CHECKs), and "remove the
+-- secret" reports success but leaves the encrypted one in place. Stop every
+-- instance of the previous release before starting this one. The 0014 comment
+-- ("stored as is") no longer holds; 0014 itself stays unchanged (applied
+-- migrations are checksummed).
 --
 -- Backups copy the ciphertext as it is; the key is never in the database.
 -- Backups taken before this release still hold the plaintext secrets.

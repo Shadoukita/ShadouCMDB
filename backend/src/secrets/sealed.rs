@@ -204,8 +204,8 @@ pub fn seal_totp_secret(keyring: &Keyring, user_id: Uuid, seed: &[u8]) -> Sealed
 }
 
 /// The seed in a `user_totp` row. `key_id` NULL is a seed stored before
-/// encryption: start-up encrypts those, but an instance of the previous
-/// release may still write one during a rolling upgrade.
+/// encryption (0025); start-up encrypts those. The previous release cannot
+/// read encrypted seeds, so it must not run next to this one.
 pub fn open_totp_secret(
     keyring: &Keyring,
     user_id: Uuid,
@@ -255,8 +255,9 @@ impl ProviderSecret {
 /// where it is presented to the provider ([`open_provider_secret`]).
 #[derive(Clone, PartialEq, Eq)]
 pub enum StoredSecret {
-    /// Written before encryption, or by an instance of the previous release
-    /// during a rolling upgrade; start-up encrypts it.
+    /// Written before encryption (0026); start-up encrypts it. The previous
+    /// release cannot use encrypted secrets, so it must not run next to this
+    /// one.
     Plain(String),
     Encrypted {
         key_id: KeyId,
@@ -686,7 +687,8 @@ mod tests {
             let mut bytes = s.bytes.clone();
             bytes[i] ^= 1;
             let tampered = StoredSecret::Encrypted { key_id: s.key_id, bytes };
-            assert!(open_provider_secret(&ring, p, ProviderSecret::ClientSecret, &tampered).is_err(), "byte {i}");
+            let refused = open_provider_secret(&ring, p, ProviderSecret::ClientSecret, &tampered).is_err();
+            assert!(refused, "byte {i}");
         }
         // The same AD under the TOTP subkey: another purpose, another key.
         let totp = ring.seal(Purpose::TotpSecret, &provider_ad(p, ProviderSecret::ClientSecret), secret.as_bytes());

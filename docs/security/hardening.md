@@ -265,7 +265,12 @@ administrator enters their secret again). Include the key in the quarterly resto
    under the new key, authenticator secrets and identity provider secrets alike (logged per table,
    e.g. `Encrypted N authenticator secrets (key …): … from previous key …`).
 4. Check with `shadoucmdb verify` that every secret is under the new key, then remove
-   `ENCRYPTION_KEY_PREVIOUS_FILE` and restart.
+   `ENCRYPTION_KEY_PREVIOUS_FILE` and restart. If `verify` still lists secrets under the previous
+   key, those do not decrypt (altered or copied from another row), and the start-up log names the
+   users or providers concerned ("… does not decrypt"). The key is not lost, so do not run
+   `reset-undecryptable`: reset two-factor sign-in for those users, or enter the provider's secret
+   again under Administration > Sign-in, then check with `verify` again before you remove the
+   previous key.
 5. **Keep the old key as long as you keep backups taken before the rotation**: their secrets are
    encrypted with it. Destroy it only after those backups have expired.
 

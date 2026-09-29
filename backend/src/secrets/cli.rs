@@ -207,9 +207,9 @@ async fn reset_providers(cfg: &Config, args: ResetUndecryptableArgs) -> anyhow::
             providers.len()
         );
         for p in &providers {
-            let (kind, secret) = if p.kind == "ldap" { ("LDAP", "bind password") } else { ("OIDC", "client secret") };
+            let (kind, field) = if p.kind == "ldap" { ("LDAP", "bind password") } else { ("OIDC", "client secret") };
             let state = if p.is_enabled { "enabled" } else { "disabled" };
-            println!("  {:<32} {kind:<4}  key {}  {state}, {secret}", p.name, p.key_id);
+            println!("  {:<32} {kind:<4}  key {}  {state}, {field}", p.name, p.key_id);
         }
         if args.dry_run {
             println!("Dry run: nothing was changed.");

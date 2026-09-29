@@ -1621,9 +1621,12 @@ mod tests {
     fn debug_output_redacts_provider_secrets() {
         const OIDC_SECRET: &str = "oidc-client-secret-value";
         const LDAP_SECRET: &str = "ldap-bind-password-value";
+        // The messages do not print the output: on a failure it would hold the secret.
         let hidden = |debug: String| {
-            assert!(!debug.contains(OIDC_SECRET) && !debug.contains(LDAP_SECRET), "{debug}");
-            assert!(debug.contains("<redacted>"), "{debug}");
+            let leaked = debug.contains(OIDC_SECRET) || debug.contains(LDAP_SECRET);
+            let redacted = debug.contains("<redacted>");
+            assert!(!leaked, "Debug output shows a provider secret");
+            assert!(redacted, "Debug output has no <redacted> marker");
         };
 
         let oidc_create: IdentityProviderCreate = serde_json::from_value(serde_json::json!({
