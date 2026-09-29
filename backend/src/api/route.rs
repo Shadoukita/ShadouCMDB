@@ -650,7 +650,8 @@ impl RouteBuilder {
         let filter = MethodFilter::try_from(self.method.clone()).expect("supported HTTP method");
         let access = self.access;
         let unlimited = self.unlimited;
-        assert!(!unlimited || access == Access::Public, "{}: only public routes can be unlimited", self.operation_id);
+        // No route name in the message: it is static, but CodeQL taints the whole builder.
+        assert!(!unlimited || access == Access::Public, "only public routes can be unlimited");
         let session_only = self.session_only;
         let before_mfa_enrolment = self.before_mfa_enrolment;
         let safe_method = self.method == Method::GET || self.method == Method::HEAD;
