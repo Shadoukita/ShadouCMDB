@@ -1,6 +1,6 @@
 name: CI
 
-# Node workspaces: the frontend (lint, typecheck, API types, build), and the
+# Node workspaces: the frontend (lint, typecheck, unit tests, API types, build), and the
 # Playwright walk of the UI served by the release binary against PostgreSQL,
 # and the changelog fragment check.
 # The Rust checks are in rust.yml, the release dry run in release.yml.
@@ -40,6 +40,8 @@ jobs:
       - run: npm ci
       - run: npm run lint --workspaces --if-present
       - run: npm run typecheck
+      - name: frontend unit tests
+        run: npm run test:unit -w frontend
       - name: frontend API types match backend/openapi.json
         run: npm run api:check -w frontend
       - run: npm run build --workspaces --if-present

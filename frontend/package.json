@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "vue-tsc --noEmit && tsc -p e2e --noEmit",
+    "typecheck": "vue-tsc --noEmit && tsc -p e2e --noEmit && tsc -p unit --noEmit",
+    "test:unit": "node --import ./unit/register.mjs --test unit/*.test.ts",
     "test:e2e": "playwright test",
     "api:types": "openapi-typescript ../backend/openapi.json -o src/api/schema.d.ts",
     "api:check": "openapi-typescript ../backend/openapi.json -o src/api/schema.d.ts --check"

@@ -680,6 +680,10 @@ table.data.loading tbody {
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--c-border);
 }
+/* Controls about the list itself (columns, later saved views) sit at the end of the toolbar. */
+.toolbar-end {
+  margin-left: auto;
+}
 .toolbar .field input {
   width: 150px;
 }
@@ -691,6 +695,85 @@ table.data.loading tbody {
 }
 .toolbar .field.search input {
   width: 220px;
+}
+/* The Columns popover of the inventory toolbar (non-modal: it closes on Esc, Done, or a click or Tab outside). */
+.columns-menu {
+  position: relative;
+}
+.popover {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  width: 320px;
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+/* A popover of a control at the end of the toolbar opens leftwards, inside the page. */
+.toolbar-end .popover {
+  left: auto;
+  right: 0;
+}
+.popover-title {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-md);
+}
+.columns-shown {
+  list-style: none;
+  margin: 0 0 var(--sp-3);
+  padding: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+}
+.columns-shown li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 2px var(--sp-3);
+  min-height: var(--row-h);
+}
+.columns-shown li + li {
+  border-top: 1px solid var(--c-divider);
+}
+fieldset.columns-more {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+}
+fieldset.columns-more legend {
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+}
+.popover-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+/* Narrow screens and high zoom: the popover is a sheet across the toolbar. */
+@media (max-width: 480px) {
+  .toolbar {
+    position: relative;
+  }
+  .columns-menu {
+    position: static;
+  }
+  .popover,
+  .toolbar-end .popover {
+    left: var(--sp-3);
+    right: var(--sp-3);
+    width: auto;
+  }
 }
 .pagination {
   display: flex;
