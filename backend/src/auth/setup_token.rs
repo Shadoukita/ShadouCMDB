@@ -13,15 +13,29 @@
 //! this process: after a restart a new one is generated and the file rewritten,
 //! and each of several API processes has its own. Set `SETUP_TOKEN` to give
 //! them all the same one.
+//!
+//! A wrong or missing token is logged at WARN, but at most [`REFUSALS_LOGGED`]
+//! times per [`REFUSAL_LOG_INTERVAL`]; further refusals in that interval are
+//! only counted, and the count is logged in one line when the next interval
+//! starts (or setup completes). So a client looping wrong tokens cannot rotate
+//! the line with the generated token out of a size-limited log (GH#230).
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use super::secret::Secret;
 use super::session::{constant_time_eq, new_token, token_hash};
 
 /// `SETUP_TOKEN` shorter than this is refused at start.
 pub const MIN_PRESET_LENGTH: usize = 32;
+
+/// Refused setup requests logged one by one per [`REFUSAL_LOG_INTERVAL`].
+pub const REFUSALS_LOGGED: u32 = 10;
+pub const REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The `SETUP_TOKEN` of the test routers and states.
 #[cfg(test)]
@@ -34,11 +48,69 @@ pub struct SetupGate {
     file: Option<PathBuf>,
     /// SHA-256 of the armed token; None while setup is not open in this process.
     armed: Mutex<Option<Vec<u8>>>,
+    refusals: Mutex<Refusals>,
+}
+
+/// Refusals in the current [`REFUSAL_LOG_INTERVAL`].
+#[derive(Default)]
+struct Refusals {
+    since: Option<Instant>,
+    logged: u32,
+    suppressed: u64,
+}
+
+impl Refusals {
+    /// Logs how many refusals went unlogged, if any, and starts over.
+    fn flush(&mut self) {
+        if self.suppressed > 0 {
+            tracing::warn!(
+                suppressed = self.suppressed,
+                interval_secs = REFUSAL_LOG_INTERVAL.as_secs(),
+                "first-run setup refused {} more times (wrong or missing setup token) without a log line each",
+                self.suppressed
+            );
+        }
+        *self = Refusals::default();
+    }
 }
 
 impl SetupGate {
     pub fn new(preset: Option<Secret>, file: Option<PathBuf>) -> Self {
-        SetupGate { preset, file, armed: Mutex::new(None) }
+        SetupGate { preset, file, armed: Mutex::new(None), refusals: Mutex::default() }
+    }
+
+    /// Logs a request refused for a wrong or missing token, within the
+    /// [`REFUSALS_LOGGED`] per [`REFUSAL_LOG_INTERVAL`]; counts the rest.
+    pub fn refused(&self, client_ip: Option<IpAddr>) {
+        let now = Instant::now();
+        let mut r = self.refusals.lock().unwrap_or_else(|e| e.into_inner());
+        if r.since.is_none_or(|since| now.duration_since(since) >= REFUSAL_LOG_INTERVAL) {
+            r.flush();
+            r.since = Some(now);
+        }
+        if r.logged >= REFUSALS_LOGGED {
+            r.suppressed += 1;
+            return;
+        }
+        r.logged += 1;
+        let last = r.logged == REFUSALS_LOGGED;
+        drop(r);
+        if last {
+            tracing::warn!(
+                client_ip = ?client_ip,
+                "first-run setup refused: the setup token is missing or wrong. Further refusals in the next {} s are counted, not logged",
+                REFUSAL_LOG_INTERVAL.as_secs()
+            );
+        } else {
+            tracing::warn!(client_ip = ?client_ip, "first-run setup refused: the setup token is missing or wrong");
+        }
+    }
+
+    /// Refusals reported in the current interval, logged or not.
+    #[cfg(test)]
+    pub fn refusals(&self) -> u64 {
+        let r = self.refusals.lock().unwrap();
+        u64::from(r.logged) + r.suppressed
     }
 
     /// Arms the token unless it already is: takes `SETUP_TOKEN`, or generates
@@ -83,6 +155,7 @@ impl SetupGate {
     /// which also removes a file a crashed earlier run left behind.
     pub fn disarm(&self) {
         *self.armed.lock().expect("setup gate lock") = None;
+        self.refusals.lock().unwrap_or_else(|e| e.into_inner()).flush();
         if self.preset.is_none()
             && let Some(path) = &self.file
         {
@@ -112,9 +185,102 @@ fn write_token_file(path: &Path, token: &str) -> std::io::Result<()> {
     file.sync_all()
 }
 
+/// Captures log lines in tests.
+#[cfg(test)]
+pub(crate) mod capture {
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    pub struct Lines(Arc<Mutex<Vec<u8>>>);
+
+    impl Lines {
+        pub fn lines(&self) -> Vec<String> {
+            String::from_utf8_lossy(&self.0.lock().unwrap()).lines().map(str::to_owned).collect()
+        }
+
+        /// Lines containing `needle`.
+        pub fn count(&self, needle: &str) -> usize {
+            self.lines().iter().filter(|l| l.contains(needle)).count()
+        }
+    }
+
+    impl std::io::Write for Lines {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Lines {
+        type Writer = Lines;
+
+        fn make_writer(&'a self) -> Lines {
+            self.clone()
+        }
+    }
+
+    /// WARN and above logged on this thread until the guard is dropped.
+    pub fn warnings() -> (Lines, tracing::subscriber::DefaultGuard) {
+        let lines = Lines::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(lines.clone())
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        // Interest is cached per call site for all threads; a test registering
+        // its subscriber at the same time could leave this one's out.
+        tracing::callsite::rebuild_interest_cache();
+        (lines, guard)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REFUSED: &str = "first-run setup refused: the setup token is missing or wrong";
+    const SUMMARY: &str = "more times (wrong or missing setup token)";
+
+    /// GH#230: a client looping wrong tokens gets [`REFUSALS_LOGGED`] lines
+    /// per interval, then one line with the count.
+    #[tokio::test(start_paused = true)]
+    async fn refusals_are_logged_up_to_the_cap_then_counted() {
+        let (log, _guard) = capture::warnings();
+        let gate = SetupGate::new(Some("operator-chosen-setup-token-0123456789".into()), None);
+        let extra = 7;
+        for _ in 0..REFUSALS_LOGGED + extra {
+            gate.refused(Some([192, 0, 2, 1].into()));
+        }
+        assert_eq!(log.count(REFUSED), REFUSALS_LOGGED as usize);
+        assert_eq!(log.count("Further refusals in the next 60 s are counted"), 1, "the last one says so");
+        assert_eq!(log.count(SUMMARY), 0, "counted until the interval ends");
+
+        tokio::time::advance(REFUSAL_LOG_INTERVAL - Duration::from_millis(1)).await;
+        gate.refused(None);
+        assert_eq!(log.count(SUMMARY), 0, "still the same interval");
+
+        tokio::time::advance(Duration::from_millis(1)).await;
+        gate.refused(None);
+        let summary: Vec<_> = log.lines().into_iter().filter(|l| l.contains(SUMMARY)).collect();
+        assert_eq!(summary.len(), 1);
+        assert!(summary[0].contains(&format!("suppressed={}", extra + 1)), "{}", summary[0]);
+        assert_eq!(log.count(REFUSED), REFUSALS_LOGGED as usize + 1, "a new interval logs again");
+
+        // Setup completing reports what the current interval counted.
+        for _ in 0..REFUSALS_LOGGED {
+            gate.refused(None);
+        }
+        gate.disarm();
+        assert!(log.lines().last().unwrap().contains("suppressed=1"), "{:?}", log.lines().last());
+        assert_eq!(log.count(REFUSED), 2 * REFUSALS_LOGGED as usize);
+        assert_eq!(log.count(SUMMARY), 2);
+    }
 
     #[test]
     fn a_generated_token_is_written_0600_and_removed_on_disarm() {

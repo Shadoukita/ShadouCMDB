@@ -220,6 +220,9 @@ async fn start_session(
     Ok(WithCookies(Json(session_dto(pool, user_id, session_id, csrf).await?), cookies))
 }
 
+/// The one key of [`AuthState::setup_throttle`].
+const SETUP_THROTTLE_KEY: &str = "setup";
+
 pub async fn setup_required(pool: &PgPool) -> Result<bool, AppError> {
     Ok(data::count_users(&mut *pool.acquire().await?).await? == 0)
 }
@@ -233,17 +236,18 @@ async fn setup(
     b: SetupBody,
 ) -> Result<WithCookies<Json<Session>>, AppError> {
     let ctx = RequestContext::system("first-run setup", request.request_id.clone()).with_client(request.client.clone());
-    // Anonymous and unthrottled: an installed system must answer without taking any lock.
+    // Unthrottled: an installed system must answer without taking any lock.
     if !setup_required(pool).await? {
         return Err(setup_done());
     }
+    // Wrong tokens lock setup for the client's network like wrong passwords
+    // lock a username, and for every network past the account budget (GH#230).
+    let attempt = throttle_gate(&auth.setup_throttle, SETUP_THROTTLE_KEY, request.client.net, "setup attempts").await?;
     // Arms the token if the database was not reachable when the server started.
     auth.setup.arm();
     if !auth.setup.matches(&b.setup_token) {
-        tracing::warn!(
-            client_ip = ?request.client.ip,
-            "first-run setup refused: the setup token is missing or wrong"
-        );
+        attempt.failure();
+        auth.setup.refused(request.client.ip);
         return Err(wrong_setup_token());
     }
     let mut tx = pool.begin().await?;
@@ -262,6 +266,7 @@ async fn setup(
     };
     let user = users::create_in(&mut tx, &ctx, &input).await?;
     tx.commit().await?;
+    attempt.success();
     auth.setup.disarm();
     tracing::info!(user = %user.username, "first-run setup created the first administrator");
     data::record_login(pool, user.id).await?;
@@ -689,11 +694,11 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Create the first administrator and sign them in (only while no users exist)")
             .description(
-                "The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.",
+                "The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. After 5 wrong tokens from one client network (the IPv4 /24 or IPv6 /64 of the client address), each further one locks setup for that network for 1 s, 2 s, 4 s, ... up to 15 min, and wrong tokens from several networks that add up to 15 lock it for every network; while locked the answer is 429 RATE_LIMITED with Retry-After and the token is not checked. The 409 answer is never throttled. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.",
             )
             .public()
             .status(StatusCode::CREATED)
-            .errors(&[ErrorCode::Forbidden, ErrorCode::Conflict])
+            .errors(&[ErrorCode::Forbidden, ErrorCode::Conflict, ErrorCode::RateLimited])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<SetupBody>>| async move {
                 setup(&api.pool, &api.auth, &api.headers, &api.ctx, b).await
             }),
@@ -857,6 +862,55 @@ mod tests {
                 .await;
         assert_eq!(late.err().map(|e| e.code), Some(ErrorCode::Conflict));
         std::fs::remove_dir_all(&dir).unwrap();
+        db.drop().await;
+    }
+
+    /// GH#230: wrong setup tokens lock setup for the client's network (429,
+    /// token not checked, nothing logged); other networks can still set up,
+    /// and the 409 of an installed system is never throttled.
+    #[tokio::test]
+    async fn wrong_setup_tokens_are_throttled_per_network() {
+        let Some(db) = scratch::database("wrong_setup_tokens_are_throttled_per_network").await else { return };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        let from = |ip: [u8; 4]| {
+            let ip = std::net::IpAddr::from(ip);
+            anon().with_client(crate::api::context::ClientInfo {
+                ip: Some(ip),
+                net: Net::of(Some(ip)),
+                ..Default::default()
+            })
+        };
+        let (guesser, owner) = (from([198, 51, 100, 7]), from([203, 0, 113, 9]));
+        let wrong = || SetupBody { setup_token: "0".repeat(64).into(), ..body("owner") };
+        for i in 0..crate::auth::throttle::FREE_FAILURES {
+            let err = setup(pool, &auth, &headers, &guesser, wrong()).await.err().expect("refused");
+            assert_eq!(err.code, ErrorCode::Forbidden, "attempt {i}");
+        }
+        assert!(matches!(auth.setup_throttle.check(SETUP_THROTTLE_KEY, guesser.client.net), Gate::Locked(_)));
+        // Lengthen the lock so what follows does not depend on how fast the database answers.
+        for _ in 0..10 {
+            auth.setup_throttle.failure(SETUP_THROTTLE_KEY, guesser.client.net);
+        }
+        assert_eq!(auth.setup.refusals(), u64::from(crate::auth::throttle::FREE_FAILURES), "each one reported");
+
+        let locked = setup(pool, &auth, &headers, &guesser, wrong()).await.err().expect("locked");
+        assert_eq!(locked.code, ErrorCode::RateLimited);
+        assert!(locked.retry_after.is_some_and(|s| s > 1));
+        let right = setup(pool, &auth, &headers, &guesser, body("owner")).await.err().expect("locked");
+        assert_eq!(right.code, ErrorCode::RateLimited, "the token is not checked while locked");
+        assert_eq!(auth.setup.refusals(), u64::from(crate::auth::throttle::FREE_FAILURES), "a 429 is not reported");
+        assert!(setup_required(pool).await.unwrap());
+
+        // Another network is unaffected: its wrong token is checked, its right one sets up.
+        let other = setup(pool, &auth, &headers, &owner, wrong()).await.err().expect("refused");
+        assert_eq!(other.code, ErrorCode::Forbidden);
+        setup(pool, &auth, &headers, &owner, body("owner")).await.expect("setup from another network");
+
+        // Installed: 409 for everyone, the locked network included, however often.
+        for _ in 0..crate::auth::throttle::FREE_FAILURES * 2 {
+            let late = setup(pool, &auth, &headers, &guesser, wrong()).await;
+            assert_eq!(late.err().map(|e| e.code), Some(ErrorCode::Conflict));
+        }
         db.drop().await;
     }
 

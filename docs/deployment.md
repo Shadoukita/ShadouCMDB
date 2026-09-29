@@ -103,6 +103,14 @@ When `serve` starts on a database without users, it generates a one-time setup t
 
 Enter the token on the first-run page. It stops working as soon as the first administrator exists,
 and the file is deleted. A wrong or missing token answers 403 and is logged with the client address.
+After 5 wrong tokens from one client network (the IPv4 /24 or IPv6 /64 of the client address), setup
+is locked for that network for 1 s, then 2 s, 4 s, ... up to 15 minutes per further wrong token; 15
+wrong tokens from several networks lock it for every network the same way. While locked, setup
+answers 429 `RATE_LIMITED` with `Retry-After`, without checking the token and without a log line. If
+you are locked out yourself, wait for the lock to expire, restart the server (the lock is kept in
+memory), or use `create-admin`. At most 10 refusals per minute are logged one by one; the rest are
+counted and logged in a single line (`first-run setup refused N more times ...`), so a client looping
+wrong tokens cannot push the line with the setup token out of a size-limited log.
 The token lives only in the running process: after a restart a new one is generated and the file
 rewritten. An installation that already has users never generates one.
 
