@@ -8,7 +8,11 @@ import type {
   UiSettingsDocument,
   UiWidgetType,
 } from "../api/uiSettings";
+import type { components } from "../api/schema";
 import { GENERAL_SECTION, groupAttributes } from "./attributes";
+import { readingOrder } from "./freeLayout";
+
+type UiSectionFrame = components["schemas"]["UiSectionFrame"];
 
 /**
  * The UI settings document (Administration › Customization) as the screens
@@ -454,10 +458,14 @@ export interface ResolvedSection {
   /** A grid of `fields`, or a content block (a note's `text`, a built-in panel) without fields. */
   kind: SectionKind;
   text?: string;
+  /** Where the section sits as a window of a free tab (lib/freeLayout); absent on the grid and for the automatic sections. */
+  frame?: UiSectionFrame;
 }
 export interface ResolvedTab {
   key: string;
   label: string;
+  /** Free: the framed sections are windows (in reading order), the rest follow below them at the full width. */
+  placement: "grid" | "free";
   sections: ResolvedSection[];
 }
 
@@ -501,9 +509,11 @@ export function resolveLayout(
   const tabs: ResolvedTab[] = (layout.tabs ?? []).map((t) => ({
     key: t.key,
     label: t.label,
-    sections: (t.sections ?? []).map((s): ResolvedSection => {
+    placement: t.placement === "free" ? "free" : "grid",
+    // A free tab's windows in reading order (y, then x): the order of the page, the keyboard and screen readers.
+    sections: (t.placement === "free" ? readingOrder(t.sections ?? []) : (t.sections ?? [])).map((s): ResolvedSection => {
       const kind = sectionKind(s);
-      const place = { width: sectionWidth(s), newRow: !!s.newRow, minHeight: s.minHeight ?? undefined };
+      const place = { width: sectionWidth(s), newRow: !!s.newRow, minHeight: s.minHeight ?? undefined, ...(t.placement === "free" && s.frame ? { frame: s.frame } : {}) };
       if (kind !== "fields") return { key: s.key, label: s.label, collapsed: !!s.collapsed, columns: GRID_COLUMNS, ...place, fields: [], auto: false, kind, text: s.text };
       const columns = Math.min(Math.max(s.columns ?? GRID_COLUMNS, 1), MAX_COLUMNS);
       const fields: ResolvedField[] = [];
@@ -550,7 +560,7 @@ export function resolveLayout(
     ...groups.map((g) => auto(`_group:${g.group}`, g.group, g.fields)),
     auto("_record", "Record", record.filter((f) => usable(f) && !taken.has(f))),
   ];
-  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, sections: [] });
+  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, placement: "grid", sections: [] });
   tabs[0].sections.push(...trailing);
   if (keepEmpty) return tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => !s.auto || s.fields.length > 0) }));
   const shown = tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => s.kind !== "fields" || s.fields.length > 0) })).filter((t) => t.sections.length > 0);
@@ -583,6 +593,29 @@ export function sectionClass(s: { width?: number | null; newRow?: boolean | null
   return ["lg-sec", `lg-s-${sectionWidth(s)}`, ...(s.newRow ? ["lg-new-row"] : [])];
 }
 export const sectionStyle = (s: { minHeight?: number | null }) => (s.minHeight ? { "--lg-min-h": String(s.minHeight) } : undefined);
+
+/**
+ * A window of a free tab (lg-win) inside its tab's area (lg-free, as tall as
+ * `freeAreaStyle` says): position, size and stacking order as CSS variables,
+ * which the stylesheet ignores below the tablet breakpoint and in print (the
+ * windows stack in reading order there, at least `minH` tall).
+ */
+export const windowClass = "lg-win";
+export function windowStyle(f: UiSectionFrame): Record<string, string> {
+  return {
+    "--win-x": `${f.x * 100}%`,
+    "--win-y": `${f.y}px`,
+    "--win-w": `${f.w * 100}%`,
+    "--win-h": `${f.h}px`,
+    "--win-z": String(f.z),
+    ...(f.minH ? { "--win-min-h": `${f.minH}px` } : {}),
+  };
+}
+/** The area of a free tab's windows: as tall as the lowest one reaches. */
+export function freeAreaStyle(sections: readonly { frame?: UiSectionFrame }[]): Record<string, string> {
+  const bottom = Math.max(0, ...sections.flatMap((s) => (s.frame ? [s.frame.y + s.frame.h] : [])));
+  return { "--free-h": `${bottom}px` };
+}
 
 /** The core fields of every CI, which the form edits: the General section starts with them. */
 export const CORE_FIELDS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key);
