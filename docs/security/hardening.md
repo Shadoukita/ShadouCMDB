@@ -331,7 +331,7 @@ holds no state of its own besides its env file.
   the server cannot delete them.
 - **Back up the env file** (or the secret-store entry) separately and just as carefully.
 - **Test a restore** at least every quarter into a separate database: `pg_restore --no-owner --role=shadoucmdb_app -d shadoucmdb_restore shadoucmdb-….dump`,
-  then run `shadoucmdb verify` and `shadoucmdb migrate` against it, and sign in.
+  then run `shadoucmdb migrate` and `shadoucmdb verify` against it, and sign in.
 - **Retention:** keep backups only as long as you need them; they are copies of personal data
   (user accounts, audit log IPs) too.
 

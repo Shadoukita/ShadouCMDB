@@ -698,6 +698,14 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
 }
 
 pub async fn run(cfg: &DatabaseConfig) -> anyhow::Result<()> {
+    // The checks and the token notice read the current schema: on an older one
+    // they would fail with raw SQL errors.
+    let pool = crate::db::connect(cfg).await?;
+    let (applied, expected) = (crate::db::applied_count(&pool).await?, crate::db::expected_count());
+    pool.close().await;
+    if applied != expected {
+        bail!("the database has {applied} of this build's {expected} migrations; run `shadoucmdb migrate` first");
+    }
     let mut conn = PgConnection::connect_with(&crate::db::connect_options(cfg)?)
         .await
         .context("could not connect to PostgreSQL")?;
