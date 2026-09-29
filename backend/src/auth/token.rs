@@ -10,7 +10,7 @@
 //! the session. Every accepted request writes a `token.use` audit row; an
 //! unknown token writes none (anyone could grow the table with made-up
 //! tokens). A token that can no longer authenticate (revoked, expired, owner
-//! disabled, profile deleted) is recorded at most once a minute per outcome,
+//! disabled, owner's MFA requirement unmet, profile deleted) is recorded at most once a minute per outcome,
 //! and the next row counts the uses left out (`unrecordedRefusals`): a dead
 //! token replayed in a loop must not grow the table, or queue on the audit
 //! chain, at the caller's pace (GH#179). A live token refused a route
@@ -67,6 +67,9 @@ pub enum Refusal {
     Revoked,
     Expired,
     OwnerDisabled,
+    /// The owner must use two-factor authentication and the token was not
+    /// created from a session that proved it (GH#200).
+    MfaRequired,
     /// Its permission profile was deleted.
     NoScope,
     /// The route needs a browser session (sign-out, password, token, user, identity provider and permission profile
@@ -81,6 +84,7 @@ impl Refusal {
             Refusal::Revoked => "revoked",
             Refusal::Expired => "expired",
             Refusal::OwnerDisabled => "owner_disabled",
+            Refusal::MfaRequired => "mfa_required",
             Refusal::NoScope => "no_scope",
             Refusal::SessionOnly => "session_only",
             Refusal::Forbidden(_) => "forbidden",
@@ -89,7 +93,10 @@ impl Refusal {
 
     /// The token itself is refused, whatever the route: its uses are rate-limited in the audit log.
     fn is_dead_token(self) -> bool {
-        matches!(self, Refusal::Revoked | Refusal::Expired | Refusal::OwnerDisabled | Refusal::NoScope)
+        matches!(
+            self,
+            Refusal::Revoked | Refusal::Expired | Refusal::OwnerDisabled | Refusal::MfaRequired | Refusal::NoScope
+        )
     }
 
     fn error(self) -> AppError {
@@ -98,6 +105,11 @@ impl Refusal {
             Refusal::Revoked => unauthenticated("This API token has been revoked"),
             Refusal::Expired => unauthenticated("This API token has expired"),
             Refusal::OwnerDisabled => unauthenticated("The owner of this API token is disabled"),
+            Refusal::MfaRequired => unauthenticated(
+                "The owner of this API token must use two-factor authentication, and this token was not created from \
+                 a session signed in with a second factor. Create a new token after signing in with two-factor \
+                 authentication.",
+            ),
             Refusal::NoScope => unauthenticated("The permission profile of this API token was deleted"),
             Refusal::SessionOnly => forbidden("This endpoint needs a signed-in session; API tokens cannot call it"),
             Refusal::Forbidden(p) => forbidden(format!("This requires the {} permission", p.as_str())),
@@ -166,6 +178,8 @@ pub async fn authenticate(
         Some(Refusal::Expired)
     } else if !t.user_active {
         Some(Refusal::OwnerDisabled)
+    } else if t.mfa_required {
+        Some(Refusal::MfaRequired)
     } else if session_only {
         Some(Refusal::SessionOnly)
     } else {
@@ -251,6 +265,8 @@ mod tests {
         assert!(
             !Refusal::SessionOnly.is_dead_token() && !Refusal::Forbidden(GlobalPermission::UsersManage).is_dead_token()
         );
+        // An unmet MFA requirement refuses the token on every route, so a replay loop is rate-limited too.
+        assert!(Refusal::MfaRequired.is_dead_token());
     }
 
     #[test]

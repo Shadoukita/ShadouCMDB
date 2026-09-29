@@ -236,6 +236,11 @@ async fn confirm(pool: &PgPool, ctx: &RequestContext, b: TotpConfirmation) -> Re
         ));
     };
     data::confirm_totp(&mut tx, me.user_id, step).await?;
+    // This request proved the new authenticator: the session counts as
+    // signed in with a second factor (e.g. for creating API tokens, GH#200).
+    if let Some(session_id) = me.session_id() {
+        auth_data::mark_session_mfa_verified(&mut tx, session_id).await?;
+    }
     let codes = new_recovery_codes(&mut tx, me.user_id).await?;
     let extra = json!({ "method": "totp", "recoveryCodes": codes.codes.len() });
     events::mfa(&mut tx, ctx, AuditAction::MfaEnrol, me.user_id, &me.username, extra).await?;
@@ -929,6 +934,249 @@ pub(crate) mod tests {
         }
         let set_up: i64 = sqlx::query_scalar("SELECT count(*) FROM user_totp").fetch_one(pool).await.unwrap();
         assert_eq!(set_up, 0);
+        db.drop().await;
+    }
+
+    /// A profile granting only `audit.view`, the scope of the tokens below.
+    async fn readers_profile(pool: &PgPool) -> Uuid {
+        let id: Uuid = sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ('Readers') RETURNING id")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'audit.view')",
+        )
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    /// A profile that requires MFA and grants nothing.
+    async fn strict_profile(pool: &PgPool) -> Uuid {
+        sqlx::query_scalar("INSERT INTO permission_profiles (name, require_mfa) VALUES ('Strict', true) RETURNING id")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// Creates a token through the API: (status, response).
+    async fn mint(app: &Router, session: &Creds, owner: Option<&str>, scope: Uuid, name: &str) -> (u16, Value) {
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let mut body = json!({ "name": name, "profileId": scope, "expiresAt": expires });
+        if let Some(owner) = owner {
+            body["userId"] = json!(owner);
+        }
+        let (status, v, _) = call(app, "POST", "/api/v1/admin/api-tokens", session, Some(body)).await;
+        (status, v)
+    }
+
+    fn bearer(created: &Value) -> Creds {
+        Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() }
+    }
+
+    async fn use_token(app: &Router, token: &Creds) -> (u16, Value) {
+        let (status, v, _) = call(app, "GET", "/api/v1/audit-log?limit=1", token, None).await;
+        (status, v)
+    }
+
+    async fn last_outcome(pool: &PgPool) -> Option<String> {
+        sqlx::query_scalar(
+            "SELECT new_value->>'outcome' FROM audit_log WHERE action = 'token.use' ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// GH#200: a token follows its owner's requireMfa at every use. A token
+    /// created without a second factor is refused while a profile of the
+    /// owner requires MFA (even after the owner enrols), and works again when
+    /// the requirement goes; tokens created from a session that proved a
+    /// second factor (enrolment confirmed in it, or /auth/login/mfa) work.
+    #[tokio::test]
+    async fn api_tokens_follow_their_owners_require_mfa() {
+        let Some(db) = scratch::database("api_tokens_follow_their_owners_require_mfa").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, me) = setup(&app).await;
+        let owner = me["user"]["id"].as_str().unwrap().to_owned();
+        let readers = readers_profile(pool).await;
+
+        // Password-only session, no policy yet: the token works.
+        let (status, a) = mint(&app, &session, None, readers, "old script").await;
+        assert_eq!(status, 201, "{a}");
+        assert_eq!((&a["token"]["mfaVerified"], &a["token"]["refusedForMfa"]), (&json!(false), &json!(false)));
+        let old = bearer(&a);
+        assert_eq!(use_token(&app, &old).await.0, 200);
+        let (status, b) = mint(&app, &session, None, readers, "revoked script").await;
+        assert_eq!(status, 201, "{b}");
+        let path = format!("/api/v1/admin/api-tokens/{}", b["token"]["id"].as_str().unwrap());
+        assert_eq!(call(&app, "DELETE", &path, &session, None).await.0, 204);
+
+        // A profile of the owner now requires MFA: refused, audited, not "used".
+        let strict = strict_profile(pool).await;
+        sqlx::query("INSERT INTO user_permission_profiles (user_id, profile_id) VALUES ($1::uuid, $2)")
+            .bind(&owner)
+            .bind(strict)
+            .execute(pool)
+            .await
+            .unwrap();
+        let used_before: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT last_used_at FROM api_tokens WHERE name = 'old script'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let (status, v) = use_token(&app, &old).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"));
+        assert!(v["error"]["message"].as_str().unwrap().contains("must use two-factor authentication"), "{v}");
+        assert_eq!(last_outcome(pool).await.as_deref(), Some("mfa_required"));
+        let used_after: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT last_used_at FROM api_tokens WHERE name = 'old script'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(used_before, used_after, "a refused use is not a use");
+        // A revoked token reports that it is revoked, not the MFA requirement.
+        let (status, v) = use_token(&app, &bearer(&b)).await;
+        assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
+        assert_eq!(last_outcome(pool).await.as_deref(), Some("revoked"));
+
+        // Enrolling does not revive the old token; confirming it in this
+        // session proves the second factor, so a new token works.
+        let step = settled_step().await;
+        let (secret, _) = enrol(&app, pool, &session, step).await;
+        assert_eq!(use_token(&app, &old).await.0, 401);
+        let (status, c) = mint(&app, &session, None, readers, "after enrolment").await;
+        assert_eq!(status, 201, "{c}");
+        assert_eq!((&c["token"]["mfaVerified"], &c["token"]["refusedForMfa"]), (&json!(true), &json!(false)));
+        assert_eq!(use_token(&app, &bearer(&c)).await.0, 200);
+
+        // Administrators find the refused tokens; migrate counts the same ones.
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/api-tokens?refusedForMfa=true", &session, None).await;
+        assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(1)), "{v}");
+        assert_eq!((v["data"][0]["name"].as_str(), &v["data"][0]["refusedForMfa"]), (Some("old script"), &json!(true)));
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/api-tokens?refusedForMfa=false", &session, None).await;
+        assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(2)), "{v}");
+        let mut conn = pool.acquire().await.unwrap();
+        assert_eq!(crate::data::api_tokens::count_second_factor_refusals(&mut conn).await.unwrap(), (1, 1));
+        let notice = crate::data::api_tokens::second_factor_refusal_notice(&mut conn).await.unwrap().unwrap();
+        assert!(notice.starts_with("1 API token of 1 account is refused"), "{notice}");
+        drop(conn);
+
+        // A sign-in through /auth/login/mfa is a verified session too.
+        let challenge = password_step(&app).await;
+        let (status, me, headers) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!(status, 200, "{me}");
+        let (status, d) = mint(&app, &session_of(&me, &headers), None, readers, "after mfa sign-in").await;
+        assert_eq!((status, &d["token"]["mfaVerified"]), (201, &json!(true)), "{d}");
+        assert_eq!(use_token(&app, &bearer(&d)).await.0, 200);
+        let created: Vec<Option<bool>> = sqlx::query_scalar(
+            "SELECT (new_value->>'mfaVerified')::boolean FROM audit_log
+             WHERE entity_type = 'api_tokens' AND action = 'create' ORDER BY id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(created, vec![Some(false), Some(false), Some(true), Some(true)], "token.create keeps mfaVerified");
+
+        // The rule is evaluated per request: relaxing the policy revives the token.
+        sqlx::query("UPDATE permission_profiles SET require_mfa = false WHERE id = $1")
+            .bind(strict)
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(use_token(&app, &old).await.0, 200);
+        db.drop().await;
+    }
+
+    /// GH#200, service accounts: the creating administrator's second factor
+    /// counts for a token of an account under requireMfa that has none. An
+    /// administrator whose session did not prove one gets 403 instead of a
+    /// token that would be refused at its first use.
+    #[tokio::test]
+    async fn an_administrators_second_factor_vouches_for_a_service_token() {
+        let Some(db) = scratch::database("an_administrators_second_factor_vouches_for_a_service_token").await else {
+            return;
+        };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (admin, _) = setup(&app).await;
+        let readers = readers_profile(pool).await;
+        let strict = strict_profile(pool).await;
+        let svc = json!({ "username": "svc-backup", "displayName": "Backup", "password": "service account password",
+            "profileIds": [strict, readers] });
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(svc)).await;
+        assert_eq!(status, 201, "{v}");
+        let svc = v["id"].as_str().unwrap().to_owned();
+
+        let (status, v) = mint(&app, &admin, Some(&svc), readers, "backup").await;
+        assert_eq!((status, code(&v)), (403, "MFA_REQUIRED_FOR_TOKEN"), "{v}");
+        assert!(v["error"]["message"].as_str().unwrap().starts_with("svc-backup must use two-factor"), "{v}");
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM api_tokens").fetch_one(pool).await.unwrap();
+        assert_eq!(count, 0);
+
+        let step = settled_step().await;
+        enrol(&app, pool, &admin, step).await;
+        let (status, v) = mint(&app, &admin, Some(&svc), readers, "backup").await;
+        assert_eq!(status, 201, "{v}");
+        assert_eq!((&v["token"]["mfaVerified"], &v["token"]["refusedForMfa"]), (&json!(true), &json!(false)));
+        assert_eq!(use_token(&app, &bearer(&v)).await.0, 200);
+        db.drop().await;
+    }
+
+    /// GH#200 for OIDC accounts: under `verify` only a token created from a
+    /// session whose sign-in proved MFA is accepted; `trust_provider`
+    /// accepts both, and switching back refuses the unverified one again.
+    #[tokio::test]
+    async fn oidc_tokens_follow_the_providers_mfa_assurance() {
+        let Some(db) = scratch::database("oidc_tokens_follow_the_providers_mfa_assurance").await else { return };
+        let pool = &db.pool;
+        let oidc = provider(pool, "oidc", true, "").await;
+        mfa_required_user(pool, "olga", Some(oidc)).await;
+        let (olga, scope): (Uuid, Uuid) = sqlx::query_as(
+            "SELECT u.id, up.profile_id FROM users u JOIN user_permission_profiles up ON up.user_id = u.id
+             WHERE u.username = 'olga'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        for (hash, mfa_verified) in [([1u8; 32], true), ([2u8; 32], false)] {
+            let t = crate::data::api_tokens::NewToken {
+                name: "sync",
+                user_id: olga,
+                profile_id: scope,
+                token_hash: &hash,
+                token_prefix: "scmdb_test",
+                expires_at: chrono::Utc::now() + chrono::Duration::days(1),
+                created_by: None,
+                created_by_user_id: Some(olga),
+                mfa_verified,
+            };
+            crate::data::api_tokens::insert(&mut conn, &t).await.unwrap();
+        }
+        drop(conn);
+        let refused = |hash: [u8; 32]| async move {
+            crate::data::api_tokens::find_by_hash(pool, &hash).await.unwrap().unwrap().mfa_required
+        };
+        for (assurance, verified_refused, unverified_refused) in [
+            ("trust_provider", false, false),
+            ("verify", false, true),
+            ("trust_provider", false, false),
+            ("verify", false, true),
+        ] {
+            sqlx::query("UPDATE identity_providers SET mfa_assurance = $1 WHERE id = $2")
+                .bind(assurance)
+                .bind(oidc)
+                .execute(pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                (refused([1; 32]).await, refused([2; 32]).await),
+                (verified_refused, unverified_refused),
+                "{assurance}"
+            );
+        }
         db.drop().await;
     }
 }
