@@ -194,7 +194,7 @@ pub(crate) async fn open_session(
         auth.config.session_max_age,
         ctx.client.user_agent.as_deref(),
         ctx.client.ip,
-        method == LoginMethod::Oidc(ProviderMfa::Verified),
+        matches!(method, LoginMethod::Totp | LoginMethod::RecoveryCode | LoginMethod::Oidc(ProviderMfa::Verified)),
     )
     .await?;
     events::login_success(&mut tx, &ctx, session_id, user_id, username, method).await?;

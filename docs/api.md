@@ -292,6 +292,13 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
   row was still there when the upgrade ran; deleting the creator sets it to null and keeps the token. Disabling or
   deleting a user does not revoke the tokens they created for others, and single sign-on accounts have no password
   to reset: revoke those tokens by listing them with `createdBy` first.
+- A token follows its owner's `requireMfa` (GH#200). While a permission profile the owner holds requires MFA (for
+  OIDC accounts: and the provider is not trusted to enforce it), the token is accepted only if it was created from a
+  session that proved a second factor (`mfaVerified`); otherwise requests get `401 UNAUTHENTICATED` and a
+  `token.use` row with outcome `mfa_required`. The check runs on every request, so relaxing the policy makes such a
+  token work again. For a service account under `requireMfa`, an administrator whose session proved a second factor
+  creates the token. Creating a token that would be refused answers `403 MFA_REQUIRED_FOR_TOKEN`.
+  `GET /admin/api-tokens?refusedForMfa=true` lists the working tokens refused this way (`refusedForMfa`).
 - Every request made with a known token, accepted or refused, writes a `token.use` audit row; creating and revoking
   write `create` and `update` rows (see [data model](data-model.md#auditing)). A token that can no longer
   authenticate (revoked, expired, owner disabled, profile deleted) is recorded at most once a minute per outcome;

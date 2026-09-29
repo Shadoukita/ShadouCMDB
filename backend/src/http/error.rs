@@ -43,6 +43,9 @@ pub enum ErrorCode {
     MfaRequired,
     /// A profile the user holds requires MFA; until it is set up only the MFA set-up routes answer (403)
     MfaEnrolmentRequired,
+    /// The token's owner must use two-factor authentication, and the session creating it did not sign in with a
+    /// second factor (403)
+    MfaRequiredForToken,
     /// The LDAP directory (or OIDC provider) could not be reached; local accounts still sign in (503)
     IdentityProviderUnavailable,
     UnsupportedMediaType,
@@ -62,9 +65,10 @@ impl ErrorCode {
         match self {
             ErrorCode::ValidationError => StatusCode::BAD_REQUEST,
             ErrorCode::Unauthenticated | ErrorCode::MfaRequired => StatusCode::UNAUTHORIZED,
-            ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid | ErrorCode::MfaEnrolmentRequired => {
-                StatusCode::FORBIDDEN
-            }
+            ErrorCode::Forbidden
+            | ErrorCode::CsrfTokenInvalid
+            | ErrorCode::MfaEnrolmentRequired
+            | ErrorCode::MfaRequiredForToken => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Gone => StatusCode::GONE,
             ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => {

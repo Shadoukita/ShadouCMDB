@@ -342,13 +342,20 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
     provider list shows these providers as "MFA not verified", and their sign-ins are recorded
     with `providerMfa: trusted`.
 
-  The check also holds for sessions already open: when a profile starts to require MFA, a group
+  The check also holds for sessions already open and for API tokens created without a second factor: when a profile starts to require MFA, a group
   mapping changes, or a provider is switched from trust to verify, an OIDC session whose sign-in
   did not prove MFA is ended on its next request (`session.revoke`, `reason: mfa_not_enforced`)
   and the user signs in again. Whether a sign-in proved MFA is judged once, against the provider's
   settings at that moment: adding or changing `requiredAcr` later does not end sessions that proved
   MFA through `amr`. To apply a stricter setting to everyone at once, disable and re-enable the
-  provider after the change, which ends the sessions of its accounts. Each `login.success` row of an OIDC sign-in carries `providerMfa`
+  provider after the change, which ends the sessions of its accounts. An API token is accepted for
+  a `requireMfa` owner only if it was created from a session that proved a second factor (an
+  authenticator or recovery code, OIDC under Verify, or TOTP enrolment confirmed in that session);
+  others are refused with `token.use` outcome `mfa_required` while the requirement applies (list them
+  with `GET /api/v1/admin/api-tokens?refusedForMfa=true`). Put automation accounts in profiles
+  without `requireMfa`, scope their tokens to the least privileged profile and keep expiries short;
+  where an automation account must hold a `requireMfa` profile, an administrator signed in with a
+  second factor creates its token. Each `login.success` row of an OIDC sign-in carries `providerMfa`
   (`verified`, `trusted` or `none`). The provider's connection test warns when the discovery
   document suggests the check cannot pass. Per provider:
   - **Microsoft Entra ID:** `amr` contains `mfa` when Conditional Access required MFA for the
@@ -423,7 +430,7 @@ holds no state of its own besides its env file.
   the server cannot delete them.
 - **Back up the env file** (or the secret-store entry) separately and just as carefully.
 - **Test a restore** at least every quarter into a separate database: `pg_restore --no-owner --role=shadoucmdb_app -d shadoucmdb_restore shadoucmdb-….dump`,
-  then run `shadoucmdb verify` and `shadoucmdb migrate` against it, and sign in.
+  then run `shadoucmdb migrate` and `shadoucmdb verify` against it, and sign in.
 - **Retention:** keep backups only as long as you need them; they are copies of personal data
   (user accounts, audit log IPs) too.
 

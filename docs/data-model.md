@@ -16,7 +16,8 @@ Migrations: [`sql/migrations/`](../sql/migrations/)
 `0007_audit_retention`, `0008_cmdb_schema_and_areas`, `0009_type_tables`, `0010_api_tokens` …
 `0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`,
 `0018_audit_hash_chain`, `0019_multiline_notes`, `0020_attribute_sorts`,
-`0021_stateless_oidc_start`, `0022_api_token_creator`, `0023_oidc_mfa_assurance`).
+`0021_stateless_oidc_start`, `0022_api_token_creator`, `0023_oidc_mfa_assurance`,
+`0024_api_token_mfa`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -78,11 +79,11 @@ ui_assets (logo, favicon)
 | `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
 | `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
-| `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by` (the creator's name, for display) and `created_by_user_id` (the creating user; NULL for the CLI, a deleted creator, or an older token whose audit `create` row was purged). An administrator's password reset revokes the working tokens they created for other users. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted, `created_by_user_id` set NULL when the creator is deleted |
-| `user_totp` | A user's authenticator: the 160-bit TOTP `secret`, encrypted with the key in `ENCRYPTION_KEY_FILE` (AES-256-GCM, bound to the user id; stored as nonce, ciphertext and tag), `key_id` (the id of that key, not secret; NULL only for a secret stored before migration 0024, still plain, which `serve` encrypts at start-up), `confirmed_at` (NULL while the set-up is unconfirmed, which does not count as MFA), `last_used_step` (the last accepted 30 s step, so no code works twice). | PK `user_id`, cascades with the user; secret 20 bytes without `key_id`, 48 bytes with it |
+| `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by` (the creator's name, for display) and `created_by_user_id` (the creating user; NULL for the CLI, a deleted creator, or an older token whose audit `create` row was purged), `mfa_verified` (the creating session proved a second factor; set once at creation, migration 0024 backfilled it for tokens whose creator had a confirmed authenticator at the time). A token is refused while a profile of its owner requires MFA (the same rule as for sessions) and `mfa_verified` is false (GH#200). An administrator's password reset revokes the working tokens they created for other users. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted, `created_by_user_id` set NULL when the creator is deleted |
+| `user_totp` | A user's authenticator: the 160-bit TOTP `secret`, encrypted with the key in `ENCRYPTION_KEY_FILE` (AES-256-GCM, bound to the user id; stored as nonce, ciphertext and tag), `key_id` (the id of that key, not secret; NULL only for a secret stored before migration 0025, still plain, which `serve` encrypts at start-up), `confirmed_at` (NULL while the set-up is unconfirmed, which does not count as MFA), `last_used_step` (the last accepted 30 s step, so no code works twice). | PK `user_id`, cascades with the user; secret 20 bytes without `key_id`, 48 bytes with it |
 | `user_recovery_codes` | Ten one-time codes per confirmed authenticator: SHA-256 of each (`code_hash`, 80 random bits per code), `used_at`. | unique (`user_id`, `code_hash`); 32-byte hash; cascades with the user |
 | `mfa_challenges` | A sign-in whose password was right and whose code is due: SHA-256 of the `shadoucmdb_mfa` cookie token, `expires_at` (5 minutes), `failed_attempts`. Never backed up. | unique `token_hash` (32 bytes); cascades with the user |
-| `sessions` | Server-side login sessions: SHA-256 of the cookie token, `csrf_token`, `last_seen_at` (idle timeout), `expires_at` (absolute lifetime), `user_agent`, `ip_address` (`inet`, client address at sign-in; evidence only), `provider_mfa` (the OIDC sign-in proved a second factor under `verify`). | unique `token_hash` (32 bytes); cascades with the user |
+| `sessions` | Server-side login sessions: SHA-256 of the cookie token, `csrf_token`, `last_seen_at` (idle timeout), `expires_at` (absolute lifetime), `user_agent`, `ip_address` (`inet`, client address at sign-in; evidence only), `mfa_verified` (the session proved a second factor: a sign-in through `/auth/login/mfa`, an OIDC sign-in that proved MFA under `verify`, or TOTP enrolment confirmed in it; `provider_mfa` before migration 0024). | unique `token_hash` (32 bytes); cascades with the user |
 | `ui_settings` | The one current UI settings document (`settings` jsonb, validated by the API against `UiSettingsDocument`), its `version`, and who saved it. Classes, attributes and lookups are referenced by key inside the document, not by FK, so it survives export/import; the API reports references that do not resolve. | exactly one row (`singleton` check + unique); `settings` is an object; `version` must exist in `ui_settings_versions` (deferred FK) |
 | `ui_settings_versions` | Every saved version of the document with actor, time and an optional comment. | PK `version`; **UPDATE/DELETE rejected** (trigger); comment at most 500 characters |
 | `ui_assets` | Logo and favicon bytes with `content_type` and `sha256` (ETag). Stored in the database so no shared file storage is needed and backups include them. | unique `kind` (`logo`, `favicon`); content type allowlist; size 1 byte to 512 KiB (logo) / 128 KiB (favicon); `sha256` format |
@@ -544,13 +545,14 @@ the provider vouched for but ShadouCMDB refused (no mapped group, name taken, ac
 A wrong code at sign-in that sets the username's lock also writes `login.locked`. No TOTP secret, code, recovery
 code or hash is ever written.
 
-API tokens (`entity_type = 'api_tokens'`, `entity_id` = the token): creating one is a `create` row and revoking it
-an `update` row (old and new token, never the secret or its hash). **Every request made with a known token** is a
+API tokens (`entity_type = 'api_tokens'`, `entity_id` = the token): creating one is a `create` row (its `mfaVerified` records whether the
+creating session proved a second factor) and revoking it an `update` row (old and new token, never the secret or its
+hash). **Every request made with a known token** is a
 `token.use` row whose `new_value` has `tokenName`, `tokenPrefix`, `userId`, `username`, `outcome` (`accepted`,
-`revoked`, `expired`, `owner_disabled`, `no_scope`, `session_only` or `forbidden`), `method`, `path`,
+`revoked`, `expired`, `owner_disabled`, `mfa_required`, `no_scope`, `session_only` or `forbidden`), `method`, `path`,
 `operationId`, `ipAddress` and `userAgent`. `path` is kept to its first 512 characters, then `…`, with
 `pathLength` holding the full length. Refusals of a token that can no longer authenticate (`revoked`, `expired`,
-`owner_disabled`, `no_scope`) are recorded at most once a minute per token and outcome in each server process: the
+`owner_disabled`, `mfa_required`, `no_scope`) are recorded at most once a minute per token and outcome in each server process: the
 next such row carries `unrecordedRefusals`, the count left out since the last one. `session_only` and `forbidden`
 refusals, like accepted uses, are one row per request. Its actor is the owner with `actor_type = 'api_client'`, as for the
 changes the request makes, which share its `request_id`. A made-up token matches no row and is not recorded

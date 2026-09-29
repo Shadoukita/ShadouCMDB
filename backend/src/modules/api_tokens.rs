@@ -21,7 +21,7 @@ use uuid::Uuid;
 use super::users::{ProfileRef, must_cover_user};
 use crate::api::context::RequestContext;
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
-use crate::api::schemas::{self, Page, Paged, Sort, UuidList, like_pattern, trimmed, ts, ts_opt};
+use crate::api::schemas::{self, Page, Paged, QueryBool, Sort, UuidList, like_pattern, trimmed, ts, ts_opt};
 use crate::auth::events::TOKEN_ENTITY;
 use crate::auth::permissions::GlobalPermission;
 use crate::auth::{session, token};
@@ -85,6 +85,12 @@ pub struct ApiToken {
     /// creator is unknown
     #[schema(required = true)]
     pub created_by_user_id: Option<Uuid>,
+    /// Created from a session signed in with a second factor. When the owner
+    /// must use two-factor authentication, only such tokens are accepted
+    pub mfa_verified: bool,
+    /// A working token that is refused because its owner must use two-factor
+    /// authentication and `mfaVerified` is false; create a new token for it
+    pub refused_for_mfa: bool,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
 }
@@ -116,6 +122,8 @@ impl From<TokenRow> for ApiToken {
             last_used_ip: r.last_used_ip.map(|n| n.ip().to_string()),
             created_by: r.created_by,
             created_by_user_id: r.created_by_user_id,
+            mfa_verified: r.mfa_verified,
+            refused_for_mfa: r.refused_for_mfa,
             created_at: r.created_at,
         }
     }
@@ -192,6 +200,10 @@ pub struct ApiTokenList {
     created_by: Option<UuidList>,
     #[param(inline)]
     status: Option<TokenStatus>,
+    /// true: only the working tokens refused because their owner must use
+    /// two-factor authentication (`refusedForMfa`); false: all others
+    #[param(inline)]
+    refused_for_mfa: Option<QueryBool>,
 }
 paged!(ApiTokenList);
 
@@ -229,6 +241,11 @@ pub async fn list(pool: &PgPool, q: &ApiTokenList) -> Result<Page<ApiToken>, App
             Some(TokenStatus::Revoked) => w.and_sql("t.revoked_at IS NOT NULL"),
             None => {}
         }
+        match q.refused_for_mfa.map(bool::from) {
+            Some(true) => w.and_sql(&data::REFUSED_WORKING),
+            Some(false) => w.and_sql(&format!("NOT {}", *data::REFUSED_WORKING)),
+            None => {}
+        }
     };
     let column = match q.sort.field.as_str() {
         "name" => "lower(t.name)",
@@ -239,8 +256,8 @@ pub async fn list(pool: &PgPool, q: &ApiTokenList) -> Result<Page<ApiToken>, App
     let order = format!("{column} {} NULLS LAST, t.id", q.sort.dir());
     let (rows, total) = crud::select_page::<TokenRow>(
         &mut *pool.acquire().await?,
-        data::FROM,
-        data::COLUMNS,
+        &data::FROM,
+        &data::COLUMNS,
         &filter,
         &order,
         q.limit,
@@ -274,11 +291,18 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> 
     // and the mint is refused here.
     let locked: Vec<Uuid> = std::iter::once(owner_id).chain(me.filter(|&id| id != owner_id)).collect();
     auth_data::share_lock_users(&mut tx, &locked).await?;
-    if let Some(session_id) = ctx.principal().and_then(|p| p.session_id())
-        && !auth_data::session_exists(&mut tx, session_id).await?
-    {
-        return Err(AppError::new(ErrorCode::Unauthenticated, "Your session has ended; sign in again"));
-    }
+    // The token inherits whether the creating session proved a second factor
+    // (GH#200). Without a user (an operator command) the operator has host
+    // access; a user without a session cannot get here (session-only route)
+    // and would count as unverified.
+    let mfa_verified = match ctx.principal().map(|p| p.session_id()) {
+        None => true,
+        Some(None) => false,
+        Some(Some(session_id)) => match auth_data::session_mfa_verified(&mut tx, session_id).await? {
+            Some(verified) => verified,
+            None => return Err(AppError::new(ErrorCode::Unauthenticated, "Your session has ended; sign in again")),
+        },
+    };
     let owner = auth_data::get_user(&mut tx, owner_id, false).await?;
     let Some(owner) = owner else {
         return Err(AppError::field("userId", "User does not exist", "not_found"));
@@ -291,6 +315,22 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> 
     }
     if auth_data::existing_profiles(&mut tx, &[b.profile_id]).await?.is_empty() {
         return Err(AppError::field("profileId", "Permission profile does not exist", "not_found"));
+    }
+    // No token that would be refused at its first use.
+    if data::refused_for_mfa_if_created(&mut tx, owner_id, mfa_verified).await? {
+        let message = if Some(owner_id) == me {
+            "You must use two-factor authentication, so your tokens must be created from a session signed in with \
+             a second factor. Set up two-factor authentication and sign in again."
+                .to_owned()
+        } else {
+            format!(
+                "{} must use two-factor authentication, so tokens for this account must be created from a session \
+                 signed in with a second factor. Set up two-factor authentication for your own account and sign in \
+                 again.",
+                owner.username
+            )
+        };
+        return Err(AppError::new(ErrorCode::MfaRequiredForToken, message));
     }
 
     let secret = token::new_secret();
@@ -306,6 +346,7 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> 
             expires_at: b.expires_at,
             created_by: ctx.actor.name.as_deref(),
             created_by_user_id: me,
+            mfa_verified,
         },
     )
     .await?;
@@ -456,11 +497,12 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Create an API token; the response carries its secret, shown this once")
             .description(
-                "The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not. 400 when the owner is disabled or the owner or profile does not exist.",
+                "The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not, and 403 `MFA_REQUIRED_FOR_TOKEN` when the owner must use two-factor authentication and your session did not sign in with a second factor (the token would be refused). The token records that as `mfaVerified`. 400 when the owner is disabled or the owner or profile does not exist.",
             )
             .status(StatusCode::CREATED)
             .requires(manage)
             .session_only()
+            .errors(&[ErrorCode::MfaRequiredForToken])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<ApiTokenCreate>>| async move {
                 Ok(Json(create(&api.pool, &api.ctx, &b).await?))
             }),
@@ -1308,6 +1350,7 @@ pub(crate) mod tests {
                         expires_at: chrono::Utc::now() + chrono::Duration::days(1),
                         created_by: None,
                         created_by_user_id: Some(creator),
+                        mfa_verified: false,
                     },
                 )
                 .await

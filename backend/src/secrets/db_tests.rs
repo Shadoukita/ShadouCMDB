@@ -65,7 +65,7 @@ async fn put_sealed(pool: &PgPool, ring: &Keyring, user: Uuid, seed: &[u8], step
 async fn plaintext_seeds_are_encrypted_at_start_up_without_re_enrolment() {
     let Some(db) = scratch::empty("plaintext_seeds_are_encrypted_at_start_up").await else { return };
     let pool = &db.pool;
-    MIGRATOR.run_to(23, pool).await.expect("migrations up to 0023");
+    MIGRATOR.run_to(24, pool).await.expect("migrations up to 0024");
     add_user(pool, ALICE, "alice").await;
     add_user(pool, BOB, "bob").await;
     let (seed_a, seed_b) = (totp::new_secret(), totp::new_secret());
@@ -84,7 +84,7 @@ async fn plaintext_seeds_are_encrypted_at_start_up_without_re_enrolment() {
         .execute(pool)
         .await
         .unwrap();
-    MIGRATOR.run(pool).await.expect("migration 0024");
+    MIGRATOR.run(pool).await.expect("migration 0025");
     assert_eq!(row(pool, ALICE).await.1, None, "the migration itself does not need the key");
 
     let ring = Keyring::random();
