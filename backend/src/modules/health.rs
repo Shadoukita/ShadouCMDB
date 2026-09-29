@@ -1,5 +1,6 @@
 //! `/healthz` (liveness), `/readyz` (readiness) and `/api/v1/version`.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::http::{Method, StatusCode};
@@ -103,6 +104,9 @@ pub struct Readiness {
 /// How long a readiness result is reused (GH#242).
 pub const READINESS_TTL: Duration = Duration::from_secs(1);
 
+/// A readiness result and when it was taken.
+type Checked = Option<(Instant, Result<usize, DatabaseState>)>;
+
 /// The last readiness check, shared by every `/readyz` request (GH#242).
 ///
 /// `/readyz` is public and takes no request permit (`RouteBuilder::unlimited`), so
@@ -110,10 +114,15 @@ pub const READINESS_TTL: Duration = Duration::from_secs(1);
 /// the pool signed-in users need. Concurrent probes wait for the one check in
 /// flight, and its result is reused for [`READINESS_TTL`]: a flood costs at most
 /// about one check per second, and the answer is never older than that.
+///
+/// Handlers run inside the request future, which hyper drops when the client
+/// disconnects. The check itself therefore runs in a detached task that owns the
+/// lock, so a client that hangs up mid-check cannot cancel it and let the next
+/// waiter start another one (GH#255).
 pub struct ReadinessCache {
     ttl: Duration,
     /// Held while a check runs, so concurrent probes queue here, not on the pool.
-    last: tokio::sync::Mutex<Option<(Instant, Result<usize, DatabaseState>)>>,
+    last: Arc<tokio::sync::Mutex<Checked>>,
     /// Checks that reached the database.
     #[cfg(test)]
     checks: std::sync::atomic::AtomicUsize,
@@ -129,7 +138,7 @@ impl ReadinessCache {
     pub fn with_ttl(ttl: Duration) -> Self {
         ReadinessCache {
             ttl,
-            last: tokio::sync::Mutex::default(),
+            last: Arc::default(),
             #[cfg(test)]
             checks: Default::default(),
         }
@@ -137,7 +146,7 @@ impl ReadinessCache {
 
     /// The applied migration count, or why the database did not answer.
     async fn check(&self, pool: &PgPool) -> Result<usize, DatabaseState> {
-        let mut last = self.last.lock().await;
+        let mut last = self.last.clone().lock_owned().await;
         if let Some((at, result)) = *last
             && at.elapsed() < self.ttl
         {
@@ -145,16 +154,24 @@ impl ReadinessCache {
         }
         #[cfg(test)]
         self.checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let probe = async {
-            sqlx::query("SELECT 1").execute(pool).await?;
-            db::applied_count(pool).await
-        };
-        let result = probe.await.map_err(|err| {
-            tracing::warn!(error = %err, "readiness check failed");
-            DatabaseState::of(&err)
+        let pool = pool.clone();
+        // Detached: dropping the handle when the client disconnects does not abort it.
+        let check = tokio::spawn(async move {
+            let probe = async {
+                sqlx::query("SELECT 1").execute(&pool).await?;
+                db::applied_count(&pool).await
+            };
+            let result = probe.await.map_err(|err| {
+                tracing::warn!(error = %err, "readiness check failed");
+                DatabaseState::of(&err)
+            });
+            *last = Some((Instant::now(), result));
+            result
         });
-        *last = Some((Instant::now(), result));
-        result
+        check.await.unwrap_or_else(|err| {
+            tracing::error!(error = %err, "readiness check task failed");
+            Err(DatabaseState::Unreachable)
+        })
     }
 }
 
@@ -249,6 +266,37 @@ mod tests {
         // The failure is cached too, so a flood against a dead database stays one check a window.
         assert!(cache.check(&db.pool).await.is_err());
         assert_eq!(cache.checks.load(Ordering::SeqCst), 2);
+
+        db.drop().await;
+    }
+
+    /// GH#255: a client that disconnects mid-check does not cancel the check, so
+    /// the next probe inside the window reuses its answer instead of starting another.
+    #[tokio::test]
+    async fn disconnected_caller_does_not_cancel_the_check() {
+        let Some(db) = scratch::database("readiness_disconnect").await else { return };
+        let cache = Arc::new(ReadinessCache::with_ttl(Duration::from_secs(30)));
+
+        // Hold every pool connection, so the check blocks waiting for one.
+        let mut held = Vec::new();
+        for _ in 0..db.pool.options().get_max_connections() {
+            held.push(db.pool.acquire().await.unwrap());
+        }
+
+        let first = tokio::spawn({
+            let (cache, pool) = (cache.clone(), db.pool.clone());
+            async move { cache.check(&pool).await }
+        });
+        while cache.checks.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        // The client hangs up: hyper drops the request future mid-check.
+        first.abort();
+        assert!(first.await.is_err_and(|err| err.is_cancelled()));
+
+        drop(held);
+        assert_eq!(cache.check(&db.pool).await.ok(), Some(db::expected_count()));
+        assert_eq!(cache.checks.load(Ordering::SeqCst), 1, "the cancelled caller's check was restarted");
 
         db.drop().await;
     }
