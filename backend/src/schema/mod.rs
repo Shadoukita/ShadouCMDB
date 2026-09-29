@@ -38,7 +38,7 @@ use sqlx::{AssertSqlSafe, PgConnection};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::api::context::RequestContext;
+use crate::api::context::{RequestContext, forbidden};
 use crate::api::schemas::ts;
 use crate::auth::permissions::ClassOp;
 use crate::data::crud::{self, AuditAction, AuditEntry};
@@ -252,14 +252,13 @@ async fn samples(conn: &mut PgConnection, sql: String) -> Result<Vec<String>, Ap
 }
 
 /// Stored values (as text) that are not in the allowed list: their count, and
-/// up to five of them when `reveal`.
+/// up to five of them.
 async fn values_outside(
     conn: &mut PgConnection,
     table: &TableName,
     expr: &str,
     column: &Ident,
     allowed: &[String],
-    reveal: bool,
 ) -> Result<(i64, Vec<String>), AppError> {
     let base = format!("FROM {} WHERE {column} IS NOT NULL AND NOT ({expr} = ANY($1))", table.sql());
     let n: i64 = sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) {base}")))
@@ -267,7 +266,7 @@ async fn values_outside(
         .persistent(false)
         .fetch_one(&mut *conn)
         .await?;
-    let sample: Vec<String> = if n > 0 && reveal {
+    let sample: Vec<String> = if n > 0 {
         sqlx::query_scalar(AssertSqlSafe(format!("SELECT DISTINCT {expr} {base} ORDER BY 1 LIMIT 5")))
             .bind(allowed)
             .persistent(false)
@@ -283,9 +282,9 @@ fn quoted_list(values: &[String]) -> String {
     values.iter().map(|v| format!("\"{v}\"")).collect::<Vec<_>>().join(", ")
 }
 
-/// `: "a", "b"` for a refusal message, or nothing when the values were withheld.
+/// `: "a", "b"` for a refusal message.
 fn listed(values: &[String]) -> String {
-    if values.is_empty() { String::new() } else { format!(": {}", quoted_list(values)) }
+    format!(": {}", quoted_list(values))
 }
 
 /// What the dry run looks for: values that would not convert at all, or
@@ -296,15 +295,14 @@ enum Guard {
 }
 
 /// `ALTER COLUMN .. TYPE .. USING ..` for a type change, after a dry run of the
-/// conversion over every stored value. A change must be lossless or it is refused;
-/// the refusal quotes offending values only when `reveal`.
+/// conversion over every stored value. A change must be lossless or it is refused
+/// with up to five offending values.
 async fn type_change(
     conn: &mut PgConnection,
     plan: &mut Plan,
     table: &TableName,
     f: &Field,
     from: &str,
-    reveal: bool,
 ) -> Result<(), AppError> {
     let col = f.column();
     let to = pg_type(f.data_type);
@@ -357,11 +355,7 @@ async fn type_change(
                 }
                 _ => text_expr(&col, from),
             };
-            let sample = if reveal {
-                samples(conn, format!("SELECT DISTINCT {shown} {where_bad} ORDER BY 1 LIMIT 5")).await?
-            } else {
-                Vec::new()
-            };
+            let sample = samples(conn, format!("SELECT DISTINCT {shown} {where_bad} ORDER BY 1 LIMIT 5")).await?;
             let (code, message) = match guard {
                 Guard::Castable(_) => (
                     "type_change_failed",
@@ -413,16 +407,37 @@ struct Planner<'a> {
     catalog: &'a Catalog,
     /// NOT NULL that cannot be applied yet is a warning rather than an error (full reconcile).
     lenient_not_null: bool,
-    /// Classes the caller may view (`None`: every class). A refusal quotes
-    /// stored values only when the caller may view every asset of the table.
+    /// Classes the caller may view (`None`: every class). A change whose outcome
+    /// depends on stored values needs view on every asset of the table.
     visible: Option<&'a [Uuid]>,
 }
 
 impl Planner<'_> {
-    /// Whether stored values of `f` may appear in a refusal: its table holds the
-    /// assets of its type and of every type below it (deleted ones included).
+    /// Whether the caller may learn about the stored values of `f`: its table holds
+    /// the assets of its type and of every type below it (deleted ones included).
     fn reveals(&self, f: &Field) -> bool {
         self.visible.is_none_or(|v| self.model.subtree(f.class_id).iter().all(|id| v.contains(id)))
+    }
+
+    /// 403 for a change whose outcome depends on the stored values of `f` (a type
+    /// change, a new enum list) when the caller may not view them all. Refused
+    /// before any value is read: success, refusal and counts would all tell a
+    /// caller which values are stored (GH#180, GH#221).
+    fn may_check_values(&self, f: &Field, field: &str) -> Result<(), AppError> {
+        if self.reveals(f) {
+            return Ok(());
+        }
+        let message = format!(
+            "Changing \"{}\" this way is checked against the values its assets store; that needs the view right on \
+             its type and every type below it. Nothing was changed.",
+            f.key
+        );
+        Err(forbidden(message.clone()).with_details(vec![FieldError {
+            location: FieldLocation::Body,
+            field: field.into(),
+            message,
+            code: "view_required".into(),
+        }]))
     }
 
     async fn field(
@@ -466,7 +481,8 @@ impl Planner<'_> {
             let i = plan.ddl(format!("ALTER TABLE {} ADD COLUMN {col} {to}", table.sql()));
             plan.note(Some(i), "add_column", None, format!("New column {}.{} ({to})", table.display(), f.key));
         } else if current_type != to {
-            type_change(conn, plan, table, f, &current_type, self.reveals(f)).await?;
+            self.may_check_values(f, "dataType")?;
+            type_change(conn, plan, table, f, &current_type).await?;
         }
 
         // Enum: the CHECK carries a hash of the allowed values, so a changed list gets a new constraint.
@@ -474,11 +490,12 @@ impl Planner<'_> {
             && !checks.iter().any(|c| &c.name == name)
         {
             if !is_new {
+                // No check yet: the field is becoming an enum; otherwise its list changed.
+                let field = if checks.is_empty() { "dataType" } else { "enumValues" };
+                self.may_check_values(f, field)?;
                 let expr = text_expr(&col, &current_type);
-                let (n, sample) = values_outside(conn, table, &expr, &col, f.enum_list(), self.reveals(f)).await?;
+                let (n, sample) = values_outside(conn, table, &expr, &col, f.enum_list()).await?;
                 if n > 0 {
-                    // No check yet: the field is becoming an enum; otherwise its list changed.
-                    let field = if checks.is_empty() { "dataType" } else { "enumValues" };
                     return Err(field_error(
                         field,
                         "enum_value_in_use",
@@ -536,12 +553,14 @@ impl Planner<'_> {
                     format!("{}.{} stays nullable: {nulls} assets have no value", table.display(), f.key),
                 );
             } else {
+                // How many assets lack a value is theirs to know who may view them all.
+                let which = if self.reveals(f) { format!("{nulls} assets") } else { "Some assets".to_owned() };
                 return Err(field_error(
                     "isRequired",
                     "values_missing",
                     format!(
-                        "{nulls} assets (deleted ones included) have no value for \"{}\". Fill it in on those assets \
-                         first, or keep the field optional.",
+                        "{which} (deleted ones included) have no value for \"{}\". Fill it in on those assets first, \
+                         or keep the field optional.",
                         f.key
                     ),
                 ));
@@ -1075,7 +1094,7 @@ mod tests {
         };
         let run = async |conn: &mut PgConnection, f: &Field, from: &str| {
             let mut plan = Plan::default();
-            type_change(conn, &mut plan, &table, f, from, true).await?;
+            type_change(conn, &mut plan, &table, f, from).await?;
             for sql in &plan.ddl {
                 execute(conn, sql).await?;
             }

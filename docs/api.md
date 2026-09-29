@@ -18,8 +18,10 @@ The backend is the only database client. Everything the UI needs goes through th
 - **Request bodies:** at most 1 MiB (16 MiB on `POST /api/v1/admin/config/import`, 64 KiB on the public
   routes), else `413 PAYLOAD_TOO_LARGE`. The body is read only after authentication and permission checks.
 - **Busy server:** past `HTTP_MAX_CONCURRENT_REQUESTS` requests in progress the server answers
-  `503 SERVER_BUSY` with a `Retry-After` header. Setup and sign-in have their own, smaller pool and
-  must send their body within `HTTP_HEADER_READ_TIMEOUT_SECS`, else `408 REQUEST_TIMEOUT`.
+  `503 SERVER_BUSY` with a `Retry-After` header. The operations callable without signing in (setup,
+  sign-in, OIDC, branding) have their own, smaller pool and must send any body within
+  `HTTP_HEADER_READ_TIMEOUT_SECS`, else `408 REQUEST_TIMEOUT`. Only `/healthz`, `/readyz` and
+  `GET /api/v1/version` are never answered `SERVER_BUSY`.
 - **Regenerate the contract** after changing a route: `shadoucmdb openapi --out backend/openapi.json`
   (or `cargo run -- openapi --out openapi.json` in `backend/`). `shadoucmdb openapi --check backend/openapi.json`
   fails if the committed file is stale; CI runs it. Then refresh the UI types with `npm run api:types -w frontend`.
@@ -62,7 +64,7 @@ Every non-2xx response has this shape:
 | 400 | `VALIDATION_ERROR` | The body, query or path failed validation, including database rule violations such as an illegal relationship class, a class cycle or an abstract class. `details[]` gives each field. |
 | 401 | `UNAUTHENTICATED` | No session, an expired or idle session, a disabled user, an unknown, expired or revoked API token, or (on login) a wrong username, password or authenticator code. |
 | 401 | `MFA_REQUIRED` | Login only: the password was right and the user has two-factor authentication; send the code to `POST /auth/login/mfa`. |
-| 403 | `FORBIDDEN` | Signed in, but a global permission or a class permission is missing; or an API token on a route that needs a session. |
+| 403 | `FORBIDDEN` | Signed in, but a global permission or a class permission is missing; or an API token on a route that needs a session. A field change checked against stored values (a type change, a new enum list) also needs the view right on the field's type and every type below it (`details[].code` `view_required`). |
 | 403 | `CSRF_TOKEN_INVALID` | A write without the session's `X-CSRF-Token` header. |
 | 403 | `MFA_ENROLMENT_REQUIRED` | A profile the user holds requires two-factor authentication and they have not set it up: only sign-out, `/auth/me`, the password change and the `/auth/mfa` set-up routes answer. |
 | 404 | `NOT_FOUND` | The id does not exist, or the route does not exist. |
@@ -395,6 +397,12 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
   stored value would not survive (up to five are named); `isRequired: true` (a `NOT NULL` column) while any
   asset, deleted ones included, has no value; removing enum values that are stored; re-parenting a type whose CIs
   hold values in a table they would leave.
+- **Changes checked against stored values need view on them.** A field's `dataType` change and a new enum list
+  (`enumValues`, or `dataType: enum`) on an existing field are checked against every value its assets store,
+  deleted ones included. Unless the caller may view the field's type and every type below it, they answer `403
+  FORBIDDEN` (`details[].code` `view_required`) before any value is read, in `PATCH` and in the preview alike; a
+  refused preview is audited as `schema_change.refused`. For such callers an `isRequired` refusal does not say how
+  many assets lack a value.
 - Technical names (`key`) are immutable once created, because imports, reports and SQL depend on them; renaming
   changes only the display name.
 

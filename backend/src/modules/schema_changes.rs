@@ -3,7 +3,7 @@
 
 use axum::http::Method;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -15,7 +15,7 @@ use crate::api::context::RequestContext;
 use crate::api::route::{Body, BodyInput, Check, IdPath, In, Json, NoBody, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{self, Page, Paged, Sort, like_pattern};
 use crate::auth::permissions::GlobalPermission;
-use crate::data::crud::{self, Where};
+use crate::data::crud::{self, AuditAction, AuditEntry, Where};
 use crate::http::error::{AppError, ErrorCode};
 use crate::paged;
 use crate::schema::naming::{self, NameKind};
@@ -130,7 +130,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> Result<SchemaChange, AppError> {
 // ---------------------------------------------------------------------------
 
 /// The data model operation to preview (the endpoint it stands for in brackets)
-#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum PreviewOperation {
     /// POST /api/v1/areas
@@ -267,11 +267,54 @@ async fn run_preview(
     })
 }
 
+/// The entity an operation acts on, for the audit log.
+fn entity_type(op: PreviewOperation) -> &'static str {
+    use PreviewOperation as Op;
+    match op {
+        Op::CreateArea | Op::UpdateArea | Op::DeleteArea | Op::PurgeArea => "areas",
+        Op::CreateType | Op::UpdateType | Op::DeleteType | Op::PurgeType => "ci_classes",
+        Op::CreateField | Op::UpdateField | Op::DeleteField | Op::PurgeField => "ci_attribute_definitions",
+    }
+}
+
+/// A preview refused for a missing right leaves an audit row, so that repeated
+/// probing shows up (GH#221). Written after the rollback, in its own statement.
+async fn audit_refusal(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    r: &PreviewRequest,
+    err: &AppError,
+) -> Result<(), AppError> {
+    let detail = err.details.as_ref().and_then(|d| d.first());
+    let entry = AuditEntry {
+        action: AuditAction::SchemaChangeRefused,
+        entity_type: entity_type(r.operation),
+        // A create has no id yet.
+        entity_id: r.id.unwrap_or_default(),
+        old_value: None,
+        new_value: Some(json!({
+            "preview": true,
+            "operation": r.operation,
+            "body": r.body,
+            "code": detail.map(|d| d.code.as_str()).unwrap_or("forbidden"),
+            "field": detail.map(|d| d.field.as_str()),
+            "message": err.message,
+        })),
+    };
+    crud::write_audit(&mut *pool.acquire().await?, ctx, vec![entry]).await?;
+    Ok(())
+}
+
 pub async fn preview(pool: &PgPool, ctx: &RequestContext, r: &PreviewRequest) -> Result<SchemaChangePreview, AppError> {
     let mut tx = pool.begin().await?;
     let (result, changes) = engine::collect_previews(run_preview(&mut tx, ctx, r)).await;
     // Whatever happened, nothing is kept.
     tx.rollback().await?;
+    if let Err(err) = &result
+        && err.code == ErrorCode::Forbidden
+    {
+        audit_refusal(pool, ctx, r, err).await?;
+    }
     let result = result?;
     let mut out = SchemaChangePreview { summaries: Vec::new(), statements: Vec::new(), impact: Vec::new(), result };
     for c in changes {
@@ -428,7 +471,9 @@ pub fn routes() -> Vec<Route> {
                 "Runs the operation exactly as its endpoint would, including every check and guard, inside a \
                  transaction that is always rolled back, and returns the DDL it would run. A refused change returns \
                  the same error the endpoint would (e.g. 422 SCHEMA_CHANGE_REFUSED when a type change would not \
-                 convert every stored value). Nothing is changed.",
+                 convert every stored value). A change checked against stored values (a type change, a new enum list \
+                 over existing data) needs the view right on the field's type and every type below it, else 403 \
+                 FORBIDDEN, audited as schema_change.refused. Nothing is changed.",
             )
             .requires(GlobalPermission::DatamodelManage)
             .errors(&[

@@ -933,10 +933,18 @@ pub(crate) mod tests {
             },
             crate::secrets::Keyring::for_tests(),
         );
-        let (_, cookies) =
-            super::super::auth::open_session(pool, &auth, &HeaderMap::new(), &system, user_id, name, LoginMethod::Ldap)
-                .await
-                .unwrap();
+        let (_, cookies) = super::super::auth::open_session(
+            pool,
+            &auth,
+            &HeaderMap::new(),
+            &system,
+            user_id,
+            name,
+            LoginMethod::Ldap,
+            None,
+        )
+        .await
+        .unwrap();
         let token = crate::auth::session::cookie_value(&cookies[0], crate::auth::session::SESSION_COOKIE).unwrap();
         let csrf = crate::auth::session::cookie_value(&cookies[1], crate::auth::session::CSRF_COOKIE).unwrap();
         let cookie = format!("shadoucmdb_session={token}; shadoucmdb_csrf={csrf}");
