@@ -510,12 +510,20 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
     Ok(Snapshot { file, ids, builtin_profile })
 }
 
-pub async fn export(pool: &PgPool) -> Result<ConfigFile, AppError> {
+/// GH#186: the permission profiles section is only exported to callers who may
+/// read profiles on their own admin API (`profiles.manage` or `users.manage`);
+/// for anyone else it is left out of the file.
+pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, AppError> {
     // One snapshot: REPEATABLE READ so every section comes from the same moment.
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *tx).await?;
-    let file = snapshot(&mut tx).await?.file;
+    let mut file = snapshot(&mut tx).await?.file;
     tx.commit().await?;
+    let reads_profiles =
+        ctx.require(GlobalPermission::ProfilesManage).or_else(|_| ctx.require(GlobalPermission::UsersManage));
+    if reads_profiles.is_err() {
+        file.permission_profiles = None;
+    }
     Ok(file)
 }
 
@@ -1680,11 +1688,14 @@ pub fn routes() -> Vec<Route> {
                  locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings \
                  including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. \
                  Everything refers to everything else by key, so the file imports into another install. Answers \
-                 with `Content-Disposition: attachment`.",
+                 with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the \
+                 caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on \
+                 `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves \
+                 the target's profiles untouched.",
             )
             .requires(GlobalPermission::ConfigExportImport)
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
-                let file = export(&api.pool).await?;
+                let file = export(&api.pool, &api.ctx).await?;
                 let name = format!(
                     "attachment; filename=\"shadoucmdb-config-{}.json\"",
                     chrono::Utc::now().format("%Y%m%d-%H%M%S")
@@ -1761,7 +1772,7 @@ mod tests {
         let Some(src) = scratch::database("import_sections_src").await else { return };
         let Some(dst) = scratch::database("import_sections_dst").await else { return };
         crate::seed::install_template(&src.pool, "it_infrastructure").await.unwrap();
-        let file = export(&src.pool).await.unwrap();
+        let file = export(&src.pool, &RequestContext::system("test", "test")).await.unwrap();
         assert!(!file.data_model.as_ref().unwrap().classes.is_empty());
 
         let before = schema_change_count(&dst.pool).await;
@@ -1827,6 +1838,50 @@ mod tests {
 
         src.drop().await;
         dst.drop().await;
+    }
+
+    /// GH#186: `config.export_import` alone must not read permission profiles
+    /// through the export; `profiles.manage` or `users.manage` (what
+    /// `/api/v1/admin/profiles` asks for) brings them back.
+    #[tokio::test]
+    async fn export_profiles_need_profile_read_permission() {
+        let Some(db) = scratch::database("export_profiles_read").await else { return };
+        crate::seed::seed_system_rows(&db.pool).await.unwrap();
+        let profile = ProfileSpec {
+            name: "Service Desk".into(),
+            description: None,
+            global_permissions: Vec::new(),
+            class_permissions: Vec::new(),
+        };
+        let file = ConfigFile {
+            format: FORMAT.into(),
+            format_version: FORMAT_VERSION,
+            exported_at: None,
+            app_version: None,
+            data_model: None,
+            lookups: None,
+            permission_profiles: Some(vec![profile]),
+            ui_settings: None,
+        };
+        import(&db.pool, &RequestContext::system("test", "test"), &file, ImportMode::Apply).await.unwrap();
+
+        let only_export = user_ctx(&db.pool, "exporter", &[GlobalPermission::ConfigExportImport]).await;
+        let exported = export(&db.pool, &only_export).await.unwrap();
+        assert_eq!(exported.permission_profiles, None);
+        assert!(exported.data_model.is_some() && exported.lookups.is_some() && exported.ui_settings.is_some());
+        let json = serde_json::to_value(&exported).unwrap();
+        assert!(json.get("permissionProfiles").is_none(), "{json}");
+        assert!(!json.to_string().contains("Service Desk"));
+
+        for (name, extra) in
+            [("profile_admin", GlobalPermission::ProfilesManage), ("user_admin", GlobalPermission::UsersManage)]
+        {
+            let ctx = user_ctx(&db.pool, name, &[GlobalPermission::ConfigExportImport, extra]).await;
+            let profiles = export(&db.pool, &ctx).await.unwrap().permission_profiles.unwrap();
+            assert!(profiles.iter().any(|p| p.name == "Service Desk"), "{name}: {profiles:?}");
+        }
+
+        db.drop().await;
     }
 
     #[test]
@@ -1917,14 +1972,14 @@ mod tests {
         crate::seed::seed_system_rows(&b.pool).await.unwrap();
         crate::modules::templates::install_by_key(&a.pool, &ctx, "it_infrastructure").await.unwrap();
 
-        let exported = export(&a.pool).await.unwrap();
+        let exported = export(&a.pool, &ctx).await.unwrap();
         let rules = &exported.data_model.as_ref().unwrap().relationship_rules;
         assert!(rules.len() > 1);
         assert!(rules.windows(2).all(|w| w[0] < w[1]), "rules not in key order: {rules:?}");
-        assert_eq!(comparable(&exported), comparable(&export(&a.pool).await.unwrap()));
+        assert_eq!(comparable(&exported), comparable(&export(&a.pool, &ctx).await.unwrap()));
 
         import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
-        let reexported = export(&b.pool).await.unwrap();
+        let reexported = export(&b.pool, &ctx).await.unwrap();
         assert_eq!(
             serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
             serde_json::to_string_pretty(&comparable(&reexported)).unwrap()
@@ -1999,7 +2054,7 @@ mod tests {
         .await
         .unwrap();
 
-        let exported = export(&a.pool).await.unwrap();
+        let exported = export(&a.pool, &ctx).await.unwrap();
         let lists = &exported.lookups.as_ref().unwrap().lists;
         let model_spec = lists.iter().find(|l| l.key == "model").unwrap();
         assert_eq!(model_spec.parent.as_deref(), Some("maker"));
@@ -2009,7 +2064,7 @@ mod tests {
         assert_eq!(model_attr.parent_attribute.as_deref(), Some("vendor_name"));
 
         import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
-        let reexported = export(&b.pool).await.unwrap();
+        let reexported = export(&b.pool, &ctx).await.unwrap();
         assert_eq!(
             serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
             serde_json::to_string_pretty(&comparable(&reexported)).unwrap()

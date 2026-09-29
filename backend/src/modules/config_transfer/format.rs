@@ -521,8 +521,9 @@ pub struct ConfigFile {
     pub data_model: Option<DataModelSection>,
     #[serde(default)]
     pub lookups: Option<LookupSection>,
+    /// Left out of an export when the caller may not read profiles (GH#186).
     #[schema(schema_with = profiles_schema)]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_profiles: Option<Vec<ProfileSpec>>,
     #[serde(default)]
     pub ui_settings: Option<UiSettingsSection>,
