@@ -249,7 +249,8 @@ pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &RelationshipList) -> 
             data::search(w, &like_pattern(text));
         }
     };
-    let (rows, total) = data::list(pool, &filter, &q.sort.field, q.sort.dir(), q.limit, q.offset).await?;
+    let (rows, total) =
+        data::list(&mut *pool.acquire().await?, &filter, &q.sort.field, q.sort.dir(), q.limit, q.offset).await?;
     Ok(Page { data: rows.into_iter().map(Relationship::from).collect(), page: q.page_meta(total) })
 }
 

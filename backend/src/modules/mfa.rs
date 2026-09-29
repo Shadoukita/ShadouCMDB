@@ -8,7 +8,7 @@
 use axum::http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use utoipa::ToSchema;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use uuid::Uuid;
@@ -245,25 +245,29 @@ async fn confirm(pool: &PgPool, ctx: &RequestContext, b: TotpConfirmation) -> Re
 
 /// After the password (its `attempt`), a current second factor. A wrong code
 /// counts against the same per-user lock as a wrong password and is audited as
-/// `mfa.failure`; only a right code clears the count.
+/// `mfa.failure`; only a right code clears the count. Takes the caller's
+/// transaction and hands it back on success; on a wrong code it is rolled back
+/// before the failure is audited in a transaction of its own, so the request
+/// never holds two pooled connections at once (GH#177).
 async fn reauthenticate(
     pool: &PgPool,
     ctx: &RequestContext,
-    tx: &mut PgConnection,
+    mut tx: Transaction<'static, Postgres>,
     attempt: Attempt<'_>,
     b: &MfaReauthentication,
     stage: &str,
-) -> Result<(), AppError> {
+) -> Result<Transaction<'static, Postgres>, AppError> {
     let me = me(ctx)?;
-    match verify_second_factor(tx, me.user_id, &b.code).await? {
+    match verify_second_factor(&mut tx, me.user_id, &b.code).await? {
         Some(method) => {
             attempt.success();
             if matches!(method, LoginMethod::RecoveryCode) {
-                audit_recovery_code_used(tx, ctx, me.user_id, &me.username, stage).await?;
+                audit_recovery_code_used(&mut tx, ctx, me.user_id, &me.username, stage).await?;
             }
-            Ok(())
+            Ok(tx)
         }
         None => {
+            tx.rollback().await?;
             let locked = attempt.failure();
             let extra = json!({ "stage": stage, "lockedForSeconds": locked.map(|d| d.as_secs().max(1)) });
             let mut own = pool.begin().await?;
@@ -285,11 +289,12 @@ async fn disable(
     let attempt = confirm_current_password_attempt(pool, auth, me, &b.current_password).await?;
     let mut tx = pool.begin().await?;
     let Some(t) = data::get_totp(&mut tx, me.user_id, true).await? else { return Err(not_enabled()) };
-    if t.confirmed {
-        reauthenticate(pool, ctx, &mut tx, attempt, &b, "disable").await?;
+    let mut tx = if t.confirmed {
+        reauthenticate(pool, ctx, tx, attempt, &b, "disable").await?
     } else {
         attempt.success();
-    }
+        tx
+    };
     if data::delete_mfa(&mut tx, me.user_id).await? {
         let extra = json!({ "reason": "self_service" });
         events::mfa(&mut tx, ctx, AuditAction::MfaDisable, me.user_id, &me.username, extra).await?;
@@ -311,7 +316,7 @@ async fn regenerate(
     if !data::get_totp(&mut tx, me.user_id, true).await?.is_some_and(|t| t.confirmed) {
         return Err(not_enabled());
     }
-    reauthenticate(pool, ctx, &mut tx, attempt, &b, "recovery_codes").await?;
+    let mut tx = reauthenticate(pool, ctx, tx, attempt, &b, "recovery_codes").await?;
     let codes = new_recovery_codes(&mut tx, me.user_id).await?;
     let extra = json!({ "recoveryCodes": codes.codes.len() });
     events::mfa(&mut tx, ctx, AuditAction::MfaRecoveryCodes, me.user_id, &me.username, extra).await?;

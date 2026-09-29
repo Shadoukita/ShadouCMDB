@@ -404,7 +404,7 @@ const SUMMARY_COLUMNS: &str =
 
 pub async fn list_versions(pool: &PgPool, q: &VersionListQuery) -> Result<Page<UiSettingsVersionSummary>, AppError> {
     let (rows, total) = crud::select_page::<UiSettingsVersionSummary>(
-        pool,
+        &mut *pool.acquire().await?,
         "ui_settings_versions",
         SUMMARY_COLUMNS,
         &|_| {},

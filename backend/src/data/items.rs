@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::types::Json;
-use sqlx::{AssertSqlSafe, PgConnection, PgPool, Postgres, QueryBuilder};
+use sqlx::{AssertSqlSafe, PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use super::crud::{self, Where};
@@ -242,7 +242,7 @@ fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
 }
 
 pub async fn list(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     f: &ItemFilters,
     sort: ListSort<'_>,
     desc: bool,
@@ -252,12 +252,12 @@ pub async fn list(
     let (join, order) = list_order(&sort, if desc { "DESC" } else { "ASC" });
     let from = format!("{SUMMARY_FROM}{join}");
     let filter = |w: &mut Where<'_>| push_filters(w, f);
-    crud::select_page_counted(pool, &from, COUNT_FROM, &summary_columns(), &filter, &order, limit, offset).await
+    crud::select_page_counted(conn, &from, COUNT_FROM, &summary_columns(), &filter, &order, limit, offset).await
 }
 
 /// Global search: same predicate as the list, ranked by exact / prefix / trigram similarity.
 pub async fn search(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     q: &str,
     f: &ItemFilters,
     limit: i64,
@@ -285,10 +285,9 @@ pub async fn search(
     let mut count = QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {COUNT_FROM}"));
     filter(&mut Where::new(&mut count));
 
-    tokio::try_join!(
-        rows.build_query_as::<SummaryRow>().fetch_all(pool),
-        count.build_query_scalar::<i64>().fetch_one(pool)
-    )
+    let page = rows.build_query_as::<SummaryRow>().fetch_all(&mut *conn).await?;
+    let total = count.build_query_scalar::<i64>().fetch_one(&mut *conn).await?;
+    Ok((page, total))
 }
 
 pub async fn summaries(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<Vec<SummaryRow>> {
@@ -826,7 +825,7 @@ pub enum Direction {
 /// Symmetric types (connected_to) are followed both ways whatever the direction.
 /// With `visible_class_ids`, only edges whose both endpoints are in those classes.
 pub async fn edges_touching(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     ci_ids: &[Uuid],
     direction: Direction,
     type_ids: Option<&[Uuid]>,
@@ -873,5 +872,5 @@ pub async fn edges_touching(
             .push(")");
     }
     qb.push(" ORDER BY r.created_at, r.id");
-    qb.build_query_as::<EdgeRow>().fetch_all(pool).await
+    qb.build_query_as::<EdgeRow>().fetch_all(conn).await
 }

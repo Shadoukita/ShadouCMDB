@@ -372,8 +372,16 @@ pub async fn list(pool: &PgPool, q: &UserList) -> Result<Page<User>, AppError> {
         _ => "lower(username)",
     };
     let order = format!("{column} {} NULLS LAST, id", q.sort.dir());
-    let (rows, total) =
-        crud::select_page::<UserRow>(pool, "users", data::USER_COLUMNS, &filter, &order, q.limit, q.offset).await?;
+    let (rows, total) = crud::select_page::<UserRow>(
+        &mut *pool.acquire().await?,
+        "users",
+        data::USER_COLUMNS,
+        &filter,
+        &order,
+        q.limit,
+        q.offset,
+    )
+    .await?;
     let data = dtos(&mut *pool.acquire().await?, rows).await?;
     Ok(Page { data, page: q.page_meta(total) })
 }

@@ -196,8 +196,16 @@ pub async fn list<R: Resource>(pool: &PgPool, query: &R::List) -> Result<Page<R:
     };
     let sort = query.sort();
     let order = format!("{} {}, id ASC", camel_to_snake(&sort.field), sort.dir());
-    let (rows, total) =
-        crud::select_page::<R::Dto>(pool, R::TABLE, R::COLUMNS, &filter, &order, query.limit(), query.offset()).await?;
+    let (rows, total) = crud::select_page::<R::Dto>(
+        &mut *pool.acquire().await?,
+        R::TABLE,
+        R::COLUMNS,
+        &filter,
+        &order,
+        query.limit(),
+        query.offset(),
+    )
+    .await?;
     Ok(Page { data: rows, page: query.page_meta(total) })
 }
 
