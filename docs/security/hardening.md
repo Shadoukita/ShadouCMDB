@@ -312,6 +312,10 @@ and name. Enter the secret again to re-encrypt it.
 
 **Downgrading** after the upgrade that introduced encryption needs a restore of a backup taken
 before it: the previous release cannot read encrypted secrets and rejects every authenticator code.
+For the same reason, do not run the previous release next to this one during the upgrade: once
+the new release has encrypted the secrets at start-up, sign-in through OIDC and LDAP fails on the
+previous release's instances and saving an identity provider secret there fails. Stop every
+instance of the previous release before you start the new one.
 
 Residual risk: the key is in the server's memory while it runs, so a memory dump of the running
 process exposes it, and the previous key widens the exposure while a rotation is in progress.
