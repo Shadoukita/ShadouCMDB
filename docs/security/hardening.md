@@ -297,6 +297,17 @@ shadoucmdb identity-providers reset-undecryptable --dry-run   # lists the provid
 shadoucmdb identity-providers reset-undecryptable             # asks for the database name, then disables them
 ```
 
+Run them with the service's environment (`--env-file`, or the same `ENCRYPTION_KEY_FILE`): they
+keep every secret under the configured key and its previous key. Without `ENCRYPTION_KEY_FILE`
+both commands refuse and change nothing, so that a shell missing the service's variables does not
+reset everyone. Only when the key is lost and no key is configured any more, pass `--no-key`:
+every encrypted secret then counts as undecryptable (try it with `--dry-run` first). `--no-key`
+together with a configured key is refused too.
+
+```sh
+shadoucmdb mfa reset-undecryptable --no-key --dry-run   # no key at all: lists every enrolled user
+```
+
 `mfa reset-undecryptable` deletes the users' authenticator and recovery codes in one transaction
 and writes one `mfa.disable` audit event per user with `reason: key_lost`.
 `identity-providers reset-undecryptable` disables each provider concerned and clears its secret

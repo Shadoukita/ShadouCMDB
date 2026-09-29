@@ -1,7 +1,8 @@
 //! Encrypted identity provider secrets against a real PostgreSQL (see
 //! `db::scratch`): the upgrade of plaintext rows, key rotation, the refusal on
 //! an unknown key, the check constraints of migration 0026, and
-//! `identity-providers reset-undecryptable` (GH#199).
+//! `identity-providers reset-undecryptable` (GH#199), which without a key
+//! refuses unless `--no-key` is given (GH#239).
 
 use serde_json::Value;
 use sqlx::PgPool;
@@ -365,5 +366,51 @@ async fn reset_undecryptable_disables_providers_under_lost_keys_only() {
     assert_eq!(revoked, 1);
     // The server starts with the current key again.
     assert!(sealed::prepare(pool, &current).await.is_ok());
+    db.drop().await;
+}
+
+/// GH#239: without ENCRYPTION_KEY_FILE, `--yes` alone disables nothing; only
+/// `--no-key` treats every encrypted provider secret as undecryptable.
+#[tokio::test]
+async fn reset_undecryptable_without_a_key_needs_no_key() {
+    let Some(db) = scratch::database("reset_undecryptable_providers_no_key").await else { return };
+    let pool = &db.pool;
+    let ring = Keyring::random();
+    add_oidc(pool, OIDC, "Entra ID").await;
+    add_ldap(pool, LDAP, "Corporate AD").await;
+    put_sealed(pool, &ring, OIDC, ProviderSecret::ClientSecret, CLIENT_SECRET).await;
+    put_sealed(pool, &ring, LDAP, ProviderSecret::BindPassword, BIND_PASSWORD).await;
+    let args = |no_key| super::cli::ResetUndecryptableArgs {
+        dry_run: false,
+        no_key,
+        confirm: crate::maintenance::ConfirmArgs { yes: true },
+    };
+    let state = || async {
+        let enabled: i64 = sqlx::query_scalar("SELECT count(*) FROM identity_providers WHERE is_enabled")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let sealed: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM identity_providers WHERE secrets_key_id IS NOT NULL")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let events: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE entity_type = 'identity_providers'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        (enabled, sealed, events)
+    };
+
+    let err = super::cli::reset_idps(pool, None, None, &args(false)).await.unwrap_err().to_string();
+    assert!(err.starts_with("ENCRYPTION_KEY_FILE is not set") && err.contains("--no-key"), "{err}");
+    assert_eq!(state().await, (2, 2, 0), "nothing changed without --no-key");
+    let configured = Some((ring.active_id(), None));
+    let err = super::cli::reset_idps(pool, None, configured, &args(true)).await.unwrap_err().to_string();
+    assert!(err.starts_with("--no-key was given, but ENCRYPTION_KEY_FILE is set"), "{err}");
+    assert_eq!(state().await, (2, 2, 0), "nothing changed with --no-key and a key");
+
+    super::cli::reset_idps(pool, None, None, &args(true)).await.unwrap();
+    assert_eq!(state().await, (0, 0, 2), "--no-key disables every provider with a secret, audited");
     db.drop().await;
 }
