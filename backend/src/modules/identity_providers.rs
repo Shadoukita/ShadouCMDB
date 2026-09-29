@@ -1310,11 +1310,13 @@ mod tests {
         assert_eq!(mfa_warnings(&amr, &discovery(Some(&["sub", "amr"]), None)), Vec::<String>::new());
         assert_eq!(mfa_warnings(&amr, &discovery(None, None)), Vec::<String>::new(), "no list, no guess");
         let w = mfa_warnings(&amr, &discovery(Some(&["sub", "email"]), None));
-        assert!(w.len() == 1 && w[0].contains("amr"), "{w:?}");
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("amr"));
 
         let acr = oidc::MfaPolicy::Verify { required_acr: vec!["gold".into(), "silver".into()] };
         let w = mfa_warnings(&acr, &discovery(Some(&["sub"]), Some(&["gold", "bronze"])));
-        assert!(w.len() == 1 && w[0].contains("\"silver\""), "{w:?}");
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("\"silver\""));
         assert_eq!(mfa_warnings(&acr, &discovery(None, None)), Vec::<String>::new());
         assert!(mfa_warnings(&oidc::MfaPolicy::TrustProvider, &discovery(None, None))[0].contains("not verified"));
     }
