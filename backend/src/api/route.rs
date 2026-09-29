@@ -668,17 +668,19 @@ impl RouteBuilder {
                     };
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
                     let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };
-                    // Public routes that take a body draw from their own pool and get a
-                    // short deadline for it, so anonymous slow senders cannot hold the
-                    // capacity signed-in users need; bodiless public routes (health) take none.
+                    // Authorise before reading the body: an anonymous caller must not make
+                    // the server buffer up to body_limit bytes only to be answered 401.
+                    let ctx = authorise(&state, &headers, rule, client, used).await?;
+                    // The permit is taken only once the caller is authorised, so rejected
+                    // requests never hold capacity. Public routes that take a body draw from
+                    // their own pool and get a short deadline for it, so anonymous slow
+                    // senders cannot hold the capacity signed-in users need; bodiless public
+                    // routes (health) take none.
                     let public = access == Access::Public;
                     let _permit = match (public, safe_method) {
                         (true, true) => None,
                         _ => Some(state.capacity.acquire(public)?),
                     };
-                    // Authorise before reading the body: an anonymous caller must not make
-                    // the server buffer up to body_limit bytes only to be answered 401.
-                    let ctx = authorise(&state, &headers, rule, client, used).await?;
                     let body = if public {
                         let limit = state.capacity.public_body_timeout;
                         tokio::time::timeout(limit, read_body(&headers, body, body_limit)).await.map_err(|_| {
@@ -1036,6 +1038,8 @@ mod tests {
         // The reverse: a full global pool refuses signed-in requests, while sign-in still works.
         let held = capacity.acquire(false).unwrap();
         assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await, (503, "SERVER_BUSY".into()));
+        // Permits are taken after authorisation: an anonymous caller is refused 401, never queued.
+        assert_eq!(send(&app, "GET", me, &Creds::default(), Body::empty(), None).await.0, 401);
         let wrong = Body::from(json!({ "username": "owner", "password": "wrong" }).to_string());
         assert_eq!(send(&app, "POST", login, &Creds::default(), wrong, None).await.0, 401);
         drop(held);
