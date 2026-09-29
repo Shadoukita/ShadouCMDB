@@ -382,7 +382,10 @@ All optional; every variable is in [`.env.example`](../.env.example).
   least 16) and must deliver any body within `HTTP_HEADER_READ_TIMEOUT_SECS`, else
   `408 REQUEST_TIMEOUT`: a flood of anonymous requests can delay sign-in but not signed-in users or
   API tokens. Only `/healthz`, `/readyz` and `/api/v1/version` are exempt from both pools, so a
-  busy server is not reported as down.
+  busy server is not reported as down. `/readyz` reuses its last database check for up to 1 s, and
+  concurrent probes wait for the one check in flight, so a flood of anonymous probes costs about one
+  database round trip per second. A lost database therefore shows in `/readyz` within about 1 s
+  plus `DATABASE_CONNECT_TIMEOUT_MS`.
 - **Reverse proxy request buffering:** let the proxy receive the whole request body before it
   forwards the request (nginx `proxy_request_buffering on`, the default; HAProxy
   `option http-buffer-request`). Slow clients then tie up the proxy, which is built for many idle
