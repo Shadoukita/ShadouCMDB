@@ -1397,7 +1397,7 @@ mod tests {
     /// A local account `name` and its password, generated per run as
     /// `OWNER_PASSWORD` is, with an authenticator when `secret` is given.
     async fn account(pool: &PgPool, name: &str, secret: Option<&[u8]>) -> (Uuid, String) {
-        let password = format!("{name} passphrase {}", Uuid::new_v4());
+        let password = format!("passphrase {}", Uuid::new_v4());
         let input = UserCreate {
             username: name.into(),
             display_name: name.into(),
