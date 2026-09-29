@@ -12,6 +12,7 @@ import {
   DEFAULT_COLUMNS,
   EMPTY_FILTERS,
   fieldLabel,
+  listColumns,
   SORT_FIELDS,
   sortParam,
   unavailableSortLabel,
@@ -83,6 +84,7 @@ const previewQuery = computed<CiListQuery>(() => ({
   sort: ((staleSort.value ? null : sortParam(view.value?.defaultSort)) ?? "label") as CiListQuery["sort"],
 }));
 const preview = useCiList(previewQuery);
+const columns = computed(() => listColumns(view.value?.columns));
 </script>
 
 <template>
@@ -104,6 +106,9 @@ const preview = useCiList(previewQuery);
             <span class="label">Columns, in order</span>
             <FieldListEditor v-model="editorColumns" :options="columnOptions" label="Columns" id-prefix="lv-col" />
             <p v-if="!view.columns?.length" class="hint">No columns chosen: the default columns are shown.</p>
+            <p v-else-if="!view.columns.includes('label')" class="hint">
+              Label is not chosen: it is shown as the first column anyway, as it is the link that opens each CI.
+            </p>
           </div>
           <div class="form-grid" style="grid-template-columns: 1fr">
             <div class="field">
@@ -153,11 +158,11 @@ const preview = useCiList(previewQuery);
     <div v-else class="table-wrap">
       <table class="data">
         <thead>
-          <tr><th v-for="c in editorColumns" :key="c" scope="col">{{ fieldLabel(c, attrDefs) }}</th></tr>
+          <tr><th v-for="c in columns" :key="c" scope="col">{{ fieldLabel(c, attrDefs) }}</th></tr>
         </thead>
         <tbody>
           <tr v-for="ci in preview.data.value?.data ?? []" :key="ci.id">
-            <td v-for="c in editorColumns" :key="c"><CiCell :ci="ci" :field="c" :defs="attrDefs" /></td>
+            <td v-for="c in columns" :key="c"><CiCell :ci="ci" :field="c" :defs="attrDefs" /></td>
           </tr>
         </tbody>
       </table>

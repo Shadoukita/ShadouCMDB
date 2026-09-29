@@ -245,6 +245,29 @@ test("list views: adding a column to a view without columns keeps the default co
   await expect(page.locator("table.data tbody tr a").first()).toBeVisible();
 });
 
+test("list views: a view without the Label column still shows it first, so every row opens its CI", async ({ page, request }) => {
+  const serverId = await classIdByName(request, "Server");
+  await page.goto("/admin/customization/list-views?class=server");
+  const customize = page.getByRole("button", { name: "Customize the Server list" });
+  if (await customize.isVisible()) await customize.click();
+  await page.getByLabel("Remove Label").click();
+  await expect(page.getByText("Label is not chosen: it is shown as the first column anyway")).toBeVisible();
+  await expect(page.getByLabel("List preview").getByRole("columnheader").first()).toHaveText("Label");
+  await save(page, "e2e list view without label");
+
+  await page.goto(`/cis?classId=${serverId}`);
+  // Wait for the view (its Hostname column, page size and sort) and the list it refetches: until the
+  // settings load, the inventory shows the default columns and page size.
+  await expect(page.getByRole("columnheader", { name: /Hostname/ })).toBeVisible();
+  await expect(page.getByRole("columnheader").first()).toHaveText(/^Label/);
+  await expect(page.locator("table.data.loading")).toHaveCount(0);
+  const rows = page.locator("table.data tbody tr");
+  await expect(rows.first()).toBeVisible();
+  await expect(rows.filter({ hasNot: page.locator("td:first-child a") })).toHaveCount(0);
+  await rows.first().locator("td:first-child a").click();
+  await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);
+});
+
 test("layouts: the form designer arranges tabs, sections and widths for the form and the detail page", async ({ page, request }) => {
   // Tall enough that a dragged field and the tab it is dropped on are both in view.
   await page.setViewportSize({ width: 1440, height: 1800 });
