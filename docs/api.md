@@ -175,8 +175,9 @@ a right password together with a right code does, so holding a session and the p
 guesses at the code.
 
 A permission profile with `requireMfa: true` (any profile, including the built-in Administrator) makes MFA mandatory
-for its holders with a local or directory (LDAP/AD) account; OIDC accounts are exempt and rely on their provider
-(`mfa.required` is then false). They still sign in with their password, but until they have confirmed an authenticator every route
+for its holders with a local or directory (LDAP/AD) account. OIDC accounts are exempt when their provider proved
+the second factor at sign-in or is trusted to enforce it (see *Enterprise sign-in*; `mfa.required` is then false).
+Local and directory users still sign in with their password, but until they have confirmed an authenticator every route
 except sign-out, `/auth/me`, `PUT /auth/password` and the `/auth/mfa` set-up routes answers
 `403 MFA_ENROLMENT_REQUIRED`; `/auth/me` shows `mfa.enrolmentRequired`. The requirement applies to sessions only: API
 tokens are separate credentials and keep working. A user who lost their device and their recovery codes asks a
@@ -198,8 +199,17 @@ and maps the provider's groups to permission profiles.
   by hand lasts until its next sign-in; change the mappings instead.
 - **Break-glass.** Local accounts keep working next to any provider, including when the provider is down or
   misconfigured. Keep at least one local administrator (with two-factor authentication) and its password in your
-  emergency procedure; `shadoucmdb create-admin` remains the last resort. For OIDC accounts two-factor
-  authentication is the provider's job; `requireMfa` on a profile applies to local and directory (LDAP) accounts.
+  emergency procedure; `shadoucmdb create-admin` remains the last resort.
+- **MFA for OIDC accounts.** OIDC accounts have no password here; their provider runs the second factor. Each OIDC
+  provider has `oidc.mfaAssurance`: `verify` (the default for new providers) or `trustProvider`. With `verify`, a
+  user holding a `requireMfa` profile is signed in only when the signed ID token proves a second factor: its `acr` is
+  one of `oidc.requiredAcr` (then also sent as `acr_values`), or, without `requiredAcr`, its `amr` contains `mfa` or
+  values of two RFC 8176 factor categories. Otherwise the sign-in ends at `/login?ssoError=mfa_not_enforced`. With
+  `trustProvider` the token is not checked. A session whose sign-in did not prove MFA ends (`401`, audited as
+  `session.revoke` with `reason: mfa_not_enforced`) on its next request once a profile of the user requires MFA or
+  the provider is switched to `verify`: such an account cannot set up MFA here, so it gets no
+  `MFA_ENROLMENT_REQUIRED` session. Providers that existed before this setting are `trustProvider`. See the
+  [hardening guide](security/hardening.md#enterprise-sign-in) for per-provider notes.
 - **Disabling or deleting a provider** ends the sessions of its accounts. A provider with accounts cannot be deleted
   (`409 IN_USE`): disable it.
 
