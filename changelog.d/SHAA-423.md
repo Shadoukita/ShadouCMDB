@@ -1,4 +1,4 @@
-### Fixed: A class list with a saved default sort is queried once, not twice
+### Fixed: a class list with a saved default sort is queried once, not twice
 
 Opening the inventory of a class whose list view sets a default sort or page size (Customization ›
 List views) now waits for that list view before loading the page, so the configuration-item query

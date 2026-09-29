@@ -1,4 +1,4 @@
-### Fixed: Dropdowns row actions visible on laptop screens
+### Fixed: row actions on *Data model › Dropdowns* are visible on laptop screens
 
 Administration › Data model › Dropdowns cut off the **Delete** button of each list at 1440 px and
 pushed it off-screen at 1280 px ([GH#110]). The Description column now takes the remaining width and

@@ -1,7 +1,7 @@
 ### Changed (breaking API change): barebone CI core, fixed fields become class attributes
 
 Every CI now has a small core that is the same for every class, and everything else is a class
-attribute ([SHAA-267]). Migration `0016_core_ci_model` does the move; `migrate` applies it as usual.
+attribute ([CI core]). Migration `0016_core_ci_model` does the move; `migrate` applies it as usual.
 
 **New on every CI** (API: `ConfigurationItem`, `ConfigurationItemSummary`, graph nodes, search hits):
 
@@ -65,4 +65,4 @@ former fixed columns appear as ordinary field columns (`name`, `status` as the v
 - If you want an exact before/after comparison, run `sql/checks/core_ci_upgrade_1_before.sql` before
   and `sql/checks/core_ci_upgrade_2_after.sql` after `migrate`.
 
-[SHAA-267]: docs/data-model.md#the-ci-core-ident-validity-and-label
+[CI core]: docs/data-model.md#the-ci-core-ident-validity-and-label

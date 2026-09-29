@@ -1,7 +1,7 @@
 ### Added: resize sections by dragging and place them side by side in the layout editors
 
 The form designer (**Customization › Detail and form layout**) and the layout editor window (**Edit
-layout** on a CI) now edit the 12-column grid directly ([SHAA-304]):
+layout** on a CI) now edit the 12-column grid directly ([editing a layout on the CI page]):
 
 - **Resize a section** by dragging its right edge; it snaps to the 12 columns and shows e.g. "6 / 12"
   while you drag. Between two sections in a row, the left edge of the second moves the border between
@@ -22,4 +22,4 @@ a half-width section on a wide screen uses two columns instead of squeezing thre
 
 **Upgrade:** nothing to do. No API or schema change; layouts saved before look the same.
 
-[SHAA-304]: docs/data-model.md#editing-a-layout-on-the-ci-page
+[editing a layout on the CI page]: docs/data-model.md#editing-a-layout-on-the-ci-page
