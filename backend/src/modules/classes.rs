@@ -214,7 +214,7 @@ fn class_parent_schema() -> Schema {
 }
 
 fn class_sort() -> Schema {
-    schemas::sort_schema(&["name", "key", "sortOrder", "createdAt", "updatedAt"], "name")
+    schemas::sort_schema(CiClassList::SORT_FIELDS, "name")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -245,6 +245,7 @@ pub struct CiClassList {
 paged!(CiClassList);
 
 impl ListQuery for CiClassList {
+    const SORT_FIELDS: &'static [&'static str] = &["name", "key", "sortOrder", "createdAt", "updatedAt"];
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -1178,7 +1179,7 @@ fn defined_on_schema() -> Schema {
 }
 
 fn attribute_sort() -> Schema {
-    schemas::sort_schema(&["sortOrder", "key", "label", "createdAt", "updatedAt"], "sortOrder")
+    schemas::sort_schema(AttributeDefinitionList::SORT_FIELDS, "sortOrder")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -1209,6 +1210,7 @@ pub struct AttributeDefinitionList {
 paged!(AttributeDefinitionList);
 
 impl ListQuery for AttributeDefinitionList {
+    const SORT_FIELDS: &'static [&'static str] = &["sortOrder", "key", "label", "createdAt", "updatedAt"];
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -1549,7 +1551,7 @@ impl Check for RelationshipTypeUpdate {
 }
 
 fn relationship_type_sort() -> Schema {
-    schemas::sort_schema(&["sortOrder", "name", "key", "createdAt", "updatedAt"], "sortOrder")
+    schemas::sort_schema(RelationshipTypeList::SORT_FIELDS, "sortOrder")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -1591,6 +1593,7 @@ fn push_pair(w: &mut sqlx::QueryBuilder<sqlx::Postgres>, a: Option<Uuid>, b: Opt
 }
 
 impl ListQuery for RelationshipTypeList {
+    const SORT_FIELDS: &'static [&'static str] = &["sortOrder", "name", "key", "createdAt", "updatedAt"];
     fn q(&self) -> Option<&str> {
         self.q.as_deref()
     }
@@ -1715,7 +1718,7 @@ impl Check for RelationshipRuleUpdate {
 }
 
 fn rule_sort() -> Schema {
-    schemas::sort_schema(&["createdAt", "updatedAt"], "createdAt")
+    schemas::sort_schema(RelationshipRuleList::SORT_FIELDS, "createdAt")
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -1740,6 +1743,7 @@ pub struct RelationshipRuleList {
 paged!(RelationshipRuleList);
 
 impl ListQuery for RelationshipRuleList {
+    const SORT_FIELDS: &'static [&'static str] = &["createdAt", "updatedAt"];
     fn sort(&self) -> &Sort {
         &self.sort
     }

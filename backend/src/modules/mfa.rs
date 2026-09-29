@@ -19,6 +19,7 @@ use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
 use crate::auth::events::{self, LoginMethod};
 use crate::auth::permissions::GlobalPermission;
+use crate::auth::secret::Secret;
 use crate::auth::throttle::Attempt;
 use crate::auth::{AuthState, Principal, totp};
 use crate::data::auth as auth_data;
@@ -102,7 +103,7 @@ fn totp_code_schema() -> Schema {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasswordConfirmation {
     #[schema(schema_with = login_field_schema)]
-    current_password: String,
+    current_password: Secret,
 }
 impl Check for PasswordConfirmation {}
 
@@ -119,7 +120,7 @@ impl Check for TotpConfirmation {}
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MfaReauthentication {
     #[schema(schema_with = login_field_schema)]
-    current_password: String,
+    current_password: Secret,
     #[schema(schema_with = code_schema)]
     code: String,
 }

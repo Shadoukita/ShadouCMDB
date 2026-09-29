@@ -80,7 +80,7 @@ test("legacy statuses, environments, locations and owners: reads work, writes an
   }
 });
 
-test("identity providers refuse API tokens for add, change and delete; reading accepts them (GitHub #137)", async ({ request, playwright, baseURL }) => {
+test("identity providers refuse API tokens for add, change, delete and the connection test; reading accepts them (GitHub #137, #192)", async ({ request, playwright, baseURL }) => {
   const admin = await createUser(request, "idp-admin", [adminProfileId]);
   const session = await signIn(playwright, baseURL!, admin.username);
   const created = await session.send("POST", "/admin/identity-providers", {
@@ -97,6 +97,7 @@ test("identity providers refuse API tokens for add, change and delete; reading a
     token.post("/api/v1/admin/identity-providers", { data: { kind: "oidc", name: `E2E by token ${stamp}`, oidc: { issuerUrl: "https://127.0.0.1:9/", clientId: "x" } } }),
     token.patch(`/api/v1/admin/identity-providers/${idp.id}`, { data: { isEnabled: false } }),
     token.delete(`/api/v1/admin/identity-providers/${idp.id}`),
+    token.post(`/api/v1/admin/identity-providers/${idp.id}/test`, { data: {} }),
   ];
   for (const res of await Promise.all(writes)) {
     expect(res.status(), `${res.url()} → ${res.status()}`).toBe(403);

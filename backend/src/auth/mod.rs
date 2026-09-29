@@ -13,6 +13,7 @@ pub mod cli;
 pub mod events;
 pub mod password;
 pub mod permissions;
+pub mod secret;
 pub mod session;
 pub mod sso;
 pub mod throttle;

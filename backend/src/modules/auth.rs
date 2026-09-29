@@ -22,6 +22,7 @@ use crate::api::route::{
 use crate::api::schemas::{name_schema, trimmed};
 use crate::auth::events::{self, LoginMethod, ProviderMfa, RevokeReason};
 use crate::auth::permissions::{ClassRights, GlobalPermission, Permissions};
+use crate::auth::secret::Secret;
 use crate::auth::throttle::{Attempt, GLOBAL_PENALTY, Gate, LoginThrottle, Net, SLOW_LANE_WAITERS};
 use crate::auth::{AuthState, Principal, password, session};
 use crate::data::auth as data;
@@ -53,7 +54,7 @@ pub struct SetupBody {
     #[serde(default)]
     email: Option<String>,
     #[schema(schema_with = password_schema)]
-    password: String,
+    password: Secret,
 }
 
 impl Check for SetupBody {
@@ -73,7 +74,7 @@ pub struct LoginBody {
     #[schema(schema_with = login_field_schema)]
     username: String,
     #[schema(schema_with = login_field_schema)]
-    password: String,
+    password: Secret,
 }
 impl Check for LoginBody {}
 
@@ -89,9 +90,9 @@ impl Check for MfaLoginBody {}
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasswordChange {
     #[schema(schema_with = login_field_schema)]
-    current_password: String,
+    current_password: Secret,
     #[schema(schema_with = password_schema)]
-    new_password: String,
+    new_password: Secret,
 }
 
 impl Check for PasswordChange {
@@ -752,7 +753,7 @@ mod tests {
             username: username.into(),
             display_name: "First admin".into(),
             email: None,
-            password: OWNER_PASSWORD.clone(),
+            password: OWNER_PASSWORD.clone().into(),
         }
     }
 
@@ -837,7 +838,7 @@ mod tests {
         let wrong = OWNER_PASSWORD.to_uppercase();
         let (headers, ctx) = (HeaderMap::new(), anon());
         let tries = (0..50).map(|_| {
-            let b = LoginBody { username: "admin".into(), password: wrong.clone() };
+            let b = LoginBody { username: "admin".into(), password: wrong.clone().into() };
             login(pool, &auth, &headers, &ctx, b)
         });
         let codes: Vec<_> =
