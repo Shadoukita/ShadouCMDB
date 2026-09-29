@@ -824,12 +824,15 @@ pub enum Direction {
 /// Live edges touching any of the given CIs, in the requested direction(s).
 /// Symmetric types (connected_to) are followed both ways whatever the direction.
 /// With `visible_class_ids`, only edges whose both endpoints are in those classes.
+/// At most `limit` rows, oldest first, so a hub CI cannot make one call load
+/// all of its relationships.
 pub async fn edges_touching(
     conn: &mut PgConnection,
     ci_ids: &[Uuid],
     direction: Direction,
     type_ids: Option<&[Uuid]>,
     visible_class_ids: Option<&[Uuid]>,
+    limit: i64,
 ) -> sqlx::Result<Vec<EdgeRow>> {
     if ci_ids.is_empty() {
         return Ok(Vec::new());
@@ -871,6 +874,6 @@ pub async fn edges_touching(
             .push_bind(classes.to_vec())
             .push(")");
     }
-    qb.push(" ORDER BY r.created_at, r.id");
+    qb.push(" ORDER BY r.created_at, r.id LIMIT ").push_bind(limit);
     qb.build_query_as::<EdgeRow>().fetch_all(conn).await
 }
