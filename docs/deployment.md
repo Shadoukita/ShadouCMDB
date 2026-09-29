@@ -42,6 +42,9 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
   mfa reset-undecryptable [--dry-run] [--yes]
                             Turn off two-factor sign-in for users whose authenticator secret is
                             encrypted with a key that is lost (audited; see docs/security/hardening.md)
+  identity-providers reset-undecryptable [--dry-run] [--yes]
+                            Disable identity providers whose OIDC client secret or LDAP bind password
+                            is encrypted with a key that is lost, and clear it (audited)
   openapi [--out F|--check F]  Print the OpenAPI document, write it, or fail if F is stale
   service install|uninstall|run   Windows Service management (Windows only)
 ```
@@ -60,7 +63,7 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
 - `serve` does **not** migrate on start. Run `migrate` as an explicit step when
   you install or upgrade.
 - `serve` does not start without `ENCRYPTION_KEY_FILE`, the key that encrypts the
-  users' authenticator secrets ([encryption key](security/hardening.md#encryption-key)).
+  users' authenticator secrets and the identity providers' secrets ([encryption key](security/hardening.md#encryption-key)).
   Before it listens, it encrypts secrets written before encryption existed, re-encrypts
   those under `ENCRYPTION_KEY_PREVIOUS_FILE` after a rotation, and refuses to start when
   the database holds secrets under a key that is not configured. `migrate` and `verify`
@@ -527,7 +530,7 @@ The unit runs as an unprivileged user and has no capabilities or writable
 paths. To upgrade (when the release notes say to stop the server before `migrate`, run
 `systemctl stop shadoucmdb` first and `systemctl start shadoucmdb` in step 3):
 1. replace the binary; when upgrading from a release without `ENCRYPTION_KEY_FILE`, create the
-   key as above first (the server encrypts the existing authenticator secrets at its next start);
+   key as above first (the server encrypts the existing authenticator and identity provider secrets at its next start);
 2. run `migrate` with `MIGRATION_DATABASE_URL` as above (on a single-role install, split the
    roles first: see [Upgrading a single-role install](#upgrading-a-single-role-install));
 3. `systemctl restart shadoucmdb`.

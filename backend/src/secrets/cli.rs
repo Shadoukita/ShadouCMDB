@@ -1,6 +1,7 @@
 //! The commands around the encryption key: `generate-encryption-key`,
-//! `mfa reset-undecryptable` (the audited way out when a key is lost), and
-//! the key report `verify` and `migrate` print.
+//! `mfa reset-undecryptable` and `identity-providers reset-undecryptable`
+//! (the audited ways out when a key is lost), and the key report `verify` and
+//! `migrate` print.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -62,7 +63,8 @@ pub fn generate_key(args: GenerateKeyArgs) -> anyhow::Result<()> {
         path.display()
     );
     println!("  3. Keep a copy apart from the database backups (password vault or escrow): without it, restored");
-    println!("     backups have no usable two-factor enrolments. See docs/security/hardening.md#encryption-key.");
+    println!("     backups have no usable two-factor enrolments or identity provider secrets.");
+    println!("     See docs/security/hardening.md#encryption-key.");
     Ok(())
 }
 
@@ -161,6 +163,96 @@ pub(crate) async fn reset_users(
     Ok(())
 }
 
+#[derive(Debug, Subcommand)]
+pub enum IdentityProvidersCommand {
+    /// Disable the identity providers whose secret (OIDC client secret, LDAP
+    /// bind password) is encrypted with a key that is not configured (the key
+    /// is lost) and clear that secret, so the server can start. Sign-in
+    /// through them stops until an administrator enters the secret again and
+    /// enables them. Audited; asks for confirmation.
+    ResetUndecryptable(ResetUndecryptableArgs),
+}
+
+pub async fn identity_providers(cfg: &Config, cmd: IdentityProvidersCommand) -> anyhow::Result<()> {
+    match cmd {
+        IdentityProvidersCommand::ResetUndecryptable(args) => reset_providers(cfg, args).await,
+    }
+}
+
+async fn reset_providers(cfg: &Config, args: ResetUndecryptableArgs) -> anyhow::Result<()> {
+    // Only the ids are needed: the secrets are cleared, not decrypted.
+    let configured = configured_key_ids(&cfg.encryption)?;
+    let known: Vec<KeyId> = configured.map(|(a, p)| [Some(a), p].into_iter().flatten().collect()).unwrap_or_default();
+    let pool = db::connect(&cfg.database).await?;
+    let result = async {
+        if db::applied_count(&pool).await? != db::expected_count() {
+            bail!("the database is not fully migrated; run `shadoucmdb migrate` first");
+        }
+        let mut tx = pool.begin().await?;
+        let providers = sealed::undecryptable_providers(&mut tx, &known).await?;
+        match configured {
+            None => println!(
+                "No key is configured (ENCRYPTION_KEY_FILE is not set): every encrypted identity provider secret \
+                 counts as undecryptable."
+            ),
+            Some((a, None)) => println!("Configured key: {a}."),
+            Some((a, Some(p))) => println!("Configured keys: {a} (previous key {p})."),
+        }
+        if providers.is_empty() {
+            println!("No identity provider secret is encrypted with another key; nothing to do.");
+            return Ok(());
+        }
+        println!(
+            "Identity providers whose secret is encrypted with a key that is not configured ({}):",
+            providers.len()
+        );
+        for p in &providers {
+            let (kind, field) = if p.kind == "ldap" { ("LDAP", "bind password") } else { ("OIDC", "client secret") };
+            let state = if p.is_enabled { "enabled" } else { "disabled" };
+            println!("  {:<32} {kind:<4}  key {}  {state}, {field}", p.name, p.key_id);
+        }
+        if args.dry_run {
+            println!("Dry run: nothing was changed.");
+            return Ok(());
+        }
+        println!(
+            "Each is disabled and its secret cleared (an LDAP directory also loses its bind DN; the old one stays in \
+             the audit trail). Sign-in through them stops, and the sessions of their accounts end, until an \
+             administrator enters the secret again under Administration > Sign-in and enables the provider."
+        );
+        let (database, place) = maintenance::describe(&mut tx).await?;
+        let action = format!("disable {} and clear their secrets in", providers_n(providers.len()));
+        maintenance::confirm(&action, &database, &place, args.confirm.yes)?;
+        let actor = match crate::prune::operator() {
+            Some(op) => format!("cli: identity-providers reset-undecryptable ({op})"),
+            None => "cli: identity-providers reset-undecryptable".to_owned(),
+        };
+        let ctx = RequestContext::system(actor, "cli");
+        crate::modules::identity_providers::reset_undecryptable(
+            &mut tx,
+            &ctx,
+            cfg.auth.public_url.as_deref(),
+            &providers,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e.message))?;
+        tx.commit().await?;
+        println!(
+            "Disabled {} and cleared their secrets. Enter each secret again and enable the provider under \
+             Administration > Sign-in.",
+            providers_n(providers.len())
+        );
+        anyhow::Ok(())
+    }
+    .await;
+    pool.close().await;
+    result
+}
+
+fn providers_n(n: usize) -> String {
+    format!("{n} identity {}", if n == 1 { "provider" } else { "providers" })
+}
+
 /// The encrypted secrets per table and key, against the configured key: for
 /// `verify` and `migrate`, so a missing or wrong key shows before `serve`
 /// refuses to start. Warns only: neither command needs the key.
@@ -198,7 +290,7 @@ pub async fn report(conn: &mut PgConnection, cfg: &EncryptionConfig) -> anyhow::
 
 fn print_counts(counts: &[KeyCount], unencrypted: &[(sealed::SealedTable, i64)], active: Option<KeyId>) {
     for &(table, n) in unencrypted {
-        let mut line = format!("  {:<12} ", table.name());
+        let mut line = format!("  {:<18} ", table.name());
         let by_key: Vec<String> = counts
             .iter()
             .filter(|c| c.table == table)
@@ -212,7 +304,7 @@ fn print_counts(counts: &[KeyCount], unencrypted: &[(sealed::SealedTable, i64)],
             parts.push(format!("{n} not encrypted yet (`serve` encrypts them at start-up)"));
         }
         if parts.is_empty() {
-            parts.push("no rows".to_owned());
+            parts.push("none".to_owned());
         }
         line.push_str(&parts.join(", "));
         println!("{line}");

@@ -198,20 +198,26 @@ protect its password accordingly.
     Each secret is bound to its user: copied onto another account, it does not decrypt. Someone
     with only the database or only a backup cannot compute sign-in codes; someone with the
     database **and** the key file can.
-  - The **OIDC client secret** and the **directory bind password** are still stored unencrypted
-    ([#199](https://github.com/Shadoukita/ShadouCMDB/issues/199)). Anyone who can read the
-    database or a backup can use them. Restrict read access to the database to the application
-    and schema-owner roles ([roles](#database-roles)), keep ad hoc reporting accounts off the
-    `cmdb` schema, and treat every backup as a copy of these credentials
-    ([backup](#backup-and-restore)). If the database or a backup leaks, rotate both at the
-    provider.
+  - The **OIDC client secret** and the **directory bind password** of every identity provider
+    are encrypted the same way, with their own subkey. Each is bound to its provider and to its
+    field: copied onto another provider, or from the bind password to the client secret, it does
+    not decrypt. The server decrypts them only to present them to the provider.
+  - Backups and database copies taken **before** the version that introduced this encryption
+    still hold these secrets unencrypted, and so do PostgreSQL's WAL and dead row versions until
+    they are vacuumed and recycled. If such backups or copies have left your custody, rotate the
+    OIDC client secret and the LDAP bind password at the identity provider.
+  - Register ShadouCMDB at the OIDC provider as a dedicated client with no application
+    (client-credentials) permissions of its own, so a leaked client secret gives nothing beyond
+    the sign-in client (for example, an Entra ID app registration without Graph application
+    permissions). Give the LDAP bind account read access only.
 - Leave `CORS_ORIGINS` empty unless you serve the UI from another origin.
 - Keep `LOG_LEVEL` at `info` in production. `trace` logs every SQL statement.
 
 ## Encryption key
 
-`ENCRYPTION_KEY_FILE` names a file holding the key that encrypts the users' authenticator secrets:
-the base64 of 32 random bytes. `serve` does not start without it. The key never enters the database,
+`ENCRYPTION_KEY_FILE` names a file holding the key that encrypts the users' authenticator secrets
+and the identity providers' secrets (OIDC client secrets, LDAP bind passwords): the base64 of 32
+random bytes. `serve` does not start without it. The key never enters the database,
 the logs or a backup, and the commands that only move data (`migrate`, `backup`, `restore`,
 `factory-reset`, `decommission`, `create-admin`) do not need it. `migrate` and `verify` print which
 key the database's secrets are encrypted with and warn when the configured key does not match.
@@ -244,9 +250,11 @@ order mark; anything but the base64 of exactly 32 bytes stops the server with
 
 **Keep a copy apart from the database backups**: in a password vault or escrow with different
 custody, and in your disaster-recovery runbook. Losing the key loses no CMDB data, only the
-two-factor enrolments: the server refuses to start until the key is configured again or
-`shadoucmdb mfa reset-undecryptable` has turned off two-factor sign-in for the users concerned
-(they set it up again). Include the key in the quarterly restore test.
+two-factor enrolments and the stored identity provider secrets: the server refuses to start until
+the key is configured again, or until `shadoucmdb mfa reset-undecryptable` has turned off
+two-factor sign-in for the users concerned (they set it up again) and
+`shadoucmdb identity-providers reset-undecryptable` has disabled the providers concerned (an
+administrator enters their secret again). Include the key in the quarterly restore test.
 
 **Rotate** it when someone who had access to it leaves, or on your key-rotation schedule:
 
@@ -254,42 +262,65 @@ two-factor enrolments: the server refuses to start until the key is configured a
 2. In the env file: `ENCRYPTION_KEY_PREVIOUS_FILE=<the old path>`, `ENCRYPTION_KEY_FILE=<the new path>`.
 3. Restart. With several instances, stop all of them first: an instance still on the old key cannot
    read the secrets the others have re-encrypted. At start-up the server re-encrypts every secret
-   under the new key (logged as `Encrypted N authenticator secrets (key …): … from previous key …`).
+   under the new key, authenticator secrets and identity provider secrets alike (logged per table,
+   e.g. `Encrypted N authenticator secrets (key …): … from previous key …`).
 4. Check with `shadoucmdb verify` that every secret is under the new key, then remove
-   `ENCRYPTION_KEY_PREVIOUS_FILE` and restart.
+   `ENCRYPTION_KEY_PREVIOUS_FILE` and restart. If `verify` still lists secrets under the previous
+   key, those do not decrypt (altered or copied from another row), and the start-up log names the
+   users or providers concerned ("… does not decrypt"). The key is not lost, so do not run
+   `reset-undecryptable`: reset two-factor sign-in for those users, or enter the provider's secret
+   again under Administration > Sign-in, then check with `verify` again before you remove the
+   previous key.
 5. **Keep the old key as long as you keep backups taken before the rotation**: their secrets are
    encrypted with it. Destroy it only after those backups have expired.
 
 Rotation protects later backups and limits what a leaked key file alone is worth. It does not help
-once the database **and** the key have leaked: then every authenticator secret is known.
+once the database **and** the key have leaked: then every authenticator secret and every identity
+provider secret is known.
 
 **If the database or a backup leaks together with the key** (e.g. the application server was
 compromised): treat it as an incident. Reset two-factor sign-in for every user who has it
 (`DELETE /api/v1/admin/users/{id}/mfa`, or **Reset two-factor** under the user's account actions) so
 they enrol a new authenticator, rotate the key as above, and rotate the OIDC client secret and the
 bind password at the provider. Password resets alone are not enough. A leak of the database or a
-backup **without** the key exposes no authenticator secret, but still the password hashes and the
-provider credentials ([secrets at rest](#secrets-and-configuration)).
+backup **without** the key exposes no authenticator secret and no provider credential, but still
+the password hashes ([secrets at rest](#secrets-and-configuration)).
 
 **Lost key.** When the database holds secrets under a key that is not configured, `serve` exits
-with a message naming both key ids. Configure the right key (from escrow), or give up those
-enrolments:
+with a message naming both key ids and the commands that apply. Configure the right key (from
+escrow), or give up those secrets:
 
 ```sh
 shadoucmdb mfa reset-undecryptable --dry-run   # lists the users concerned
 shadoucmdb mfa reset-undecryptable             # asks for the database name, then turns it off
+shadoucmdb identity-providers reset-undecryptable --dry-run   # lists the providers concerned
+shadoucmdb identity-providers reset-undecryptable             # asks for the database name, then disables them
 ```
 
-It deletes their authenticator and recovery codes in one transaction and writes one `mfa.disable`
-audit event per user with `reason: key_lost`. Users under the configured key are not touched.
+`mfa reset-undecryptable` deletes the users' authenticator and recovery codes in one transaction
+and writes one `mfa.disable` audit event per user with `reason: key_lost`.
+`identity-providers reset-undecryptable` disables each provider concerned and clears its secret
+(for a directory also its bind DN, which needs its password), ends the sessions of its accounts,
+and writes one `update` audit row per provider with `reason: key_lost`; the old bind DN stays in
+that row. Sign-in through those providers stops until an administrator enters the secret again
+under **Administration › Sign-in** and enables the provider; sign in with a local administrator
+account to do so. Users and providers under the configured key are not touched.
 
 A secret that does not decrypt although its key is configured (altered in the database, or copied
 from another user's row) fails closed: the user's authenticator codes are refused, the server logs
 an error with the user id and writes an `mfa.failure` event with `reason: secret_undecryptable`.
-Recovery codes still work, and an administrator can reset the user's two-factor sign-in.
+Recovery codes still work, and an administrator can reset the user's two-factor sign-in. The same
+holds for an identity provider's secret: sign-in through that provider answers
+`IDENTITY_PROVIDER_UNAVAILABLE` (the OIDC button ends at `ssoError=unavailable`), the connection
+test says the stored secret cannot be decrypted, and the server logs an error with the provider id
+and name. Enter the secret again to re-encrypt it.
 
 **Downgrading** after the upgrade that introduced encryption needs a restore of a backup taken
 before it: the previous release cannot read encrypted secrets and rejects every authenticator code.
+For the same reason, do not run the previous release next to this one during the upgrade: once
+the new release has encrypted the secrets at start-up, sign-in through OIDC and LDAP fails on the
+previous release's instances and saving an identity provider secret there fails. Stop every
+instance of the previous release before you start the new one.
 
 Residual risk: the key is in the server's memory while it runs, so a memory dump of the running
 process exposes it, and the previous key widens the exposure while a rotation is in progress.
@@ -392,9 +423,10 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   the directory (636, or 389 with StartTLS). Allow exactly those in the egress firewall; OIDC calls
   honour `HTTPS_PROXY`/`NO_PROXY`.
 - **Secrets at rest.** The OIDC client secret and the directory bind password are stored in the
-  database (the server has to present them) and in backups; they are never returned by the API
-  or written to the audit log. See [secrets at rest](#secrets-and-configuration) for what that
-  means and what to do if a backup is lost.
+  database encrypted with the [encryption key](#encryption-key) (the server has to present them);
+  they are never returned by the API or written to the audit log. See
+  [secrets at rest](#secrets-and-configuration) for what that means, and what to do about
+  backups taken before that encryption.
 - **Leavers.** Disable the person in the provider. Their next sign-in is refused; a session they
   already have lasts until it idles out (`SESSION_IDLE_TIMEOUT_MINUTES`) or ends. To end it at
   once, disable the account in ShadouCMDB too, or disable the provider (ends all its sessions).
@@ -413,14 +445,14 @@ holds no state of its own besides its env file.
   snapshots).
 - **Encrypt backups** at rest and in transit (e.g. `age` or `gpg` before the file leaves the host,
   or an encrypted backup repository). A backup, whether a `pg_dump` or a `shadoucmdb backup`
-  file, contains the password hashes, the whole CMDB and the
-  [identity provider credentials](#secrets-and-configuration), which are stored unencrypted. The
-  users' authenticator secrets in it are encrypted with the [encryption key](#encryption-key),
-  which is never part of a backup. Keep the backup decryption key away from the backups and from
+  file, contains the password hashes and the whole CMDB. The users' authenticator secrets and the
+  [identity provider credentials](#secrets-and-configuration) in it are encrypted with the
+  [encryption key](#encryption-key), which is never part of a backup. Keep the backup decryption key away from the backups and from
   the database host.
 - **Back up the encryption key separately.** A restored database needs the key it was encrypted
   with (a backup taken before a rotation needs the previous key); without it, the users with
-  two-factor sign-in have to set it up again. Store the key where the backups are not, so that one
+  two-factor sign-in have to set it up again, and an administrator has to enter the identity
+  providers' secrets again. Store the key where the backups are not, so that one
   leak does not expose both.
 - **Restrict the file on the host.** `shadoucmdb backup` creates its file with mode `0600` on
   Linux. On Windows the file inherits the folder's ACL: write backups only to a folder limited to

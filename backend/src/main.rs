@@ -90,6 +90,9 @@ enum Command {
     /// Two-factor authentication maintenance.
     #[command(subcommand)]
     Mfa(secrets::cli::MfaCommand),
+    /// Identity provider (OIDC, LDAP) maintenance.
+    #[command(subcommand)]
+    IdentityProviders(secrets::cli::IdentityProvidersCommand),
     /// Print the OpenAPI document generated from the code, or compare it with a file.
     Openapi {
         /// Write the document to this file instead of stdout.
@@ -120,6 +123,7 @@ impl Command {
             Command::Decommission(_) => "decommission",
             Command::GenerateEncryptionKey(_) => "generate-encryption-key",
             Command::Mfa(_) => "mfa",
+            Command::IdentityProviders(_) => "identity-providers",
             Command::Openapi { .. } => "openapi",
             Command::Service(_) => "service",
         }
@@ -228,6 +232,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Mfa(cmd) => {
             let cfg = Config::from_env()?;
             runtime()?.block_on(secrets::cli::mfa(&cfg, cmd))
+        }
+        Command::IdentityProviders(cmd) => {
+            let cfg = Config::from_env()?;
+            runtime()?.block_on(secrets::cli::identity_providers(&cfg, cmd))
         }
         Command::Service(cmd) => service::run(cmd, launch),
         Command::Openapi { .. } | Command::GenerateEncryptionKey(_) => unreachable!("handled above"),

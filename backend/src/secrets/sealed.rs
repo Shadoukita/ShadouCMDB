@@ -19,15 +19,19 @@ use super::{KeyId, Keyring, OpenError, Purpose, Sealed, Secret};
 pub enum SealedTable {
     /// TOTP seeds (`secret`, `key_id`).
     UserTotp,
+    /// OIDC client secrets and LDAP bind passwords (`client_secret_enc`,
+    /// `bind_password_enc`, `secrets_key_id`).
+    IdentityProviders,
 }
 
-pub const SEALED_TABLES: &[SealedTable] = &[SealedTable::UserTotp];
+pub const SEALED_TABLES: &[SealedTable] = &[SealedTable::UserTotp, SealedTable::IdentityProviders];
 
 impl SealedTable {
     /// Table name in the `cmdb` schema, as in the backup header.
     pub fn name(self) -> &'static str {
         match self {
             SealedTable::UserTotp => "user_totp",
+            SealedTable::IdentityProviders => "identity_providers",
         }
     }
 
@@ -38,6 +42,20 @@ impl SealedTable {
     fn key_column(self) -> &'static str {
         match self {
             SealedTable::UserTotp => "key_id",
+            SealedTable::IdentityProviders => "secrets_key_id",
+        }
+    }
+
+    /// The rows not encrypted yet; `migrated`: the key column exists.
+    fn unencrypted_filter(self, migrated: bool) -> &'static str {
+        match (self, migrated) {
+            (SealedTable::UserTotp, true) => "key_id IS NULL",
+            (SealedTable::UserTotp, false) => "true",
+            // A provider without a secret has nothing to encrypt.
+            (SealedTable::IdentityProviders, true) => {
+                "secrets_key_id IS NULL AND (client_secret IS NOT NULL OR bind_password IS NOT NULL)"
+            }
+            (SealedTable::IdentityProviders, false) => "client_secret IS NOT NULL OR bind_password IS NOT NULL",
         }
     }
 
@@ -45,6 +63,7 @@ impl SealedTable {
     pub fn describe(self, n: i64) -> String {
         let (one, many) = match self {
             SealedTable::UserTotp => ("authenticator secret", "authenticator secrets"),
+            SealedTable::IdentityProviders => ("identity provider secret", "identity provider secrets"),
         };
         format!("{n} {}", if n == 1 { one } else { many })
     }
@@ -55,6 +74,10 @@ impl SealedTable {
             SealedTable::UserTotp => (
                 "shadoucmdb mfa reset-undecryptable",
                 "turns off two-factor sign-in for those users so they can enrol again",
+            ),
+            SealedTable::IdentityProviders => (
+                "shadoucmdb identity-providers reset-undecryptable",
+                "disables those providers and clears their secrets until an administrator enters them again",
             ),
         }
     }
@@ -104,6 +127,62 @@ impl SealedTable {
                     if key_id.is_none() { done.unencrypted += 1 } else { done.from_previous += 1 }
                 }
             }
+            SealedTable::IdentityProviders => {
+                let rows: Vec<ProviderSecretsRow> = sqlx::query_as(
+                    "SELECT id, client_secret, bind_password, client_secret_enc, bind_password_enc, secrets_key_id
+                     FROM identity_providers
+                     WHERE (secrets_key_id IS NULL AND (client_secret IS NOT NULL OR bind_password IS NOT NULL))
+                        OR secrets_key_id <> $1
+                     FOR UPDATE",
+                )
+                .bind(keyring.active_id().0)
+                .fetch_all(&mut *conn)
+                .await?;
+                'rows: for row in rows {
+                    let mut resealed: [Option<Sealed>; 2] = [None, None];
+                    for (slot, column) in resealed.iter_mut().zip(ProviderSecret::ALL) {
+                        let Some(stored) = row.stored(column) else { continue };
+                        let secret = match open_provider_secret(keyring, row.id, column, &stored) {
+                            Ok(secret) => secret,
+                            Err(OpenError::UnknownKey(k)) => {
+                                return Err(PrepareError::Refused(format!(
+                                    "identity_providers row {} is encrypted with key {k}, which is not configured",
+                                    row.id
+                                )));
+                            }
+                            Err(OpenError::Invalid) => {
+                                // Left as it is: sign-in through the provider fails closed until an
+                                // administrator enters the secret again.
+                                tracing::error!(
+                                    provider_id = %row.id,
+                                    key = ?row.secrets_key_id.map(KeyId),
+                                    "the {} of this identity provider does not decrypt (altered or copied from \
+                                     another row); it cannot be re-encrypted. Enter it again under Administration \
+                                     > Sign-in",
+                                    column.label()
+                                );
+                                done.failed += 1;
+                                continue 'rows;
+                            }
+                        };
+                        *slot = Some(seal_provider_secret(keyring, row.id, column, &secret));
+                    }
+                    let [client_secret, bind_password] = resealed;
+                    // Not an audited change: the configuration stays the same (as for TOTP).
+                    sqlx::query(
+                        "UPDATE identity_providers SET client_secret_enc = $1, bind_password_enc = $2,
+                           secrets_key_id = $3, client_secret = NULL, bind_password = NULL
+                         WHERE id = $4",
+                    )
+                    .bind(client_secret.as_ref().map(|s| &s.bytes))
+                    .bind(bind_password.as_ref().map(|s| &s.bytes))
+                    .bind(keyring.active_id().0)
+                    .bind(row.id)
+                    .execute(&mut *conn)
+                    .await?;
+                    if row.secrets_key_id.is_none() { done.unencrypted += 1 } else { done.from_previous += 1 }
+                }
+            }
         }
         Ok(done)
     }
@@ -125,8 +204,8 @@ pub fn seal_totp_secret(keyring: &Keyring, user_id: Uuid, seed: &[u8]) -> Sealed
 }
 
 /// The seed in a `user_totp` row. `key_id` NULL is a seed stored before
-/// encryption: start-up encrypts those, but an instance of the previous
-/// release may still write one during a rolling upgrade.
+/// encryption (0025); start-up encrypts those. The previous release cannot
+/// read encrypted seeds, so it must not run next to this one.
 pub fn open_totp_secret(
     keyring: &Keyring,
     user_id: Uuid,
@@ -137,6 +216,122 @@ pub fn open_totp_secret(
         None if stored.len() == 20 => Ok(Secret::new(stored.to_vec())),
         None => Err(OpenError::Invalid),
         Some(k) => keyring.open(Purpose::TotpSecret, KeyId(k), &totp_ad(user_id), stored),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Identity provider secrets
+// ---------------------------------------------------------------------------
+
+/// A secret column of `identity_providers`. Only one applies to a kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderSecret {
+    /// OIDC `client_secret_enc`
+    ClientSecret,
+    /// LDAP `bind_password_enc`
+    BindPassword,
+}
+
+impl ProviderSecret {
+    pub const ALL: [ProviderSecret; 2] = [ProviderSecret::ClientSecret, ProviderSecret::BindPassword];
+
+    /// The column name in the associated data (the plaintext column's name).
+    fn column(self) -> &'static str {
+        match self {
+            ProviderSecret::ClientSecret => "client_secret",
+            ProviderSecret::BindPassword => "bind_password",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ProviderSecret::ClientSecret => "client secret",
+            ProviderSecret::BindPassword => "bind password",
+        }
+    }
+}
+
+/// A provider secret as stored. `Debug` never shows it; it is decrypted only
+/// where it is presented to the provider ([`open_provider_secret`]).
+#[derive(Clone, PartialEq, Eq)]
+pub enum StoredSecret {
+    /// Written before encryption (0026); start-up encrypts it. The previous
+    /// release cannot use encrypted secrets, so it must not run next to this
+    /// one.
+    Plain(String),
+    Encrypted {
+        key_id: KeyId,
+        bytes: Vec<u8>,
+    },
+}
+
+impl std::fmt::Debug for StoredSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Sealed(<redacted>)")
+    }
+}
+
+impl StoredSecret {
+    /// From the plaintext column, the `_enc` column and the row's key id. The
+    /// check constraints never let a row hold both forms.
+    pub fn from_columns(plain: Option<String>, sealed: Option<Vec<u8>>, key_id: Option<i32>) -> Option<StoredSecret> {
+        match (sealed, key_id) {
+            (Some(bytes), Some(k)) => Some(StoredSecret::Encrypted { key_id: KeyId(k), bytes }),
+            _ => plain.map(StoredSecret::Plain),
+        }
+    }
+}
+
+/// Binds a secret to its provider and column: copied onto another provider, or
+/// from the bind password to the client secret, it does not open.
+fn provider_ad(provider_id: Uuid, column: ProviderSecret) -> Vec<u8> {
+    let mut ad = b"shadoucmdb:identity_providers:v1:".to_vec();
+    ad.extend_from_slice(provider_id.as_bytes());
+    ad.push(b':');
+    ad.extend_from_slice(column.column().as_bytes());
+    ad
+}
+
+pub fn seal_provider_secret(keyring: &Keyring, provider_id: Uuid, column: ProviderSecret, secret: &str) -> Sealed {
+    keyring.seal(Purpose::IdentityProviderSecret, &provider_ad(provider_id, column), secret.as_bytes())
+}
+
+/// The secret in clear, to present to the provider.
+pub fn open_provider_secret(
+    keyring: &Keyring,
+    provider_id: Uuid,
+    column: ProviderSecret,
+    stored: &StoredSecret,
+) -> Result<crate::auth::secret::Secret, OpenError> {
+    match stored {
+        StoredSecret::Plain(s) => Ok(s.as_str().into()),
+        StoredSecret::Encrypted { key_id, bytes } => {
+            let plain =
+                keyring.open(Purpose::IdentityProviderSecret, *key_id, &provider_ad(provider_id, column), bytes)?;
+            let text = std::str::from_utf8(&plain).map_err(|_| OpenError::Invalid)?;
+            Ok(text.into())
+        }
+    }
+}
+
+/// The secret columns of one provider, as the start-up step reads them.
+#[derive(sqlx::FromRow)]
+struct ProviderSecretsRow {
+    id: Uuid,
+    client_secret: Option<String>,
+    bind_password: Option<String>,
+    client_secret_enc: Option<Vec<u8>>,
+    bind_password_enc: Option<Vec<u8>>,
+    secrets_key_id: Option<i32>,
+}
+
+impl ProviderSecretsRow {
+    fn stored(&self, column: ProviderSecret) -> Option<StoredSecret> {
+        let (plain, sealed) = match column {
+            ProviderSecret::ClientSecret => (&self.client_secret, &self.client_secret_enc),
+            ProviderSecret::BindPassword => (&self.bind_password, &self.bind_password_enc),
+        };
+        StoredSecret::from_columns(plain.clone(), sealed.clone(), self.secrets_key_id)
     }
 }
 
@@ -188,16 +383,9 @@ pub async fn key_counts(conn: &mut PgConnection) -> sqlx::Result<Vec<KeyCount>> 
 pub async fn unencrypted_counts(conn: &mut PgConnection) -> sqlx::Result<Vec<(SealedTable, i64)>> {
     let mut out = Vec::new();
     for &table in SEALED_TABLES {
-        let n: i64 = if has_key_column(conn, table).await? {
-            sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                "SELECT count(*) FROM cmdb.{} WHERE {} IS NULL",
-                table.name(),
-                table.key_column()
-            )))
-            .fetch_one(&mut *conn)
-            .await?
-        } else {
-            // Before the migration every row is plaintext, if the table exists at all.
+        let migrated = has_key_column(conn, table).await?;
+        // Before the migration every secret is plaintext, if the table exists at all.
+        if !migrated {
             let exists: bool = sqlx::query_scalar("SELECT to_regclass('cmdb.' || $1) IS NOT NULL")
                 .bind(table.name())
                 .fetch_one(&mut *conn)
@@ -205,10 +393,14 @@ pub async fn unencrypted_counts(conn: &mut PgConnection) -> sqlx::Result<Vec<(Se
             if !exists {
                 continue;
             }
-            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM cmdb.{}", table.name())))
-                .fetch_one(&mut *conn)
-                .await?
-        };
+        }
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM cmdb.{} WHERE {}",
+            table.name(),
+            table.unencrypted_filter(migrated)
+        )))
+        .fetch_one(&mut *conn)
+        .await?;
         out.push((table, n));
     }
     Ok(out)
@@ -390,6 +582,37 @@ pub async fn undecryptable_totp(conn: &mut PgConnection, known: &[KeyId]) -> sql
         .collect())
 }
 
+/// A provider whose secret is under a key that is not configured.
+#[derive(Debug)]
+pub struct UndecryptableProvider {
+    pub id: Uuid,
+    pub name: String,
+    pub kind: String,
+    pub is_enabled: bool,
+    pub key_id: KeyId,
+}
+
+/// The `identity_providers` rows under keys other than `known`, locked.
+pub async fn undecryptable_providers(
+    conn: &mut PgConnection,
+    known: &[KeyId],
+) -> sqlx::Result<Vec<UndecryptableProvider>> {
+    let known: Vec<i32> = known.iter().map(|k| k.0).collect();
+    let rows: Vec<(Uuid, String, String, bool, i32)> = sqlx::query_as(
+        "SELECT id, name, kind, is_enabled, secrets_key_id FROM identity_providers
+         WHERE secrets_key_id IS NOT NULL AND secrets_key_id <> ALL ($1)
+         ORDER BY lower(name), id
+         FOR UPDATE",
+    )
+    .bind(&known)
+    .fetch_all(conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, kind, is_enabled, k)| UndecryptableProvider { id, name, kind, is_enabled, key_id: KeyId(k) })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +637,70 @@ mod tests {
         let msg = refusal(&[count(1, 1)], b, Some(a)).unwrap();
         assert!(msg.starts_with("1 authenticator secret is encrypted with key 00000001"), "{msg}");
         assert!(msg.contains("ENCRYPTION_KEY_PREVIOUS_FILE holds key 3f9a01c2"), "{msg}");
+    }
+
+    #[test]
+    fn refusal_lists_both_tables_and_both_commands() {
+        let (a, b) = (KeyId(0x3f9a01c2), KeyId(0x8be4d177u32 as i32));
+        let idp = |key: KeyId, rows| KeyCount { table: SealedTable::IdentityProviders, key_id: key, rows };
+        let msg = refusal(&[count(a.0, 42), idp(a, 2)], b, None).unwrap();
+        assert_eq!(
+            msg,
+            "42 authenticator secrets and 2 identity provider secrets are encrypted with key 3f9a01c2, but \
+             ENCRYPTION_KEY_FILE holds key 8be4d177 (and ENCRYPTION_KEY_PREVIOUS_FILE is not set). Configure the key \
+             this database was encrypted with. If that key is lost, run \"shadoucmdb mfa reset-undecryptable\" \
+             (turns off two-factor sign-in for those users so they can enrol again) and \"shadoucmdb \
+             identity-providers reset-undecryptable\" (disables those providers and clears their secrets until an \
+             administrator enters them again)."
+        );
+        // Only the command that applies is named.
+        let msg = refusal(&[count(b.0, 42), idp(a, 1)], b, None).unwrap();
+        assert!(msg.starts_with("1 identity provider secret is encrypted with key 3f9a01c2"), "{msg}");
+        assert!(!msg.contains("mfa reset-undecryptable"), "{msg}");
+        assert_eq!(refusal(&[count(a.0, 42), idp(b, 2)], b, Some(a)), None);
+    }
+
+    #[test]
+    fn stored_secrets_never_show_in_debug() {
+        let plain = StoredSecret::Plain("hunter2".into());
+        let sealed = StoredSecret::Encrypted { key_id: KeyId(1), bytes: b"hunter2-bytes".to_vec() };
+        for s in [&plain, &sealed] {
+            assert_eq!(format!("{s:?}"), "Sealed(<redacted>)");
+        }
+        assert_eq!(format!("{:?}", Some(plain)), "Some(Sealed(<redacted>))");
+    }
+
+    #[test]
+    fn provider_secrets_are_bound_to_provider_and_column() {
+        let ring = Keyring::random();
+        let (p, q) = (Uuid::new_v4(), Uuid::new_v4());
+        let secret = "client-secret-value";
+        let s = seal_provider_secret(&ring, p, ProviderSecret::ClientSecret, secret);
+        assert_eq!(s.bytes.len(), secret.len() + super::super::OVERHEAD);
+        assert!(!s.bytes.windows(secret.len()).any(|w| w == secret.as_bytes()));
+        let stored = StoredSecret::Encrypted { key_id: s.key_id, bytes: s.bytes.clone() };
+        let open = |id, column| open_provider_secret(&ring, id, column, &stored).map(|s| s.expose().to_owned());
+        assert_eq!(open(p, ProviderSecret::ClientSecret).as_deref(), Ok(secret));
+        assert_eq!(open(q, ProviderSecret::ClientSecret), Err(OpenError::Invalid), "another provider");
+        assert_eq!(open(p, ProviderSecret::BindPassword), Err(OpenError::Invalid), "the other column");
+        // The message names the part flipped, never an index derived from the
+        // ciphertext (CodeQL treats that as logging the secret).
+        for (part, i) in [("nonce", 0), ("ciphertext", 12), ("tag", s.bytes.len() - 1)] {
+            let mut bytes = s.bytes.clone();
+            bytes[i] ^= 1;
+            let tampered = StoredSecret::Encrypted { key_id: s.key_id, bytes };
+            let refused = open_provider_secret(&ring, p, ProviderSecret::ClientSecret, &tampered).is_err();
+            assert!(refused, "flipped {part} byte");
+        }
+        // The same AD under the TOTP subkey: another purpose, another key.
+        let totp = ring.seal(Purpose::TotpSecret, &provider_ad(p, ProviderSecret::ClientSecret), secret.as_bytes());
+        let as_idp = StoredSecret::Encrypted { key_id: totp.key_id, bytes: totp.bytes };
+        assert!(open_provider_secret(&ring, p, ProviderSecret::ClientSecret, &as_idp).is_err());
+        // The AD layout of the design (SHAA-490 §A2).
+        let mut ad = b"shadoucmdb:identity_providers:v1:".to_vec();
+        ad.extend_from_slice(p.as_bytes());
+        ad.extend_from_slice(b":bind_password");
+        assert_eq!(provider_ad(p, ProviderSecret::BindPassword), ad);
     }
 
     #[test]
