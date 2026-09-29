@@ -402,7 +402,11 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
   deleted ones included. Unless the caller may view the field's type and every type below it, they answer `403
   FORBIDDEN` (`details[].code` `view_required`) before any value is read, in `PATCH` and in the preview alike; a
   refused preview is audited as `schema_change.refused`. For such callers an `isRequired` refusal does not say how
-  many assets lack a value.
+  many assets lack a value, and a re-parenting refusal does not name the fields that hold values.
+- **Purge counts need view on the purged values.** A field purge counts the values it deletes, a type purge the CIs
+  and relationships; both appear in the preview and in the recorded schema change. For a caller who may not view
+  the type and every type below it, `impact[].rows` is `null`, the message says only that the values or rows are
+  deleted, and the summary carries no counts.
 - Technical names (`key`) are immutable once created, because imports, reports and SQL depend on them; renaming
   changes only the display name.
 

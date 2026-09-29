@@ -2606,7 +2606,7 @@ export interface components {
             kind: string;
             /**
              * Format: int64
-             * @description Rows (assets) concerned, when known
+             * @description Rows (assets) concerned, when known and the caller may view them all
              */
             rows: number | null;
             message: string;
