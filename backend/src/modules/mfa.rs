@@ -656,6 +656,65 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
+    /// A second-factor step started before an administrator resets the
+    /// password or disables the account is refused afterwards, even with the
+    /// right code and the account enabled again (GH#191).
+    #[tokio::test]
+    async fn a_reset_or_disable_drops_pending_second_factor_steps() {
+        let Some(db) = scratch::database("a_reset_or_disable_drops_pending_second_factor_steps").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, _) = setup(&app).await;
+        let step = settled_step().await;
+        let (secret, _) = enrol(&app, pool, &session, step).await;
+        let administrators: Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let body = json!({ "username": "second", "displayName": "Second", "password": PASSWORD,
+            "profileIds": [administrators] });
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+        let body = json!({ "username": "second", "password": PASSWORD });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(body)).await;
+        assert_eq!(status, 200, "{me}");
+        let second = session_of(&me, &headers);
+        let owner: Uuid =
+            sqlx::query_scalar("SELECT id FROM users WHERE username = 'owner'").fetch_one(pool).await.unwrap();
+        let user = format!("/api/v1/admin/users/{owner}");
+        let pending = || {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mfa_challenges WHERE user_id = $1")
+                .bind(owner)
+                .fetch_one(pool)
+        };
+
+        // Disabled and enabled again while the second step is pending.
+        let challenge = password_step(&app).await;
+        assert_eq!(pending().await.unwrap(), 1);
+        let (status, v, _) = call(&app, "PATCH", &user, &second, Some(json!({ "isActive": false }))).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(pending().await.unwrap(), 0);
+        let (status, v, _) = call(&app, "PATCH", &user, &second, Some(json!({ "isActive": true }))).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+
+        // Reset (to the same password, so the test can sign in again) while it is pending.
+        let challenge = password_step(&app).await;
+        let reset = json!({ "password": PASSWORD });
+        let (status, v, _) = call(&app, "PUT", &format!("{user}/password"), &second, Some(reset)).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(pending().await.unwrap(), 0);
+        let (status, v, _) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+
+        // A step started afterwards goes through with the same code.
+        let challenge = password_step(&app).await;
+        let (status, v, _) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!(status, 200, "{v}");
+        db.drop().await;
+    }
+
     /// With the session and the password, guessing the code to turn MFA off
     /// or get new recovery codes locks like guessing the password: a right
     /// password does not clear the count, not even on a password-only

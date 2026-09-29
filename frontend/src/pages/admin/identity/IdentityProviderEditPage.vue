@@ -10,6 +10,7 @@ import {
   type IdentityProvider,
   type IdentityProviderCreateBody,
   type IdentityProviderUpdateBody,
+  type MfaAssurance,
   type ProviderKind,
 } from "../../../api/identityProviders";
 import Breadcrumbs from "../../../components/Breadcrumbs.vue";
@@ -56,6 +57,9 @@ interface Form {
   scopes: string;
   usernameClaim: string;
   groupsClaim: string;
+  mfaAssurance: MfaAssurance;
+  /** requiredAcr as typed: values separated by spaces or line breaks */
+  requiredAcr: string;
   url: string;
   bindDn: string;
   bindPassword: string | null | undefined;
@@ -82,6 +86,8 @@ const blank = (kind: ProviderKind = "oidc"): Form => ({
   scopes: "profile email",
   usernameClaim: "preferred_username",
   groupsClaim: "groups",
+  mfaAssurance: "verify",
+  requiredAcr: "",
   url: "",
   bindDn: "",
   bindPassword: undefined,
@@ -105,6 +111,8 @@ const fromProvider = (p: IdentityProvider): Form => ({
     scopes: p.oidc.scopes,
     usernameClaim: p.oidc.usernameClaim,
     groupsClaim: p.oidc.groupsClaim,
+    mfaAssurance: p.oidc.mfaAssurance,
+    requiredAcr: p.oidc.requiredAcr.join(" "),
   }),
   ...(p.ldap && {
     url: p.ldap.url,
@@ -166,6 +174,8 @@ const FIELDS = [
   "oidc.scopes",
   "oidc.usernameClaim",
   "oidc.groupsClaim",
+  "oidc.mfaAssurance",
+  "oidc.requiredAcr",
   "ldap.url",
   "ldap.startTls",
   "ldap.bindDn",
@@ -181,11 +191,16 @@ const fieldErrors = computed<Record<string, string>>(() => {
   const api = error.value instanceof ApiError ? error.value.fieldErrors() : {};
   // StartTLS is derived from the URL, so its complaints belong next to the URL.
   if (api["ldap.startTls"]) api["ldap.url"] = api["ldap.url"] ? `${api["ldap.url"]}; ${api["ldap.startTls"]}` : api["ldap.startTls"];
+  // One input holds the whole list: a complaint about one value ("oidc.requiredAcr.2") belongs next to it.
+  for (const [k, v] of Object.entries(api)) {
+    const m = /^oidc\.requiredAcr[.[](\d+)/.exec(k);
+    if (m) api["oidc.requiredAcr"] = [api["oidc.requiredAcr"], `Value ${Number(m[1]) + 1}: ${v}`].filter(Boolean).join("; ");
+  }
   return { ...api, ...local.value };
 });
 const unplaced = computed(() =>
   error.value instanceof ApiError
-    ? error.value.details.filter((d) => !FIELDS.includes(d.field) && !d.field.startsWith("groupMappings"))
+    ? error.value.details.filter((d) => !FIELDS.includes(d.field) && !/^(groupMappings|oidc\.requiredAcr)\b/.test(d.field))
     : [],
 );
 
@@ -199,6 +214,12 @@ function validate(f: Form): Record<string, string> {
     need("oidc.clientId", f.clientId);
     need("oidc.usernameClaim", f.usernameClaim);
     need("oidc.groupsClaim", f.groupsClaim);
+    if (f.mfaAssurance === "verify") {
+      const acr = acrValues(f.requiredAcr);
+      const bad = acr.find((v) => !ACR_VALUE.test(v));
+      if (acr.length > MAX_REQUIRED_ACR) errs["oidc.requiredAcr"] = `At most ${MAX_REQUIRED_ACR} values`;
+      else if (bad !== undefined) errs["oidc.requiredAcr"] = `“${bad.length > 40 ? `${bad.slice(0, 40)}…` : bad}”: printable ASCII only, up to 200 characters`;
+    }
   } else {
     need("ldap.url", f.url);
     need("ldap.userBaseDn", f.userBaseDn);
@@ -219,6 +240,12 @@ function validate(f: Form): Record<string, string> {
   return errs;
 }
 
+const MAX_REQUIRED_ACR = 10;
+/** Printable ASCII without spaces, as the API accepts. */
+const ACR_VALUE = /^[!-~]{1,200}$/;
+/** The typed list, each value once, in order. */
+const acrValues = (text: string) => [...new Set(text.split(/\s+/).filter(Boolean))];
+
 /** Secrets: undefined keeps the stored one, "" (an untouched replace box) too; null removes. */
 const secret = (v: string | null | undefined) => (v === "" ? undefined : v);
 
@@ -237,7 +264,10 @@ function body(f: Form): IdentityProviderUpdateBody {
       scopes: f.scopes.trim(),
       usernameClaim: f.usernameClaim.trim(),
       groupsClaim: f.groupsClaim.trim(),
+      mfaAssurance: f.mfaAssurance,
     };
+    // Under Trust the list is left out: the API then empties it.
+    if (f.mfaAssurance === "verify") b.oidc.requiredAcr = acrValues(f.requiredAcr);
     const s = secret(f.clientSecret);
     if (s !== undefined) b.oidc.clientSecret = s;
   } else {
@@ -337,6 +367,9 @@ const notFound = computed(() => {
           <span class="badge">{{ KIND_LABELS[p.kind] }}</span>
           <span v-if="p.isEnabled" class="badge ok">Enabled</span>
           <span v-else class="badge off">Disabled</span>
+          <span v-if="p.oidc?.mfaAssurance === 'trustProvider'" class="badge warn" title="Trusts the provider to enforce MFA; the sign-in token is not checked">
+            MFA not verified
+          </span>
           <span class="muted">{{ plural(p.userCount, "account") }}</span>
         </template>
       </div>
@@ -352,7 +385,7 @@ const notFound = computed(() => {
             <div v-if="saved" class="alert" role="status">{{ saved }}</div>
             <fieldset v-if="isNew" class="group">
               <legend>Type</legend>
-              <div class="kind-choice">
+              <div class="radio-choice">
                 <label class="checkbox-row">
                   <input v-model="form.kind" type="radio" name="idp-kind" value="oidc" />
                   <span><strong>OpenID Connect</strong> — Microsoft Entra ID, Okta, Keycloak, ADFS, Google Workspace…: a “Sign in with …” button</span>
@@ -455,6 +488,45 @@ const notFound = computed(() => {
                 </template>
               </FormField>
             </div>
+            <fieldset class="group mfa" aria-describedby="idp-mfa-hint">
+              <legend>Multi-factor authentication</legend>
+              <span id="idp-mfa-hint" class="hint">
+                Applies to users whose permission profiles require multi-factor authentication. Their second factor is run by the provider.
+              </span>
+              <div class="radio-choice">
+                <label class="checkbox-row">
+                  <input v-model="form.mfaAssurance" type="radio" name="idp-mfa" value="verify" />
+                  <span>
+                    <strong>Verify from the sign-in token (recommended)</strong>: the ID token must prove a second factor
+                    (<code>amr</code>, or <code>acr</code> in the list below); otherwise the sign-in is refused
+                  </span>
+                </label>
+                <label class="checkbox-row">
+                  <input v-model="form.mfaAssurance" type="radio" name="idp-mfa" value="trustProvider" />
+                  <span><strong>Trust the provider without checking</strong>: for providers that send neither, such as Google Workspace</span>
+                </label>
+              </div>
+              <FormField
+                v-if="form.mfaAssurance === 'verify'"
+                id="idp-oidc-requiredAcr"
+                label="Required ACR values"
+                wide
+                :error="fieldErrors['oidc.requiredAcr']"
+                hint="Optional, up to 10, separated by spaces (e.g. a Keycloak level of authentication). Case-sensitive; also sent to the provider as acr_values. Empty: the amr claim decides."
+              >
+                <template #default="{ id: fid, invalid, describedBy }">
+                  <input :id="fid" v-model="form.requiredAcr" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
+                </template>
+              </FormField>
+              <div v-else class="alert alert-warn" role="status" data-testid="mfa-trust-warning">
+                <strong>MFA is not verified.</strong>
+                <div>
+                  ShadouCMDB will not check that the provider used a second factor. Permission profiles that require
+                  multi-factor authentication then depend entirely on the identity provider's policy for this application:
+                  make sure it enforces MFA there.
+                </div>
+              </div>
+            </fieldset>
           </div>
         </section>
 
@@ -559,7 +631,8 @@ const notFound = computed(() => {
               authentication for emergencies.
             </p>
             <p class="muted no-margin">
-              OpenID Connect accounts get their second factor from the provider. Directory (LDAP) accounts that hold a
+              OpenID Connect accounts get their second factor from the provider; the provider's multi-factor
+              authentication setting decides whether ShadouCMDB checks it in the sign-in token. Directory (LDAP) accounts that hold a
               permission profile requiring two-factor authentication set up an authenticator app in ShadouCMDB, confirmed
               with their directory password; sign-in then asks for its code after the directory password.
             </p>
@@ -586,16 +659,16 @@ const notFound = computed(() => {
 </template>
 
 <style scoped>
-.kind-choice {
+.radio-choice {
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
 }
-.kind-choice .checkbox-row {
+.radio-choice .checkbox-row {
   height: auto;
   align-items: flex-start;
 }
-.kind-choice input {
+.radio-choice input {
   margin-top: 3px;
 }
 .copy-row {
@@ -607,5 +680,21 @@ const notFound = computed(() => {
 }
 .unsaved {
   align-self: center;
+}
+.mfa {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  border-top: 1px solid var(--c-border);
+  padding-top: var(--sp-4);
+  margin-top: var(--sp-4);
+}
+.mfa legend {
+  float: left;
+  padding-bottom: 0;
+}
+.mfa .hint {
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
 }
 </style>

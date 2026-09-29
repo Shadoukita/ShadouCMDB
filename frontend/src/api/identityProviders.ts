@@ -12,6 +12,7 @@ export type SignInProvider = Schemas["SignInProvider"];
 export type IdentityProvider = Schemas["IdentityProvider"];
 export type ProviderKind = Schemas["ProviderKind"];
 export type OidcConfig = Schemas["OidcConfig"];
+export type MfaAssurance = OidcConfig["mfaAssurance"];
 export type LdapConfig = Schemas["LdapConfig"];
 export type GroupMapping = Schemas["GroupMapping"];
 export type ConnectionTest = Schemas["ConnectionTest"];

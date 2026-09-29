@@ -24,6 +24,12 @@ static HASHING: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(MAX_CONCUR
 static DUMMY_HASH: LazyLock<String> =
     LazyLock::new(|| hash_blocking("dummy password, never matches").unwrap_or_default());
 
+#[cfg(test)]
+thread_local! {
+    /// Verifications against [`DUMMY_HASH`] on this thread (tests run on one).
+    pub static DUMMY_VERIFIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Problems with a new password, as a message for the `password` field.
 pub fn policy_error(password: &str) -> Option<String> {
     let len = password.chars().count();
@@ -67,6 +73,10 @@ pub async fn hash(password: &str) -> Result<String, AppError> {
 pub async fn verify(password: &str, hash: Option<&str>) -> Result<bool, AppError> {
     let password = password.to_owned();
     let known = hash.is_some();
+    #[cfg(test)]
+    if !known {
+        DUMMY_VERIFIES.with(|n| n.set(n.get() + 1));
+    }
     let hash = hash.map(str::to_owned).unwrap_or_else(|| DUMMY_HASH.clone());
     let ok = blocking(move || verify_blocking(&password, &hash)).await?;
     Ok(ok && known)
