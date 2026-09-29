@@ -313,7 +313,11 @@ curl -s http://127.0.0.1:3000/readyz
 ```
 
 A failed migration rolls back and leaves the database at the previous version; the old binary
-keeps working. Installs created with the older single-role bootstrap are split into the three
+keeps working. A migration that succeeded cannot be undone: to go back to the previous version,
+restore the backup taken before the upgrade. When the release notes say a migration renames or
+removes something the running version uses (migration 0024, for example), run
+`sudo systemctl stop shadoucmdb` before `migrate` and `sudo systemctl start shadoucmdb` instead of
+the restart. Installs created with the older single-role bootstrap are split into the three
 roles with `sql/bootstrap/10_split_roles.sql` (see
 [deployment.md](deployment.md#upgrading-a-single-role-install)). For backups before an upgrade
 see [backup-and-reset.md](backup-and-reset.md).

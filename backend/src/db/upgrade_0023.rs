@@ -33,7 +33,7 @@ async fn existing_oidc_providers_are_trusted_after_the_upgrade() {
     let pool = &db.pool;
     MIGRATOR.run_to(22, pool).await.expect("migrations up to 0022");
     pool.execute(BEFORE).await.expect("data before the upgrade");
-    MIGRATOR.run(pool).await.expect("migration 0023");
+    MIGRATOR.run_to(23, pool).await.expect("migration 0023");
 
     assert_eq!(
         providers(pool).await,

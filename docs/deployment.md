@@ -496,7 +496,8 @@ journalctl -u shadoucmdb -f
 ```
 
 The unit runs as an unprivileged user and has no capabilities or writable
-paths. To upgrade:
+paths. To upgrade (when the release notes say to stop the server before `migrate`, run
+`systemctl stop shadoucmdb` first and `systemctl start shadoucmdb` in step 3):
 1. replace the binary;
 2. run `migrate` with `MIGRATION_DATABASE_URL` as above (on a single-role install, split the
    roles first: see [Upgrading a single-role install](#upgrading-a-single-role-install));

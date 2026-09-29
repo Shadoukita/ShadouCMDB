@@ -37,22 +37,24 @@ pub struct LiveSession {
 /// Whether a profile the user `u` holds requires MFA of this session `s`
 /// (`s` may be NULL: no session, nothing proven). OIDC accounts are exempt
 /// only when their provider is trusted to enforce MFA (`trust_provider`) or
-/// the sign-in that opened the session proved it (`s.provider_mfa`, set under
+/// the sign-in that opened the session proved it (`s.mfa_verified`, set under
 /// `verify`). Local and directory (LDAP) accounts are covered: a directory
-/// password alone is one factor. Shared by the per-request gate and
-/// `/auth/me`, so the two cannot disagree.
+/// password alone is one factor. Shared by the per-request gate, `/auth/me`
+/// and API tokens (with the token as `s`, see [`crate::data::api_tokens`]),
+/// so they cannot disagree.
 pub const MFA_REQUIRED: &str =
     "(EXISTS (SELECT 1 FROM user_permission_profiles up JOIN permission_profiles p ON p.id = up.profile_id
                   WHERE up.user_id = u.id AND p.require_mfa)
          AND NOT EXISTS (SELECT 1 FROM identity_providers ip
                   WHERE ip.id = u.identity_provider_id AND ip.kind = 'oidc'
-                    AND (ip.mfa_assurance = 'trust_provider' OR COALESCE(s.provider_mfa, false))))";
+                    AND (ip.mfa_assurance = 'trust_provider' OR COALESCE(s.mfa_verified, false))))";
 
 /// Whether the user `u` signs in through an OIDC provider.
 const OIDC_ACCOUNT: &str =
     "EXISTS (SELECT 1 FROM identity_providers ip WHERE ip.id = u.identity_provider_id AND ip.kind = 'oidc')";
 
-/// `provider_mfa`: the OIDC sign-in proved a second factor under `verify`.
+/// `mfa_verified`: the sign-in proved a second factor (an authenticator or
+/// recovery code, or an OIDC ID token under `verify`).
 #[allow(clippy::too_many_arguments)]
 pub async fn create_session(
     conn: &mut PgConnection,
@@ -62,10 +64,10 @@ pub async fn create_session(
     max_age: Duration,
     user_agent: Option<&str>,
     ip_address: Option<IpAddr>,
-    provider_mfa: bool,
+    mfa_verified: bool,
 ) -> sqlx::Result<Uuid> {
     sqlx::query_scalar(
-        "INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at, user_agent, ip_address, provider_mfa)
+        "INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at, user_agent, ip_address, mfa_verified)
          VALUES ($1, $2, $3, now() + $4::interval, $5, $6, $7) RETURNING id",
     )
     .bind(user_id)
@@ -74,7 +76,7 @@ pub async fn create_session(
     .bind(interval(max_age))
     .bind(user_agent)
     .bind(ip_address.map(IpNetwork::from))
-    .bind(provider_mfa)
+    .bind(mfa_verified)
     .fetch_one(conn)
     .await
 }
@@ -112,6 +114,12 @@ pub async fn holds_mfa_profile(conn: &mut PgConnection, user_id: Uuid) -> sqlx::
     .bind(user_id)
     .fetch_one(conn)
     .await
+}
+
+/// The session proved a second factor after sign-in (TOTP enrolment confirmed in it).
+pub async fn mark_session_mfa_verified(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE sessions SET mfa_verified = true WHERE id = $1").bind(id).execute(conn).await?;
+    Ok(())
 }
 
 pub async fn touch_session(pool: &PgPool, id: Uuid) -> sqlx::Result<()> {
@@ -161,8 +169,9 @@ pub async fn delete_user_sessions(
 }
 
 /// Whether the session still exists (it was not ended since the request was authenticated).
-pub async fn session_exists(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<bool> {
-    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)").bind(id).fetch_one(conn).await
+/// Whether the session proved a second factor; None once it has ended.
+pub async fn session_mfa_verified(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<bool>> {
+    sqlx::query_scalar("SELECT mfa_verified FROM sessions WHERE id = $1").bind(id).fetch_optional(conn).await
 }
 
 /// Expired and idle sessions; called on login so the table stays small.

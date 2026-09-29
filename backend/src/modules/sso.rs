@@ -1106,10 +1106,10 @@ mod tests {
             .unwrap()
     }
 
-    /// (session count, provider_mfa of each session) of the user.
+    /// (session count, mfa_verified of each session) of the user.
     async fn sessions_of(pool: &PgPool, name: &str) -> Vec<bool> {
         sqlx::query_scalar(
-            "SELECT s.provider_mfa FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.username = $1",
+            "SELECT s.mfa_verified FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.username = $1",
         )
         .bind(name)
         .fetch_all(pool)
