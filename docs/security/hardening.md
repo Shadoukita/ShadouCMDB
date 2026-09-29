@@ -32,6 +32,14 @@ carries passwords and session cookies. Requirements for the proxy:
   cookies `Secure` and doesn't send HSTS. If the proxy can't, set `COOKIE_SECURE=always`.
 - **Replace `X-Forwarded-For`** with the client address; never append to what the client sent.
   The audit log records that address.
+- **List the proxy in `TRUSTED_PROXIES`** on the ShadouCMDB server (its address as the server sees
+  it, or a CIDR range for a pool: `TRUSTED_PROXIES=10.0.0.5`). The sign-in throttle reads the
+  forwarding headers only from a listed peer, right to left, and skips listed hops; without it,
+  every client counts as the proxy's network, so one client's wrong passwords lock a username for
+  all of them. Never list a range your users' clients are in, and never `0.0.0.0/0` (refused at
+  start-up): a listed address can make the server believe any client address.
+- **Keep `SIGN_IN_FAILURE_FLOOR_MS`** (default 1000) above the slowest sign-in your LDAP/AD
+  directory takes, so refused sign-ins all take the same time.
 - **Don't add `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`,
   `Referrer-Policy`, `X-Frame-Options`, `Permissions-Policy` or `Cross-Origin-Opener-Policy`**: the
   server sends them (see [deployment.md](../deployment.md#https-and-session-cookies)). If an earlier

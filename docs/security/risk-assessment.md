@@ -114,19 +114,24 @@ guide.
 
 T1 lockout (GH#187): the sign-in lock is kept per username *and* client network (IPv4 /24, IPv6
 /64), so wrong passwords from one network no longer lock the account holder out from another, and
-one network gets at most 4 places in the server-wide slow lane. The client network comes from the
-forwarding headers, which only a reverse proxy that overwrites them makes trustworthy. Without one,
-or with guesses from three or more real networks, an attacker who knows a username can still add up
+one network gets at most 4 places in the server-wide slow lane. The client network is the TCP
+peer's, or behind a proxy listed in `TRUSTED_PROXIES` the client address it reports, read right to
+left past the listed hops (GH#215), so a forged `X-Forwarded-For` no longer picks the network. With
+the list empty behind a proxy, every client shares the proxy's network (one guesser locks a name for
+all of them); with guesses from three or more real networks, an attacker who knows a username can still add up
 the per-user budget across networks (15 failures) and lock that name for every network, with the
 same backoff up to 15 minutes, and 16 or more networks can still fill the slow lane. IPv6 makes
 distinct networks cheap (a single /48 holds 65,536 /64s), and a user on the account holder's own
 network (for example behind the same office NAT) still locks them out. Mitigations for
-the operator: run behind a proxy that sets `X-Forwarded-For`, rate-limit `/api/v1/auth/*` per client
-address there, and keep a break-glass administrator whose username is not guessable. Timing (GH#190):
-a name that no local account has and that the directory does not match now costs the same argon2
-verify as a wrong local password, but also a directory round trip, so a patient attacker can still
-tell local accounts from other names by latency when a directory is enabled; padding every failed
-sign-in to a fixed minimum would close that and is not done.
+the operator: run behind a proxy that sets `X-Forwarded-For` and list it in `TRUSTED_PROXIES`,
+rate-limit `/api/v1/auth/*` per client address there, and keep a break-glass administrator whose
+username is not guessable. Timing (GH#190, GH#216): a name that no local account has and that the
+directory does not match costs the same argon2 verify as a wrong local password, and every refused
+sign-in (401) is held to `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s, plus up to 5 % jitter) after the
+throttle, so the directory round trip no longer shows in the latency. Residual: a sign-in that takes
+longer than the floor (a slow or unreachable directory, an overloaded server) still shows, so the
+floor must stay above the directory's worst case; and the answer's status still tells a right
+password from a wrong one, as it must.
 
 T20 (GH#131) is residual by design for OIDC providers set to **Trust the provider**: ShadouCMDB
 cannot tell whether such a provider used a second factor, so a password-only policy at the

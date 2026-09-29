@@ -179,6 +179,14 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
   it as evidence, never as an access control. When the recorded address is not the TCP peer,
   the row also has `peerIpAddress`: the proxy's address, or the real client's when there is
   no proxy, which the client cannot forge.
+- List the proxy's address in `TRUSTED_PROXIES` (addresses or CIDR ranges, comma-separated, for
+  example `TRUSTED_PROXIES=10.0.0.5` or `10.20.0.0/24,fd00:1::/64` for a load balancer pool).
+  The sign-in throttle believes the forwarding headers only from a listed peer: it reads
+  `X-Forwarded-For` from right to left, skips listed hops and takes the first address that is
+  not listed as the client, so a forged value to the left of what your proxy added changes
+  nothing. Unset (the default), it uses the TCP peer, which behind a proxy is the proxy for every
+  client (see [Hardening settings](#hardening-settings)). List only proxies you run:
+  anything listed can make the server believe any client address.
 - `SESSION_IDLE_TIMEOUT_MINUTES` (default 12 h) and `SESSION_MAX_AGE_HOURS` (default 7 days)
   bound how long a session lives. Sessions are stored in PostgreSQL, so they survive restarts
   and work across several instances. The login backoff counters are per process.
@@ -396,10 +404,19 @@ All optional; every variable is in [`.env.example`](../.env.example).
   anonymous routes (`/api/v1/auth/*`) per client address at the reverse proxy, which sees the real
   one. Sign-in attempts are throttled per username by the server either way, and starting an OIDC
   sign-in stores nothing, so it cannot fill up the server. The sign-in throttle keeps failures per
-  username and client network (from `X-Forwarded-For`), so that someone guessing one account's
-  password cannot lock the account holder out from their own network. That works only when the proxy
-  overwrites `X-Forwarded-For`; otherwise a client can claim other networks and the per-username
-  budget across networks (15 failures) is what locks the account.
+  username and client network (the IPv4 /24 or IPv6 /64 of the client address), so that someone
+  guessing one account's password cannot lock the account holder out from their own network. The
+  client address is the TCP peer's, or, when the peer is listed in `TRUSTED_PROXIES`, the one your
+  proxies report in `X-Forwarded-For` (GH#215). Behind a proxy that is not listed, every client
+  shares the proxy's network, and five wrong passwords from anyone lock a username for everyone
+  behind that proxy; set `TRUSTED_PROXIES` to the proxy's address.
+- **Refused sign-ins take at least `SIGN_IN_FAILURE_FLOOR_MS`** (default 1000 ms, 0 to 10000): every
+  401 answer of `POST /api/v1/auth/login` (wrong password, unknown name, disabled account, directory
+  refusal) waits until that long after the throttle let the attempt through, plus up to 5 % jitter,
+  so response times do not reveal which names are local accounts (GH#216). The wait holds no
+  database connection and no request capacity. Successful sign-ins, `MFA_REQUIRED`, 429 and 503 are
+  not delayed. With an LDAP/AD directory, keep the floor above the slowest directory sign-in, or the
+  directory's latency shows again.
 - **OIDC provider hosts:** `OIDC_ALLOWED_HOSTS` limits which hosts the server contacts for OIDC
   sign-in, as a comma-separated list: `login.example.com,idp.corp.example:8443`. Host names match
   exactly (case does not matter; `example.com` does not allow `login.example.com`), and an entry
@@ -410,7 +427,11 @@ All optional; every variable is in [`.env.example`](../.env.example).
   either way.
 - **Client details:** `AUDIT_CAPTURE_CLIENT_IP=false` and `AUDIT_CAPTURE_USER_AGENT=false` stop the
   server recording the IP address and User-Agent of sign-ins and sessions (for example where a works
-  council agreement rules them out). Changes stay attributed to the signed-in user.
+  council agreement rules them out). Changes stay attributed to the signed-in user. The sign-in
+  throttle still processes the client address in memory with either setting, to key failures by
+  client network (legitimate interest in protecting accounts, GDPR Art. 6(1)(f)): it is kept in
+  the server's memory only, counts for an hour after a network's last failure, is lost on restart,
+  and is never stored or logged.
 - **Audit export to a SIEM:** `AUDIT_EXPORT` copies each committed `audit_log` row, once, to `stdout`,
   a file (`file:/var/log/shadoucmdb/audit.jsonl`), or syslog over UDP or TCP
   (`udp://siem.example.com:514`). `AUDIT_EXPORT_FORMAT` is `rfc5424` (default for UDP/TCP) or `json`
