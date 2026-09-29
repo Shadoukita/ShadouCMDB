@@ -68,6 +68,9 @@ pub struct ClientInfo {
     /// The TCP peer: the one hop the client cannot forge (the proxy, if there is one).
     pub peer_ip: Option<IpAddr>,
     pub user_agent: Option<String>,
+    /// The client's network, for the sign-in throttle only: set whatever
+    /// `AUDIT_CAPTURE_CLIENT_IP` says, and never stored or logged.
+    pub net: crate::auth::throttle::Net,
 }
 
 /// Per-request context handed to services: the caller, the audit actor and a request id.

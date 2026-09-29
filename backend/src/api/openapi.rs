@@ -161,10 +161,10 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
         ErrorCode::UnsupportedMediaType => (415, "Body is not application/json"),
         ErrorCode::PayloadTooLarge => (413, "Body too large"),
         ErrorCode::RequestTimeout => (408, "Request not completed in time (code REQUEST_TIMEOUT)"),
-        ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated => (
+        ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated | ErrorCode::ServerBusy => (
             503,
-            "Database unreachable (code DATABASE_UNAVAILABLE), or migrations pending (code SCHEMA_NOT_MIGRATED; run \
-             `shadoucmdb migrate`)",
+            "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run \
+             `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
         ),
         ErrorCode::IdentityProviderUnavailable => (
             503,
@@ -300,7 +300,7 @@ pub fn document(routes: &[Route]) -> OpenApi {
         codes.extend(r.errors.iter().copied());
         codes.push(ErrorCode::InternalError);
         if r.path.starts_with("/api/") {
-            codes.extend([ErrorCode::DatabaseUnavailable, ErrorCode::SchemaNotMigrated]);
+            codes.extend([ErrorCode::DatabaseUnavailable, ErrorCode::SchemaNotMigrated, ErrorCode::ServerBusy]);
         }
         if r.body.is_some() {
             codes.push(ErrorCode::UnsupportedMediaType);

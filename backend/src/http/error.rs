@@ -53,6 +53,8 @@ pub enum ErrorCode {
     /// The request was not completed within HTTP_REQUEST_TIMEOUT_SECS
     RequestTimeout,
     DatabaseUnavailable,
+    /// HTTP_MAX_CONCURRENT_REQUESTS requests are already in progress; retry after the Retry-After header (503)
+    ServerBusy,
     /// The database has migrations pending; run `shadoucmdb migrate` (503)
     SchemaNotMigrated,
     InternalError,
@@ -77,9 +79,10 @@ impl ErrorCode {
             ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorCode::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
-            ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated | ErrorCode::IdentityProviderUnavailable => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            ErrorCode::DatabaseUnavailable
+            | ErrorCode::ServerBusy
+            | ErrorCode::SchemaNotMigrated
+            | ErrorCode::IdentityProviderUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -113,7 +116,7 @@ pub struct AppError {
     pub code: ErrorCode,
     pub message: String,
     pub details: Option<Vec<FieldError>>,
-    /// Seconds, sent as Retry-After (RATE_LIMITED).
+    /// Seconds, sent as Retry-After (RATE_LIMITED, SERVER_BUSY).
     pub retry_after: Option<u64>,
 }
 

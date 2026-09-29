@@ -310,11 +310,30 @@ All optional; every variable is in [`.env.example`](../.env.example).
 - **Timeouts:** `HTTP_HEADER_READ_TIMEOUT_SECS` (default 10) closes connections that do not finish
   their headers in time; `HTTP_REQUEST_TIMEOUT_SECS` (default 120) answers `408 REQUEST_TIMEOUT` to a
   request that runs longer. A reverse proxy in front should have its own, shorter limits.
+- **Concurrent requests:** `HTTP_MAX_CONCURRENT_REQUESTS` (default 512) caps the API requests the
+  server handles at once; further requests get `503 SERVER_BUSY` with `Retry-After: 1` until one
+  finishes. Request bodies are read only after the caller is authenticated, at most 64 KiB on setup
+  and sign-in, 1 MiB elsewhere and 16 MiB on configuration import, so the cap also bounds the memory
+  held by uploads. Size it to the memory available: in the worst case every request is a 16 MiB
+  import. The anonymous routes that take a body (setup, sign-in, the MFA step of sign-in) draw from a
+  separate pool of one eighth of the cap (at least 16) and must deliver their body within
+  `HTTP_HEADER_READ_TIMEOUT_SECS`, else `408 REQUEST_TIMEOUT`: a flood of slow anonymous requests
+  can delay sign-in but not signed-in users or API tokens. `/healthz`, `/readyz` and
+  `/api/v1/version` are exempt, so a busy server is not reported as down.
+- **Reverse proxy request buffering:** let the proxy receive the whole request body before it
+  forwards the request (nginx `proxy_request_buffering on`, the default; HAProxy
+  `option http-buffer-request`). Slow clients then tie up the proxy, which is built for many idle
+  connections, rather than the server's request capacity. Keep the proxy's body size limit at or
+  above 16 MiB if configuration import is used (nginx `client_max_body_size 16m`).
 - **Request rate limits:** the server does not limit requests per client address, because it cannot
   tell a real client address from a forged `X-Forwarded-For` without a trusted proxy. Limit the
   anonymous routes (`/api/v1/auth/*`) per client address at the reverse proxy, which sees the real
   one. Sign-in attempts are throttled per username by the server either way, and starting an OIDC
-  sign-in stores nothing, so it cannot fill up the server.
+  sign-in stores nothing, so it cannot fill up the server. The sign-in throttle keeps failures per
+  username and client network (from `X-Forwarded-For`), so that someone guessing one account's
+  password cannot lock the account holder out from their own network. That works only when the proxy
+  overwrites `X-Forwarded-For`; otherwise a client can claim other networks and the per-username
+  budget across networks (15 failures) is what locks the account.
 - **Client details:** `AUDIT_CAPTURE_CLIENT_IP=false` and `AUDIT_CAPTURE_USER_AGENT=false` stop the
   server recording the IP address and User-Agent of sign-ins and sessions (for example where a works
   council agreement rules them out). Changes stay attributed to the signed-in user.
