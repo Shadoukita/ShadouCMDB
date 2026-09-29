@@ -148,10 +148,13 @@ jobs:
       # LDAP/AD sign-in against a real directory (tools/ldap-it/README.md): OpenLDAP, LDAPS only,
       # with a CA made in this step. Started here rather than as a service container, which would
       # start before the certificates exist; the test also stops and starts it.
-      - name: "LDAPS directory: sign-in, group mapping, TLS trust, requireMfa re-auth, renamed entry"
+      - name: "LDAPS directory: sign-in, group mapping, TLS trust, encrypted bind password, requireMfa re-auth, renamed entry"
         env:
           PGDATABASE: shadoucmdb_ldap
           LDAP_IT_SERVE_LOG: serve-ldap.log
+          # Throwaway first-run setup token: the test completes setup with it. ENCRYPTION_KEY_FILE
+          # comes from the key step above, so the bind password is stored encrypted.
+          SETUP_TOKEN: ci-only-setup-token-not-a-secret-0123456789
         run: |
           trap 'if [ $? != 0 ]; then
             echo "::group::server log"; tail -100 serve-ldap.log || true; echo "::endgroup::"

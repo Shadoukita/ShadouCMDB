@@ -38,6 +38,12 @@ const CLOSED_URL = 'ldaps://127.0.0.1:1';
 const CA = readFileSync(join(LDAP_DIR, 'certs/ca.pem'), 'utf8');
 const OTHER_CA = readFileSync(join(LDAP_DIR, 'certs/other-ca.pem'), 'utf8');
 const SERVE_LOG = process.env.LDAP_IT_SERVE_LOG;
+/** The server's first-run setup token (its SETUP_TOKEN, GitHub #192). */
+const SETUP_TOKEN = process.env.SETUP_TOKEN ?? '';
+if (!SETUP_TOKEN) {
+  console.error('Set SETUP_TOKEN to the first-run setup token the server runs with');
+  process.exit(2);
+}
 
 const SUFFIX = 'dc=shadoucmdb,dc=test';
 const ADMIN = 'ldap-it-admin';
@@ -178,7 +184,7 @@ function authenticator(secret: string): () => Promise<string> {
 
 async function main(): Promise<void> {
   section('Setup: administrator, profile, directory with one mapped group');
-  const setup = await call(null, 'POST', '/api/v1/setup', { username: ADMIN, displayName: 'LDAP IT admin', password: ADMIN_PASSWORD });
+  const setup = await call(null, 'POST', '/api/v1/setup', { username: ADMIN, displayName: 'LDAP IT admin', password: ADMIN_PASSWORD, setupToken: SETUP_TOKEN });
   if (setup.status !== 201) throw new Error(`first-run setup: ${setup.status} ${JSON.stringify(setup.json)} (use an empty, migrated database)`);
   const admin = identity(setup);
   const profile = await ok(admin, 'POST', '/api/v1/admin/profiles', {
@@ -216,10 +222,26 @@ async function main(): Promise<void> {
   const providers = await ok(null, 'GET', '/api/v1/auth/providers');
   check(providers.directory === true, 'GET /auth/providers: the password form also takes directory accounts', providers);
 
+  // The bind password saved above is stored encrypted under ENCRYPTION_KEY_FILE (PR #237).
+  // Settings are read from the row on every sign-in, so the directory sign-ins below only
+  // work if the server decrypts it again; the Rust suite has no directory to prove that.
+  const stored = await ok(admin, 'GET', P);
+  check(stored.ldap?.bindPasswordSet === true && !JSON.stringify(stored).includes(ldap.bindPassword), 'the admin API reports the bind password as set, never its value', stored.ldap);
+  const atRest = sql(
+    `SELECT bind_password IS NULL, bind_password_enc IS NOT NULL, secrets_key_id IS NOT NULL,
+            position(convert_to('${ldap.bindPassword}', 'UTF8') IN bind_password_enc) = 0
+       FROM cmdb.identity_providers WHERE id = '${provider.id}'`,
+  );
+  check(atRest === 't|t|t|t', 'at rest: bind_password_enc and key id set, no plaintext column, no plaintext in the ciphertext', atRest);
+
   // ---------------------------------------------------------------------------------------
   section('1. Directory sign-in and group mapping');
   const aliceLogin = await login(ALICE);
-  check(aliceLogin.status === 200 && cookieOf(aliceLogin, 'shadoucmdb_session'), 'alice signs in with her directory password (200, session cookie)', brief(aliceLogin));
+  check(
+    aliceLogin.status === 200 && cookieOf(aliceLogin, 'shadoucmdb_session'),
+    'alice signs in with her directory password (200, session cookie): the service bind used the decrypted bind password',
+    brief(aliceLogin),
+  );
   let alice = identity(aliceLogin);
   const me = await ok(alice, 'GET', '/api/v1/auth/me');
   check(me.user.username === 'alice' && me.user.identityProvider?.id === provider.id, 'the account is created and linked to the directory', me.user);
@@ -312,8 +334,16 @@ async function main(): Promise<void> {
   };
   await untrusted('CA not trusted (another CA configured)', { caCertificate: OTHER_CA });
   await untrusted('CA not trusted (no CA configured)', { caCertificate: null });
-  await untrusted('certificate not valid for the host name', { caCertificate: CA, ldap: { url: WRONG_NAME_URL } });
-  await untrusted('closed port', { ldap: { url: CLOSED_URL } });
+  // GH#238: a new server address needs the bind password again; nothing changes without it.
+  const moved = await call(admin, 'PATCH', P, { ldap: { url: WRONG_NAME_URL } });
+  check(
+    moved.status === 422 && code(moved) === 'SECRET_REQUIRED' && field(moved) === 'ldap.bindPassword',
+    'moving the directory without its bind password: 422 SECRET_REQUIRED on ldap.bindPassword',
+    moved.json,
+  );
+  check((await ok(admin, 'GET', P)).ldap.url === LDAP_URL, 'and the URL is unchanged');
+  await untrusted('certificate not valid for the host name', { caCertificate: CA, ldap: { url: WRONG_NAME_URL, bindPassword: ldap.bindPassword } });
+  await untrusted('closed port', { ldap: { url: CLOSED_URL, bindPassword: ldap.bindPassword } });
   if (SERVE_LOG) {
     const log = readFileSync(SERVE_LOG, 'utf8');
     check(/identity provider connection test failed/.test(log) && /UnknownIssuer|invalid peer certificate/i.test(log), 'the server log has the exact TLS error for the administrator');
@@ -376,9 +406,9 @@ async function main(): Promise<void> {
     check(l.status === 503 && code(l) === 'IDENTITY_PROVIDER_UNAVAILABLE', `${what}: sign-in is 503 IDENTITY_PROVIDER_UNAVAILABLE`, l.json);
     check(!LEAK.test(JSON.stringify([rc.json, off.json, l.json])), `${what}: no socket or TLS detail in the answers`);
   };
-  await patch({ ldap: { url: CLOSED_URL } });
+  await patch({ ldap: { url: CLOSED_URL, bindPassword: ldap.bindPassword } });
   await unavailable('unreachable URL');
-  await patch({ ldap: { url: LDAP_URL } });
+  await patch({ ldap: { url: LDAP_URL, bindPassword: ldap.bindPassword } });
 
   directory('stop');
   await unavailable('directory stopped');
@@ -387,9 +417,9 @@ async function main(): Promise<void> {
   check(r.status === 200, 'directory back: re-authentication works again', brief(r));
   if (r.status === 200) recovery = r.json.codes;
 
-  // Disabling through the API ends the account's sessions, so no session is left to reach
-  // the MFA routes with; the state behind the 409 (a live session of an account whose
-  // directory is disabled) is set in the database instead.
+  // Disabling through the API ends the account's sessions. A session that was not ended
+  // (the provider disabled in the database, as reset-undecryptable or a race could leave it)
+  // is refused on every request too, the MFA routes included (GH#250).
   await patch({ isEnabled: false });
   check((await call(alice, 'GET', '/api/v1/auth/me')).status === 401, 'disabling the directory ends her session');
   const disabledLogin = await login(ALICE);
@@ -400,13 +430,15 @@ async function main(): Promise<void> {
   check(again.status === 401 && viaRecovery.status === 200, 'enabled again: she signs in (password, then a recovery code)', brief(viaRecovery));
   alice = identity(viaRecovery);
   sql(`UPDATE cmdb.identity_providers SET is_enabled = false WHERE id = '${provider.id}'`);
+  const leftover = await call(alice, 'GET', '/api/v1/auth/me');
+  check(leftover.status === 401 && code(leftover) === 'UNAUTHENTICATED', 'directory disabled, session not ended: /auth/me is 401', brief(leftover));
   for (const [method, url, body] of [
     ['POST', '/api/v1/auth/mfa/totp', { currentPassword: ALICE.password }],
     ['POST', '/api/v1/auth/mfa/recovery-codes', { currentPassword: ALICE.password, code: recovery[0] }],
     ['DELETE', '/api/v1/auth/mfa/totp', { currentPassword: ALICE.password, code: recovery[0] }],
   ] as const) {
     const d = await call(alice, method, url, body);
-    check(d.status === 409 && code(d) === 'CONFLICT' && /directory is disabled/.test(message(d)), `directory disabled, session live: ${method} ${url} is 409`, brief(d));
+    check(d.status === 401 && code(d) === 'UNAUTHENTICATED', `directory disabled, session not ended: ${method} ${url} is 401`, brief(d));
   }
   sql(`UPDATE cmdb.identity_providers SET is_enabled = true WHERE id = '${provider.id}'`);
 
