@@ -20428,7 +20428,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Rows (assets) concerned, when known"
+            "description": "Rows (assets) concerned, when known and the caller may view them all"
           },
           "message": {
             "type": "string"

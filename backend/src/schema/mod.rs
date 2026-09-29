@@ -67,7 +67,7 @@ pub struct Impact {
     pub statement: Option<usize>,
     /// create, add_column, rewrite, not_null, drop_column, drop_table, drop_schema, warning, data_moved, ...
     pub kind: String,
-    /// Rows (assets) concerned, when known
+    /// Rows (assets) concerned, when known and the caller may view them all
     #[schema(required = true)]
     pub rows: Option<i64>,
     pub message: String,
@@ -111,6 +111,17 @@ pub struct Purge {
     pub tables: Vec<TableName>,
     /// (table, column)
     pub columns: Vec<(TableName, Ident)>,
+    /// The types whose assets' values the tables and columns hold (collected
+    /// before their definitions are deleted). How many values a purge deletes
+    /// is only told to a caller who may view them all (GH#243).
+    pub classes: Vec<Uuid>,
+}
+
+impl Purge {
+    /// Whether a caller who may view `visible` (`None`: every type) may learn how much the purge deletes.
+    pub fn reveals(&self, visible: Option<&[Uuid]>) -> bool {
+        visible.is_none_or(|v| self.classes.iter().all(|id| v.contains(id)))
+    }
 }
 
 #[derive(Default)]
@@ -699,18 +710,20 @@ async fn build(
     }
 
     // Purges: columns, then tables, then schemas.
+    let counts = purge.reveals(visible);
     for (table, column) in &purge.columns {
         if catalog.column(table, column.as_str()).is_none() {
             continue;
         }
-        let n = count(conn, format!("SELECT count(*) FROM {} WHERE {column} IS NOT NULL", table.sql())).await?;
         let i = plan.ddl(format!("ALTER TABLE {} DROP COLUMN {column}", table.sql()));
-        plan.note(
-            Some(i),
-            "drop_column",
-            Some(n),
-            format!("{n} stored values of {}.{column} are deleted", table.display()),
-        );
+        if counts {
+            let n = count(conn, format!("SELECT count(*) FROM {} WHERE {column} IS NOT NULL", table.sql())).await?;
+            let message = format!("{n} stored values of {}.{column} are deleted", table.display());
+            plan.note(Some(i), "drop_column", Some(n), message);
+        } else {
+            let message = format!("The stored values of {}.{column} are deleted", table.display());
+            plan.note(Some(i), "drop_column", None, message);
+        }
         plan.rebuild.insert(table.clone());
     }
     for table in &purge.tables {
@@ -727,9 +740,18 @@ async fn build(
         if !catalog.has_table(table) {
             continue;
         }
-        let n = count(conn, format!("SELECT count(*) FROM {}", table.sql())).await?;
         let i = plan.ddl(format!("DROP TABLE {}", table.sql()));
-        plan.note(Some(i), "drop_table", Some(n), format!("Table {} and its {n} rows are deleted", table.display()));
+        if counts {
+            let n = count(conn, format!("SELECT count(*) FROM {}", table.sql())).await?;
+            plan.note(
+                Some(i),
+                "drop_table",
+                Some(n),
+                format!("Table {} and its {n} rows are deleted", table.display()),
+            );
+        } else {
+            plan.note(Some(i), "drop_table", None, format!("Table {} and its rows are deleted", table.display()));
+        }
         plan.rebuild.insert(table.clone());
     }
     for schema in &purge.schemas {
