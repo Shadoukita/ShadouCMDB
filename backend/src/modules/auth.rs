@@ -7,7 +7,7 @@ use std::time::Duration;
 use axum::http::{HeaderMap, Method, StatusCode};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use utoipa::ToSchema;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use uuid::Uuid;
@@ -172,7 +172,8 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, session_id: Uuid, csrf_token:
 /// `verified`: the `password_changed_at` of the password the sign-in was
 /// checked against, None when an identity provider checked it. The user's row
 /// is locked first; a password changed since, or an account disabled or
-/// deleted since, gets no session but a 401 (GH#209).
+/// deleted since, gets no session but a 401 (GH#209), as does an account
+/// whose identity provider was disabled or deleted since (GH#250).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_session(
     pool: &PgPool,
@@ -184,14 +185,31 @@ pub(crate) async fn open_session(
     method: LoginMethod,
     verified: Option<DateTime<Utc>>,
 ) -> Result<(Uuid, Vec<axum::http::HeaderValue>), AppError> {
+    try_open_session(pool, auth, headers, request, user_id, username, method, verified).await?.map_err(AppError::from)
+}
+
+/// [`open_session`], with a refusal (already logged and recorded as
+/// `login.failure`) as a value, for callers that answer it their own way.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn try_open_session(
+    pool: &PgPool,
+    auth: &AuthState,
+    headers: &HeaderMap,
+    request: &RequestContext,
+    user_id: Uuid,
+    username: &str,
+    method: LoginMethod,
+    verified: Option<DateTime<Utc>>,
+) -> Result<Result<(Uuid, Vec<axum::http::HeaderValue>), Changed>, AppError> {
     let ctx = request.acting_as_user(user_id, username);
     let token = session::new_token();
     let csrf = session::new_token();
     let mut tx = pool.begin().await?;
     // First, so the row is locked before anything the reset or disable also takes.
-    if !data::record_login(&mut tx, user_id).await?.is_some_and(|now| now.allows(verified)) {
+    let stamp = data::record_login(&mut tx, user_id).await?;
+    if let Some(changed) = changed_since(&mut tx, stamp, verified).await? {
         drop(tx);
-        return Err(account_changed(pool, request, username).await?);
+        return Ok(Err(refused(pool, request, username, changed).await?));
     }
     // A cookie from an earlier session in this browser is replaced, not kept alive.
     if let Some((old, _)) = session::session_token(headers)
@@ -212,19 +230,62 @@ pub(crate) async fn open_session(
     .await?;
     events::login_success(&mut tx, &ctx, session_id, user_id, username, method).await?;
     tx.commit().await?;
-    Ok((session_id, session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &token, &csrf)))
+    Ok(Ok((session_id, session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &token, &csrf))))
 }
 
-/// A sign-in whose credentials were right when checked, refused because the
-/// account was disabled, deleted or given a new password since (GH#209):
-/// logged and audited; returns the 401.
-async fn account_changed(pool: &PgPool, ctx: &RequestContext, username: &str) -> Result<AppError, AppError> {
-    tracing::warn!(user = %username, ip = ?ctx.client.ip, "sign-in refused: the account changed while it was checked");
-    record_failure(pool, ctx, username, Some("account_changed"), None).await?;
-    Ok(AppError::new(
-        ErrorCode::Unauthenticated,
-        "The account was changed during the sign-in; enter your username and password again",
-    ))
+/// Why a sign-in whose credentials were right when checked gets no session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Changed {
+    /// The account was disabled, deleted or given a new password (GH#209).
+    Account,
+    /// The account's identity provider was disabled or deleted (GH#250).
+    Provider,
+}
+
+impl Changed {
+    /// The `reason` of the `login.failure` row.
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            Changed::Account => "account_changed",
+            Changed::Provider => "provider_disabled",
+        }
+    }
+}
+
+impl From<Changed> for AppError {
+    fn from(changed: Changed) -> Self {
+        let message = match changed {
+            Changed::Account => "The account was changed during the sign-in; enter your username and password again",
+            Changed::Provider => {
+                "The identity provider of this account was disabled during the sign-in; ask an administrator"
+            }
+        };
+        AppError::new(ErrorCode::Unauthenticated, message)
+    }
+}
+
+/// What changed since the sign-in's credentials were checked, given the
+/// user's `stamp` as locked now; None if nothing did. The account's identity
+/// provider is share-locked in turn, so disabling or deleting it waits for
+/// this transaction (whose session it then ends) or this waits for that one.
+async fn changed_since(
+    conn: &mut PgConnection,
+    stamp: Option<data::SignInStamp>,
+    verified: Option<DateTime<Utc>>,
+) -> sqlx::Result<Option<Changed>> {
+    let Some(stamp) = stamp.filter(|now| now.allows(verified)) else { return Ok(Some(Changed::Account)) };
+    match stamp.identity_provider_id {
+        Some(provider) if !data::lock_provider_enabled(conn, provider).await? => Ok(Some(Changed::Provider)),
+        _ => Ok(None),
+    }
+}
+
+/// A sign-in refused because the account or its provider changed while it
+/// was checked (GH#209, GH#250): logged and audited.
+async fn refused(pool: &PgPool, ctx: &RequestContext, username: &str, changed: Changed) -> Result<Changed, AppError> {
+    tracing::warn!(user = %username, ip = ?ctx.client.ip, reason = changed.reason(), "sign-in refused: the account or its identity provider changed while it was checked");
+    record_failure(pool, ctx, username, Some(changed.reason()), None).await?;
+    Ok(changed)
 }
 
 /// [`open_session`], answering with the session.
@@ -445,9 +506,10 @@ async fn password_accepted(
         let mut tx = pool.begin().await?;
         // A reset or disable deletes the user's challenges under its lock on
         // the row: one committed after this check finds the challenge.
-        if !data::lock_sign_in(&mut tx, user_id).await?.is_some_and(|now| now.allows(verified)) {
+        let stamp = data::lock_sign_in(&mut tx, user_id).await?;
+        if let Some(changed) = changed_since(&mut tx, stamp, verified).await? {
             drop(tx);
-            return Err(account_changed(pool, ctx, username).await?);
+            return Err(refused(pool, ctx, username, changed).await?.into());
         }
         mfa_data::create_challenge(&mut tx, user_id, &session::token_hash(&token), MFA_CHALLENGE_TTL).await?;
         tx.commit().await?;
@@ -814,7 +876,7 @@ pub fn routes() -> Vec<Route> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use sqlx::Executor;
 
     use super::*;
@@ -1422,21 +1484,7 @@ mod tests {
     /// sign-in waits for that lock, so the sign-in had checked the password
     /// before the reset committed.
     async fn change_account_under(pool: &PgPool, mut tx: sqlx::PgTransaction<'_>, user: Uuid, disable: bool) {
-        let mut waiting = false;
-        for _ in 0..400 {
-            let n: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
-            )
-            .fetch_one(pool)
-            .await
-            .unwrap();
-            if n > 0 {
-                waiting = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        assert!(waiting, "the sign-in waits for the lock on the user's row");
+        assert!(a_lock_is_awaited(pool).await, "the sign-in waits for the lock on the user's row");
         if disable {
             sqlx::query("UPDATE users SET is_active = false WHERE id = $1").bind(user).execute(&mut *tx).await.unwrap();
         } else {
@@ -1445,6 +1493,51 @@ mod tests {
         }
         mfa_data::delete_challenges_of_user(&mut tx, user).await.unwrap();
         data::delete_user_sessions(&mut tx, user, None).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    /// Whether a session of the test database waits for a lock, within 10 seconds.
+    pub(crate) async fn a_lock_is_awaited(pool: &PgPool) -> bool {
+        for _ in 0..400 {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if n > 0 {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        false
+    }
+
+    /// An administrator disabling `provider`, with its row already locked as
+    /// `identity_providers::update` locks it: once a sign-in waits for that
+    /// lock, the provider is disabled, its accounts' sessions end, and it commits.
+    pub(crate) async fn locked_provider(pool: &PgPool, provider: Uuid) -> sqlx::PgTransaction<'_> {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM identity_providers WHERE id = $1 FOR UPDATE")
+            .bind(provider)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        tx
+    }
+
+    pub(crate) async fn disable_provider_under(pool: &PgPool, mut tx: sqlx::PgTransaction<'_>, provider: Uuid) {
+        assert!(a_lock_is_awaited(pool).await, "the sign-in waits for the lock on the provider's row");
+        sqlx::query("UPDATE identity_providers SET is_enabled = false WHERE id = $1")
+            .bind(provider)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE identity_provider_id = $1)")
+            .bind(provider)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
     }
 
@@ -1549,6 +1642,60 @@ mod tests {
             .expect_err("a session for the old password");
         assert_eq!(e.code, ErrorCode::Unauthenticated);
         assert_eq!(rows_of(pool, "sessions", user).await, 0);
+        db.drop().await;
+    }
+
+    /// A directory password checked just before the directory is disabled
+    /// gets neither a session nor a second-factor step (GH#250).
+    #[tokio::test]
+    async fn a_directory_sign_in_during_a_provider_disable_gets_no_session_or_challenge() {
+        let Some(db) =
+            scratch::database("a_directory_sign_in_during_a_provider_disable_gets_no_session_or_challenge").await
+        else {
+            return;
+        };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        let ldap = crate::modules::mfa::tests::provider(pool, "ldap", true, "ldaps://dc.example.test").await;
+        let mut tx = pool.begin().await.unwrap();
+        let linked = |username: &'static str| crate::data::identity_providers::NewLinkedUser {
+            provider_id: ldap,
+            external_id: username,
+            username,
+            display_name: username,
+            email: None,
+        };
+        let dana = crate::data::identity_providers::insert_linked(&mut tx, &linked("dana")).await.unwrap();
+        let dirk = crate::data::identity_providers::insert_linked(&mut tx, &linked("dirk")).await.unwrap();
+        let sealed = crate::secrets::sealed::seal_totp_secret(
+            &crate::secrets::Keyring::for_tests(),
+            dirk,
+            &crate::auth::totp::new_secret(),
+        );
+        mfa_data::put_pending_totp(&mut tx, dirk, &sealed).await.unwrap();
+        mfa_data::confirm_totp(&mut tx, dirk, 1).await.unwrap();
+        tx.commit().await.unwrap();
+
+        for (user, name) in [(dana, "dana"), (dirk, "dirk")] {
+            sqlx::query("UPDATE identity_providers SET is_enabled = true WHERE id = $1")
+                .bind(ldap)
+                .execute(pool)
+                .await
+                .unwrap();
+            let attempt = auth.throttle.begin(name, Net::default(), false).expect("the gate lets it through");
+            let tx = locked_provider(pool, ldap).await;
+            let ctx = anon();
+            let (answer, ()) = tokio::join!(
+                password_accepted(pool, &auth, &headers, &ctx, attempt, user, name, LoginMethod::Ldap, None),
+                disable_provider_under(pool, tx, ldap)
+            );
+            let e = answer.err().unwrap_or_else(|| panic!("{name}: signed in"));
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "{name}: {}", e.message);
+            assert_eq!(rows_of(pool, "sessions", user).await, 0, "{name}: no session");
+            assert_eq!(rows_of(pool, "mfa_challenges", user).await, 0, "{name}: no second-factor step");
+        }
+        let refused = auth_rows(pool, "login.failure").await;
+        assert_eq!(refused.len(), 2);
+        assert!(refused.iter().all(|r| r.3["reason"] == "provider_disabled"), "{refused:?}");
         db.drop().await;
     }
 

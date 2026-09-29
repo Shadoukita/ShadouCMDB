@@ -21,6 +21,7 @@ use utoipa::openapi::schema::{ObjectBuilder, Type};
 use utoipa::openapi::{RefOr, Required};
 use uuid::Uuid;
 
+use super::auth::Changed;
 use super::users;
 use crate::api::context::RequestContext;
 use crate::api::route::{In, Json, NoBody, NoPath, NoQuery, PathInput, QueryInput, Redirect, Route, route};
@@ -158,6 +159,8 @@ pub enum Refusal {
     /// A profile the user holds requires MFA, and the provider (set to
     /// verify) did not prove a second factor in the ID token.
     MfaNotEnforced,
+    /// The provider was disabled or deleted while the sign-in was checked (GH#250).
+    ProviderDisabled,
 }
 
 impl Refusal {
@@ -170,6 +173,7 @@ impl Refusal {
             Refusal::NotAuthorised => "not_authorised",
             Refusal::LastAdministrator => "last_administrator",
             Refusal::MfaNotEnforced => "mfa_not_enforced",
+            Refusal::ProviderDisabled => "unavailable",
         }
     }
 
@@ -189,6 +193,7 @@ impl Refusal {
             Refusal::MfaNotEnforced => {
                 "Your identity provider did not confirm a second factor, which your access to ShadouCMDB requires. Sign in again using multi-factor authentication, or ask an administrator to check the provider's MFA settings."
             }
+            Refusal::ProviderDisabled => "Sign-in through this identity provider is disabled",
         }
     }
 }
@@ -672,9 +677,14 @@ pub async fn verified_sign_in(
         return refused(Refusal::MfaNotEnforced).await;
     }
     let purged = auth_data::purge_sessions(pool, auth.config.session_idle).await?;
+    let method = LoginMethod::Oidc(evidence);
+    // Already recorded as `login.failure` (`account_changed`, `provider_disabled`).
     let (_, cookies) =
-        super::auth::open_session(pool, auth, headers, ctx, user_id, &username, LoginMethod::Oidc(evidence), None)
-            .await?;
+        match super::auth::try_open_session(pool, auth, headers, ctx, user_id, &username, method, None).await? {
+            Ok(opened) => opened,
+            Err(Changed::Account) => return Ok(Err(Refusal::AccountDisabled)),
+            Err(Changed::Provider) => return Ok(Err(Refusal::ProviderDisabled)),
+        };
     tracing::info!(user = %username, provider = %provider.name, ip = ?ctx.client.ip, purged_sessions = purged, provider_mfa = evidence.as_str(), "signed in through OIDC");
     Ok(Ok(cookies))
 }
@@ -1229,6 +1239,54 @@ mod tests {
             csrf: Some(csrf),
             bearer: None,
         })
+    }
+
+    /// GH#250: an OIDC sign-in whose provider is disabled after it was
+    /// checked (while the code is exchanged) gets no session: neither when the
+    /// disable has committed before the session would open, nor when it is
+    /// under way as the session opens.
+    #[tokio::test]
+    async fn an_oidc_sign_in_gets_no_session_once_its_provider_is_disabled() {
+        let Some(db) = scratch::database("an_oidc_sign_in_gets_no_session_once_its_provider_is_disabled").await else {
+            return;
+        };
+        let pool = &db.pool;
+        let f = mfa_fixture(pool, "trust_provider", &[]).await;
+        let claims = id_token("olga", READERS, Value::Null);
+        oidc_sign_in(pool, &f, &claims).await.expect("the account is linked");
+        let (id, ctx, auth) = (f.provider_id, RequestContext::anonymous(String::new()), auth_state());
+        let checked = async || data::get(&mut pool.acquire().await.unwrap(), id, false).await.unwrap().unwrap();
+        let sign_in = async |provider: &ProviderRow| {
+            let settings = oidc_settings(provider, &crate::secrets::Keyring::for_tests()).unwrap();
+            verified_sign_in(pool, &auth, &HeaderMap::new(), &ctx, provider, &settings, &claims).await.unwrap().err()
+        };
+        let disable = "UPDATE identity_providers SET is_enabled = false WHERE id = $1";
+
+        // The callback checked the provider while it was enabled; the disable
+        // committed (ending the sessions it found) before the exchange ended.
+        let provider = checked().await;
+        sqlx::query(disable).bind(id).execute(pool).await.unwrap();
+        sqlx::query("DELETE FROM sessions").execute(pool).await.unwrap();
+        assert_eq!(sign_in(&provider).await, Some(Refusal::ProviderDisabled));
+        assert!(sessions_of(pool, "olga").await.is_empty(), "no session");
+
+        // The disable is under way when the session would open: one waits for the other.
+        sqlx::query("UPDATE identity_providers SET is_enabled = true WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+        let provider = checked().await;
+        let tx = crate::modules::auth::tests::locked_provider(pool, id).await;
+        let (refusal, ()) =
+            tokio::join!(sign_in(&provider), crate::modules::auth::tests::disable_provider_under(pool, tx, id));
+        assert_eq!(refusal, Some(Refusal::ProviderDisabled));
+        assert!(sessions_of(pool, "olga").await.is_empty(), "no session");
+
+        let refused = audit_rows(pool, "login.failure").await;
+        assert_eq!(refused.len(), 2, "{refused:?}");
+        assert!(refused.iter().all(|v| v["reason"] == "provider_disabled"), "{refused:?}");
+        db.drop().await;
     }
 
     /// `new_value` of the audit rows with this action, oldest first.
