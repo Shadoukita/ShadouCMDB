@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Browser, Page, TestInfo } from "@playwright/test";
-import { apiSend, at, classIdByName, createCi, expect, test } from "./support";
+import { apiGet, apiSend, at, classIdByName, expect, test } from "./support";
 
 // Accessibility (WCAG 2.1 A and AA) of the main screens, checked with axe-core. A critical or serious
 // violation fails the test; moderate and minor ones are listed in the output and attached to the report.
@@ -59,11 +59,13 @@ test("inventory list", async ({ page }, testInfo) => {
 });
 
 test("CI detail page (grid layout), its delete dialog and the edit form", async ({ page, request }, testInfo) => {
-  const name = `a11y-srv-${stamp}`;
-  const ci = await createCi(request, await classIdByName(request, "Server"), name);
+  // A demo-seed Server with its relationships, so the relationship table is checked too. Read-only: creating
+  // a Server here would change which Server other specs pick as the first one by label (layout-edit).
+  const serverId = await classIdByName(request, "Server");
+  const ci = (await apiGet<{ data: { id: string; label: string }[] }>(request, `/configuration-items?classId=${serverId}&sort=label&limit=1`)).data[0];
   await page.goto(`/cis/${ci.id}`);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(name);
-  await expect(page.getByRole("region", { name: "Relationships" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(ci.label);
+  await expect(page.getByRole("region", { name: "Relationships" }).getByRole("columnheader", { name: "Related CI" })).toBeVisible();
   await checkA11y(page, testInfo, "ci-detail");
 
   await page.getByRole("button", { name: "Delete", exact: true }).click();
