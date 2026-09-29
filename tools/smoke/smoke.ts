@@ -1040,7 +1040,11 @@ async function identityProviders(builtin: Json, readers: Json) {
   check(changed.oidc.clientSecretSet === false && changed.oidc.scopes === 'profile email groups' && changed.groupMappings.length === 1,
     'PATCH removes the secret, keeps the other settings and replaces the mappings');
   await patch(`${base}/${created.id}`, { ldap: { url: 'ldaps://x.invalid' } }, 400); // not a directory
-  await patch(`${base}/${directory.id}`, { ldap: { url: 'ldaps://dc.smoke.invalid:636' } }); // ldaps:// switches StartTLS off
+  // A new server address without the bind password is refused, so the stored one never goes to another host (GH#238).
+  const moved = (await patch(`${base}/${directory.id}`, { ldap: { url: 'ldaps://dc.smoke.invalid:636' } }, 422)).json;
+  check(moved.error?.code === 'SECRET_REQUIRED' && moved.error.details?.some((d: Json) => d.field === 'ldap.bindPassword' && d.code === 'secret_required'),
+    'moving the directory without its bind password answers SECRET_REQUIRED');
+  await patch(`${base}/${directory.id}`, { ldap: { url: 'ldaps://dc.smoke.invalid:636', bindPassword: secret } }); // ldaps:// switches StartTLS off
   await patch(`${base}/${directory.id}`, { ldap: { startTls: true } }, 400); // not both
   const test = (await call('POST', `${base}/${created.id}/test`, {}, 200)).json;
   // One generic text whatever the transport failure, without the host (GH#125: no port-scan oracle).

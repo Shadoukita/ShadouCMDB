@@ -48,6 +48,8 @@ pub struct Api {
     pub auth: Arc<AuthState>,
     /// Request headers (the auth routes read cookies and the forwarded protocol).
     pub headers: HeaderMap,
+    /// The last readiness check (`/readyz`).
+    pub readiness: Arc<crate::modules::health::ReadinessCache>,
 }
 
 /// Who may call a route.
@@ -710,7 +712,7 @@ impl RouteBuilder {
                         .principal()
                         .and_then(|p| p.csrf_token())
                         .and_then(|csrf| auth::session::upgrade_cookies(&state.auth.config, &headers, csrf));
-                    let api = Api { pool: state.pool, ctx, auth: state.auth, headers };
+                    let api = Api { pool: state.pool, ctx, auth: state.auth, headers, readiness: state.readiness };
                     let mut res = f(api, input).await?.respond(status);
                     // A session from before the __Host- names moves over on its first
                     // HTTPS answer, unless the route set the session cookies itself (logout).

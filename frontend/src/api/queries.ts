@@ -24,6 +24,7 @@ export type Owner = Schemas["Owner"];
 export type SearchResults = Schemas["SearchResults"];
 
 export type CiListQuery = NonNullable<paths["/api/v1/configuration-items"]["get"]["parameters"]["query"]>;
+export type SearchQuery = paths["/api/v1/search"]["get"]["parameters"]["query"];
 export type CiCreateBody = NonNullable<paths["/api/v1/configuration-items"]["post"]["requestBody"]>["content"]["application/json"];
 export type CiUpdateBody = NonNullable<paths["/api/v1/configuration-items/{id}"]["patch"]["requestBody"]>["content"]["application/json"];
 export type RelationshipCreateBody = NonNullable<paths["/api/v1/relationships"]["post"]["requestBody"]>["content"]["application/json"];
@@ -37,7 +38,7 @@ export const keys = {
   ciCount: (q: CiListQuery) => ["cis", "count", q] as const,
   ci: (id: string) => ["cis", "detail", id] as const,
   graph: (id: string, depth: number, direction: string) => ["cis", "graph", id, depth, direction] as const,
-  search: (q: string, limit: number, offset: number) => ["cis", "search", q, limit, offset] as const,
+  search: (q: string, limit: number, offset: number, filters: SearchFilters = {}) => ["cis", "search", q, limit, offset, filters] as const,
   relationships: (ciId: string) => ["relationships", ciId] as const,
   audit: (entityId: string) => ["audit", entityId] as const,
   classes: ["ci-classes"] as const,
@@ -124,16 +125,25 @@ export function useDeleteCi() {
   });
 }
 
-export function useSearch(q: MaybeRefOrGetter<string>, limit: MaybeRefOrGetter<number>, offset: MaybeRefOrGetter<number> = 0) {
+/** The search page's filters (the term, page size and offset are passed on their own). */
+export type SearchFilters = Omit<SearchQuery, "q" | "limit" | "offset">;
+
+export function useSearch(
+  q: MaybeRefOrGetter<string>,
+  limit: MaybeRefOrGetter<number>,
+  offset: MaybeRefOrGetter<number> = 0,
+  filters: MaybeRefOrGetter<SearchFilters> = {},
+) {
   return useQuery(() => {
     const text = toValue(q);
     const l = toValue(limit);
     const o = toValue(offset);
+    const f = toValue(filters);
     return {
-      queryKey: keys.search(text, l, o),
+      queryKey: keys.search(text, l, o, f),
       enabled: text.trim().length > 0,
       queryFn: ({ signal }: { signal: AbortSignal }) =>
-        unwrap(api.GET("/api/v1/search", { params: { query: { q: text, limit: l, offset: o } }, signal })),
+        unwrap(api.GET("/api/v1/search", { params: { query: { ...f, q: text, limit: l, offset: o } }, signal })),
       placeholderData: keepPreviousData,
     };
   });

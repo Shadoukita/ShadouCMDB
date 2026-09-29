@@ -22,7 +22,7 @@ use crate::api::schemas::{
     sort_order_schema, technical_name_schema, trimmed, ts,
 };
 use crate::api::validate;
-use crate::auth::permissions::GlobalPermission;
+use crate::auth::permissions::{ClassOp, GlobalPermission};
 use crate::data::classes as data;
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Val, Where};
 use crate::data::items as items_data;
@@ -413,7 +413,7 @@ impl Resource for CiClasses {
                     ));
                 }
                 if row.parent_id != previous.parent_id {
-                    move_to_new_parent(conn, row, previous).await?;
+                    move_to_new_parent(conn, ctx, row, previous).await?;
                     check_parent_fields_in_lineage(conn, row.id).await?;
                     repair_titles(conn, row, previous).await?;
                 }
@@ -438,7 +438,12 @@ impl Resource for CiClasses {
 /// A type got a new parent: its CIs (and those of its subtypes) need rows in
 /// the tables of the new ancestors and lose them in the tables of ancestors
 /// they no longer have, which is refused while those rows hold values.
-async fn move_to_new_parent(conn: &mut PgConnection, row: &CiClass, previous: &CiClass) -> Result<(), AppError> {
+async fn move_to_new_parent(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    row: &CiClass,
+    previous: &CiClass,
+) -> Result<(), AppError> {
     let model = Model::load(conn).await?;
     let new_lineage: Vec<Uuid> = model.lineage(row.id).iter().map(|c| c.id).collect();
     let mut old_lineage: Vec<Uuid> =
@@ -454,12 +459,14 @@ async fn move_to_new_parent(conn: &mut PgConnection, row: &CiClass, previous: &C
         let fields: Vec<&str> = model.own_fields(*gone).map(|f| f.key.as_str()).collect();
         let used = items_data::fields_with_values(conn, &table, &fields, &items).await?;
         if !used.is_empty() {
+            // Which fields hold values is theirs to know who may view every moved CI (GH#243).
+            let reveals = ctx.class_scope(ClassOp::View).is_none_or(|v| subtree.iter().all(|id| v.contains(id)));
+            let which = if reveals { format!(": {}", used.join(", ")) } else { String::new() };
             return Err(engine::refused(
                 "parentId",
                 "attributes_outside_lineage",
                 format!(
-                    "CIs of this type hold values for fields that the new parent does not provide: {}. Clear them first.",
-                    used.join(", ")
+                    "CIs of this type hold values for fields that the new parent does not provide{which}. Clear them first."
                 ),
             ));
         }
@@ -648,8 +655,12 @@ pub async fn purge_class_in(
         .await?;
     sqlx::query("DELETE FROM cmdb.ci_attribute_definitions WHERE class_id = $1").bind(id).execute(&mut *conn).await?;
     crud::delete_row(conn, CiClasses::TABLE, id).await?;
-    let summary = format!("Purge type {} ({} CIs, {} relationships deleted)", row.table_name, items.len(), edge_count);
-    let purge = Purge { tables: vec![table], ..Purge::default() };
+    let purge = Purge { tables: vec![table], classes: model.subtree(id), ..Purge::default() };
+    let summary = if purge.reveals(ctx.class_scope(ClassOp::View).as_deref()) {
+        format!("Purge type {} ({} CIs, {} relationships deleted)", row.table_name, items.len(), edge_count)
+    } else {
+        format!("Purge type {} (its CIs and their relationships deleted)", row.table_name)
+    };
     let parent_scope = row.parent_id.map(|p| vec![p]).unwrap_or_default();
     let change = engine::apply(conn, ctx, &summary, Scope::Classes(parent_scope), purge).await?;
     let entry = AuditEntry {
@@ -1376,7 +1387,11 @@ pub async fn purge_attribute_in(
     // The foreign key clears the title of the types it labelled; their CIs fall back to the ident.
     crud::delete_row(conn, AttributeDefinitions::TABLE, id).await?;
     let summary = format!("Purge field {}.{}", table.display(), row.key);
-    let purge = Purge { columns: vec![(table, Ident::trusted(&row.key))], ..Purge::default() };
+    let purge = Purge {
+        columns: vec![(table, Ident::trusted(&row.key))],
+        classes: model.subtree(row.class_id),
+        ..Purge::default()
+    };
     let change = engine::apply(conn, ctx, &summary, Scope::Classes(vec![row.class_id]), purge).await?;
     if !titled.is_empty() {
         let model = Model::load(conn).await?;
@@ -2074,6 +2089,120 @@ mod tests {
             let (got, message) = refusal(schema_changes::preview(pool, &caller, &preview).await.unwrap_err());
             assert_eq!(got, *code);
             assert!(message.contains("\"s3cr3t-alpha\", \"s3cr3t-vault\""), "{message}");
+        }
+        db.drop().await;
+    }
+
+    /// GH#243: purges and re-parenting refusals tell how many values are stored,
+    /// and in which fields, only to a caller who may view every type concerned.
+    #[tokio::test]
+    async fn purges_and_moves_count_values_only_for_callers_who_may_view_them() {
+        use crate::auth::permissions::{ClassRights, Permissions};
+        use crate::modules::schema_changes::{self, PreviewRequest};
+        let Some(db) = scratch::database("purges_and_moves_count_values_only_for_callers_who_may_view_them").await
+        else {
+            return;
+        };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("gh243-test", "gh243-test");
+        let manager = |view: &[Uuid]| {
+            let permissions = Permissions {
+                global: [GlobalPermission::DatamodelManage].into(),
+                classes: view.iter().map(|id| (*id, ClassRights { view: true, ..Default::default() })).collect(),
+                ..Default::default()
+            };
+            let principal = crate::auth::Principal {
+                user_id: Uuid::new_v4(),
+                username: "modeller".into(),
+                credential: crate::auth::Credential::Token,
+                permissions,
+            };
+            RequestContext::user(std::sync::Arc::new(principal), "gh243".into())
+        };
+
+        let secrets: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Secrets"}))).await.unwrap();
+        let vault: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Vault Secrets", "parentId": secrets.id})))
+                .await
+                .unwrap();
+        let field: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": secrets.id, "key": "code", "label": "Code", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        for class in [secrets.id, secrets.id, vault.id] {
+            let item = body::<CreateItemBody>(json!({"classId": class, "attributes": {"code": "x"}}));
+            items_service::create(pool, &ctx, &item).await.unwrap();
+        }
+        simple::update::<AttributeDefinitions>(pool, &ctx, field.id, &body(json!({"isActive": false}))).await.unwrap();
+        simple::update::<CiClasses>(pool, &ctx, vault.id, &body(json!({"isActive": false}))).await.unwrap();
+
+        // (operation, id, confirm, impact kind, rows for a viewer, summary for a viewer, who may view it all).
+        // A type purge deletes its CIs before the table is dropped: its summary carries the count.
+        let purges = [
+            ("purgeField", field.id, "code", "drop_column", 3, "Purge field", vec![secrets.id, vault.id]),
+            (
+                "purgeType",
+                vault.id,
+                vault.key.as_str(),
+                "drop_table",
+                0,
+                "(1 CIs, 0 relationships deleted)",
+                vec![vault.id],
+            ),
+        ];
+        for (operation, id, confirm, kind, n, summary, viewable) in &purges {
+            let request: PreviewRequest = body(json!({"operation": operation, "id": id, "body": {"confirm": confirm}}));
+            let impact = |p: &schema_changes::SchemaChangePreview| {
+                p.impact.iter().find(|i| i.kind == *kind).cloned().expect(kind)
+            };
+            // The field is stored for both types: viewing only the parent is not enough.
+            for scope in [vec![secrets.id], vec![]] {
+                let preview = schema_changes::preview(pool, &manager(&scope), &request).await.unwrap();
+                let i = impact(&preview);
+                assert_eq!(i.rows, None, "{operation} {scope:?}: {i:?}");
+                assert!(!i.message.contains(char::is_numeric), "{operation} {scope:?}: {}", i.message);
+                assert!(i.message.contains("are deleted"), "{}", i.message);
+                let purge_summary = &preview.summaries[0];
+                assert!(!purge_summary.contains(char::is_numeric), "{operation} {scope:?}: {purge_summary}");
+            }
+            let preview = schema_changes::preview(pool, &manager(viewable), &request).await.unwrap();
+            let i = impact(&preview);
+            assert_eq!(i.rows, Some(*n), "{operation}: {i:?}");
+            assert!(i.message.contains(&format!("{n} ")), "{}", i.message);
+            assert!(preview.summaries[0].contains(summary), "{:?}", preview.summaries);
+        }
+
+        // Moving a type whose CIs hold values in a field the new parent lacks is
+        // refused either way; only a viewer of every moved CI learns which field.
+        let holder: CiClass = simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Holder"}))).await.unwrap();
+        simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": holder.id, "key": "pin_hint", "label": "PIN hint", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        let leaf: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Leaf", "parentId": holder.id})))
+                .await
+                .unwrap();
+        let sub: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Sub Leaf", "parentId": leaf.id})))
+                .await
+                .unwrap();
+        let item = body::<CreateItemBody>(json!({"classId": sub.id, "attributes": {"pin_hint": "x"}}));
+        items_service::create(pool, &ctx, &item).await.unwrap();
+        let mv = json!({"parentId": null});
+        for (scope, named) in [(vec![leaf.id], false), (vec![], false), (vec![leaf.id, sub.id], true)] {
+            let err =
+                simple::update::<CiClasses>(pool, &manager(&scope), leaf.id, &body(mv.clone())).await.unwrap_err();
+            assert_eq!(err.code, ErrorCode::SchemaChangeRefused, "{scope:?}: {err:?}");
+            assert_eq!(err.details.as_ref().expect("details")[0].code, "attributes_outside_lineage");
+            assert_eq!(err.message.contains("pin_hint"), named, "{scope:?}: {}", err.message);
         }
         db.drop().await;
     }

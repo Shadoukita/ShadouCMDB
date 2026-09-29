@@ -1,7 +1,10 @@
 //! `/healthz` (liveness), `/readyz` (readiness) and `/api/v1/version`.
 
+use std::time::{Duration, Instant};
+
 use axum::http::{Method, StatusCode};
 use serde::Serialize;
+use sqlx::PgPool;
 use utoipa::ToSchema;
 
 use crate::api::pg_error;
@@ -45,7 +48,7 @@ pub enum ReadyStatus {
 }
 
 /// `ok` once the database answered both queries; otherwise why it did not.
-#[derive(Serialize, ToSchema)]
+#[derive(Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseState {
     Ok,
@@ -97,6 +100,64 @@ pub struct Readiness {
     migrations: Migrations,
 }
 
+/// How long a readiness result is reused (GH#242).
+pub const READINESS_TTL: Duration = Duration::from_secs(1);
+
+/// The last readiness check, shared by every `/readyz` request (GH#242).
+///
+/// `/readyz` is public and takes no request permit (`RouteBuilder::unlimited`), so
+/// an anonymous flood must not turn into one database round trip per request on
+/// the pool signed-in users need. Concurrent probes wait for the one check in
+/// flight, and its result is reused for [`READINESS_TTL`]: a flood costs at most
+/// about one check per second, and the answer is never older than that.
+pub struct ReadinessCache {
+    ttl: Duration,
+    /// Held while a check runs, so concurrent probes queue here, not on the pool.
+    last: tokio::sync::Mutex<Option<(Instant, Result<usize, DatabaseState>)>>,
+    /// Checks that reached the database.
+    #[cfg(test)]
+    checks: std::sync::atomic::AtomicUsize,
+}
+
+impl Default for ReadinessCache {
+    fn default() -> Self {
+        ReadinessCache::with_ttl(READINESS_TTL)
+    }
+}
+
+impl ReadinessCache {
+    pub fn with_ttl(ttl: Duration) -> Self {
+        ReadinessCache {
+            ttl,
+            last: tokio::sync::Mutex::default(),
+            #[cfg(test)]
+            checks: Default::default(),
+        }
+    }
+
+    /// The applied migration count, or why the database did not answer.
+    async fn check(&self, pool: &PgPool) -> Result<usize, DatabaseState> {
+        let mut last = self.last.lock().await;
+        if let Some((at, result)) = *last
+            && at.elapsed() < self.ttl
+        {
+            return result;
+        }
+        #[cfg(test)]
+        self.checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let probe = async {
+            sqlx::query("SELECT 1").execute(pool).await?;
+            db::applied_count(pool).await
+        };
+        let result = probe.await.map_err(|err| {
+            tracing::warn!(error = %err, "readiness check failed");
+            DatabaseState::of(&err)
+        });
+        *last = Some((Instant::now(), result));
+        result
+    }
+}
+
 pub fn routes() -> Vec<Route> {
     vec![
         route(Method::GET, "/healthz", "getLiveness")
@@ -121,7 +182,7 @@ pub fn routes() -> Vec<Route> {
             .summary("Readiness: database reachable and all migrations applied")
             .unlimited()
             .description(
-                "Returns 200 with status \"ready\" only when the database answers and every migration in this build is applied; otherwise 503 with the same body shape.",
+                "Returns 200 with status \"ready\" only when the database answers and every migration in this build is applied; otherwise 503 with the same body shape. The result is reused for up to 1 s, and concurrent requests share one database check.",
             )
             .also_returns(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -129,11 +190,7 @@ pub fn routes() -> Vec<Route> {
             )
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 let expected = db::expected_count();
-                let probe = async {
-                    sqlx::query("SELECT 1").execute(&api.pool).await?;
-                    db::applied_count(&api.pool).await
-                };
-                Ok(match probe.await {
+                Ok(match api.readiness.check(&api.pool).await {
                     Ok(applied) => {
                         let ready = applied == expected;
                         let body = Readiness {
@@ -143,11 +200,10 @@ pub fn routes() -> Vec<Route> {
                         };
                         WithStatus(if ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE }, body)
                     }
-                    Err(err) => {
-                        tracing::warn!(error = %err, "readiness check failed");
+                    Err(database) => {
                         let body = Readiness {
                             status: ReadyStatus::NotReady,
-                            database: DatabaseState::of(&err),
+                            database,
                             migrations: Migrations { applied: None, expected, up_to_date: None },
                         };
                         WithStatus(StatusCode::SERVICE_UNAVAILABLE, body)
@@ -155,4 +211,45 @@ pub fn routes() -> Vec<Route> {
                 })
             }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use super::{DatabaseState, ReadinessCache};
+    use crate::db::{self, scratch};
+
+    /// GH#242: a flood of concurrent probes costs one database check, and the
+    /// cached answer expires, so a lost database still turns `/readyz` red.
+    #[tokio::test]
+    async fn concurrent_probes_share_one_check_that_expires() {
+        let Some(db) = scratch::database("readiness_single_flight").await else { return };
+        let cache = Arc::new(ReadinessCache::with_ttl(Duration::from_millis(300)));
+
+        let mut probes = tokio::task::JoinSet::new();
+        for _ in 0..200 {
+            let (cache, pool) = (cache.clone(), db.pool.clone());
+            probes.spawn(async move { cache.check(&pool).await });
+        }
+        while let Some(result) = probes.join_next().await {
+            assert_eq!(result.unwrap().ok(), Some(db::expected_count()));
+        }
+        assert_eq!(cache.checks.load(Ordering::SeqCst), 1, "concurrent probes each reached the database");
+
+        // The database goes away: the cached answer holds for the window, then expires.
+        db.pool.close().await;
+        assert!(cache.check(&db.pool).await.is_ok());
+        assert_eq!(cache.checks.load(Ordering::SeqCst), 1);
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        assert!(matches!(cache.check(&db.pool).await, Err(DatabaseState::Unreachable)));
+        assert_eq!(cache.checks.load(Ordering::SeqCst), 2);
+        // The failure is cached too, so a flood against a dead database stays one check a window.
+        assert!(cache.check(&db.pool).await.is_err());
+        assert_eq!(cache.checks.load(Ordering::SeqCst), 2);
+
+        db.drop().await;
+    }
 }

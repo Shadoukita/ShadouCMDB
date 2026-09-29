@@ -50,7 +50,7 @@ export interface paths {
         };
         /**
          * Readiness: database reachable and all migrations applied
-         * @description Returns 200 with status "ready" only when the database answers and every migration in this build is applied; otherwise 503 with the same body shape.
+         * @description Returns 200 with status "ready" only when the database answers and every migration in this build is applied; otherwise 503 with the same body shape. The result is reused for up to 1 s, and concurrent requests share one database check.
          */
         get: operations["getReadiness"];
         put?: never;
@@ -1870,7 +1870,7 @@ export interface paths {
         head?: never;
         /**
          * Change an identity provider (partial); groupMappings replaces all mappings
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts. `oidc.mfaAssurance: trustProvider` without `oidc.requiredAcr` also empties `requiredAcr` (400 when both are sent with values). Switching to `verify` ends, on their next request, the sessions whose sign-in did not prove MFA for users whose profiles require it. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). The kind cannot change. Secrets: a string replaces, null removes, left out keeps; but a patch that changes `oidc.issuerUrl`, the scheme, host or port of `ldap.url`, or `ldap.bindDn` must send the secret again, or it is refused with 422 SECRET_REQUIRED (detail code `secret_required` on `oidc.clientSecret` or `ldap.bindPassword`) and nothing changes. `isEnabled: false` stops sign-ins through the provider and ends the sessions of its accounts. `oidc.mfaAssurance: trustProvider` without `oidc.requiredAcr` also empties `requiredAcr` (400 when both are sent with values). Switching to `verify` ends, on their next request, the sessions whose sign-in did not prove MFA for users whose profiles require it. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updateIdentityProvider"];
         trace?: never;
@@ -2513,7 +2513,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
                 message: string;
                 details?: {
                     /** @enum {string} */
@@ -2606,7 +2606,7 @@ export interface components {
             kind: string;
             /**
              * Format: int64
-             * @description Rows (assets) concerned, when known
+             * @description Rows (assets) concerned, when known and the caller may view them all
              */
             rows: number | null;
             message: string;
@@ -15061,6 +15061,15 @@ export interface operations {
             };
             /** @description Body is not application/json */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The stored secret must be entered again (code SECRET_REQUIRED): the patch changes the server address or bind DN it would be sent to; details name the secret's field (code secret_required). Nothing was changed */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

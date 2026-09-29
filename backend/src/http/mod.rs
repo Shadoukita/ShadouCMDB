@@ -55,6 +55,8 @@ pub struct AppState {
     pub sealed: Arc<SealedState>,
     /// Requests the API handles at once (`HTTP_MAX_CONCURRENT_REQUESTS`).
     pub capacity: Capacity,
+    /// The last `/readyz` check, reused briefly (GH#242).
+    pub readiness: Arc<crate::modules::health::ReadinessCache>,
 }
 
 /// The start-up step for encrypted secrets ([`crate::secrets::sealed::prepare`]):
@@ -78,6 +80,7 @@ impl AppState {
             schema: Arc::default(),
             sealed: Arc::default(),
             capacity: Capacity::new(512, Duration::from_secs(10)),
+            readiness: Arc::default(),
         }
     }
 
