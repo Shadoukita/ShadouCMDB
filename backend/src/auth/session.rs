@@ -126,28 +126,110 @@ pub fn request_is_https(headers: &HeaderMap) -> bool {
     forwarded_proto || forwarded
 }
 
-/// The client's IP address, for the audit trail: the first hop of
-/// `X-Forwarded-For`, else the first `Forwarded: for=`, else the TCP peer.
+/// The client's IP address as the request claims it, for the audit trail: the
+/// first hop of `X-Forwarded-For`, else the first `Forwarded: for=`, else the
+/// TCP peer.
 ///
-/// Trusted-proxy assumption, as for [`request_is_https`]: the reverse proxy in
-/// front of the API overwrites (not appends to) these headers. Without such a
-/// proxy a client can put any address there (as it can behind a proxy that
-/// appends), so the value is evidence for an investigator, never an input to an
-/// access decision. The audit trail therefore also keeps the TCP peer when it
-/// differs (`ClientInfo::peer_ip`).
+/// Any client can put any address in these headers (directly, or through a
+/// proxy that appends to them), so the value is evidence for an investigator,
+/// never an input to an access decision: the audit trail also keeps the TCP
+/// peer when it differs (`ClientInfo::peer_ip`), and the sign-in throttle uses
+/// [`throttle_ip`] instead.
 pub fn client_ip(headers: &HeaderMap, peer: Option<IpAddr>) -> Option<IpAddr> {
-    let x_forwarded_for = || {
-        let first = headers.get("x-forwarded-for")?.to_str().ok()?.split(',').next()?;
-        parse_node(first)
-    };
-    let forwarded = || {
-        let first = headers.get(header::FORWARDED)?.to_str().ok()?.split(',').next()?;
-        first.split(';').find_map(|kv| {
-            let (k, v) = kv.trim().split_once('=')?;
-            if k.trim().eq_ignore_ascii_case("for") { parse_node(v) } else { None }
-        })
-    };
+    let x_forwarded_for = || forwarded_for(headers)?.into_iter().next().flatten();
+    let forwarded = || forwarded_nodes(headers)?.into_iter().next().flatten();
     x_forwarded_for().or_else(forwarded).or(peer)
+}
+
+/// The client address the sign-in throttle keys on (GH#215): the TCP peer,
+/// unless the peer is one of the operator's [`TrustedProxies`]. Then the
+/// forwarding header (`X-Forwarded-For`, else `Forwarded: for=`) is read from
+/// right to left, skipping the trusted hops, and the first untrusted hop is
+/// the client: every hop left of it was written by someone we do not trust.
+/// An unusable hop ends the walk at the trusted hop that reported it.
+pub fn throttle_ip(headers: &HeaderMap, peer: Option<IpAddr>, trusted: &TrustedProxies) -> Option<IpAddr> {
+    let mut client = peer?;
+    if !trusted.contains(client) {
+        return Some(client);
+    }
+    let Some(hops) = forwarded_for(headers).or_else(|| forwarded_nodes(headers)) else { return Some(client) };
+    for hop in hops.into_iter().rev() {
+        let Some(hop) = hop else { break };
+        client = hop;
+        if !trusted.contains(hop) {
+            break;
+        }
+    }
+    Some(client)
+}
+
+/// The hops of the `X-Forwarded-For` headers, left to right (None for an unusable one).
+fn forwarded_for(headers: &HeaderMap) -> Option<Vec<Option<IpAddr>>> {
+    let values = header_list(headers, "x-forwarded-for")?;
+    Some(values.iter().map(|hop| parse_node(hop)).collect())
+}
+
+/// The `for=` of each `Forwarded` element, left to right (None for an unusable or missing one).
+fn forwarded_nodes(headers: &HeaderMap) -> Option<Vec<Option<IpAddr>>> {
+    let elements = header_list(headers, header::FORWARDED.as_str())?;
+    Some(
+        elements
+            .iter()
+            .map(|element| {
+                element.split(';').find_map(|kv| {
+                    let (k, v) = kv.trim().split_once('=')?;
+                    if k.trim().eq_ignore_ascii_case("for") { parse_node(v) } else { None }
+                })
+            })
+            .collect(),
+    )
+}
+
+/// The comma-separated entries of every `name` header, in order; None without
+/// one. A header that is not visible ASCII makes the whole list unusable.
+fn header_list<'h>(headers: &'h HeaderMap, name: &str) -> Option<Vec<&'h str>> {
+    let mut values = headers.get_all(name).iter().peekable();
+    values.peek()?;
+    let mut entries = Vec::new();
+    for v in values {
+        entries.extend(v.to_str().ok()?.split(','));
+    }
+    Some(entries)
+}
+
+/// `TRUSTED_PROXIES`: the reverse proxies whose forwarding headers the sign-in
+/// throttle believes. Empty (the default): none, so the throttle keys on the
+/// TCP peer only.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrustedProxies(Vec<ipnetwork::IpNetwork>);
+
+impl TrustedProxies {
+    /// A comma-separated list of addresses and CIDR ranges.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let mut nets = Vec::new();
+        for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            let net: ipnetwork::IpNetwork = entry.parse().map_err(|_| {
+                format!("\"{entry}\" is not an IP address or CIDR range, e.g. 10.0.0.5 or 10.0.0.0/24 or fd00::/64")
+            })?;
+            if net.prefix() == 0 {
+                return Err(format!(
+                    "\"{entry}\" would trust every address, so any client could choose the network it is \
+                     throttled as; list only the addresses of your reverse proxies"
+                ));
+            }
+            nets.push(net);
+        }
+        Ok(TrustedProxies(nets))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        let ip = ip.to_canonical();
+        self.0.iter().any(|net| net.contains(ip))
+    }
 }
 
 /// `1.2.3.4`, `1.2.3.4:5678`, `2001:db8::1`, `"[2001:db8::1]:4711"`; None for
@@ -354,6 +436,72 @@ mod tests {
         assert_eq!(client_ip(&HeaderMap::new(), None), None);
     }
 
+    fn trusted(raw: &str) -> TrustedProxies {
+        TrustedProxies::parse(raw).unwrap()
+    }
+
+    /// GH#215: forwarding headers from an untrusted peer cannot choose the throttled network.
+    #[test]
+    fn throttle_ip_ignores_forwarding_headers_from_an_untrusted_peer() {
+        let peer: Option<IpAddr> = Some("198.51.100.9".parse().unwrap());
+        let forged = headers(&[("x-forwarded-for", "203.0.113.10"), ("forwarded", "for=203.0.113.11")]);
+        for proxies in [TrustedProxies::default(), trusted("10.0.0.0/8")] {
+            assert_eq!(throttle_ip(&forged, peer, &proxies), peer);
+            assert_eq!(
+                crate::auth::throttle::Net::of(throttle_ip(&forged, peer, &proxies)),
+                crate::auth::throttle::Net::of(peer),
+                "a forged X-Forwarded-For does not change the network"
+            );
+        }
+        // The audit trail still records the claim, next to the peer.
+        assert_eq!(client_ip(&forged, peer), Some("203.0.113.10".parse().unwrap()));
+        assert_eq!(throttle_ip(&forged, None, &TrustedProxies::default()), None);
+    }
+
+    #[test]
+    fn throttle_ip_takes_the_rightmost_untrusted_hop_behind_a_trusted_peer() {
+        let proxies = trusted("10.0.0.0/8, 192.0.2.7, fd00::/64");
+        let ip = |peer: &str, pairs: &[(&'static str, &'static str)]| {
+            throttle_ip(&headers(pairs), Some(peer.parse().unwrap()), &proxies).map(|a| a.to_string())
+        };
+        // An appending proxy: the client's forged hop is left of the one the proxy added.
+        assert_eq!(
+            ip("10.0.0.2", &[("x-forwarded-for", "203.0.113.10, 198.51.100.4")]).as_deref(),
+            Some("198.51.100.4")
+        );
+        // Trusted hops are skipped, across repeated headers too.
+        assert_eq!(
+            ip("10.0.0.2", &[("x-forwarded-for", "203.0.113.10, 198.51.100.4"), ("x-forwarded-for", "192.0.2.7")])
+                .as_deref(),
+            Some("198.51.100.4")
+        );
+        assert_eq!(ip("::ffff:10.0.0.2", &[("x-forwarded-for", "198.51.100.4:5123")]).as_deref(), Some("198.51.100.4"));
+        assert_eq!(
+            ip("fd00::1", &[("forwarded", "for=203.0.113.10, for=\"[2001:db8::5]:443\";proto=https")]).as_deref(),
+            Some("2001:db8::5")
+        );
+        // All hops trusted: the leftmost one. None, or an unusable hop: the trusted hop that reported it.
+        assert_eq!(ip("10.0.0.2", &[("x-forwarded-for", "10.1.1.1, 192.0.2.7")]).as_deref(), Some("10.1.1.1"));
+        assert_eq!(ip("10.0.0.2", &[]).as_deref(), Some("10.0.0.2"));
+        assert_eq!(
+            ip("10.0.0.2", &[("x-forwarded-for", "203.0.113.10, unknown, 10.3.3.3")]).as_deref(),
+            Some("10.3.3.3")
+        );
+    }
+
+    #[test]
+    fn trusted_proxies_parse_addresses_and_ranges() {
+        let p = trusted(" 10.0.0.0/8 ,, 192.0.2.7,2001:db8::/48");
+        assert!(p.contains("10.200.0.1".parse().unwrap()));
+        assert!(p.contains("::ffff:192.0.2.7".parse().unwrap()), "mapped IPv4 is IPv4");
+        assert!(!p.contains("192.0.2.8".parse().unwrap()));
+        assert!(p.contains("2001:db8:0:ffff::1".parse().unwrap()));
+        assert!(trusted("").is_empty());
+        for bad in ["10.0.0.0/33", "proxy.example.com", "0.0.0.0/0", "::/0"] {
+            assert!(TrustedProxies::parse(bad).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn cookie_attributes() {
         let cfg = AuthConfig {
@@ -364,6 +512,8 @@ mod tests {
             oidc_allowed_hosts: None,
             setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
             setup_token_file: None,
+            trusted_proxies: Default::default(),
+            sign_in_failure_floor: Duration::ZERO,
         };
         let c = login_cookies(&cfg, true, "tok", "csrf");
         assert_eq!(c[0], "__Host-shadoucmdb_session=tok; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly; Secure");
@@ -405,6 +555,8 @@ mod tests {
             oidc_allowed_hosts: None,
             setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
             setup_token_file: None,
+            trusted_proxies: Default::default(),
+            sign_in_failure_floor: Duration::ZERO,
         };
         let plain = headers(&[("cookie", "shadoucmdb_session=old; shadoucmdb_csrf=c"), ("x-forwarded-proto", "https")]);
         let c = upgrade_cookies(&cfg, &plain, "c").unwrap();

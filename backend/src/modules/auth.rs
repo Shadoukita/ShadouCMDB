@@ -445,6 +445,14 @@ const MFA_CHALLENGE_ATTEMPTS: i32 = 5;
 
 type LoginAnswer = Either<WithCookies<Json<Session>>, ErrorWithCookies>;
 
+/// Sign-in with a password. Every refusal (401: a wrong password, an unknown
+/// name, a disabled account, a directory's refusal) answers no earlier than
+/// `SIGN_IN_FAILURE_FLOOR_MS` after the throttle let it through, plus up to 5 %
+/// jitter: otherwise the directory round trip an unknown name costs would tell
+/// local accounts apart (GH#216). The failure is recorded before the wait, and
+/// the wait itself is `api::route`'s ([`AppError::hold_until`]), once this has
+/// returned its database connections and throttle reservation. 429 and 503
+/// answers, a second factor due and a success are not held.
 async fn login(
     pool: &PgPool,
     auth: &AuthState,
@@ -453,6 +461,30 @@ async fn login(
     b: LoginBody,
 ) -> Result<LoginAnswer, AppError> {
     let attempt = throttle_gate(&auth.throttle, &b.username, ctx.client.net, "sign-ins for this username").await?;
+    let start = tokio::time::Instant::now();
+    check_login(pool, auth, headers, ctx, attempt, b).await.map_err(|mut e| {
+        if e.code == ErrorCode::Unauthenticated {
+            e.hold_until = Some(start + with_jitter(auth.config.sign_in_failure_floor));
+        }
+        e
+    })
+}
+
+/// `floor` plus a random 0-5 % of it.
+fn with_jitter(floor: Duration) -> Duration {
+    let mut bytes = [0u8; 2];
+    getrandom::fill(&mut bytes).expect("OS random number generator");
+    floor + floor * u32::from(u16::from_le_bytes(bytes)) / (20 * u32::from(u16::MAX))
+}
+
+async fn check_login(
+    pool: &PgPool,
+    auth: &AuthState,
+    headers: &HeaderMap,
+    ctx: &RequestContext,
+    attempt: Attempt<'_>,
+    b: LoginBody,
+) -> Result<LoginAnswer, AppError> {
     let row = data::find_for_login(pool, &b.username).await?;
     // Directory accounts, and names no account has while a directory is enabled, go to LDAP.
     let directory = match &row {
@@ -820,7 +852,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Sign in with username and password")
             .description(
-                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the client address the reverse proxy reports), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
+                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, 503, MFA_REQUIRED and successful answers are not delayed. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
             )
             .public()
             .errors(&[ErrorCode::MfaRequired, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
@@ -894,6 +926,8 @@ pub(crate) mod tests {
                 oidc_allowed_hosts: None,
                 setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
                 setup_token_file: None,
+                trusted_proxies: Default::default(),
+                sign_in_failure_floor: Duration::ZERO,
             },
             crate::secrets::Keyring::for_tests(),
         )
@@ -1696,6 +1730,114 @@ pub(crate) mod tests {
         let refused = auth_rows(pool, "login.failure").await;
         assert_eq!(refused.len(), 2);
         assert!(refused.iter().all(|r| r.3["reason"] == "provider_disabled"), "{refused:?}");
+        db.drop().await;
+    }
+
+    /// GH#216: every refused sign-in (local wrong password, unknown name,
+    /// directory no-match, disabled account) is held to the floor, counted from
+    /// after the throttle; a success and a 429 are not held.
+    #[tokio::test]
+    async fn refused_sign_ins_are_held_to_the_floor() {
+        let Some(db) = scratch::database("refused_sign_ins_are_held_to_the_floor").await else { return };
+        let floor = Duration::from_secs(1);
+        let base = auth_state();
+        let auth = AuthState::new(
+            AuthConfig { sign_in_failure_floor: floor, ..base.config.clone() },
+            crate::secrets::Keyring::for_tests(),
+        );
+        let (pool, headers) = (&db.pool, HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        let disabled = UserCreate {
+            username: "gone".into(),
+            display_name: "Gone".into(),
+            email: None,
+            password: "gone correct horse".into(),
+            is_active: Some(false),
+            profile_ids: vec![],
+        };
+        users::create(pool, &RequestContext::system("test", "test"), &disabled).await.unwrap();
+        let ldap = crate::modules::mfa::tests::provider(pool, "ldap", false, "ldaps://dc.example.test").await;
+        let mut tx = pool.begin().await.unwrap();
+        let linked = crate::data::identity_providers::NewLinkedUser {
+            provider_id: ldap,
+            external_id: "erin",
+            username: "erin",
+            display_name: "erin",
+            email: None,
+        };
+        crate::data::identity_providers::insert_linked(&mut tx, &linked).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let wrong = OWNER_PASSWORD.to_uppercase();
+        for (name, password) in [
+            ("owner", wrong.as_str()),
+            ("nobody", wrong.as_str()),
+            ("erin", wrong.as_str()),
+            ("gone", "gone correct horse"),
+        ] {
+            let start = tokio::time::Instant::now();
+            let e =
+                login(pool, &auth, &headers, &from("198.51.100.7"), login_body(name, password)).await.err().unwrap();
+            let done = tokio::time::Instant::now();
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "{name}");
+            let until = e.hold_until.expect("held");
+            assert!(until >= start + floor, "{name}: answered before the floor");
+            assert!(until <= done + floor + floor / 20, "{name}: counted from after the throttle, 5 % jitter at most");
+        }
+        assert_eq!(auth_rows(pool, "login.failure").await.len(), 4, "recorded before the wait");
+
+        let ok =
+            login(pool, &auth, &headers, &from("198.51.100.7"), login_body("owner", OWNER_PASSWORD.as_str())).await;
+        assert!(ok.is_ok(), "a success is not refused: {:?}", ok.err().map(|e| e.code));
+        auth.throttle.freeze();
+        for _ in 0..crate::auth::throttle::FREE_FAILURES {
+            let _ = login(pool, &auth, &headers, &from("198.51.100.8"), login_body("owner", &wrong)).await;
+        }
+        let e = login(pool, &auth, &headers, &from("198.51.100.8"), login_body("owner", &wrong)).await.err().unwrap();
+        assert_eq!((e.code, e.hold_until), (ErrorCode::RateLimited, None), "a 429 is not held");
+        db.drop().await;
+    }
+
+    /// GH#216 through the router: the wait holds neither a database connection
+    /// nor a capacity permit, and a success is not held.
+    #[tokio::test]
+    async fn a_held_sign_in_holds_no_connection_or_permit() {
+        use axum::body::Body as HttpBody;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let Some(db) = scratch::database("a_held_sign_in_holds_no_connection_or_permit").await else { return };
+        let pool = db.pool.clone();
+        setup(&pool, &auth_state(), &HeaderMap::new(), &anon(), body("owner")).await.unwrap();
+        let capacity = crate::http::Capacity::with_sizes(8, 4, Duration::from_secs(10));
+        let floor = |ms| move |cfg: &mut AuthConfig| cfg.sign_in_failure_floor = Duration::from_millis(ms);
+        let post = |app: axum::Router, password: &str| {
+            let body = serde_json::json!({ "username": "owner", "password": password }).to_string();
+            let req = Request::post("/api/v1/auth/login").header("content-type", "application/json");
+            async move { app.oneshot(req.body(HttpBody::from(body)).unwrap()).await.unwrap().status().as_u16() }
+        };
+
+        let long = crate::modules::api_tokens::tests::app_with_auth(pool.clone(), capacity.clone(), floor(3_600_000));
+        let ok = tokio::time::timeout(Duration::from_secs(60), post(long.clone(), OWNER_PASSWORD.as_str())).await;
+        assert_eq!(ok.expect("a success is not held"), 200);
+        let held = tokio::spawn(post(long, &OWNER_PASSWORD.to_uppercase()));
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while auth_rows(&pool, "login.failure").await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the failure is recorded before the wait");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!held.is_finished(), "held to the floor");
+        assert_eq!(capacity.available(true), 4, "the permit was given back");
+        assert_eq!(pool.num_idle() as u32, pool.size(), "no connection is held");
+        held.abort();
+
+        let short = crate::modules::api_tokens::tests::app_with_auth(pool.clone(), capacity, floor(300));
+        let start = tokio::time::Instant::now();
+        assert_eq!(post(short, "wrong").await, 401);
+        assert!(start.elapsed() >= Duration::from_millis(300), "no earlier than the floor");
         db.drop().await;
     }
 

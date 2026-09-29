@@ -215,6 +215,8 @@ mod tests {
                 oidc_allowed_hosts: None,
                 setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
                 setup_token_file: None,
+                trusted_proxies: Default::default(),
+                sign_in_failure_floor: Duration::ZERO,
             },
             crate::secrets::Keyring::for_tests(),
         )

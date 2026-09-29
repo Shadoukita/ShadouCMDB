@@ -494,6 +494,12 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     // No key, no server: checked before anything else, with no database needed.
     let keyring = Arc::new(crate::secrets::Keyring::load(&cfg.encryption)?);
     let pool = db::lazy_pool(&cfg.database)?;
+    if cfg.auth.trusted_proxies.is_empty() {
+        tracing::info!(
+            "TRUSTED_PROXIES is empty: the sign-in throttle keys on the TCP peer address. Behind a reverse proxy, \
+             list it there, or every client shares the proxy's network for throttling"
+        );
+    }
     let state = AppState::new(pool.clone(), cfg.auth.clone(), keyring).capturing(&cfg.audit).limited(&cfg.http);
     // Before listening: rows under a key that is not configured stop the server
     // here, and rows not encrypted yet are encrypted. An unreachable or
@@ -680,6 +686,8 @@ mod tests {
             oidc_allowed_hosts: None,
             setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
             setup_token_file: None,
+            trusted_proxies: Default::default(),
+            sign_in_failure_floor: Duration::ZERO,
         };
         let mut cfg = Config {
             api_host: "127.0.0.1".into(),
