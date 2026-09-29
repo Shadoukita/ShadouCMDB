@@ -118,7 +118,9 @@ one network gets at most 4 places in the server-wide slow lane. The client netwo
 forwarding headers, which only a reverse proxy that overwrites them makes trustworthy. Without one,
 or with guesses from three or more real networks, an attacker who knows a username can still add up
 the per-user budget across networks (15 failures) and lock that name for every network, with the
-same backoff up to 15 minutes, and 16 or more networks can still fill the slow lane. Mitigations for
+same backoff up to 15 minutes, and 16 or more networks can still fill the slow lane. IPv6 makes
+distinct networks cheap (a single /48 holds 65,536 /64s), and a user on the account holder's own
+network (for example behind the same office NAT) still locks them out. Mitigations for
 the operator: run behind a proxy that sets `X-Forwarded-For`, rate-limit `/api/v1/auth/*` per client
 address there, and keep a break-glass administrator whose username is not guessable. Timing (GH#190):
 a name that no local account has and that the directory does not match now costs the same argon2
