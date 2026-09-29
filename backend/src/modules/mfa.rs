@@ -998,7 +998,7 @@ pub(crate) mod tests {
         let mut conn = pool.acquire().await.unwrap();
         assert_eq!(crate::data::api_tokens::count_refused_for_mfa(&mut conn).await.unwrap(), (1, 1));
         let notice = crate::data::api_tokens::refused_for_mfa_notice(&mut conn).await.unwrap().unwrap();
-        assert!(notice.starts_with("1 API token of 1 account will be refused"), "{notice}");
+        assert!(notice.starts_with("1 API token of 1 account is refused"), "{notice}");
         drop(conn);
 
         // A sign-in through /auth/login/mfa is a verified session too.

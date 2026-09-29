@@ -318,11 +318,18 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> 
     }
     // No token that would be refused at its first use.
     if data::refused_for_mfa_if_created(&mut tx, owner_id, mfa_verified).await? {
-        let message = format!(
-            "{} must use two-factor authentication, so this token must be created from a session signed in with a \
-             second factor. Set up two-factor authentication and sign in again.",
-            owner.username
-        );
+        let message = if Some(owner_id) == me {
+            "You must use two-factor authentication, so your tokens must be created from a session signed in with \
+             a second factor. Set up two-factor authentication and sign in again."
+                .to_owned()
+        } else {
+            format!(
+                "{} must use two-factor authentication, so tokens for this account must be created from a session \
+                 signed in with a second factor. Set up two-factor authentication for your own account and sign in \
+                 again.",
+                owner.username
+            )
+        };
         return Err(AppError::new(ErrorCode::MfaRequiredForToken, message));
     }
 

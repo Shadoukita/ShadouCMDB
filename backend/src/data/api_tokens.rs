@@ -205,12 +205,13 @@ pub async fn refused_for_mfa_notice(conn: &mut PgConnection) -> sqlx::Result<Opt
     let (tokens, owners) = count_refused_for_mfa(conn).await?;
     Ok((tokens > 0).then(|| {
         format!(
-            "{tokens} API token{} of {owners} account{} will be refused after this upgrade: their owners must use \
-             two-factor authentication and the tokens were not created from a session signed in with a second \
-             factor. List them with GET /api/v1/admin/api-tokens?refusedForMfa=true (or Administration > API tokens) \
-             and create new tokens for the affected integrations.",
+            "{tokens} API token{} of {owners} account{} {} refused: their owners must use two-factor \
+             authentication and the tokens were not created from a session signed in with a second factor. List \
+             them with GET /api/v1/admin/api-tokens?refusedForMfa=true and create new tokens for the affected \
+             integrations.",
             if tokens == 1 { "" } else { "s" },
             if owners == 1 { "" } else { "s" },
+            if tokens == 1 { "is" } else { "are" },
         )
     }))
 }
