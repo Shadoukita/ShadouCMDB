@@ -545,6 +545,13 @@ changes a sign-in through a provider makes (creating the account, new name, e-ma
 the provider vouched for but ShadouCMDB refused (no mapped group, name taken, account disabled) is a
 `login.failure` with the name the provider sent; a callback without this browser's pending sign-in is not recorded.
 
+A data model preview (`POST /schema-changes/preview`) refused because the caller lacks a right it needs is a
+`schema_change.refused` row: `entity_type` is `areas`, `ci_classes` or `ci_attribute_definitions`, `entity_id` the
+one previewed (the nil UUID for a create), `old_value` NULL, and `new_value` holds `preview: true`, `operation`,
+the `body` sent, `code` (e.g. `view_required`), `field` and `message`. Today the only such refusal is a type change
+or new enum list for a field whose types the caller may not all view (GH#221); the rows make repeated attempts
+visible. They are data model history: `prune-audit --scope changes` removes them (migration 0027).
+
 A wrong code at sign-in that sets the username's lock also writes `login.locked`. No TOTP secret, code, recovery
 code or hash is ever written.
 
@@ -582,7 +589,7 @@ These fields hold it:
 | Data | Kept | How it goes |
 | --- | --- | --- |
 | Authentication events (including `mfa.*`) and `token.use` rows in `audit_log` | **180 days** | `shadoucmdb prune-audit --older-than 180d --execute`, run by the operator (scope `auth`, the default) |
-| CI and configuration change history in `audit_log` (`create`, `update`, `delete`, `restore`) | **Indefinitely** | Only if an operator explicitly runs `prune-audit --scope changes` |
+| CI and configuration change history in `audit_log` (`create`, `update`, `delete`, `restore`, `schema_change.refused`) | **Indefinitely** | Only if an operator explicitly runs `prune-audit --scope changes` |
 | `sessions` rows | Until **30 days after expiry**; revoked sessions are deleted at once | Deleted at sign-in once expired; `prune-audit` (scope `auth`) removes any older than 30 days past expiry |
 | `audit.purge` rows | **Forever** | Never deleted, not even by the purge |
 
@@ -604,7 +611,7 @@ and never for an `audit.purge` row. Because the function runs with the owner's r
 aggregate another role planted in `public` can never be resolved in its place. For the same
 reason no role but the owner may create objects in `public` (PostgreSQL 14 allows it by
 default; the bootstrap scripts and migration 0007 revoke it). Migration 0008 moved the function into
-`cmdb` with the other system objects (`cmdb.prune_audit_log`); migration 0010 added `token.use` to the `auth` scope, and 0013 the `mfa.*` events (and the clean-up of expired `mfa_challenges`). The schema owner remains able to change anything, which
+`cmdb` with the other system objects (`cmdb.prune_audit_log`); migration 0010 added `token.use` to the `auth` scope, 0013 the `mfa.*` events (and the clean-up of expired `mfa_challenges`), and 0027 `schema_change.refused` to the `changes` scope. The schema owner remains able to change anything, which
 is why its credentials belong to migrations only, not to the running server.
 
 **Erasure for one person (GDPR Art. 17) is not supported.** It conflicts with an append-only
