@@ -71,8 +71,11 @@ the database credentials can.
 ### Protecting backup files
 
 A backup holds password hashes (argon2id) and personal data: names, email
-addresses, and the IP addresses and user agents in the audit log. Treat it like
-the database itself.
+addresses, and the IP addresses and user agents in the audit log. It also holds
+secrets the server stores unencrypted: every user's authenticator (TOTP)
+secret, the OIDC client secret and the directory bind password (see
+[secrets at rest](security/hardening.md#secrets-and-configuration)). Treat it
+like the database itself.
 
 - On Linux and macOS, `backup` creates the file readable by its owner only (mode `0600`).
 - Encrypt backups before they leave the host (for example `age -r <recipient>` or

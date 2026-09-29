@@ -187,6 +187,21 @@ protect its password accordingly.
   Kubernetes Secrets with encryption at rest, Vault) rather than baking it into an image.
 - Never put the password in `DATABASE_URL` on a command line; it shows up in `ps` and shell
   history. Use the env file.
+- **Secrets at rest.** The server has to read some secrets back, so the database stores them
+  unencrypted: the authenticator (TOTP) secret of every user with two-factor sign-in, the OIDC
+  client secret and the directory bind password. They are never returned by the API or written
+  to the audit log, but anyone who can read the database or a backup of it can compute every
+  user's current sign-in code and use the provider credentials. The second factor then only
+  protects against someone who has a password but not the data. Until these secrets are
+  encrypted with a key kept outside the database
+  ([#189](https://github.com/Shadoukita/ShadouCMDB/issues/189)):
+  - Restrict read access to the database to the application and schema-owner roles
+    ([roles](#database-roles)), and keep ad hoc reporting accounts off the `cmdb` schema.
+  - Treat every backup as a copy of these secrets ([backup](#backup-and-restore)).
+  - If the database or a backup leaks, reset two-factor sign-in for every user who has it
+    (`DELETE /api/v1/admin/users/{id}/mfa`, or **Reset two-factor** under the user's account actions) so they enrol
+    a new authenticator, and rotate the OIDC client secret and the bind password at the
+    provider. Password resets alone are not enough.
 - Leave `CORS_ORIGINS` empty unless you serve the UI from another origin.
 - Keep `LOG_LEVEL` at `info` in production. `trace` logs every SQL statement.
 
@@ -238,8 +253,8 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   honour `HTTPS_PROXY`/`NO_PROXY`.
 - **Secrets at rest.** The OIDC client secret and the directory bind password are stored in the
   database (the server has to present them) and in backups; they are never returned by the API
-  or written to the audit log. Protect database access and backups accordingly, and rotate
-  them at the provider if a backup is lost.
+  or written to the audit log. See [secrets at rest](#secrets-and-configuration) for what that
+  means and what to do if a backup is lost.
 - **Leavers.** Disable the person in the provider. Their next sign-in is refused; a session they
   already have lasts until it idles out (`SESSION_IDLE_TIMEOUT_MINUTES`) or ends. To end it at
   once, disable the account in ShadouCMDB too, or disable the provider (ends all its sessions).
@@ -254,7 +269,16 @@ holds no state of its own besides its env file.
   recovery, use physical backups with WAL archiving (pgBackRest, Barman or your provider's
   snapshots).
 - **Encrypt backups** at rest and in transit (e.g. `age` or `gpg` before the file leaves the host,
-  or an encrypted backup repository). A dump contains the password hashes and the whole CMDB.
+  or an encrypted backup repository). A backup, whether a `pg_dump` or a `shadoucmdb backup`
+  file, contains the password hashes, the whole CMDB and the
+  [secrets stored unencrypted](#secrets-and-configuration): the users' authenticator secrets and
+  the identity provider credentials. Whoever has an unencrypted backup and cracks one password
+  hash can sign in as that user despite two-factor sign-in. Keep the decryption key away from the
+  backups and from the database host.
+- **Restrict the file on the host.** `shadoucmdb backup` creates its file with mode `0600` on
+  Linux. On Windows the file inherits the folder's ACL: write backups only to a folder limited to
+  Administrators and the account that runs the backup (see
+  [backup-and-reset.md](../backup-and-reset.md#taking-backups)).
 - **Keep them apart:** store backups outside the database host and outside the reach of the
   application role, with at least one copy offline or immutable (object lock), so ransomware on
   the server cannot delete them.
@@ -264,8 +288,8 @@ holds no state of its own besides its env file.
 - **Retention:** keep backups only as long as you need them; they are copies of personal data
   (user accounts, audit log IPs) too.
 
-Built-in `shadoucmdb backup` / `restore` commands and a decommission wipe are planned (SHAA-77
-workstream 7).
+The built-in `shadoucmdb backup` and `restore` commands and the decommission wipe are described
+in [backup-and-reset.md](../backup-and-reset.md).
 
 ## Logging and monitoring
 
