@@ -193,6 +193,16 @@ pub async fn authenticate(
                 let mut conn = pool.acquire().await?;
                 let owner = auth_data::load_permissions(&mut conn, t.user_id).await?;
                 permissions = owner.intersect(&data::profile_permissions(&mut conn, profile_id).await?);
+                // A token minted for someone else is also capped at what its
+                // creator holds now, so promoting the owner does not widen it
+                // beyond its creator's rights (GH#178).
+                if let Some(creator) = t.created_by_user_id.filter(|&c| c != t.user_id) {
+                    permissions = if t.creator_active {
+                        permissions.intersect(&auth_data::load_permissions(&mut conn, creator).await?)
+                    } else {
+                        Permissions::default()
+                    };
+                }
                 refusal = required.filter(|p| !permissions.has(*p)).map(Refusal::Forbidden);
             }
         }

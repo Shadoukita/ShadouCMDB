@@ -283,7 +283,11 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
   outlives its revocation. Listing and reading accounts, providers and profiles, the provider connection test and
   configuration export accept tokens.
 - Managing tokens needs `users.manage`. As for accounts, a non-administrator can only create or revoke tokens for
-  users whose permissions they hold themselves (their own tokens are always revocable).
+  users whose permissions they hold themselves (their own tokens are always revocable), and a token for another
+  user only with a profile whose permissions they hold themselves (`403` otherwise). A token created for another
+  owner is also capped at its creator's current permissions: it may do only what the owner, the profile and the
+  creator all allow, and nothing while the creator is disabled. Tokens created with the CLI, or whose creator is
+  unknown, are capped by owner and profile only.
 - A token records who created it (`createdByUserId`; `createdBy` is the name, for display). An administrator's
   reset of a user's password (`PUT /admin/users/{id}/password`) revokes the user's own tokens **and** every
   working token the user created for another owner, since the account may have been compromised. The user's own

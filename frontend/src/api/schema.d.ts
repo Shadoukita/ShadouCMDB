@@ -1790,7 +1790,7 @@ export interface paths {
         put?: never;
         /**
          * Create an API token; the response carries its secret, shown this once
-         * @description Requires `users.manage`. The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not, and 403 `MFA_REQUIRED_FOR_TOKEN` when the owner must use two-factor authentication and your session did not sign in with a second factor (the token would be refused). The token records that as `mfaVerified`. 400 when the owner is disabled or the owner or profile does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant, and for a token you create for another owner also only those you hold at the time of use. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner, or for another owner the profile, holds permissions you do not, and 403 `MFA_REQUIRED_FOR_TOKEN` when the owner must use two-factor authentication and your session did not sign in with a second factor (the token would be refused). The token records that as `mfaVerified`. 400 when the owner is disabled or the owner or profile does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createApiToken"];
         delete?: never;
@@ -14365,6 +14365,7 @@ export interface operations {
                     /**
                      * Format: uuid
                      * @description The scope: the token may do what both this profile and its owner allow
+                     *     (and, for another owner, you: you must hold the profile's permissions)
                      */
                     profileId: string;
                     /**

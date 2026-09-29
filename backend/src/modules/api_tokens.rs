@@ -8,7 +8,9 @@
 //!
 //! Managing tokens needs `users.manage` and a signed-in session (a token cannot
 //! mint or revoke tokens). As for accounts, a non-administrator can only
-//! create or revoke tokens of users whose permissions they hold themselves.
+//! create or revoke tokens of users whose permissions they hold themselves,
+//! and a token for another user only with a profile they hold themselves; such
+//! a token is also capped at its creator's current permissions (GH#178).
 
 use axum::http::{Method, StatusCode};
 use chrono::{DateTime, Duration, Utc};
@@ -19,7 +21,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::users::{ProfileRef, must_cover_user};
-use crate::api::context::RequestContext;
+use crate::api::context::{RequestContext, forbidden};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{self, Page, Paged, QueryBool, Sort, UuidList, like_pattern, trimmed, ts, ts_opt};
 use crate::auth::events::TOKEN_ENTITY;
@@ -166,6 +168,7 @@ pub struct ApiTokenCreate {
     #[schema(nullable = false)]
     pub user_id: Option<Uuid>,
     /// The scope: the token may do what both this profile and its owner allow
+    /// (and, for another owner, you: you must hold the profile's permissions)
     pub profile_id: Uuid,
     #[schema(schema_with = expires_at_schema)]
     pub expires_at: DateTime<Utc>,
@@ -315,6 +318,14 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> 
     }
     if auth_data::existing_profiles(&mut tx, &[b.profile_id]).await?.is_empty() {
         return Err(AppError::field("profileId", "Permission profile does not exist", "not_found"));
+    }
+    // For another owner the profile is the ceiling that outlives today's
+    // owner: it must not grant more than the caller holds (GH#178).
+    if Some(owner_id) != me
+        && let Some(p) = ctx.principal()
+        && !p.permissions.covers(&data::profile_permissions(&mut tx, b.profile_id).await?)
+    {
+        return Err(forbidden("This permission profile grants permissions you do not hold yourself"));
     }
     // No token that would be refused at its first use.
     if data::refused_for_mfa_if_created(&mut tx, owner_id, mfa_verified).await? {
@@ -497,7 +508,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Create an API token; the response carries its secret, shown this once")
             .description(
-                "The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner holds permissions you do not, and 403 `MFA_REQUIRED_FOR_TOKEN` when the owner must use two-factor authentication and your session did not sign in with a second factor (the token would be refused). The token records that as `mfaVerified`. 400 when the owner is disabled or the owner or profile does not exist.",
+                "The token acts as its owner (`userId`, default yourself), limited to what `profileId` allows: its permissions are those the owner and the profile both grant, and for a token you create for another owner also only those you hold at the time of use. `expiresAt` is required, in the future and at most 366 days away. 403 when the owner, or for another owner the profile, holds permissions you do not, and 403 `MFA_REQUIRED_FOR_TOKEN` when the owner must use two-factor authentication and your session did not sign in with a second factor (the token would be refused). The token records that as `mfaVerified`. 400 when the owner is disabled or the owner or profile does not exist.",
             )
             .status(StatusCode::CREATED)
             .requires(manage)
@@ -1221,6 +1232,100 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert_eq!(audited, 2, "each revocation has its audit row");
+
+        db.drop().await;
+    }
+
+    /// The issue's repro (GH#178): Alice holds only users.manage and mints a
+    /// token for low-privilege Bob. She cannot scope it wider than her own
+    /// rights, and a token that already is (minted before the fix) stays
+    /// capped at her rights when Bob is promoted.
+    #[tokio::test]
+    async fn a_token_minted_for_another_user_is_capped_at_its_creators_rights() {
+        let Some(db) = scratch::database("a_token_minted_for_another_user_is_capped_at_its_creators_rights").await
+        else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let managers: uuid::Uuid =
+            sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ('User managers') RETURNING id")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        sqlx::query(
+            "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'users.manage')",
+        )
+        .bind(managers)
+        .execute(pool)
+        .await
+        .unwrap();
+        let mut ids = Vec::new();
+        for (name, profiles) in [("alice", json!([managers])), ("bob", json!([]))] {
+            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+                "profileIds": profiles });
+            let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            ids.push(v["id"].as_str().unwrap().to_owned());
+        }
+        let bob_id = ids[1].clone();
+        let login = json!({ "username": "alice", "password": "alice first password" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+        assert_eq!(status, 200, "{me}");
+        let alice = session_of(&me, &headers);
+
+        // She covers Bob, but not the Administrator profile: refused, nothing stored.
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let wide = json!({ "name": "wide", "userId": bob_id, "profileId": administrators, "expiresAt": expires });
+        let (status, v, _) = call(&app, "POST", super::BASE, &alice, Some(wide)).await;
+        assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+        let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM api_tokens").fetch_one(pool).await.unwrap();
+        assert_eq!(stored, 0);
+
+        // A profile she holds herself is fine.
+        let narrow = json!({ "name": "for bob", "userId": bob_id, "profileId": managers, "expiresAt": expires });
+        let (status, created, _) = call(&app, "POST", super::BASE, &alice, Some(narrow)).await;
+        assert_eq!(status, 201, "{created}");
+        let tok = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+
+        // As if minted before the fix with the Administrator profile; then Bob
+        // is promoted. The token gets what Bob, its profile and Alice all allow.
+        sqlx::query("UPDATE api_tokens SET profile_id = $1").bind(administrators).execute(pool).await.unwrap();
+        let promote = json!({ "profileIds": [administrators] });
+        let (status, v, _) = call(&app, "PATCH", &format!("/api/v1/admin/users/{bob_id}"), &admin, Some(promote)).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &tok, None).await;
+        assert_eq!(status, 200, "within Alice's rights: {v}");
+        let (status, v, _) = call(&app, "GET", "/api/v1/audit-log?limit=1", &tok, None).await;
+        assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "audit.view is Bob's, not Alice's");
+
+        // The administrator's token for Bob, with the same profile, has it all.
+        let body = json!({ "name": "by admin", "userId": bob_id, "profileId": administrators, "expiresAt": expires });
+        let (status, created, _) = call(&app, "POST", super::BASE, &admin, Some(body)).await;
+        assert_eq!(status, 201, "{created}");
+        let admins = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+        assert_eq!(call(&app, "GET", "/api/v1/audit-log?limit=1", &admins, None).await.0, 200);
+
+        // The cap comes on top of the owner's requireMfa rule (GH#200): once
+        // Bob must use a second factor, Alice's token is refused outright.
+        sqlx::query("UPDATE permission_profiles SET require_mfa = true WHERE id = $1")
+            .bind(administrators)
+            .execute(pool)
+            .await
+            .unwrap();
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &tok, None).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+        assert!(v["error"]["message"].as_str().unwrap().contains("must use two-factor authentication"), "{v}");
 
         db.drop().await;
     }
