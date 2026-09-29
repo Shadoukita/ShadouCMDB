@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { RouterLink } from "vue-router";
 import { useAllProfiles, useCreateApiToken, useUserList, type ApiToken } from "../../api/admin";
 import { ApiError } from "../../api/client";
 import { MAX_PAGE } from "../../api/queries";
@@ -100,6 +101,8 @@ const PLACED = ["name", "userId", "profileId", "expiresAt"];
 const unplaced = computed(() => apiError.value?.details.filter((d) => !PLACED.includes(d.field)) ?? []);
 /** 403: the chosen owner holds permissions the caller does not, so the caller may not mint a token acting as them. */
 const forbidden = computed(() => apiError.value?.code === "FORBIDDEN");
+/** 403: the owner must use two-factor authentication and this session did not sign in with a second factor (GH#200). */
+const mfaRequired = computed(() => apiError.value?.code === "MFA_REQUIRED_FOR_TOKEN");
 
 function submit() {
   const errs: Record<string, string> = {};
@@ -154,6 +157,11 @@ async function copySecret() {
             administrator to create it.
           </div>
           <div class="meta">{{ apiError?.message }}</div>
+        </div>
+        <div v-else-if="mfaRequired" class="alert alert-error" role="alert">
+          <strong>Not created — the token would be refused.</strong>
+          <div>{{ apiError?.message }}</div>
+          <div><RouterLink to="/account" @click="close()">Open your account settings</RouterLink> to set up two-factor authentication.</div>
         </div>
         <FormErrorBanner v-else-if="create.error.value" :error="create.error.value" :unplaced="unplaced" />
         <div class="form-grid">

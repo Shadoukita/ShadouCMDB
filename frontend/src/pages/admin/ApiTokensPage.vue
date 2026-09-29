@@ -43,9 +43,12 @@ const COLUMNS: { key: string; label: string; sort?: string }[] = [
 const lq = useListQuery({ sort: "-createdAt" });
 const { get, limit, offset, update } = lq;
 const status = computed(() => STATUSES.find((s) => s.value === get("status"))?.value);
+/** Only the working tokens refused because their owner must use two-factor authentication (GH#200). */
+const refusedOnly = computed(() => get("refusedForMfa") === "true");
 const query = computed<ApiTokenListQuery>(() => ({
   q: get("q") || undefined,
   status: status.value,
+  refusedForMfa: refusedOnly.value ? "true" : undefined,
   userId: get("userId") || undefined,
   sort: lq.sort.value as SortField,
   limit: limit.value,
@@ -62,14 +65,18 @@ watch(
   (v) => (qText.value = v),
 );
 
-const filtered = computed(() => !!(get("q") || get("status") || get("userId")));
+const filtered = computed(() => !!(get("q") || get("status") || get("userId") || refusedOnly.value));
 const total = computed(() => list.data.value?.page.total ?? 0);
 const rows = computed(() => list.data.value?.data ?? []);
 
 function clearFilters() {
   qText.value = "";
-  update({ q: undefined, status: undefined, userId: undefined });
+  update({ q: undefined, status: undefined, userId: undefined, refusedForMfa: undefined });
 }
+
+const REFUSED_TITLE =
+  "The owner must use two-factor authentication, and this token was not created from a session signed in with a second factor, " +
+  "so every request with it is refused. Create a new token from a session signed in with a second factor, then revoke this one.";
 
 const creating = ref(false);
 const statusBadge = (s: Status) => STATUSES.find((x) => x.value === s)!;
@@ -135,6 +142,10 @@ function revokedTitle(t: ApiToken): string | undefined {
           <option v-for="u in users.data.value?.data ?? []" :key="u.id" :value="u.id">{{ u.username }}</option>
         </select>
       </div>
+      <label class="checkbox-row" :title="REFUSED_TITLE">
+        <input type="checkbox" :checked="refusedOnly" @change="update({ refusedForMfa: ($event.target as HTMLInputElement).checked ? 'true' : undefined })" />
+        Refused for two-factor only
+      </label>
       <button v-if="filtered" type="button" class="btn" @click="clearFilters">Clear filters</button>
     </form>
 
@@ -143,7 +154,11 @@ function revokedTitle(t: ApiToken): string | undefined {
     </div>
     <LoadingState v-if="list.isLoading.value" label="Loading API tokens…" />
     <EmptyState v-if="list.data.value && total === 0" :title="filtered ? 'No API tokens match these filters' : 'No API tokens yet'">
-      <template v-if="filtered">Adjust or clear the filters above.</template>
+      <template v-if="refusedOnly && !get('q') && !get('status') && !get('userId')">
+        No working token is refused for two-factor authentication: every owner who must use a second factor has tokens created from a
+        session signed in with one.
+      </template>
+      <template v-else-if="filtered">Adjust or clear the filters above.</template>
       <template v-else>
         A token lets a script or integration call the API as its owner, limited to a permission profile. Its secret is shown once, when
         you create it.
@@ -185,6 +200,7 @@ function revokedTitle(t: ApiToken): string | undefined {
               <td :title="revokedTitle(t)">
                 <span :class="['badge', statusBadge(t.status).badge]">{{ statusBadge(t.status).label }}</span>
                 <span v-if="t.status === 'revoked' && t.revokedBy" class="muted"> by {{ t.revokedBy }}</span>
+                <span v-if="t.refusedForMfa" class="badge danger" :title="REFUSED_TITLE"> Refused: owner requires MFA</span>
               </td>
               <td :title="formatDateTime(t.expiresAt)">{{ formatDate(t.expiresAt) }}</td>
               <td :title="t.lastUsedAt ? `${formatDateTime(t.lastUsedAt)}${t.lastUsedIp ? ` from ${t.lastUsedIp}` : ''}` : undefined">

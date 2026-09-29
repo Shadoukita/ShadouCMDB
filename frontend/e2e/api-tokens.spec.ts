@@ -194,6 +194,56 @@ test("a token for an owner with more rights than yours is refused, and the dialo
   await context.close();
 });
 
+test("a token refused because its owner must use two-factor authentication is badged and filterable (GH#200)", async ({ page, request }) => {
+  // A service account's token, created from this password-only session while the account needs no second factor.
+  const readers = await apiSend<{ id: string }>(request, "POST", "/admin/profiles", { name: `E2E token readers ${stamp}`, globalPermissions: [], classPermissions: [] });
+  const mfa = await apiSend<{ id: string }>(request, "POST", "/admin/profiles", { name: `E2E token MFA ${stamp}`, globalPermissions: [], classPermissions: [], requireMfa: true });
+  const svc = await apiSend<{ id: string; username: string }>(request, "POST", "/admin/users", {
+    username: `e2e-token-svc-${stamp}`,
+    displayName: `E2E token service ${stamp}`,
+    password: "token-service-password-1",
+    profileIds: [readers.id],
+  });
+  const refusedName = `E2E refused for MFA ${stamp}`;
+  const expiresAt = new Date(Date.now() + 7 * 86_400_000).toISOString();
+  const minted = await apiSend<{ token: { mfaVerified: boolean; refusedForMfa: boolean } }>(request, "POST", "/admin/api-tokens", { name: refusedName, userId: svc.id, profileId: readers.id, expiresAt });
+  expect(minted.token).toMatchObject({ mfaVerified: false, refusedForMfa: false });
+  // Now the account must use two-factor authentication: the token is refused.
+  await apiSend(request, "PATCH", `/admin/users/${svc.id}`, { profileIds: [readers.id, mfa.id] });
+
+  await page.goto(`/admin/api-tokens?q=${encodeURIComponent(stamp)}`);
+  const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: refusedName, exact: true }) });
+  const badge = row.getByText("Refused: owner requires MFA");
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveAttribute("title", /created from a session signed in with a second factor/);
+  await expect(row.getByText("Active", { exact: true })).toBeVisible();
+  await snap(page, "44-api-token-refused-for-mfa");
+
+  // The filter lists only refused tokens, is kept in the URL and survives a reload.
+  await page.getByLabel("Refused for two-factor only").check();
+  await expect(page).toHaveURL(at("/admin/api-tokens", `?q=${stamp}&refusedForMfa=true`));
+  await page.reload();
+  await expect(page.getByLabel("Refused for two-factor only")).toBeChecked();
+  await expect(page.getByRole("cell", { name: refusedName, exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: NAME, exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page).toHaveURL(at("/admin/api-tokens"));
+
+  // A new token for the account from this session would be refused too: the dialog shows the server's reason.
+  await page.getByRole("button", { name: "+ New API token" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "New API token" });
+  await dialog.getByLabel("Name").fill(`E2E not created ${stamp}`);
+  await dialog.getByLabel("Owner").selectOption(svc.id);
+  await dialog.getByLabel("Permission profile").selectOption({ label: `E2E token readers ${stamp}` });
+  await dialog.getByRole("button", { name: "Create token" }).click();
+  const alert = dialog.getByRole("alert");
+  await expect(alert).toContainText("Not created — the token would be refused.");
+  await expect(alert).toContainText(`${svc.username} must use two-factor authentication`);
+  await expect(alert.getByRole("link", { name: "Open your account settings" })).toHaveAttribute("href", "/account");
+  await snap(page, "45-api-token-mfa-required");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+});
+
 test("a user's page links to their API tokens", async ({ page }) => {
   await page.goto(`/admin/users?q=${encodeURIComponent(E2E_USER.username)}`);
   await page.getByRole("link", { name: E2E_USER.username, exact: true }).click();
