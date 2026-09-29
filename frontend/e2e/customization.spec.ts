@@ -228,12 +228,15 @@ test("list views: a view without the Label column still shows it first, so every
   await save(page, "e2e list view without label");
 
   await page.goto(`/cis?classId=${serverId}`);
+  // Wait for the view (its IP address column, page size and sort) and the list it refetches: until the
+  // settings load, the inventory shows the default columns and page size.
+  await expect(page.getByRole("columnheader", { name: /IP address/ })).toBeVisible();
   await expect(page.getByRole("columnheader").first()).toHaveText(/^Label/);
+  await expect(page.locator("table.data.loading")).toHaveCount(0);
   const rows = page.locator("table.data tbody tr");
   await expect(rows.first()).toBeVisible();
-  const count = await rows.count();
-  await expect(page.locator("table.data tbody tr td:first-child a")).toHaveCount(count);
-  await page.locator("table.data tbody tr td:first-child a").first().click();
+  await expect(rows.filter({ hasNot: page.locator("td:first-child a") })).toHaveCount(0);
+  await rows.first().locator("td:first-child a").click();
   await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);
 });
 
