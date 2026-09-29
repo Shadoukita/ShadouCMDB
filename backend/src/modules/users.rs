@@ -467,13 +467,12 @@ pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_pas
     must_cover_user(&mut tx, ctx, id).await?;
     data::set_password(&mut tx, id, &hash).await?;
     let own = ctx.principal().filter(|p| p.user_id == id);
+    // Tokens first: their rows must be locked before the first audit insert
+    // takes the chain head (GH#166).
+    api_tokens::revoke_all_of_user(&mut tx, ctx, id, own.is_none()).await?;
     let ended = data::delete_user_sessions(&mut tx, id, own.and_then(|p| p.session_id())).await?;
     let reason = if own.is_some() { RevokeReason::PasswordChanged } else { RevokeReason::PasswordReset };
     events::revoked(&mut tx, ctx, &ended, reason).await?;
-    api_tokens::revoke_all_of_user(&mut tx, ctx, id).await?;
-    if own.is_none() {
-        api_tokens::revoke_created_for_others(&mut tx, ctx, id).await?;
-    }
     let dto = load(&mut tx, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
