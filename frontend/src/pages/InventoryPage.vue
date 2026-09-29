@@ -62,7 +62,18 @@ const query = computed<CiListQuery>(() => ({
   limit: limit.value,
   offset: offset.value,
 }));
-const list = useCiList(query);
+/**
+ * Whether the class's list view is known. Its default sort and page size feed the
+ * query, so running it earlier would fetch the page (and its total) with the fallback
+ * sort only to fetch it again when the view arrives. A URL that names both needs no view.
+ */
+const viewSettled = computed(
+  () =>
+    (!!get("sort") && !!get("limit")) ||
+    !get("classId") ||
+    (classes.isFetched.value && settings.query.isFetched.value),
+);
+const list = useCiList(query, viewSettled);
 const areas = useAreas();
 const session = useSessionStore();
 // The class filter offers only what the user may view; the API would answer any other class with an empty list.
@@ -274,7 +285,7 @@ function ariaSort(field: string): "ascending" | "descending" | "none" {
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <LoadingState v-if="list.isLoading.value" label="Loading inventory…" />
+    <LoadingState v-if="list.isPending.value" label="Loading inventory…" />
 
     <EmptyState v-if="classDenied" title="Permission denied">
       None of your permission profiles allows viewing {{ currentClass?.name }} configuration items, so none are listed here.

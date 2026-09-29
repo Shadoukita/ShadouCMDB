@@ -1,5 +1,5 @@
 import type { APIRequestContext } from "@playwright/test";
-import { classIdByName, createCi, csrf, expect, test } from "./support";
+import { apiGet, apiSend, classIdByName, createCi, csrf, expect, test } from "./support";
 
 // The inventory sorts by an attribute of the class (GH#112): sort=[-]attributes.<key> with classId.
 // Text sorts case-insensitively, IP addresses in address order, CIs without a value come last.
@@ -62,4 +62,27 @@ test("the inventory lists a class in the attribute order given in the URL", asyn
   const rows = page.getByRole("table").getByRole("row").filter({ hasText: `e2e-sort-${stamp}` });
   await expect(rows).toHaveCount(4);
   await expect(rows.getByRole("link").filter({ hasText: `e2e-sort-${stamp}` })).toHaveText([name("a"), name("c"), name("b"), name("d")]);
+});
+
+test("opening a class whose list view sorts by an attribute lists it once, in that order (GH#167)", async ({ page, request }) => {
+  const before = await apiGet<{ version: number; settings: { listViews: { classKey: string }[] } }>(request, "/ui-settings");
+  const listViews = [
+    ...before.settings.listViews.filter((v) => v.classKey !== "server"),
+    { classKey: "server", columns: ["label", "attributes.ip_address"], defaultSort: { field: "attributes.ip_address", direction: "desc" } },
+  ];
+  const saved = await apiSend<{ version: number }>(request, "PUT", "/ui-settings", { version: before.version, settings: { ...before.settings, listViews } });
+  try {
+    // The inventory's list requests (the sidebar's counts ask for limit=1).
+    const sorts: string[] = [];
+    page.on("request", (r) => {
+      const url = new URL(r.url());
+      if (url.pathname === "/api/v1/configuration-items" && url.searchParams.get("limit") !== "1") sorts.push(url.searchParams.get("sort") ?? "");
+    });
+    await page.goto(`/cis?classId=${serverId}&q=${encodeURIComponent(`e2e-sort-${stamp}`)}`);
+    const rows = page.getByRole("table").getByRole("row").filter({ hasText: `e2e-sort-${stamp}` });
+    await expect(rows.getByRole("link").filter({ hasText: `e2e-sort-${stamp}` })).toHaveText([name("a"), name("c"), name("b"), name("d")]);
+    expect(sorts).toEqual(["-attributes.ip_address"]);
+  } finally {
+    await apiSend(request, "PUT", "/ui-settings", { version: saved.version, settings: before.settings });
+  }
 });
