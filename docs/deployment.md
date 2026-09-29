@@ -106,6 +106,10 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
   cannot send that header, set `COOKIE_SECURE=always`. With the default `COOKIE_SECURE=auto`,
   the first session cookie issued without `Secure` logs a one-time warning naming this fix;
   `COOKIE_SECURE=never` is taken as deliberate and is not warned about.
+- With `Secure`, the cookies are named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`
+  (without it, `shadoucmdb_session` and `shadoucmdb_csrf`). Browsers accept a `__Host-` cookie
+  only from the host itself, so another host under your domain cannot plant a session cookie for
+  ShadouCMDB. Do not rewrite cookie names, `Path` or `Domain` at the proxy.
 - Serve the UI and the API from the same origin (the embedded UI does this). A UI on another
   origin needs that origin in `CORS_ORIGINS`, spelled exactly as the browser sends it
   (`https://cmdb.example.com`: no path, no trailing slash); those origins may send the session
@@ -334,6 +338,14 @@ All optional; every variable is in [`.env.example`](../.env.example).
   password cannot lock the account holder out from their own network. That works only when the proxy
   overwrites `X-Forwarded-For`; otherwise a client can claim other networks and the per-username
   budget across networks (15 failures) is what locks the account.
+- **OIDC provider hosts:** `OIDC_ALLOWED_HOSTS` limits which hosts the server contacts for OIDC
+  sign-in, as a comma-separated list: `login.example.com,idp.corp.example:8443`. Host names match
+  exactly (case does not matter; `example.com` does not allow `login.example.com`), and an entry
+  with a port allows only that port. Every URL the server fetches is checked: the issuer's discovery
+  document, and the key set and token endpoint that document names. A provider elsewhere fails with
+  "The provider uses a host this server may not contact"; the server log names the URL. Unset (the
+  default), any host is allowed, as before. The server never follows redirects from a provider
+  either way.
 - **Client details:** `AUDIT_CAPTURE_CLIENT_IP=false` and `AUDIT_CAPTURE_USER_AGENT=false` stop the
   server recording the IP address and User-Agent of sign-ins and sessions (for example where a works
   council agreement rules them out). Changes stay attributed to the signed-in user.

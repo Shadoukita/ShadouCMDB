@@ -494,16 +494,26 @@ pub(crate) mod tests {
 
     /// The real router on a scratch database (also used by the MFA tests).
     pub(crate) fn app(pool: sqlx::PgPool) -> Router {
-        app_with_capacity(pool, crate::http::Capacity::new(512, StdDuration::from_secs(10)))
+        app_with(pool, CookieSecure::Never)
+    }
+
+    /// The real router with `cookie_secure` in place of `CookieSecure::Never`.
+    pub(crate) fn app_with(pool: sqlx::PgPool, cookie_secure: CookieSecure) -> Router {
+        build_app(pool, cookie_secure, crate::http::Capacity::new(512, StdDuration::from_secs(10)))
     }
 
     /// The real router with `capacity` (HTTP_MAX_CONCURRENT_REQUESTS) in place of the default.
     pub(crate) fn app_with_capacity(pool: sqlx::PgPool, capacity: crate::http::Capacity) -> Router {
+        build_app(pool, CookieSecure::Never, capacity)
+    }
+
+    fn build_app(pool: sqlx::PgPool, cookie_secure: CookieSecure, capacity: crate::http::Capacity) -> Router {
         let auth = AuthConfig {
             session_idle: StdDuration::from_secs(3600),
             session_max_age: StdDuration::from_secs(3600),
-            cookie_secure: CookieSecure::Never,
+            cookie_secure,
             public_url: None,
+            oidc_allowed_hosts: None,
         };
         let cfg = Config {
             api_host: "127.0.0.1".into(),

@@ -695,8 +695,20 @@ impl RouteBuilder {
                         read_body(&headers, body, body_limit).await?
                     };
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
+                    let upgrade = ctx
+                        .principal()
+                        .and_then(|p| p.csrf_token())
+                        .and_then(|csrf| auth::session::upgrade_cookies(&state.auth.config, &headers, csrf));
                     let api = Api { pool: state.pool, ctx, auth: state.auth, headers };
-                    Ok::<_, AppError>(f(api, input).await?.respond(status))
+                    let mut res = f(api, input).await?.respond(status);
+                    // A session from before the __Host- names moves over on its first
+                    // HTTPS answer, unless the route set the session cookies itself (logout).
+                    if let Some(cookies) = upgrade
+                        && !res.headers().contains_key(header::SET_COOKIE)
+                    {
+                        res.headers_mut().extend(cookies.into_iter().map(|c| (header::SET_COOKIE, c)));
+                    }
+                    Ok::<_, AppError>(res)
                 };
                 run.await.unwrap_or_else(IntoResponse::into_response)
             }

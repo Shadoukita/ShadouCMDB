@@ -853,6 +853,7 @@ pub(crate) mod tests {
             session_max_age: std::time::Duration::from_secs(3600),
             cookie_secure: crate::config::CookieSecure::Never,
             public_url: None,
+            oidc_allowed_hosts: None,
         });
         let (_, cookies) =
             super::super::auth::open_session(pool, &auth, &HeaderMap::new(), &system, user_id, name, LoginMethod::Ldap)

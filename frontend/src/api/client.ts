@@ -3,6 +3,7 @@
 // error envelope into an ApiError. Components never call fetch directly.
 import createClient from "openapi-fetch";
 import { config } from "../config";
+import { csrfFromCookies } from "./csrf";
 import type { components, paths } from "./schema";
 
 export type Schemas = components["schemas"];
@@ -37,8 +38,7 @@ export function setCsrfToken(token: string | undefined) {
 
 /** The session's CSRF token: the readable cookie the API sets at sign-in, else the one from the session. */
 function csrfToken(): string | undefined {
-  const match = document.cookie.match(/(?:^|;\s*)shadoucmdb_csrf=([^;]+)/);
-  return match?.[1] ?? sessionCsrfToken;
+  return csrfFromCookies(document.cookie) ?? sessionCsrfToken;
 }
 
 /** Paths whose 401 is an answer (wrong password, not signed in yet), not an expired session. */
