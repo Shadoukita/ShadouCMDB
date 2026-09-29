@@ -153,6 +153,10 @@ jobs:
           PGDATABASE: shadoucmdb_ldap
           LDAP_IT_SERVE_LOG: serve-ldap.log
         run: |
+          trap 'if [ $? != 0 ]; then
+            echo "::group::server log"; tail -100 serve-ldap.log || true; echo "::endgroup::"
+            echo "::group::directory log"; ../tools/ldap-it/ldap.sh logs || true; echo "::endgroup::"
+          fi' EXIT
           psql -d postgres -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE shadoucmdb_ldap'
           B=./target/release/shadoucmdb
           $B migrate
@@ -161,11 +165,7 @@ jobs:
           API_HOST=127.0.0.1 API_PORT=3003 $B serve > serve-ldap.log 2>&1 &
           PID=$!
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3003/readyz && break; sleep 1; done
-          API_URL=http://127.0.0.1:3003 node ../tools/ldap-it/ldap-it.ts || {
-            echo "::group::server log"; tail -100 serve-ldap.log; echo "::endgroup::"
-            echo "::group::directory log"; ../tools/ldap-it/ldap.sh logs; echo "::endgroup::"
-            exit 1
-          }
+          API_URL=http://127.0.0.1:3003 node ../tools/ldap-it/ldap-it.ts
           kill -TERM $PID && wait $PID
           ../tools/ldap-it/ldap.sh remove
 

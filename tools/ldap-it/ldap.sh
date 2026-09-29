@@ -112,8 +112,10 @@ stop() {
 
 modify() {
   if [ "$MODE" = docker ]; then
+    # 127.0.0.1, not localhost: the image's OpenLDAP 2.4 client checks the certificate against the
+    # container's host name when given "localhost".
     docker exec -i -e LDAPTLS_CACERT=/certs/ca.pem "$CONTAINER" \
-      ldapmodify -a -H ldaps://localhost:636 -x -D "$ROOT_DN" -w "$ROOT_PW"
+      ldapmodify -a -H ldaps://127.0.0.1:636 -x -D "$ROOT_DN" -w "$ROOT_PW"
   else
     LDAPTLS_CACERT="$DIR/certs/ca.pem" "${LDAP_IT_LDAPMODIFY:-ldapmodify}" -a -H "ldaps://127.0.0.1:$PORT" \
       -x -D "$ROOT_DN" -w "$ROOT_PW"
