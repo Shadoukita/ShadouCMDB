@@ -202,22 +202,22 @@ pub async fn refused_for_mfa_if_created(
 /// What `shadoucmdb migrate` and `verify` print when working tokens are
 /// refused for MFA (GH#200); None when there are none.
 pub async fn second_factor_refusal_notice(conn: &mut PgConnection) -> sqlx::Result<Option<String>> {
-    let (tokens, owners) = count_refused_for_mfa(conn).await?;
-    Ok((tokens > 0).then(|| {
+    let (refused, accounts) = count_second_factor_refusals(conn).await?;
+    Ok((refused > 0).then(|| {
         format!(
-            "{tokens} API token{} of {owners} account{} {} refused: their owners must use two-factor \
+            "{refused} API token{} of {accounts} account{} {} refused: their owners must use two-factor \
              authentication and the tokens were not created from a session signed in with a second factor. List \
              them with GET /api/v1/admin/api-tokens?refusedForMfa=true and create new tokens for the affected \
              integrations.",
-            if tokens == 1 { "" } else { "s" },
-            if owners == 1 { "" } else { "s" },
-            if tokens == 1 { "is" } else { "are" },
+            if refused == 1 { "" } else { "s" },
+            if accounts == 1 { "" } else { "s" },
+            if refused == 1 { "is" } else { "are" },
         )
     }))
 }
 
 /// Working tokens [`REFUSED_WORKING`] refuses, and how many owners they have.
-pub async fn count_refused_for_mfa(conn: &mut PgConnection) -> sqlx::Result<(i64, i64)> {
+pub async fn count_second_factor_refusals(conn: &mut PgConnection) -> sqlx::Result<(i64, i64)> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT count(*), count(DISTINCT t.user_id) FROM {} WHERE {}",
         *FROM, *REFUSED_WORKING
