@@ -58,6 +58,18 @@ test("inventory list", async ({ page }, testInfo) => {
   await checkA11y(page, testInfo, "inventory");
 });
 
+test("inventory Columns popover, light and dark", async ({ page, request }, testInfo) => {
+  await page.goto(`/cis?classId=${await classIdByName(request, "Server")}`);
+  await expect(page.locator("table tbody tr").first()).toBeVisible();
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await page.getByRole("button", { name: /^Columns/ }).click();
+    await expect(page.getByRole("dialog", { name: "Columns" }).getByRole("group", { name: "Attributes of Server" })).toBeVisible();
+    await checkA11y(page, testInfo, `columns-popover-${colorScheme}`);
+    await page.keyboard.press("Escape");
+  }
+});
+
 test("CI detail page (grid layout), its delete dialog and the edit form", async ({ page, request }, testInfo) => {
   // A demo-seed Server with its relationships, so the relationship table is checked too. Read-only: creating
   // a Server here would change which Server other specs pick as the first one by label (layout-edit).
