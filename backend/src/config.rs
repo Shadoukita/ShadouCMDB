@@ -607,6 +607,12 @@ impl Config {
             .unwrap_or_default();
         let sign_in_failure_floor_ms =
             r.int::<u64>("SIGN_IN_FAILURE_FLOOR_MS", 0, MAX_SIGN_IN_FAILURE_FLOOR_MS).unwrap_or(1_000);
+        if sign_in_failure_floor_ms >= request_timeout_secs.saturating_mul(1_000) {
+            r.errors.push(format!(
+                "SIGN_IN_FAILURE_FLOOR_MS: {sign_in_failure_floor_ms} ms is not below HTTP_REQUEST_TIMEOUT_SECS \
+                 ({request_timeout_secs} s), so refused sign-ins would time out instead of answering 401"
+            ));
+        }
 
         let encryption = EncryptionConfig {
             key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
@@ -790,6 +796,8 @@ mod tests {
             let err = load_with(&[(key, bad)]).unwrap_err().to_string();
             assert!(err.contains(key), "{err}");
         }
+        let err = load_with(&[("SIGN_IN_FAILURE_FLOOR_MS", "2000"), ("HTTP_REQUEST_TIMEOUT_SECS", "2")]).unwrap_err();
+        assert!(err.to_string().contains("SIGN_IN_FAILURE_FLOOR_MS"), "{err}");
     }
 
     #[test]

@@ -495,7 +495,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     let keyring = Arc::new(crate::secrets::Keyring::load(&cfg.encryption)?);
     let pool = db::lazy_pool(&cfg.database)?;
     if cfg.auth.trusted_proxies.is_empty() {
-        tracing::info!(
+        tracing::warn!(
             "TRUSTED_PROXIES is empty: the sign-in throttle keys on the TCP peer address. Behind a reverse proxy, \
              list it there, or every client shares the proxy's network for throttling"
         );

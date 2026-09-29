@@ -147,12 +147,23 @@ pub fn client_ip(headers: &HeaderMap, peer: Option<IpAddr>) -> Option<IpAddr> {
 /// right to left, skipping the trusted hops, and the first untrusted hop is
 /// the client: every hop left of it was written by someone we do not trust.
 /// An unusable hop ends the walk at the trusted hop that reported it.
+///
+/// The header is chosen by presence, not by whether it parses: with any
+/// `X-Forwarded-For` present, `Forwarded` is never read. Otherwise a client
+/// behind a proxy that appends to `X-Forwarded-For` could spoil that header
+/// and have its own `Forwarded: for=` believed instead.
 pub fn throttle_ip(headers: &HeaderMap, peer: Option<IpAddr>, trusted: &TrustedProxies) -> Option<IpAddr> {
     let mut client = peer?;
     if !trusted.contains(client) {
         return Some(client);
     }
-    let Some(hops) = forwarded_for(headers).or_else(|| forwarded_nodes(headers)) else { return Some(client) };
+    let hops = match forwarded_for(headers) {
+        Some(hops) => hops,
+        None => match forwarded_nodes(headers) {
+            Some(hops) => hops,
+            None => return Some(client),
+        },
+    };
     for hop in hops.into_iter().rev() {
         let Some(hop) = hop else { break };
         client = hop;
@@ -166,7 +177,7 @@ pub fn throttle_ip(headers: &HeaderMap, peer: Option<IpAddr>, trusted: &TrustedP
 /// The hops of the `X-Forwarded-For` headers, left to right (None for an unusable one).
 fn forwarded_for(headers: &HeaderMap) -> Option<Vec<Option<IpAddr>>> {
     let values = header_list(headers, "x-forwarded-for")?;
-    Some(values.iter().map(|hop| parse_node(hop)).collect())
+    Some(values.into_iter().map(|hop| hop.and_then(parse_node)).collect())
 }
 
 /// The `for=` of each `Forwarded` element, left to right (None for an unusable or missing one).
@@ -174,9 +185,9 @@ fn forwarded_nodes(headers: &HeaderMap) -> Option<Vec<Option<IpAddr>>> {
     let elements = header_list(headers, header::FORWARDED.as_str())?;
     Some(
         elements
-            .iter()
+            .into_iter()
             .map(|element| {
-                element.split(';').find_map(|kv| {
+                element?.split(';').find_map(|kv| {
                     let (k, v) = kv.trim().split_once('=')?;
                     if k.trim().eq_ignore_ascii_case("for") { parse_node(v) } else { None }
                 })
@@ -186,13 +197,14 @@ fn forwarded_nodes(headers: &HeaderMap) -> Option<Vec<Option<IpAddr>>> {
 }
 
 /// The comma-separated entries of every `name` header, in order; None without
-/// one. A header that is not visible ASCII makes the whole list unusable.
-fn header_list<'h>(headers: &'h HeaderMap, name: &str) -> Option<Vec<&'h str>> {
+/// one. Each entry is decoded on its own, so bytes that are not UTF-8 spoil
+/// only their entry (a None entry), not the hops a proxy appended after it.
+fn header_list<'h>(headers: &'h HeaderMap, name: &str) -> Option<Vec<Option<&'h str>>> {
     let mut values = headers.get_all(name).iter().peekable();
     values.peek()?;
     let mut entries = Vec::new();
     for v in values {
-        entries.extend(v.to_str().ok()?.split(','));
+        entries.extend(v.as_bytes().split(|b| *b == b',').map(|entry| std::str::from_utf8(entry).ok()));
     }
     Some(entries)
 }
@@ -211,6 +223,17 @@ impl TrustedProxies {
             let net: ipnetwork::IpNetwork = entry.parse().map_err(|_| {
                 format!("\"{entry}\" is not an IP address or CIDR range, e.g. 10.0.0.5 or 10.0.0.0/24 or fd00::/64")
             })?;
+            // An IPv4-mapped range (`::ffff:10.0.0.0/104`) as the IPv4 range it
+            // stands for: `contains` compares canonical addresses.
+            let net = match net {
+                ipnetwork::IpNetwork::V6(v6) if v6.prefix() >= 96 => match v6.ip().to_ipv4_mapped() {
+                    Some(v4) => ipnetwork::IpNetwork::V4(
+                        ipnetwork::Ipv4Network::new(v4, v6.prefix() - 96).expect("a prefix of at most 32"),
+                    ),
+                    None => net,
+                },
+                _ => net,
+            };
             if net.prefix() == 0 {
                 return Err(format!(
                     "\"{entry}\" would trust every address, so any client could choose the network it is \
@@ -489,15 +512,37 @@ mod tests {
         );
     }
 
+    /// An `X-Forwarded-For` spoilt with bytes that are not visible ASCII still
+    /// counts, hop by hop: the client's own `Forwarded` is never read instead.
+    #[test]
+    fn throttle_ip_never_falls_back_to_forwarded_when_x_forwarded_for_is_present() {
+        let proxies = trusted("10.0.0.0/8");
+        let peer: Option<IpAddr> = Some("10.0.0.2".parse().unwrap());
+        let spoilt = |xff: &'static [u8]| {
+            let mut h = HeaderMap::new();
+            h.append("x-forwarded-for", HeaderValue::from_bytes(xff).unwrap());
+            h.append("forwarded", HeaderValue::from_static("for=203.0.113.99"));
+            h
+        };
+        // What nginx's `$proxy_add_x_forwarded_for` makes of a client's `\xff`.
+        let appended = throttle_ip(&spoilt(b"\xff, 198.51.100.4"), peer, &proxies);
+        assert_eq!(appended, Some("198.51.100.4".parse().unwrap()));
+        assert_eq!(throttle_ip(&spoilt(b"\xff"), peer, &proxies), peer, "the trusted peer, not the forged Forwarded");
+        assert_eq!(throttle_ip(&spoilt(b"garbage"), peer, &proxies), peer);
+    }
+
     #[test]
     fn trusted_proxies_parse_addresses_and_ranges() {
         let p = trusted(" 10.0.0.0/8 ,, 192.0.2.7,2001:db8::/48");
         assert!(p.contains("10.200.0.1".parse().unwrap()));
         assert!(p.contains("::ffff:192.0.2.7".parse().unwrap()), "mapped IPv4 is IPv4");
         assert!(!p.contains("192.0.2.8".parse().unwrap()));
+        let mapped = trusted("::ffff:172.16.0.0/108");
+        assert!(mapped.contains("172.16.3.4".parse().unwrap()), "a mapped range is the IPv4 range");
+        assert!(mapped.contains("::ffff:172.16.3.4".parse().unwrap()));
         assert!(p.contains("2001:db8:0:ffff::1".parse().unwrap()));
         assert!(trusted("").is_empty());
-        for bad in ["10.0.0.0/33", "proxy.example.com", "0.0.0.0/0", "::/0"] {
+        for bad in ["10.0.0.0/33", "proxy.example.com", "0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96"] {
             assert!(TrustedProxies::parse(bad).is_err(), "{bad}");
         }
     }

@@ -187,7 +187,7 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
   nothing. Unset (the default), it uses the TCP peer, which behind a proxy is the proxy for every
   client (see [Hardening settings](#hardening-settings)). List only proxies you run:
   anything listed can make the server believe any client address. `X-Forwarded-For` takes
-  precedence over `Forwarded`, so a listed proxy that writes only `Forwarded` must still add or
+  precedence over `Forwarded`: whenever it is present, even unreadable, `Forwarded` is ignored, so a listed proxy that writes only `Forwarded` must still add or
   overwrite `X-Forwarded-For`, or remove it from client requests; otherwise the client's own
   `X-Forwarded-For` chooses its throttle network.
 - `SESSION_IDLE_TIMEOUT_MINUTES` (default 12 h) and `SESSION_MAX_AGE_HOURS` (default 7 days)
@@ -413,7 +413,8 @@ All optional; every variable is in [`.env.example`](../.env.example).
   proxies report in `X-Forwarded-For` (GH#215). Behind a proxy that is not listed, every client
   shares the proxy's network, and five wrong passwords from anyone lock a username for everyone
   behind that proxy; set `TRUSTED_PROXIES` to the proxy's address.
-- **Refused sign-ins take at least `SIGN_IN_FAILURE_FLOOR_MS`** (default 1000 ms, 0 to 10000): every
+- **Refused sign-ins take at least `SIGN_IN_FAILURE_FLOOR_MS`** (default 1000 ms, 0 to 10000, and
+  below `HTTP_REQUEST_TIMEOUT_SECS`, checked at start-up): every
   401 answer of `POST /api/v1/auth/login` (wrong password, unknown name, disabled account, directory
   refusal) waits until that long after the throttle let the attempt through, plus up to 5 % jitter,
   so response times do not reveal which names are local accounts (GH#216). The wait holds no
