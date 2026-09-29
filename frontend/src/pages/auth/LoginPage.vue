@@ -50,6 +50,7 @@ const SSO_ERRORS: Record<string, string> = {
   account_disabled: "Your ShadouCMDB account is disabled. Ask an administrator.",
   invalid_username: "Your identity provider did not send a usable username. Ask an administrator to check the provider settings.",
   last_administrator: "Signing in would leave ShadouCMDB without an active administrator, because your groups no longer map to the Administrator profile. Ask another administrator to check the group mappings.",
+  mfa_not_enforced: "Your identity provider did not confirm a second factor, which your access to ShadouCMDB requires. Sign in again using multi-factor authentication, or ask an administrator to check the provider's MFA settings.",
 };
 const ssoCode = computed(() => (typeof route.query.ssoError === "string" ? route.query.ssoError : null));
 const ssoError = computed(() =>

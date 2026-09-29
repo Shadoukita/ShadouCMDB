@@ -22,7 +22,7 @@ interface Provider {
   name: string;
   isEnabled: boolean;
   userCount: number;
-  oidc: { clientSecretSet: boolean; redirectUri: string | null } | null;
+  oidc: { clientSecretSet: boolean; redirectUri: string | null; mfaAssurance: "verify" | "trustProvider"; requiredAcr: string[] } | null;
   ldap: { bindPasswordSet: boolean; startTls: boolean } | null;
   groupMappings: { group: string; profileName: string }[];
 }
@@ -43,6 +43,7 @@ const SSO_CODES: Record<string, RegExp> = {
   account_disabled: /account is disabled/,
   invalid_username: /did not send a usable username/,
   last_administrator: /without an active administrator/,
+  mfa_not_enforced: /did not confirm a second factor, which your access to ShadouCMDB requires/,
 };
 
 /** A signed-out page. */
@@ -168,6 +169,10 @@ test("create an OIDC provider: required fields, the API's field errors, then a w
   // The server's defaults are filled in.
   await expect(page.getByLabel("Username claim")).toHaveValue("preferred_username");
   await expect(page.getByLabel("Groups claim")).toHaveValue("groups");
+  // A new provider verifies MFA from the sign-in token by default.
+  await expect(page.getByRole("radio", { name: /^Verify from the sign-in token/ })).toBeChecked();
+  await expect(page.getByLabel("Required ACR values")).toHaveValue("");
+  await expect(page.getByTestId("mfa-trust-warning")).toHaveCount(0);
 
   // Nothing filled: the form says what is missing without a round trip.
   await page.getByRole("button", { name: "Create provider" }).click();
@@ -200,6 +205,7 @@ test("create an OIDC provider: required fields, the API's field errors, then a w
   expect(await page.content()).not.toContain(SECRET);
   const saved = await provider(request, oidcId);
   expect(saved.oidc?.clientSecretSet).toBe(true);
+  expect(saved.oidc).toMatchObject({ mfaAssurance: "verify", requiredAcr: [] });
   expect(JSON.stringify(saved)).not.toContain(SECRET);
   expect(saved.groupMappings).toEqual([expect.objectContaining({ group: "CMDB-Admins", profileName: "Administrator" })]);
 
@@ -248,6 +254,81 @@ test("secrets: left alone they are kept, Replace sets a new one, Remove deletes 
   await expect(page.getByLabel("Client secret")).toHaveValue("");
 });
 
+test("MFA setting: required ACR values round-trip under Verify; Trust warns, drops them and badges the provider", async ({ page, request }) => {
+  await page.goto(`/admin/identity-providers/${oidcId}`);
+  await expect(page.getByRole("heading", { level: 1, name: OIDC_NAME })).toBeVisible();
+  const verify = page.getByRole("radio", { name: /^Verify from the sign-in token/ });
+  const trust = page.getByRole("radio", { name: /^Trust the provider without checking/ });
+  const acr = page.getByLabel("Required ACR values");
+  await expect(verify).toBeChecked();
+
+  // Checked before any request: at most 10 values, printable ASCII.
+  await acr.fill(Array.from({ length: 11 }, (_, i) => `loa${i}`).join(" "));
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.locator("#idp-oidc-requiredAcr-err")).toHaveText("At most 10 values");
+  await expect(acr).toBeFocused();
+  await acr.fill("urn:x:gold\u00e9");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.locator("#idp-oidc-requiredAcr-err")).toContainText("printable ASCII");
+
+  // Separated by spaces or line breaks, sent as a list, each value once.
+  await acr.fill("  urn:x:gold   loa3 urn:x:gold ");
+  let patch = page.waitForRequest((r) => r.method() === "PATCH" && r.url().endsWith(`/identity-providers/${oidcId}`));
+  await page.getByRole("button", { name: "Save changes" }).click();
+  expect((await patch).postDataJSON().oidc).toMatchObject({ mfaAssurance: "verify", requiredAcr: ["urn:x:gold", "loa3"] });
+  await expect(page.getByRole("status").filter({ hasText: `Saved ${OIDC_NAME}` })).toBeVisible();
+  expect((await provider(request, oidcId)).oidc).toMatchObject({ mfaAssurance: "verify", requiredAcr: ["urn:x:gold", "loa3"] });
+  await page.reload();
+  await expect(acr).toHaveValue("urn:x:gold loa3");
+
+  // Trust: the list goes away, a warning says what it means, and the API empties the list.
+  await trust.check();
+  await expect(acr).toHaveCount(0);
+  const warning = page.getByTestId("mfa-trust-warning");
+  await expect(warning).toContainText("will not check that the provider used a second factor");
+  await expect(warning).toContainText("depend entirely on the identity provider's policy");
+  patch = page.waitForRequest((r) => r.method() === "PATCH" && r.url().endsWith(`/identity-providers/${oidcId}`));
+  await page.getByRole("button", { name: "Save changes" }).click();
+  const sent = (await patch).postDataJSON().oidc;
+  expect(sent.mfaAssurance).toBe("trustProvider");
+  expect(sent).not.toHaveProperty("requiredAcr");
+  await expect(page.getByRole("status").filter({ hasText: `Saved ${OIDC_NAME}` })).toBeVisible();
+  expect((await provider(request, oidcId)).oidc).toMatchObject({ mfaAssurance: "trustProvider", requiredAcr: [] });
+  await expect(page.locator(".page-header .badge.warn")).toHaveText("MFA not verified");
+  await page.reload();
+  await expect(trust).toBeChecked();
+  await snap(page, "131-oidc-mfa-trust");
+
+  // The list badges it, visibly: next to the "No group mappings" warning the Name cell wraps
+  // instead of clipping the badge out of view (toHaveText/toBeVisible ignore overflow clipping).
+  await page.route("**/api/v1/admin/identity-providers", async (route: Route) => {
+    const body = (await (await route.fetch()).json()) as Provider[];
+    await route.fulfill({ json: body.map((p) => (p.id === oidcId ? { ...p, groupMappings: [] } : p)) });
+  });
+  await page.goto("/admin/identity-providers");
+  const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: OIDC_NAME, exact: true }) });
+  await expect(row.getByText("No group mappings: nobody can sign in")).toBeVisible();
+  const badge = row.getByTestId("mfa-not-verified");
+  await expect(badge).toHaveText("MFA not verified");
+  const cell = (await row.locator("td").nth(1).boundingBox())!;
+  const box = (await badge.boundingBox())!;
+  expect(box.x + box.width).toBeLessThanOrEqual(cell.x + cell.width + 0.5);
+  expect(box.y + box.height).toBeLessThanOrEqual(cell.y + cell.height + 0.5);
+  await snap(page, "131-oidc-mfa-list-badge");
+  await page.unroute("**/api/v1/admin/identity-providers");
+
+  // Back to Verify: the badge goes, the list starts empty (amr decides).
+  await page.goto(`/admin/identity-providers/${oidcId}`);
+  await verify.check();
+  await expect(acr).toHaveValue("");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status").filter({ hasText: `Saved ${OIDC_NAME}` })).toBeVisible();
+  expect((await provider(request, oidcId)).oidc).toMatchObject({ mfaAssurance: "verify", requiredAcr: [] });
+  await expect(page.locator(".page-header .badge.warn")).toHaveCount(0);
+  await page.goto("/admin/identity-providers");
+  await expect(page.getByRole("row").filter({ has: page.getByRole("link", { name: OIDC_NAME, exact: true }) }).getByTestId("mfa-not-verified")).toHaveCount(0);
+});
+
 test("the connection test reports what failed, and warns when there are unsaved changes", async ({ page }) => {
   await page.goto(`/admin/identity-providers/${oidcId}`);
   const panel = page.getByRole("region", { name: "Test connection" });
@@ -276,6 +357,8 @@ test("create an LDAP directory: StartTLS follows the URL, a bind DN needs its pa
   await page.getByRole("link", { name: "+ New LDAP directory" }).first().click();
   await expect(page.getByRole("radio", { name: /^LDAP \/ Active Directory/ })).toBeChecked();
   await expect(page.getByLabel("User filter")).toHaveValue("(&(objectClass=user)(sAMAccountName={username}))");
+  // Directory accounts set up MFA in ShadouCMDB: no provider MFA setting.
+  await expect(page.getByRole("group", { name: "Multi-factor authentication" })).toHaveCount(0);
   await page.locator("#idp-name").fill(LDAP_NAME);
   // Disabled, so that no other spec's password sign-in asks this (unreachable) directory.
   await page.getByLabel("Enabled (users can sign in through it)").uncheck();
