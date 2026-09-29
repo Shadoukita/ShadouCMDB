@@ -18,7 +18,8 @@ The backend is the only database client. Everything the UI needs goes through th
 - **Request bodies:** at most 1 MiB (16 MiB on `POST /api/v1/admin/config/import`, 64 KiB on the public
   routes), else `413 PAYLOAD_TOO_LARGE`. The body is read only after authentication and permission checks.
 - **Busy server:** past `HTTP_MAX_CONCURRENT_REQUESTS` requests in progress the server answers
-  `503 SERVER_BUSY` with a `Retry-After` header.
+  `503 SERVER_BUSY` with a `Retry-After` header. Setup and sign-in have their own, smaller pool and
+  must send their body within `HTTP_HEADER_READ_TIMEOUT_SECS`, else `408 REQUEST_TIMEOUT`.
 - **Regenerate the contract** after changing a route: `shadoucmdb openapi --out backend/openapi.json`
   (or `cargo run -- openapi --out openapi.json` in `backend/`). `shadoucmdb openapi --check backend/openapi.json`
   fails if the committed file is stale; CI runs it. Then refresh the UI types with `npm run api:types -w frontend`.

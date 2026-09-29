@@ -30,7 +30,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use crate::api;
 use crate::auth::AuthState;
 use crate::auth::session::{CSRF_HEADER, request_is_https};
-use crate::config::{ApiDocs, AuditConfig, AuthConfig, Config};
+use crate::config::{ApiDocs, AuditConfig, AuthConfig, Config, HttpConfig};
 use crate::db;
 use error::{AppError, ErrorCode};
 
@@ -51,6 +51,8 @@ pub struct AppState {
     pub capture: ClientCapture,
     /// Whether every migration of this build is applied (see `schema_gate`).
     pub schema: Arc<db::SchemaState>,
+    /// Requests the API handles at once (`HTTP_MAX_CONCURRENT_REQUESTS`).
+    pub capacity: Capacity,
 }
 
 impl AppState {
@@ -60,12 +62,67 @@ impl AppState {
             auth: Arc::new(AuthState::new(auth)),
             capture: ClientCapture { ip: true, user_agent: true },
             schema: Arc::default(),
+            capacity: Capacity::new(512, Duration::from_secs(10)),
         }
     }
 
     pub fn capturing(mut self, audit: &AuditConfig) -> Self {
         self.capture = ClientCapture { ip: audit.capture_client_ip, user_agent: audit.capture_user_agent };
         self
+    }
+
+    pub fn limited(mut self, http: &HttpConfig) -> Self {
+        self.capacity = Capacity::new(http.max_concurrent_requests, http.header_read_timeout);
+        self
+    }
+}
+
+/// Bounds the API requests in progress; each route takes a permit in
+/// `api::route` before it authorises the caller or reads the body, and a
+/// request that finds its pool empty is answered 503 SERVER_BUSY instead of
+/// queueing. Public routes that take a body (setup, sign-in) draw from their
+/// own, smaller pool and must deliver the body within
+/// `HTTP_HEADER_READ_TIMEOUT_SECS`: anonymous slow senders can then only
+/// saturate sign-in, never the capacity signed-in users and API tokens need.
+/// Bodiless public routes (liveness, readiness, version) take no permit, so a
+/// busy server is not mistaken for a dead one.
+#[derive(Clone)]
+pub struct Capacity {
+    global: Arc<tokio::sync::Semaphore>,
+    public: Arc<tokio::sync::Semaphore>,
+    /// Time a public route may take to receive its body.
+    pub public_body_timeout: Duration,
+}
+
+impl Capacity {
+    /// `max` requests for authenticated routes, and `max / 8` (at least 16) for public ones.
+    pub fn new(max: usize, public_body_timeout: Duration) -> Self {
+        Capacity::with_sizes(max, (max / 8).max(16), public_body_timeout)
+    }
+
+    pub fn with_sizes(global: usize, public: usize, public_body_timeout: Duration) -> Self {
+        Capacity {
+            global: Arc::new(tokio::sync::Semaphore::new(global)),
+            public: Arc::new(tokio::sync::Semaphore::new(public)),
+            public_body_timeout,
+        }
+    }
+
+    /// A permit from the public or the global pool, or 503 SERVER_BUSY.
+    pub fn acquire(&self, public: bool) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+        let pool = if public { &self.public } else { &self.global };
+        pool.clone().try_acquire_owned().map_err(|_| {
+            tracing::warn!(public, "request refused: HTTP_MAX_CONCURRENT_REQUESTS reached");
+            let mut err =
+                AppError::new(ErrorCode::ServerBusy, "The server is handling too many requests; retry shortly");
+            err.retry_after = Some(1);
+            err
+        })
+    }
+
+    #[cfg(test)]
+    pub fn available(&self, public: bool) -> usize {
+        if public { self.public.available_permits() } else { self.global.available_permits() }
     }
 }
 
@@ -340,27 +397,6 @@ async fn request_timeout(
     }
 }
 
-/// Answers 503 SERVER_BUSY once `HTTP_MAX_CONCURRENT_REQUESTS` requests are in
-/// progress, instead of queueing: every accepted request may hold a buffered
-/// body and a pool connection. Liveness is exempt so an orchestrator does not
-/// restart a server that is merely busy.
-async fn concurrency_limit(
-    axum::extract::State(permits): axum::extract::State<Arc<tokio::sync::Semaphore>>,
-    req: Request,
-    next: axum::middleware::Next,
-) -> Response {
-    if req.uri().path() == "/healthz" {
-        return next.run(req).await;
-    }
-    let Ok(_permit) = permits.try_acquire_owned() else {
-        tracing::warn!("request refused: HTTP_MAX_CONCURRENT_REQUESTS reached");
-        let mut err = AppError::new(ErrorCode::ServerBusy, "The server is handling too many requests; retry shortly");
-        err.retry_after = Some(1);
-        return err.into_response();
-    };
-    next.run(req).await
-}
-
 pub fn router(state: AppState, cfg: &Config) -> Router {
     let mut app = api::router()
         .route(security_txt::PATH, axum::routing::get(security_txt::handler))
@@ -372,11 +408,7 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(cfg.http.request_timeout, request_timeout))
         .layer(CatchPanicLayer::custom(panic_response))
-        .layer(DefaultBodyLimit::max(api::route::BODY_LIMIT))
-        .layer(axum::middleware::from_fn_with_state(
-            Arc::new(tokio::sync::Semaphore::new(cfg.http.max_concurrent_requests)),
-            concurrency_limit,
-        ));
+        .layer(DefaultBodyLimit::max(api::route::BODY_LIMIT));
 
     if !cfg.cors_origins.is_empty() {
         let origins: Vec<HeaderValue> = cfg.cors_origins.iter().filter_map(|o| HeaderValue::from_str(o).ok()).collect();
@@ -405,7 +437,7 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
 /// and closes the pool.
 pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
     let pool = db::lazy_pool(&cfg.database)?;
-    let state = AppState::new(pool.clone(), cfg.auth.clone()).capturing(&cfg.audit);
+    let state = AppState::new(pool.clone(), cfg.auth.clone()).capturing(&cfg.audit).limited(&cfg.http);
     let app = router(state.clone(), &cfg);
     let exporter = cfg.audit.export.clone().map(|export| crate::audit_export::spawn(pool.clone(), export));
 
@@ -594,42 +626,6 @@ mod tests {
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth), &cfg)
-    }
-
-    /// GH#181: past HTTP_MAX_CONCURRENT_REQUESTS the server answers 503 at once
-    /// instead of queueing; liveness stays reachable.
-    #[tokio::test]
-    async fn requests_beyond_the_concurrency_limit_are_refused() {
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
-        let entered = Arc::new(std::sync::Mutex::new(Some(entered_tx)));
-        let slow = Router::new()
-            .route(
-                "/slow",
-                axum::routing::get(move || {
-                    if let Some(tx) = entered.lock().unwrap().take() {
-                        let _ = tx.send(());
-                    }
-                    std::future::pending::<&'static str>()
-                }),
-            )
-            .route("/fast", axum::routing::get(|| async { "ok" }))
-            .route("/healthz", axum::routing::get(|| async { "ok" }))
-            .layer(axum::middleware::from_fn_with_state(Arc::new(tokio::sync::Semaphore::new(1)), concurrency_limit));
-
-        let held = tokio::spawn(get(slow.clone(), "/slow", &[]));
-        entered_rx.await.unwrap();
-        let res = get(slow.clone(), "/fast", &[]).await;
-        assert_eq!(res.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(header(&res, header::RETRY_AFTER), Some("1"));
-        let body = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["error"]["code"], "SERVER_BUSY");
-        assert_eq!(get(slow.clone(), "/healthz", &[]).await.status(), axum::http::StatusCode::OK);
-
-        // The permit is released when the request ends.
-        held.abort();
-        let _ = held.await;
-        assert_eq!(get(slow, "/fast", &[]).await.status(), axum::http::StatusCode::OK);
     }
 
     /// GH#43: `serve` before `migrate` answered every API call with 500 INTERNAL_ERROR.

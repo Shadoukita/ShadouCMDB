@@ -668,10 +668,28 @@ impl RouteBuilder {
                     };
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
                     let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };
+                    // Public routes that take a body draw from their own pool and get a
+                    // short deadline for it, so anonymous slow senders cannot hold the
+                    // capacity signed-in users need; bodiless public routes (health) take none.
+                    let public = access == Access::Public;
+                    let _permit = match (public, safe_method) {
+                        (true, true) => None,
+                        _ => Some(state.capacity.acquire(public)?),
+                    };
                     // Authorise before reading the body: an anonymous caller must not make
                     // the server buffer up to body_limit bytes only to be answered 401.
                     let ctx = authorise(&state, &headers, rule, client, used).await?;
-                    let body = read_body(&headers, body, body_limit).await?;
+                    let body = if public {
+                        let limit = state.capacity.public_body_timeout;
+                        tokio::time::timeout(limit, read_body(&headers, body, body_limit)).await.map_err(|_| {
+                            AppError::new(
+                                ErrorCode::RequestTimeout,
+                                format!("The request body was not received within {} s", limit.as_secs()),
+                            )
+                        })??
+                    } else {
+                        read_body(&headers, body, body_limit).await?
+                    };
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
                     let api = Api { pool: state.pool, ctx, auth: state.auth, headers };
                     Ok::<_, AppError>(f(api, input).await?.respond(status))
@@ -763,8 +781,6 @@ async fn authorise(
     Ok(RequestContext::user(Arc::new(principal), request_id).with_client(client))
 }
 
-/// JSON is the only accepted body type. An empty body counts as no body
-/// (clients often send Content-Type: application/json on DELETE).
 /// Largest request body a route accepts unless it sets [`RouteBuilder::body_limit`].
 pub const BODY_LIMIT: usize = 1024 * 1024;
 /// Largest body of a public route (setup, sign-in): anyone can send one, and
@@ -773,6 +789,8 @@ pub const PUBLIC_BODY_LIMIT: usize = 64 * 1024;
 
 /// Reads the body, at most `limit` bytes: a larger declared Content-Length is
 /// refused without reading, a larger streamed body as soon as it passes the limit.
+/// JSON is the only accepted body type. An empty body counts as no body
+/// (clients often send Content-Type: application/json on DELETE).
 async fn read_body(headers: &HeaderMap, body: RequestBody, limit: usize) -> Result<Option<Value>, AppError> {
     let too_large = || AppError::new(ErrorCode::PayloadTooLarge, "Request body is too large");
     let declared =
@@ -834,8 +852,13 @@ mod tests {
     use serde_json::json;
     use tower::ServiceExt;
 
+    use std::time::{Duration, Instant};
+
+    use axum::http::HeaderMap;
+
     use crate::db::scratch;
-    use crate::modules::api_tokens::tests::{Creds, app, call, code};
+    use crate::http::Capacity;
+    use crate::modules::api_tokens::tests::{Creds, app, app_with_capacity, call, code};
 
     const IMPORT: &str = "/api/v1/admin/config/import";
 
@@ -858,6 +881,18 @@ mod tests {
         body: Body,
         content_length: Option<usize>,
     ) -> (u16, String) {
+        let (status, code, _) = send_full(app, method, path, creds, body, content_length).await;
+        (status, code)
+    }
+
+    async fn send_full(
+        app: &axum::Router,
+        method: &str,
+        path: &str,
+        creds: &Creds,
+        body: Body,
+        content_length: Option<usize>,
+    ) -> (u16, String, HeaderMap) {
         let mut req = Request::builder().method(method).uri(path).header(header::CONTENT_TYPE, "application/json");
         if let Some(n) = content_length {
             req = req.header(header::CONTENT_LENGTH, n);
@@ -872,10 +907,24 @@ mod tests {
             req = req.header(header::AUTHORIZATION, format!("Bearer {b}"));
         }
         let res = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
-        let status = res.status().as_u16();
+        let (status, headers) = (res.status().as_u16(), res.headers().clone());
         let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
-        (status, code(&v).to_owned())
+        (status, code(&v).to_owned(), headers)
+    }
+
+    /// Runs first-run setup and returns the owner's session.
+    async fn set_up_owner(app: &axum::Router) -> Creds {
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
+        let (status, me, headers) = call(app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None }
     }
 
     /// GH#181: bodies (16 MiB on config import) were buffered before the
@@ -910,16 +959,7 @@ mod tests {
         );
         assert!(!polled.load(Ordering::SeqCst), "an oversized declared body was read");
 
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery" });
-        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
-        assert_eq!(status, 201, "{me}");
-        let cookie = headers
-            .get_all(header::SET_COOKIE)
-            .iter()
-            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
-            .collect::<Vec<_>>()
-            .join("; ");
-        let session = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+        let session = set_up_owner(&app).await;
 
         // Signed in, but without the CSRF token: still refused before the body is read.
         let no_csrf = Creds { csrf: None, ..session.clone() };
@@ -944,6 +984,62 @@ mod tests {
         let (body, _) = spy_body(super::BODY_LIMIT + 1);
         let settings = "/api/v1/ui-settings";
         assert_eq!(send(&app, "PUT", settings, &session, body, None).await, (413, "PAYLOAD_TOO_LARGE".into()));
+
+        db.drop().await;
+    }
+
+    /// PR #212 review: anonymous callers that send a public route's body slowly
+    /// must not hold the capacity signed-in users need, and must be cut off
+    /// after HTTP_HEADER_READ_TIMEOUT_SECS instead of HTTP_REQUEST_TIMEOUT_SECS.
+    #[tokio::test]
+    async fn slow_public_bodies_cannot_exhaust_the_capacity_of_signed_in_users() {
+        let Some(db) = scratch::database("slow_public_bodies_cannot_exhaust_capacity").await else { return };
+        const PUBLIC: usize = 2;
+        let capacity = Capacity::with_sizes(1, PUBLIC, Duration::from_millis(500));
+        let app = app_with_capacity(db.pool.clone(), capacity.clone());
+        let session = set_up_owner(&app).await;
+        let (login, me) = ("/api/v1/auth/login", "/api/v1/auth/me");
+        let never = || Body::from_stream(stream::pending::<Result<Bytes, std::convert::Infallible>>());
+
+        // Fill the public pool with sign-ins whose body never arrives.
+        let started = Instant::now();
+        let slow: Vec<_> = (0..PUBLIC)
+            .map(|_| {
+                let app = app.clone();
+                tokio::spawn(async move { send(&app, "POST", login, &Creds::default(), never(), Some(100)).await })
+            })
+            .collect();
+        while capacity.available(true) > 0 {
+            assert!(started.elapsed() < Duration::from_secs(5), "the slow sign-ins never started");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        // One more is refused at once, without reading its body.
+        let (body, polled) = spy_body(10);
+        let (status, code, headers) = send_full(&app, "POST", login, &Creds::default(), body, Some(10)).await;
+        assert_eq!((status, code.as_str()), (503, "SERVER_BUSY"));
+        assert_eq!(headers.get(header::RETRY_AFTER).and_then(|v| v.to_str().ok()), Some("1"));
+        assert!(!polled.load(Ordering::SeqCst));
+        // Signed-in users and health checks are unaffected.
+        assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await.0, 200);
+        for path in ["/healthz", "/readyz", "/api/v1/version"] {
+            assert_eq!(send(&app, "GET", path, &Creds::default(), Body::empty(), None).await.0, 200, "{path}");
+        }
+
+        // The slow bodies time out after the short public deadline, not the 120 s request timeout.
+        for task in slow {
+            assert_eq!(task.await.unwrap(), (408, "REQUEST_TIMEOUT".into()));
+        }
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(capacity.available(true), PUBLIC, "public permits were not released");
+
+        // The reverse: a full global pool refuses signed-in requests, while sign-in still works.
+        let held = capacity.acquire(false).unwrap();
+        assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await, (503, "SERVER_BUSY".into()));
+        let wrong = Body::from(json!({ "username": "owner", "password": "wrong" }).to_string());
+        assert_eq!(send(&app, "POST", login, &Creds::default(), wrong, None).await.0, 401);
+        drop(held);
+        assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await.0, 200);
 
         db.drop().await;
     }
