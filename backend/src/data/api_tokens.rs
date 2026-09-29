@@ -31,6 +31,10 @@ pub struct PresentedToken {
     pub user_id: Uuid,
     pub username: String,
     pub user_active: bool,
+    /// The owner signs in locally, or through an identity provider that is
+    /// enabled: disabling the provider stops the token until it is enabled
+    /// again, as disabling the owner does (GH#257).
+    pub provider_enabled: bool,
     pub profile_id: Option<Uuid>,
     /// Who minted it; null for the CLI, a deleted creator or an unknown one
     pub created_by_user_id: Option<Uuid>,
@@ -45,11 +49,13 @@ pub struct PresentedToken {
 
 pub async fn find_by_hash(pool: &PgPool, token_hash: &[u8]) -> sqlx::Result<Option<PresentedToken>> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT t.id, t.name, t.token_prefix, u.id AS user_id, u.username, u.is_active AS user_active, t.profile_id,
+        "SELECT t.id, t.name, t.token_prefix, u.id AS user_id, u.username, u.is_active AS user_active,
+                coalesce(ip.is_enabled, true) AS provider_enabled, t.profile_id,
                 t.created_by_user_id, coalesce(c.is_active, false) AS creator_active,
                 t.revoked_at IS NOT NULL AS revoked, t.expires_at <= now() AS expired,
                 {} AS mfa_required
          FROM api_tokens t JOIN users u ON u.id = t.user_id LEFT JOIN users c ON c.id = t.created_by_user_id
+              LEFT JOIN identity_providers ip ON ip.id = u.identity_provider_id
               {TOKEN_AS_SESSION}
          WHERE t.token_hash = $1",
         refused_for_mfa()
@@ -130,12 +136,20 @@ pub static FROM: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-/// A working token (not revoked or expired, owner active) that is refused
-/// because of [`refused_for_mfa`]: what a request with it would be answered
-/// (`mfa_required`). Also the `refusedForMfa` filter and the count
-/// `shadoucmdb migrate` prints.
+/// The owner `u` signs in locally, or through an identity provider that is
+/// enabled (GH#257).
+const OWNER_PROVIDER_ENABLED: &str = "(u.identity_provider_id IS NULL OR EXISTS (SELECT 1 FROM identity_providers ip
+     WHERE ip.id = u.identity_provider_id AND ip.is_enabled))";
+
+/// A working token (not revoked or expired, owner active, owner's identity
+/// provider enabled) that is refused because of [`refused_for_mfa`]: what a
+/// request with it would be answered (`mfa_required`). Also the
+/// `refusedForMfa` filter and the count `shadoucmdb migrate` prints.
 pub static REFUSED_WORKING: LazyLock<String> = LazyLock::new(|| {
-    format!("(t.revoked_at IS NULL AND t.expires_at > now() AND u.is_active AND {})", refused_for_mfa())
+    format!(
+        "(t.revoked_at IS NULL AND t.expires_at > now() AND u.is_active AND {OWNER_PROVIDER_ENABLED} AND {})",
+        refused_for_mfa()
+    )
 });
 
 pub static COLUMNS: LazyLock<String> = LazyLock::new(|| {

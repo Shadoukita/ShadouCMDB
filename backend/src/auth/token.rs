@@ -67,6 +67,8 @@ pub enum Refusal {
     Revoked,
     Expired,
     OwnerDisabled,
+    /// The owner signs in through an identity provider that is disabled (GH#257).
+    ProviderDisabled,
     /// The owner must use two-factor authentication and the token was not
     /// created from a session that proved it (GH#200).
     MfaRequired,
@@ -84,6 +86,7 @@ impl Refusal {
             Refusal::Revoked => "revoked",
             Refusal::Expired => "expired",
             Refusal::OwnerDisabled => "owner_disabled",
+            Refusal::ProviderDisabled => "provider_disabled",
             Refusal::MfaRequired => "mfa_required",
             Refusal::NoScope => "no_scope",
             Refusal::SessionOnly => "session_only",
@@ -95,7 +98,12 @@ impl Refusal {
     fn is_dead_token(self) -> bool {
         matches!(
             self,
-            Refusal::Revoked | Refusal::Expired | Refusal::OwnerDisabled | Refusal::MfaRequired | Refusal::NoScope
+            Refusal::Revoked
+                | Refusal::Expired
+                | Refusal::OwnerDisabled
+                | Refusal::ProviderDisabled
+                | Refusal::MfaRequired
+                | Refusal::NoScope
         )
     }
 
@@ -105,6 +113,9 @@ impl Refusal {
             Refusal::Revoked => unauthenticated("This API token has been revoked"),
             Refusal::Expired => unauthenticated("This API token has expired"),
             Refusal::OwnerDisabled => unauthenticated("The owner of this API token is disabled"),
+            Refusal::ProviderDisabled => {
+                unauthenticated("The identity provider the owner of this API token signs in through is disabled")
+            }
             Refusal::MfaRequired => unauthenticated(
                 "The owner of this API token must use two-factor authentication, and this token was not created from \
                  a session signed in with a second factor. Create a new token after signing in with two-factor \
@@ -178,6 +189,8 @@ pub async fn authenticate(
         Some(Refusal::Expired)
     } else if !t.user_active {
         Some(Refusal::OwnerDisabled)
+    } else if !t.provider_enabled {
+        Some(Refusal::ProviderDisabled)
     } else if t.mfa_required {
         Some(Refusal::MfaRequired)
     } else if session_only {

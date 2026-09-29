@@ -228,7 +228,9 @@ and maps the provider's groups to permission profiles.
   [hardening guide](security/hardening.md#enterprise-sign-in) for per-provider notes.
 - **Disabling or deleting a provider** ends the sessions of its accounts, including one a sign-in in progress
   opens: that sign-in is refused (`login.failure`, `reason: "provider_disabled"`), and a session of an account
-  whose provider is disabled is not accepted on any request. A provider with accounts cannot be deleted
+  whose provider is disabled is not accepted on any request. While a provider is disabled, the API tokens of its
+  accounts are refused (`401 UNAUTHENTICATED`, `token.use` outcome `provider_disabled`); they are not revoked and
+  work again once it is enabled, as for a disabled account. A provider with accounts cannot be deleted
   (`409 IN_USE`): disable it.
 
 *OIDC* (authorization code flow with PKCE S256, `state` and `nonce`; confidential or public clients). Set

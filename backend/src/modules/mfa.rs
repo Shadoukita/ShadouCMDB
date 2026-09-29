@@ -1269,4 +1269,42 @@ pub(crate) mod tests {
         }
         db.drop().await;
     }
+
+    /// GH#257: disabling an identity provider stops the API tokens of its
+    /// accounts as well as their sessions, until it is enabled again.
+    #[tokio::test]
+    async fn a_disabled_providers_accounts_tokens_are_refused() {
+        let Some(db) = scratch::database("a_disabled_providers_accounts_tokens_are_refused").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (admin, _) = setup(&app).await;
+        let oidc = provider(pool, "oidc", true, "").await;
+        let olga = mfa_required_user(pool, "olga", Some(oidc)).await;
+        let readers = readers_profile(pool).await;
+        let olga_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO user_permission_profiles (user_id, profile_id)
+             SELECT id, $1 FROM users WHERE username = 'olga' RETURNING user_id",
+        )
+        .bind(readers)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let (status, v) = mint(&app, &admin, Some(&olga_id.to_string()), readers, "sync").await;
+        assert_eq!(status, 201, "{v}");
+        let token = bearer(&v);
+        assert_eq!(use_token(&app, &token).await.0, 200);
+
+        let path = format!("/api/v1/admin/identity-providers/{oidc}");
+        let (status, v, _) = call(&app, "PATCH", &path, &admin, Some(json!({ "isEnabled": false }))).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(call(&app, "GET", "/api/v1/auth/me", &olga, None).await.0, 401);
+        let (status, v) = use_token(&app, &token).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+        assert_eq!(last_outcome(pool).await.as_deref(), Some("provider_disabled"));
+
+        let (status, v, _) = call(&app, "PATCH", &path, &admin, Some(json!({ "isEnabled": true }))).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(use_token(&app, &token).await.0, 200);
+        assert_eq!(last_outcome(pool).await.as_deref(), Some("accepted"));
+        db.drop().await;
+    }
 }
