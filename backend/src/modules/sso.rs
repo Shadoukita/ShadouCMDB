@@ -861,6 +861,8 @@ mod tests {
             cookie_secure: CookieSecure::Never,
             public_url: Some(PUBLIC_URL.into()),
             oidc_allowed_hosts: None,
+            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+            setup_token_file: None,
         })
     }
 

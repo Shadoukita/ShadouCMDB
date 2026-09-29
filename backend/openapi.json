@@ -180,7 +180,7 @@
           "Authentication"
         ],
         "summary": "Create the first administrator and sign them in (only while no users exist)",
-        "description": "The new user holds the built-in Administrator profile. 409 once any user exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line.",
+        "description": "The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.",
         "operationId": "completeSetup",
         "parameters": [],
         "requestBody": {
@@ -191,7 +191,8 @@
                 "required": [
                   "username",
                   "displayName",
-                  "password"
+                  "password",
+                  "setupToken"
                 ],
                 "properties": {
                   "username": {
@@ -222,6 +223,11 @@
                     "description": "At least 12 characters",
                     "maxLength": 256,
                     "minLength": 12
+                  },
+                  "setupToken": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "minLength": 1
                   }
                 },
                 "additionalProperties": false
@@ -243,6 +249,16 @@
           },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
             "content": {
               "application/json": {
                 "schema": {

@@ -164,7 +164,12 @@ async fn schema_gate(
 /// (and reports not-ready) while the database is unreachable.
 async fn log_schema_state(state: AppState) {
     match state.schema.check(&state.pool).await {
-        Ok(db::SchemaCheck::Current) => {}
+        // A fresh install logs its setup token now; an installed one deletes a leftover token file.
+        Ok(db::SchemaCheck::Current) => match crate::modules::auth::setup_required(&state.pool).await {
+            Ok(true) => state.auth.setup.arm(),
+            Ok(false) => state.auth.setup.disarm(),
+            Err(err) => tracing::warn!(error = %err.message, "cannot check whether first-run setup is needed"),
+        },
         Ok(db::SchemaCheck::Pending { applied, expected }) => tracing::warn!(
             applied,
             expected,
@@ -595,6 +600,8 @@ mod tests {
             cookie_secure: CookieSecure::Auto,
             public_url: None,
             oidc_allowed_hosts: None,
+            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+            setup_token_file: None,
         };
         let mut cfg = Config {
             api_host: "127.0.0.1".into(),

@@ -15,6 +15,7 @@ pub mod password;
 pub mod permissions;
 pub mod secret;
 pub mod session;
+pub mod setup_token;
 pub mod sso;
 pub mod throttle;
 pub mod token;
@@ -87,12 +88,15 @@ pub struct AuthState {
     oidc_state_key: tokio::sync::OnceCell<sso::login_state::SealingKey>,
     /// Set once the "session cookie without Secure under auto" warning has been logged.
     insecure_cookie_warned: AtomicBool,
+    /// The one-time token `POST /api/v1/setup` requires.
+    pub setup: setup_token::SetupGate,
 }
 
 impl AuthState {
     pub fn new(config: AuthConfig) -> Self {
         AuthState {
             oidc: sso::oidc::Cache::new(config.oidc_allowed_hosts.clone()),
+            setup: setup_token::SetupGate::new(config.setup_token.clone(), config.setup_token_file.clone()),
             config,
             throttle: LoginThrottle::default(),
             password_throttle: LoginThrottle::per_key(),
@@ -201,6 +205,8 @@ mod tests {
             cookie_secure,
             public_url: None,
             oidc_allowed_hosts: None,
+            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+            setup_token_file: None,
         })
     }
 

@@ -28,7 +28,7 @@ use crate::auth::{AuthState, Principal, password, session};
 use crate::data::auth as data;
 use crate::data::crud::AuditAction;
 use crate::data::mfa as mfa_data;
-use crate::http::error::{AppError, ErrorCode, FieldError};
+use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::lookups::email_schema;
 
 // ---------------------------------------------------------------------------
@@ -55,6 +55,14 @@ pub struct SetupBody {
     email: Option<String>,
     #[schema(schema_with = password_schema)]
     password: Secret,
+    /// The one-time setup token from the server log or the setup token file
+    /// (or `SETUP_TOKEN`, when the operator set it)
+    #[schema(schema_with = setup_token_schema)]
+    setup_token: Secret,
+}
+
+fn setup_token_schema() -> Schema {
+    ObjectBuilder::new().schema_type(Type::String).min_length(Some(1)).max_length(Some(1024)).into()
 }
 
 impl Check for SetupBody {
@@ -229,6 +237,15 @@ async fn setup(
     if !setup_required(pool).await? {
         return Err(setup_done());
     }
+    // Arms the token if the database was not reachable when the server started.
+    auth.setup.arm();
+    if !auth.setup.matches(&b.setup_token) {
+        tracing::warn!(
+            client_ip = ?request.client.ip,
+            "first-run setup refused: the setup token is missing or wrong"
+        );
+        return Err(wrong_setup_token());
+    }
     let mut tx = pool.begin().await?;
     data::lock_setup(&mut tx).await?;
     if data::count_users(&mut tx).await? > 0 {
@@ -245,6 +262,7 @@ async fn setup(
     };
     let user = users::create_in(&mut tx, &ctx, &input).await?;
     tx.commit().await?;
+    auth.setup.disarm();
     tracing::info!(user = %user.username, "first-run setup created the first administrator");
     data::record_login(pool, user.id).await?;
     start_session(pool, auth, headers, request, user.id, &user.username, LoginMethod::Setup).await
@@ -252,6 +270,20 @@ async fn setup(
 
 fn setup_done() -> AppError {
     AppError::conflict("Setup is already complete; sign in instead")
+}
+
+fn wrong_setup_token() -> AppError {
+    const MESSAGE: &str = "The setup token is missing or wrong. The server writes it to its log when it starts \
+                           without users, and to the setup token file (SETUP_TOKEN_FILE) if one is configured; \
+                           or use the SETUP_TOKEN you set";
+    let mut err = AppError::new(ErrorCode::Forbidden, MESSAGE);
+    err.details = Some(vec![FieldError {
+        location: FieldLocation::Body,
+        field: "setupToken".into(),
+        message: "Does not match the setup token of this server".into(),
+        code: "setup_token".into(),
+    }]);
+    err
 }
 
 fn rate_limited(wait: Duration, message: &str) -> AppError {
@@ -647,17 +679,21 @@ pub fn routes() -> Vec<Route> {
             .summary("Whether first-run setup is needed (no users exist yet)")
             .public()
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
-                Ok(Json(SetupStatus { setup_required: setup_required(&api.pool).await? }))
+                let setup_required = setup_required(&api.pool).await?;
+                if setup_required {
+                    api.auth.setup.arm();
+                }
+                Ok(Json(SetupStatus { setup_required }))
             }),
         route(Method::POST, "/api/v1/setup", "completeSetup")
             .tag(TAG)
             .summary("Create the first administrator and sign them in (only while no users exist)")
             .description(
-                "The new user holds the built-in Administrator profile. 409 once any user exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line.",
+                "The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.",
             )
             .public()
             .status(StatusCode::CREATED)
-            .errors(&[ErrorCode::Conflict])
+            .errors(&[ErrorCode::Forbidden, ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<SetupBody>>| async move {
                 setup(&api.pool, &api.auth, &api.headers, &api.ctx, b).await
             }),
@@ -736,6 +772,8 @@ mod tests {
             cookie_secure: CookieSecure::Never,
             public_url: None,
             oidc_allowed_hosts: None,
+            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+            setup_token_file: None,
         })
     }
 
@@ -754,6 +792,7 @@ mod tests {
             display_name: "First admin".into(),
             email: None,
             password: OWNER_PASSWORD.clone().into(),
+            setup_token: crate::auth::setup_token::TEST_TOKEN.into(),
         }
     }
 
@@ -776,6 +815,48 @@ mod tests {
             .expect("setup waited on a lock held by a users writer");
         assert_eq!(late.err().map(|e| e.code), Some(ErrorCode::Conflict));
         writer.rollback().await.unwrap();
+        db.drop().await;
+    }
+
+    /// GitHub #192 / T14: a fresh install cannot be claimed without the
+    /// generated one-time token, which only the operator can read (log, file).
+    #[tokio::test]
+    async fn setup_requires_the_generated_one_time_token() {
+        let Some(db) = scratch::database("setup_requires_the_generated_one_time_token").await else { return };
+        let dir = std::env::temp_dir().join(format!("shadoucmdb-setup-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("setup-token");
+        let auth = AuthState::new(AuthConfig {
+            setup_token: None,
+            setup_token_file: Some(file.clone()),
+            ..auth_state().config
+        });
+        let (pool, headers) = (&db.pool, HeaderMap::new());
+        let with = |token: &str| SetupBody { setup_token: token.into(), ..body("owner") };
+
+        // Nothing is armed until the server has seen the empty database; the first attempt arms it and fails.
+        for guess in [
+            "",
+            crate::auth::setup_token::TEST_TOKEN,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            let err = setup(pool, &auth, &headers, &anon(), with(guess)).await.err().expect("refused");
+            assert_eq!(err.code, ErrorCode::Forbidden, "{guess:?}");
+            assert_eq!(err.details.unwrap()[0].field, "setupToken");
+        }
+        assert!(setup_required(pool).await.unwrap(), "a refused setup creates no user");
+
+        let token = std::fs::read_to_string(&file).unwrap().trim().to_owned();
+        setup(pool, &auth, &headers, &anon(), with(&token)).await.expect("setup with the token");
+        assert!(!file.exists(), "the token file is deleted once used");
+        assert!(!auth.setup.matches(&token), "the token works once");
+
+        // Installed: 409 whatever the token, and never 403 (the token is not the gate any more).
+        let late =
+            setup(pool, &auth, &headers, &anon(), SetupBody { setup_token: token.as_str().into(), ..body("late") })
+                .await;
+        assert_eq!(late.err().map(|e| e.code), Some(ErrorCode::Conflict));
+        std::fs::remove_dir_all(&dir).unwrap();
         db.drop().await;
     }
 
@@ -1271,7 +1352,7 @@ mod tests {
         };
 
         // Session A: opened over plain HTTP, so under the plain names.
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": OWNER_PASSWORD.as_str() });
+        let setup = json!({ "username": "owner", "displayName": "Owner", "password": OWNER_PASSWORD.as_str(), "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, a, set) = send("POST", "/api/v1/setup", false, None, None, Some(setup)).await;
         assert_eq!(status, 201, "{a}");
         assert!(set.iter().all(|c| !c.starts_with("__Host-")), "{set:?}");

@@ -362,6 +362,8 @@ mod tests {
             cookie_secure: CookieSecure::Auto,
             public_url: None,
             oidc_allowed_hosts: None,
+            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+            setup_token_file: None,
         };
         let c = login_cookies(&cfg, true, "tok", "csrf");
         assert_eq!(c[0], "__Host-shadoucmdb_session=tok; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly; Secure");
@@ -401,6 +403,8 @@ mod tests {
             cookie_secure: CookieSecure::Auto,
             public_url: None,
             oidc_allowed_hosts: None,
+            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+            setup_token_file: None,
         };
         let plain = headers(&[("cookie", "shadoucmdb_session=old; shadoucmdb_csrf=c"), ("x-forwarded-proto", "https")]);
         let c = upgrade_cookies(&cfg, &plain, "c").unwrap();
