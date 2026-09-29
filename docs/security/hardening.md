@@ -37,7 +37,10 @@ carries passwords and session cookies. Requirements for the proxy:
   forwarding headers only from a listed peer, right to left, and skips listed hops; without it,
   every client counts as the proxy's network, so one client's wrong passwords lock a username for
   all of them. Never list a range your users' clients are in, and never `0.0.0.0/0` (refused at
-  start-up): a listed address can make the server believe any client address.
+  start-up): a listed address can make the server believe any client address. The server reads
+  `X-Forwarded-For` before `Forwarded`: a proxy that writes only `Forwarded` must also add or
+  overwrite `X-Forwarded-For`, or remove it from client requests, or the client picks its own
+  throttle network.
 - **Keep `SIGN_IN_FAILURE_FLOOR_MS`** (default 1000) above the slowest sign-in your LDAP/AD
   directory takes, so refused sign-ins all take the same time.
 - **Don't add `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`,

@@ -186,7 +186,10 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
   not listed as the client, so a forged value to the left of what your proxy added changes
   nothing. Unset (the default), it uses the TCP peer, which behind a proxy is the proxy for every
   client (see [Hardening settings](#hardening-settings)). List only proxies you run:
-  anything listed can make the server believe any client address.
+  anything listed can make the server believe any client address. `X-Forwarded-For` takes
+  precedence over `Forwarded`, so a listed proxy that writes only `Forwarded` must still add or
+  overwrite `X-Forwarded-For`, or remove it from client requests; otherwise the client's own
+  `X-Forwarded-For` chooses its throttle network.
 - `SESSION_IDLE_TIMEOUT_MINUTES` (default 12 h) and `SESSION_MAX_AGE_HOURS` (default 7 days)
   bound how long a session lives. Sessions are stored in PostgreSQL, so they survive restarts
   and work across several instances. The login backoff counters are per process.
