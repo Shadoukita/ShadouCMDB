@@ -22,7 +22,7 @@ use crate::api::route::{
 use crate::api::schemas::{name_schema, trimmed};
 use crate::auth::events::{self, LoginMethod, ProviderMfa, RevokeReason};
 use crate::auth::permissions::{ClassRights, GlobalPermission, Permissions};
-use crate::auth::throttle::{Attempt, GLOBAL_PENALTY, Gate, LoginThrottle, SLOW_LANE_WAITERS};
+use crate::auth::throttle::{Attempt, GLOBAL_PENALTY, Gate, LoginThrottle, Net, SLOW_LANE_WAITERS};
 use crate::auth::{AuthState, Principal, password, session};
 use crate::data::auth as data;
 use crate::data::crud::AuditAction;
@@ -261,19 +261,25 @@ fn rate_limited(wait: Duration, message: &str) -> AppError {
 /// for a turn in the slow lane instead of refusing (so a correct password
 /// still gets in while someone sprays wrong ones). The attempt is reserved
 /// until the returned [`Attempt`] is done, so concurrent requests cannot all
-/// get past the gate before the first failure is counted.
-async fn throttle_gate<'a>(throttle: &'a LoginThrottle, key: &str, what: &str) -> Result<Attempt<'a>, AppError> {
+/// get past the gate before the first failure is counted. `net`: the client's
+/// network, so failures from one network do not lock the key for the others.
+async fn throttle_gate<'a>(
+    throttle: &'a LoginThrottle,
+    key: &str,
+    net: Net,
+    what: &str,
+) -> Result<Attempt<'a>, AppError> {
     let locked = |wait| rate_limited(wait, &format!("Too many failed {what}"));
-    match throttle.begin(key, false) {
+    match throttle.begin(key, net, false) {
         Ok(attempt) => Ok(attempt),
         Err(Gate::Locked(wait)) => Err(locked(wait)),
         Err(Gate::Open | Gate::Slow) => {
-            if !throttle.slow_lane().await {
+            if !throttle.slow_lane(net).await {
                 let wait = GLOBAL_PENALTY * SLOW_LANE_WAITERS as u32;
                 return Err(rate_limited(wait, "Too many sign-ins are waiting on this server"));
             }
             // Failures for this key may have locked it while it waited.
-            throttle.begin(key, true).map_err(|gate| match gate {
+            throttle.begin(key, net, true).map_err(|gate| match gate {
                 Gate::Locked(wait) => locked(wait),
                 Gate::Open | Gate::Slow => locked(GLOBAL_PENALTY),
             })
@@ -317,7 +323,7 @@ async fn login(
     ctx: &RequestContext,
     b: LoginBody,
 ) -> Result<LoginAnswer, AppError> {
-    let attempt = throttle_gate(&auth.throttle, &b.username, "sign-ins for this username").await?;
+    let attempt = throttle_gate(&auth.throttle, &b.username, ctx.client.net, "sign-ins for this username").await?;
     let row = data::find_for_login(pool, &b.username).await?;
     // Directory accounts, and names no account has while a directory is enabled, go to LDAP.
     let directory = match &row {
@@ -415,7 +421,12 @@ async fn directory_login(
         sso::DirectoryAnswer::SignedIn { user_id, username } => {
             password_accepted(pool, auth, headers, ctx, attempt, user_id, &username, LoginMethod::Ldap).await
         }
-        sso::DirectoryAnswer::NoMatch => Err(wrong_credentials(pool, attempt, ctx, &b.username).await?),
+        sso::DirectoryAnswer::NoMatch => {
+            // A local account's wrong password costs an argon2 verify; so does
+            // this answer, or its speed would tell the names apart (GH#190).
+            password::verify(&b.password, None).await?;
+            Err(wrong_credentials(pool, attempt, ctx, &b.username).await?)
+        }
         // A right password that is still refused counts like a disabled account's.
         sso::DirectoryAnswer::Refused(refusal) => {
             let locked = attempt.failure();
@@ -448,7 +459,8 @@ async fn login_mfa(
     let Some(pending) = mfa_data::take_challenge(&mut *pool.acquire().await?, &hash).await? else {
         return Err(sign_in_expired());
     };
-    let attempt = throttle_gate(&auth.throttle, &pending.username, "sign-ins for this username").await?;
+    let attempt =
+        throttle_gate(&auth.throttle, &pending.username, ctx.client.net, "sign-ins for this username").await?;
 
     let mut tx = pool.begin().await?;
     let Some(challenge) = mfa_data::take_challenge(&mut tx, &hash).await? else { return Err(sign_in_expired()) };
@@ -496,9 +508,11 @@ fn principal(ctx: &RequestContext) -> Result<&Principal, AppError> {
 
 /// Waits for the per-user password-confirmation throttle. Shared by every
 /// kind of account, so a stolen session cannot be turned into a known
-/// password, local or directory, by guessing the current one.
+/// password, local or directory, by guessing the current one. Not per
+/// network: only the signed-in user can lock their own key.
 async fn password_gate<'a>(auth: &'a AuthState, me: &Principal) -> Result<Attempt<'a>, AppError> {
-    throttle_gate(&auth.password_throttle, &me.user_id.to_string(), "attempts at your current password").await
+    let key = me.user_id.to_string();
+    throttle_gate(&auth.password_throttle, &key, Net::default(), "attempts at your current password").await
 }
 
 /// Counts a wrong current password against the user; returns the 400.
@@ -647,7 +661,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Sign in with username and password")
             .description(
-                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username, each further failure locks it for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
+                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax, Secure behind HTTPS) and the `shadoucmdb_csrf` cookie. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the client address the reverse proxy reports), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
             )
             .public()
             .errors(&[ErrorCode::MfaRequired, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
@@ -796,9 +810,9 @@ mod tests {
         let (pool, auth) = (&db.pool, auth_state());
         setup(pool, &auth, &HeaderMap::new(), &anon(), body("admin")).await.expect("setup");
         for i in 0..crate::auth::throttle::GLOBAL_BUDGET {
-            auth.throttle.failure(&format!("junk-{i}"));
+            auth.throttle.failure(&format!("junk-{i}"), Net::default());
         }
-        assert_eq!(auth.throttle.check("admin"), Gate::Slow);
+        assert_eq!(auth.throttle.check("admin", Net::default()), Gate::Slow);
         let started = std::time::Instant::now();
         let login_as = |password: &str| LoginBody { username: "admin".into(), password: password.into() };
         let signed_in = login(pool, &auth, &HeaderMap::new(), &anon(), login_as(OWNER_PASSWORD.as_str())).await;
@@ -882,6 +896,7 @@ mod tests {
             ip: Some(ip.parse().unwrap()),
             peer_ip: Some(peer.parse().unwrap()),
             user_agent: Some("audit-test".into()),
+            net: Net::of(Some(ip.parse().unwrap())),
         };
         anon().with_client(client)
     }
@@ -1065,6 +1080,54 @@ mod tests {
         db.drop().await;
     }
 
+    /// GH#187: wrong passwords from one network lock the name for that
+    /// network only; the account holder signs in from another.
+    #[tokio::test]
+    async fn guessing_from_one_network_does_not_lock_the_owner_out_elsewhere() {
+        let Some(db) = scratch::database("guessing_from_one_network_does_not_lock_the_owner_out_elsewhere").await
+        else {
+            return;
+        };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("admin")).await.unwrap();
+        let (right, wrong) = (OWNER_PASSWORD.as_str(), OWNER_PASSWORD.to_uppercase());
+        for _ in 0..crate::auth::throttle::FREE_FAILURES {
+            let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("admin", &wrong)).await.err();
+            assert_eq!(e.map(|e| e.code), Some(ErrorCode::Unauthenticated));
+        }
+        let e = login(pool, &auth, &headers, &from("198.51.100.99"), login_body("admin", right)).await.err();
+        assert_eq!(e.map(|e| e.code), Some(ErrorCode::RateLimited), "locked for the guessing /24");
+        let owner = login(pool, &auth, &headers, &from("203.0.113.5"), login_body("admin", right)).await;
+        assert!(owner.is_ok(), "refused from another network: {:?}", owner.err().map(|e| e.code));
+        db.drop().await;
+    }
+
+    /// GH#190: a name the directory does not match costs an argon2 verify,
+    /// like a local account's wrong password, so timing does not tell them apart.
+    #[tokio::test]
+    async fn a_directory_no_match_costs_a_password_verify() {
+        let Some(db) = scratch::database("a_directory_no_match_costs_a_password_verify").await else { return };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        // A disabled directory answers NoMatch without being contacted: the
+        // same answer as an enabled one that finds no entry for the name.
+        let ldap = crate::modules::mfa::tests::provider(pool, "ldap", false, "ldaps://dc.example.test").await;
+        let mut tx = pool.begin().await.unwrap();
+        let linked = crate::data::identity_providers::NewLinkedUser {
+            provider_id: ldap,
+            external_id: "erin",
+            username: "erin",
+            display_name: "erin",
+            email: None,
+        };
+        crate::data::identity_providers::insert_linked(&mut tx, &linked).await.unwrap();
+        tx.commit().await.unwrap();
+        let before = password::DUMMY_VERIFIES.with(|n| n.get());
+        let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", "some password")).await.err();
+        assert_eq!(e.map(|e| e.code), Some(ErrorCode::Unauthenticated));
+        assert_eq!(password::DUMMY_VERIFIES.with(|n| n.get()), before + 1, "the dummy hash was verified");
+        db.drop().await;
+    }
+
     /// GH#120: after the directory accepted the password, a user with an
     /// authenticator gets the second-factor challenge, not a session, and the
     /// name's failure count is kept until the code is right. Without an
@@ -1091,9 +1154,9 @@ mod tests {
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sessions WHERE user_id = $1").bind(id).fetch_one(pool)
         };
 
-        let attempt = |name: &str| auth.throttle.begin(name, false).expect("the gate lets it through");
+        let attempt = |name: &str| auth.throttle.begin(name, Net::default(), false).expect("the gate lets it through");
         for _ in 1..crate::auth::throttle::FREE_FAILURES {
-            auth.throttle.failure("Dirk");
+            auth.throttle.failure("Dirk", Net::default());
         }
         let answer =
             password_accepted(pool, &auth, &headers, &anon(), attempt("Dirk"), dirk, "dirk", LoginMethod::Ldap)
@@ -1116,7 +1179,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(last_login, None, "not recorded as a sign-in yet");
-        assert!(auth.throttle.failure("Dirk").is_some(), "the failure count was not cleared");
+        assert!(auth.throttle.failure("Dirk", Net::default()).is_some(), "the failure count was not cleared");
 
         let answer =
             password_accepted(pool, &auth, &headers, &anon(), attempt("dora"), dora, "dora", LoginMethod::Ldap)
