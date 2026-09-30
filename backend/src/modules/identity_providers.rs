@@ -1584,6 +1584,10 @@ mod tests {
         let ldap_id: Uuid = ldap["id"].as_str().unwrap().parse().unwrap();
         let by_id = |id: Uuid| format!("{BASE}/{id}");
 
+        // IdentityProviderList is a plain array on the wire, not `{ data }`.
+        let (status, list, _) = call(&app, "GET", BASE, &admin, None).await;
+        assert_eq!((status, list.as_array().map(Vec::len)), (200, Some(2)), "{list}");
+
         type Stored = (Option<String>, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>, Option<i32>);
         let stored = async |id: Uuid| -> Stored {
             sqlx::query_as(
