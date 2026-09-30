@@ -169,7 +169,7 @@ pub struct TemplateCounts {
 }
 
 impl TemplateCounts {
-    fn total(&self) -> i64 {
+    pub fn total(&self) -> i64 {
         self.areas
             + self.classes
             + self.attribute_definitions
@@ -274,7 +274,10 @@ pub async fn template_classes(c: &mut PgConnection) -> sqlx::Result<KeyMap> {
     Ok(classes)
 }
 
+#[derive(Clone)]
 struct State {
+    /// "service" in `classes` is the business service type standing in for it
+    service_stand_in: bool,
     areas: KeyMap,
     lists: KeyMap,
     /// (list id, value key)
@@ -305,7 +308,9 @@ impl State {
         .fetch_all(&mut *c)
         .await?;
         let classes = template_classes(c).await?;
+        let service_stand_in = classes.len() > key_map(c, "ci_classes").await?.len();
         Ok(State {
+            service_stand_in,
             areas: key_map(c, "areas").await?,
             lists: key_map(c, "lookup_lists").await?,
             list_values: list_values.into_iter().collect(),
@@ -363,6 +368,14 @@ fn contents(c: &Content) -> TemplateCounts {
 }
 
 fn present(c: &Content, s: &State) -> TemplateCounts {
+    // The built-in business service type is there on every install; it only
+    // counts as the template's service once the template itself is (its area).
+    if s.service_stand_in && !s.areas.contains_key(c.area.key) {
+        let mut own = s.clone();
+        own.classes.remove(SERVICE_CLASS);
+        own.service_stand_in = false;
+        return present(c, &own);
+    }
     let n = |it: &mut dyn Iterator<Item = bool>| it.filter(|b| *b).count() as i64;
     TemplateCounts {
         areas: n(&mut std::iter::once(s.areas.contains_key(c.area.key))),

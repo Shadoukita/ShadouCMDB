@@ -261,11 +261,25 @@ async fn fresh_install_creates_the_class_and_the_template_adopts_it() {
     member_type(pool).await;
     reconcile(pool).await;
 
+    // The built-in class alone is no partial install: the templates page still says the CMDB is empty.
+    use crate::modules::templates::TemplateStatus;
+    let status = |list: crate::modules::templates::StarterTemplateList| {
+        let t = list.data.into_iter().find(|t| t.key == "it_infrastructure").unwrap();
+        (t.status, t.present.total())
+    };
+    let listed = crate::modules::templates::list(pool).await.unwrap_or_else(|e| panic!("{}", e.message));
+    assert_eq!(status(listed), (TemplateStatus::NotInstalled, 0));
+
     let template = crate::modules::templates::find("it_infrastructure").unwrap();
     let ctx = RequestContext::system("test", "test");
     let mut tx = pool.begin().await.unwrap();
-    crate::modules::templates::install(&mut tx, &ctx, template).await.unwrap_or_else(|e| panic!("{}", e.message));
+    let installed =
+        crate::modules::templates::install(&mut tx, &ctx, template).await.unwrap_or_else(|e| panic!("{}", e.message));
     tx.commit().await.unwrap();
+    assert_eq!(installed.existing.total(), 0, "nothing of the template was there");
+    let listed = crate::modules::templates::list(pool).await.unwrap_or_else(|e| panic!("{}", e.message));
+    let (installed_status, _) = status(listed);
+    assert_eq!(installed_status, TemplateStatus::Installed);
 
     let service: i64 =
         sqlx::query_scalar("SELECT count(*) FROM ci_classes WHERE key = 'service'").fetch_one(pool).await.unwrap();
