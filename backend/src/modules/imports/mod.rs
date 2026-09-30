@@ -4,6 +4,8 @@
 //! administrator turns it on (D4), and needs the global right `cis.import`
 //! (D3) on top of the class rights, which every row is still checked against.
 
+pub mod analyse;
+pub mod parse;
 pub mod settings;
 
 use axum::http::Method;

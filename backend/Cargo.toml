@@ -14,9 +14,15 @@ argon2 = "0.6"
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "query", "tokio", "tracing"] }
 # Logo and favicon travel base64-encoded in JSON (uploads and config export files).
 base64 = "0.23"
+# Bulk import: the XLSX reader, used only through calamine::Xlsx (never open_workbook_auto), so the
+# XLS, XLSB and ODS parsers are never reached with uploaded bytes.
+calamine = { version = "0.36", default-features = false, features = ["dates"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
+# Bulk import: the CSV tokenizer (RFC 4180, fixed buffers so one record is capped) and the encodings (UTF-8, Windows-1252, ISO-8859-1).
+csv-core = "0.1"
+encoding_rs = "0.8"
 # Backup files are gzip-compressed JSON Lines (zlib-rs: pure Rust, already in the tree, no C zlib to link).
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 futures-util = { version = "0.3", default-features = false }
@@ -36,6 +42,8 @@ ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ri
 mime_guess = "2"
 # Decodes the id in a token.use path before the audit log judges it; already in the tree through axum.
 percent-encoding = "2"
+# Bulk import: the XLSX preflight reads every XML part as events and refuses a DOCTYPE (no DTD, no entities).
+quick-xml = "0.41"
 regex = "1"
 # OIDC discovery, JWKS and token requests. rustls with the ring provider we configure
 # ourselves (the same one sqlx uses), so no second crypto library enters the build.
@@ -77,6 +85,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net
 tower = { version = "0.5", default-features = false, features = ["util"] }
 tower-http = { version = "0.7", features = ["cors", "catch-panic", "set-header", "trace"] }
 tracing = "0.1"
+# Bulk import: cells are NFC-normalised before matching and validation (T10); header matching uses NFKC.
+unicode-normalization = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "env-filter", "ansi", "std"] }
 url = "2"
 utoipa = { version = "6", features = ["uuid", "chrono", "preserve_order", "preserve_path_order"] }
