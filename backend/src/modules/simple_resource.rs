@@ -15,7 +15,7 @@ use sqlx::{FromRow, PgConnection, PgPool};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::api::context::RequestContext;
+use crate::api::context::{Count, RequestContext};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{Page, Paged, Sort, like_pattern};
 use crate::auth::permissions::GlobalPermission;
@@ -31,9 +31,38 @@ pub struct Usage {
     /// Plural noun for messages (e.g. "configuration items").
     pub label: &'static str,
     pub sql: &'static str,
+    /// For a count over CI data: SQL returning (`uuid[]`, for `$1`) every class
+    /// whose CIs the count can include, from the data model alone. The count is
+    /// told only to a caller who may view them all (GH#265). `None`: the count
+    /// is over data-model rows, which every signed-in user may read.
+    pub spans: Option<&'static str>,
     /// Blocks a hard delete. Non-blocking references are removed with the row (cascade).
     pub blocking: bool,
 }
+
+/// [`Usage::spans`] of a count over the CIs storing lookup value `$1`: every
+/// class carrying a lookup field of its list, with the types below it.
+pub const LOOKUP_VALUE_SPANS: &str = "SELECT coalesce(array_agg(DISTINCT c.id), '{}')
+     FROM ci_attribute_definitions d
+     JOIN lookup_list_values v ON v.list_id = d.lookup_list_id
+     JOIN ci_classes c ON ci_class_is_a(c.id, d.class_id)
+     WHERE v.id = $1 AND d.data_type = 'lookup'";
+/// [`Usage::spans`] of a count over the values of field `$1`: its type's table
+/// holds the CIs of the type and of every type below it.
+pub const ATTRIBUTE_SPANS: &str = "SELECT coalesce(array_agg(c.id), '{}')
+     FROM ci_attribute_definitions d JOIN ci_classes c ON ci_class_is_a(c.id, d.class_id)
+     WHERE d.id = $1";
+/// [`Usage::spans`] of a count over the CIs of class `$1` itself.
+pub const CLASS_SPANS: &str = "SELECT ARRAY[$1::uuid]";
+/// [`Usage::spans`] of a count over relationships of any class (a relationship
+/// may outlive the rule that allowed it).
+pub const EVERY_CLASS_SPANS: &str = "SELECT coalesce(array_agg(id), '{}') FROM ci_classes WHERE $1::uuid IS NOT NULL";
+/// [`Usage::spans`] of a count over the relationships rule `$1` covers: its
+/// source and target classes with the types below them.
+pub const RULE_SPANS: &str = "SELECT coalesce(array_agg(c.id), '{}')
+     FROM relationship_type_rules r
+     JOIN ci_classes c ON ci_class_is_a(c.id, r.source_class_id) OR ci_class_is_a(c.id, r.target_class_id)
+     WHERE r.id = $1";
 
 /// How many records of one kind refer to the row.
 #[derive(Debug, Serialize, ToSchema)]
@@ -41,7 +70,11 @@ pub struct Usage {
 pub struct UsageCount {
     pub kind: String,
     pub label: String,
-    pub count: i64,
+    /// Null when withheld (see `withheld`)
+    #[schema(value_type = Option<i64>, required = true)]
+    pub count: Count,
+    /// True when the count spans CIs of a class the caller may not view: `count` is then null
+    pub withheld: bool,
     /// A non-zero count prevents deleting the row; retire it with isActive=false instead
     pub blocking: bool,
 }
@@ -50,7 +83,7 @@ pub struct UsageCount {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageReport {
-    /// True when a blocking count is non-zero: DELETE would return 409 IN_USE
+    /// True when a blocking count is non-zero: DELETE would return 409 IN_USE (decided on every count, withheld ones included)
     pub in_use: bool,
     pub data: Vec<UsageCount>,
 }
@@ -296,41 +329,75 @@ pub async fn update<R: Resource>(
     Ok(row)
 }
 
-async fn usage_counts<R: Resource>(conn: &mut PgConnection, id: Uuid) -> Result<UsageReport, AppError> {
+/// The usage counts and whether a blocking one is non-zero. `in_use` is decided
+/// on every count; only what the caller may view is told ([`Usage::spans`]).
+async fn usage_counts<R: Resource>(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+) -> Result<UsageReport, AppError> {
     let mut data = Vec::with_capacity(R::USAGE.len());
+    let mut in_use = false;
     for u in R::USAGE {
-        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(u.sql)).bind(id).fetch_one(&mut *conn).await?;
-        data.push(UsageCount { kind: u.kind.into(), label: u.label.into(), count, blocking: u.blocking });
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(u.sql)).bind(id).fetch_one(&mut *conn).await?;
+        in_use |= u.blocking && n > 0;
+        let count = match u.spans {
+            None => Count::Exact(n),
+            Some(spans) => {
+                let classes: Vec<Uuid> =
+                    sqlx::query_scalar(sqlx::AssertSqlSafe(spans)).bind(id).fetch_one(&mut *conn).await?;
+                Count::scoped(ctx, &classes, n)
+            }
+        };
+        data.push(UsageCount {
+            kind: u.kind.into(),
+            label: u.label.into(),
+            count,
+            withheld: count == Count::Withheld,
+            blocking: u.blocking,
+        });
     }
-    Ok(UsageReport { in_use: data.iter().any(|u| u.blocking && u.count > 0), data })
+    Ok(UsageReport { in_use, data })
 }
 
-pub async fn usage<R: Resource>(pool: &PgPool, id: Uuid) -> Result<UsageReport, AppError> {
+pub async fn usage<R: Resource>(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<UsageReport, AppError> {
     let mut conn = pool.acquire().await?;
     if crud::select_by_id::<R::Dto>(&mut conn, R::TABLE, R::COLUMNS, id, false).await?.is_none() {
         return Err(AppError::missing(R::LABEL, id));
     }
-    usage_counts::<R>(&mut conn, id).await
+    usage_counts::<R>(&mut conn, ctx, id).await
 }
 
 /// 409 IN_USE naming every blocking reference, or Ok when the row can go.
+/// A withheld count is neither told nor named: whether the message says
+/// "details withheld" depends only on what the caller may view.
 fn refuse_if_used(label: &str, report: &UsageReport) -> Result<(), AppError> {
     if !report.in_use {
         return Ok(());
     }
-    let blocking: Vec<&UsageCount> = report.data.iter().filter(|u| u.blocking && u.count > 0).collect();
-    let summary = blocking.iter().map(|u| format!("{} {}", u.count, u.label)).collect::<Vec<_>>().join(", ");
-    Err(AppError::new(
-        ErrorCode::InUse,
-        format!("{label} is still used by {summary}. Retire it with isActive=false instead of deleting it."),
-    )
-    .with_details(
+    let blocking: Vec<(&UsageCount, i64)> = report
+        .data
+        .iter()
+        .filter(|u| u.blocking)
+        .filter_map(|u| u.count.exact().filter(|n| *n > 0).map(|n| (u, n)))
+        .collect();
+    let withheld = report.data.iter().any(|u| u.blocking && u.withheld);
+    let mut parts: Vec<String> = blocking.iter().map(|(u, n)| format!("{n} {}", u.label)).collect();
+    if withheld {
+        parts.push("records whose details are withheld (they span CI types you may not view)".into());
+    }
+    let message = if blocking.is_empty() {
+        format!("{label} is still in use (details withheld). Retire it with isActive=false instead of deleting it.")
+    } else {
+        format!("{label} is still used by {}. Retire it with isActive=false instead of deleting it.", parts.join(", "))
+    };
+    Err(AppError::new(ErrorCode::InUse, message).with_details(
         blocking
             .into_iter()
-            .map(|u| FieldError {
+            .map(|(u, n)| FieldError {
                 location: FieldLocation::Params,
                 field: u.kind.clone(),
-                message: format!("{} {}", u.count, u.label),
+                message: format!("{n} {}", u.label),
                 code: "in_use".into(),
             })
             .collect(),
@@ -355,7 +422,7 @@ pub async fn remove_in<R: Resource>(tx: &mut PgConnection, ctx: &RequestContext,
     R::before_write(tx).await?;
     let before: R::Dto =
         crud::select_by_id(tx, R::TABLE, R::COLUMNS, id, true).await?.ok_or_else(|| AppError::missing(R::LABEL, id))?;
-    refuse_if_used(R::LABEL, &usage_counts::<R>(tx, id).await?)?;
+    refuse_if_used(R::LABEL, &usage_counts::<R>(tx, ctx, id).await?)?;
     crud::delete_row(tx, R::TABLE, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Delete,
@@ -412,13 +479,13 @@ pub fn routes<R: Resource>() -> Vec<Route> {
                 .tag(R::TAG)
                 .summary(format!("What still refers to a {label}"))
                 .description(format!(
-                    "Counts of {}. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.",
+                    "Counts of {}. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
                     kinds.join(", ")
                 ))
                 .requires(GlobalPermission::DatamodelManage)
                 .errors(&[ErrorCode::NotFound])
                 .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                    Ok(Json(usage::<R>(&api.pool, id).await?))
+                    Ok(Json(usage::<R>(&api.pool, &api.ctx, id).await?))
                 }),
         );
     }
