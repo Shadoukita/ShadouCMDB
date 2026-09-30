@@ -117,8 +117,10 @@ impl AppState {
 /// body in transit holds no permit. It must arrive within
 /// `HTTP_HEADER_READ_TIMEOUT_SECS`, and what has arrived counts against a
 /// shared budget of `HTTP_MAX_CONCURRENT_REQUESTS` × 64 KiB (at least 16 MiB)
-/// of body bytes, so slow senders cost a connection each but never the
-/// permits of real sign-ins, and the memory they hold stays bounded. Anonymous
+/// of body bytes once the read has to wait for more, so slow senders cost a
+/// connection each but never the permits of real sign-ins, and the memory they
+/// hold stays bounded. A body that arrives without a wait is never held and
+/// never counts, so a spent budget cannot refuse it. Anonymous
 /// callers can then only saturate the public routes, never the capacity
 /// signed-in users and API tokens need. Only the health routes (liveness,
 /// readiness, version; `RouteBuilder::unlimited`) take no permit, so a busy
@@ -127,7 +129,7 @@ impl AppState {
 pub struct Capacity {
     global: Arc<tokio::sync::Semaphore>,
     public: Arc<tokio::sync::Semaphore>,
-    /// Bytes of public request bodies being received, one permit per byte.
+    /// Bytes held by public request bodies waiting for the rest, one permit per byte.
     public_body_bytes: Arc<tokio::sync::Semaphore>,
     /// Time a public route may take to receive its body.
     pub public_body_timeout: Duration,

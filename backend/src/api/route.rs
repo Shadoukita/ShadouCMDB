@@ -837,10 +837,13 @@ pub const PUBLIC_BODY_LIMIT: usize = 64 * 1024;
 /// JSON is the only accepted body type. An empty body counts as no body
 /// (clients often send Content-Type: application/json on DELETE).
 ///
-/// With a `budget` (public routes), every byte counts against the shared
-/// public body budget as it arrives, until the body is parsed: 503
-/// SERVER_BUSY once the budget is spent. Bytes are counted as received, not
-/// as declared, so a slow sender holds only what it has actually sent.
+/// With a `budget` (public routes), the bytes received so far count against
+/// the shared public body budget as soon as the read has to wait for more,
+/// until the body is parsed: 503 SERVER_BUSY once the budget is spent. Bytes
+/// are counted as received, not as declared, so a slow sender holds only what
+/// it has actually sent. A body that arrives without a wait (every sign-in
+/// that is not deliberately slow) is never held and never counts, so slow
+/// senders that fill the budget cannot refuse it (PR #307 review).
 async fn read_body(
     headers: &HeaderMap,
     body: RequestBody,
@@ -862,17 +865,30 @@ async fn read_body(
             Err(e) => return Err(unreadable(&e)),
         },
         Some(capacity) => {
+            use futures_util::FutureExt;
             use http_body_util::BodyExt;
             let (mut body, mut buf, mut reserved) = (body, Vec::new(), None::<tokio::sync::OwnedSemaphorePermit>);
-            while let Some(frame) = body.frame().await {
+            let mut charged = 0;
+            loop {
+                let frame = match body.frame().now_or_never() {
+                    Some(frame) => frame,
+                    // Waiting for more: what is buffered so far is now held, so it counts.
+                    None => {
+                        if buf.len() > charged {
+                            let more = capacity.reserve_public_body(buf.len() - charged)?;
+                            charged = buf.len();
+                            match &mut reserved {
+                                Some(r) => r.merge(more),
+                                None => reserved = Some(more),
+                            }
+                        }
+                        body.frame().await
+                    }
+                };
+                let Some(frame) = frame else { break };
                 let Ok(data) = frame.map_err(|e| unreadable(&e))?.into_data() else { continue };
                 if buf.len() + data.len() > limit {
                     return Err(too_large());
-                }
-                let more = capacity.reserve_public_body(data.len())?;
-                match &mut reserved {
-                    Some(r) => r.merge(more),
-                    None => reserved = Some(more),
                 }
                 buf.extend_from_slice(&data);
             }
@@ -1075,7 +1091,8 @@ mod tests {
         const PUBLIC: usize = 2;
         const SLOW: usize = PUBLIC * 4;
         const SENT: &[u8] = b"{\"username\":";
-        const BUDGET: usize = SLOW * SENT.len() + 64;
+        // Exactly what the slow sign-ins hold: they spend the whole budget.
+        const BUDGET: usize = SLOW * SENT.len();
         let capacity = Capacity::with_body_budget(1, PUBLIC, BUDGET, Duration::from_secs(3));
         let app = app_with_capacity(db.pool.clone(), capacity.clone());
         let session = set_up_owner(&app).await;
@@ -1093,19 +1110,24 @@ mod tests {
                 tokio::spawn(async move { send(&app, "POST", login, &Creds::default(), trickle(), Some(100)).await })
             })
             .collect();
-        while capacity.available_body_bytes() > BUDGET - SLOW * SENT.len() {
+        while capacity.available_body_bytes() > 0 {
             assert!(started.elapsed() < Duration::from_secs(5), "the slow sign-ins never started");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         // They hold no public permit, so a real sign-in still gets through.
         assert_eq!(capacity.available(true), PUBLIC, "a body in transit holds a public permit");
-        let good = json!({ "username": "owner", "password": "correct horse battery" }).to_string();
-        assert!(good.len() <= 64);
-        // What they hold is bounded by the body budget: a body past it is refused.
+        // What they hold is bounded by the body budget: another body that has to wait
+        // for more bytes would be held too, so it is refused.
+        let split = stream::iter([&b"{\"username\":"[..], &b"\"owner\"}"[..]]).then(|part| async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok::<_, std::convert::Infallible>(Bytes::from_static(part))
+        });
         let (status, code, headers) =
-            send_full(&app, "POST", login, &Creds::default(), Body::from(vec![b' '; 65]), None).await;
+            send_full(&app, "POST", login, &Creds::default(), Body::from_stream(split), None).await;
         assert_eq!((status, code.as_str()), (503, "SERVER_BUSY"));
         assert_eq!(headers.get(header::RETRY_AFTER).and_then(|v| v.to_str().ok()), Some("1"));
+        // A body that arrives in one go is never held, so a spent budget cannot refuse it.
+        let good = json!({ "username": "owner", "password": "correct horse battery" }).to_string();
         assert_eq!(send(&app, "POST", login, &Creds::default(), Body::from(good), None).await.0, 200);
         assert!(slow.iter().all(|t| !t.is_finished()), "the slow sign-ins ended before the real one");
 
