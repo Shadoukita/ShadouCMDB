@@ -7,6 +7,8 @@ SQL and never receives database credentials. There is nothing to configure here 
 
 ## Run it
 
+Node.js 22.18 or newer is required (the repo root `.nvmrc` pins `22`).
+
 ```sh
 npm ci                                   # from the repo root
 cp frontend/.env.example frontend/.env   # optional
@@ -35,35 +37,42 @@ When the UI and API are on different origins, add the UI origin to the backend's
 
 | Route | Screen |
 | --- | --- |
-| `/` | Dashboard: total CIs, counts by class and by status (server-side counts), recently changed CIs, "+ New" per class; or the widgets chosen under Customization |
-| `/cis` | Inventory: dense table with server-side search, filters (class, status, environment, owner, location, deleted), sortable columns and pagination. **All state is in the URL** (e.g. `/cis?classId=…&statusId=…&q=fra1&sort=-updatedAt&offset=50`), so views survive reload and can be bookmarked or shared. |
+| `/` | Dashboard: total CIs, counts by class, counts by status (only if a lookup list with the key `status` exists; server-side counts), recently changed CIs, and a `New <class name>` link per class; or the widgets chosen under Customization |
+| `/cis` | Inventory: dense table with server-side search, filters, sortable columns and pagination. The filters are class, lookup values (`lookupValueId`, set by links such as the dashboard counts and shown as a removable chip), IP within (`ipWithin`, likewise a chip), validity (active only, show inactive, only inactive) and deleted CIs (hide, include, only deleted). The **Columns** popover chooses and reorders the columns (built-in fields and, when one class is selected, its attributes). **All state is in the URL** (e.g. `/cis?classId=…&lookupValueId=…&q=fra1&sort=-updatedAt&columns=label,ident&offset=50`), so views survive reload and can be bookmarked or shared. |
 | `/cis/new?classId=…` | Create form |
-| `/cis/:id` | Detail: general fields, class attributes (reference attributes are links), relationships (add/remove), relationship map (multi-hop graph), history (audit log with field diffs) |
+| `/cis/:id` | Detail: one tab per tab of the class layout (core fields and class attributes; reference attributes are links), then a "Relationship map" tab (multi-hop graph) and, with `audit.view` and unless the layout places it, a "History" tab (audit log with field diffs). Relationships can be added and removed. Holders of `customization.manage` also see "Edit layout". |
 | `/cis/:id/edit` | Edit form (sends `version` for optimistic locking and handles `409 VERSION_CONFLICT`) |
+| `/cis/new/layout-editor`, `/cis/:id/layout-editor`, `/cis/:id/edit/layout-editor` | The in-page layout editor, opened in its own window from "Edit layout" on the pages above. Needs `customization.manage`; without it the route shows the plain page. |
 | `/search?q=…` | Global search results, ranked by the API with the field that matched. The header search box has type-ahead; press `/` to focus it. |
-| `/login` | Sign-in. `?redirect=/cis?…` returns there afterwards (only same-app paths are followed). For users with two-factor authentication a second step asks for the authenticator code, or a recovery code. |
-| `/account` | My account (the name in the header): two-factor authentication. Set up an authenticator app (password, then a QR code of `otpauthUri` rendered in the browser plus the setup key, then a code), see the 10 recovery codes once (copy or download as `.txt`), replace them, or turn two-factor off. |
-| `/two-factor-setup` | Forced enrolment: while a profile the user holds requires two-factor authentication they have not set up (`/auth/me` `mfa.enrolmentRequired`), every other route leads here, without the app shell. `?redirect=` returns to the page they asked for afterwards. |
-| `/setup` | First-run setup: creates the first administrator and signs them in. Shown only while `GET /setup` says no user exists. |
+| `/login` | Sign-in. `?redirect=/cis?…` returns there afterwards (only same-app paths are followed). Each enabled OpenID Connect identity provider adds an "Enterprise sign-in" button; a failed attempt comes back as `?ssoError=<code>` with a message. For users with two-factor authentication a second step asks for the authenticator code, or a recovery code. |
+| `/account` | My account (the name in the header): change your own password, and two-factor authentication. Set up an authenticator app (password, then a QR code of `otpauthUri` rendered in the browser plus the setup key, then a code), see the 10 recovery codes once (copy or download as `.txt`), replace them, or turn two-factor off. |
+| `/two-factor-setup` | Forced enrolment: while a profile the user holds requires two-factor authentication they have not set up (`/auth/me` `mfa.enrolmentRequired`), every other route leads here, without the app shell. `?redirect=` returns to the page they asked for afterwards. Without a pending enrolment the route redirects to `/account`. |
+| `/setup` | First-run setup: creates the first administrator and signs them in. It asks for the one-time setup token the server wrote to its log and setup token file at start-up. Shown only while `GET /setup` says no user exists. |
 | `/admin` | Administration, with its own sub-navigation. Opens the first section the user may use. |
 | `/admin/users` | Users: search, status and profile filters, sortable columns, paging (all in the URL). `/admin/users/new` creates one; `/admin/users/:id` edits it, assigns profiles, disables/enables it, resets the password or two-factor authentication, or deletes it. The list and the user page show whether two-factor is on. |
 | `/admin/profiles` | Permission profiles: list, clone. `/admin/profiles/new` and `/admin/profiles/:id` edit the global permissions, the per-class view/create/edit/delete matrix and "Require two-factor authentication" (the only setting the built-in Administrator profile accepts); delete confirms and names the users who lose the profile. |
-| `/admin/classes` | Data model › CI classes: the class tree in menu order. Drag a row (or use ↑/↓) to reorder among its siblings; archive/restore; `?archived=show` lists archived classes. |
-| `/admin/classes/new`, `/admin/classes/:id` | Class editor: name, key (fixed after creation), parent, abstract, icon, colour; archive, delete (refused with the usage counts while anything refers to it). Below it, the **attribute editor**: every attribute defined on the class by form section, with drag-and-drop (or ↑/↓) ordering that also moves an attribute into another section; add/edit type, required, enum values, lookup list, reference class, validation, default value, help text and section; archive/restore/delete. Inherited attributes are listed read-only with a link to the class that defines them. |
+| `/admin/api-tokens` | API tokens (`users.manage`): search, filters, sort and paging in the URL; create a token (its secret is shown once, in the create dialog). |
+| `/admin/identity-providers` | Identity providers (Administrator profile only): OpenID Connect providers and LDAP / Active Directory directories. `/admin/identity-providers/new` and `/admin/identity-providers/:id` edit one, with write-only secrets and group mappings to permission profiles. |
+| `/admin/areas` | Data model › Areas (`datamodel.manage`): an area is a menu tab and a database schema holding the tables of its classes. Reorder; delete archives (schema and data are kept), and only a purge, typed to confirm, drops the schema. |
+| `/admin/classes` | Data model › CI classes: the class tree in menu order. Drag a row (or use ↑/↓) to reorder among its siblings; archive/restore. "Show archived classes" (`?archived=show`) lists archived classes and the Area filter (`?areaId=…`) narrows the tree to one area. |
+| `/admin/classes/new`, `/admin/classes/:id` | Class editor: name, key and area (both fixed after creation), description, parent, abstract, icon, colour and title attribute; archive/restore, and purge for an archived class (drops its table and CIs). Every change is previewed as the DDL it will run before it is applied. Below it, the **attribute editor**: every attribute defined on the class by form section, with drag-and-drop (or ↑/↓) ordering that also moves an attribute into another section; add/edit type, required, enum values, lookup list, reference class, validation, default value, help text and section; archive/restore, and purge for an archived attribute (drops its column), also previewed as DDL. Inherited attributes are listed read-only with a link to the class that defines them. |
 | `/admin/relationships` | Relationship types (reorder, edit labels, archive, delete) and, for the selected type (`?type=…`), its rules: which source and target classes it may connect. |
 | `/admin/lookups`, `/admin/lookups/:kind` | Former Lookups section; redirects to `/admin/dropdowns` (`/admin/lookups/lists?list=…` keeps its list). Status, environment, location and owner are the lookup lists of the same name. |
+| `/admin/dropdowns` | Data model › Dropdowns (`datamodel.manage`): the administrator's own lookup lists, used by lookup attributes (and the place where status, environment, owner and location values are edited), with their ordered, coloured values. The selected list is `?list=…`. A list can depend on a parent list: each of its values then names a parent value, forms offer only the values of the chosen parent, and `?parent=…` filters the values. |
 | `/admin/templates` | Starter templates: what each contains and how much already exists; one click installs the IT infrastructure starter (idempotent). On an empty install it explains that the CMDB has no data model yet. |
-| `/admin/customization/:section` | Customization (`customization.manage`): `branding`, `navigation`, `dashboard`, `list-views`, `layouts` and `history`. See [Customization](#customization) below. The class a per-class section edits is in the URL (`?class=server`). |
+| `/admin/customization/:section` | Customization (`customization.manage`): `branding`, `navigation`, `dashboard`, `list-views`, `layouts` (detail and form layout) and `history` (the saved versions, with restore). `/admin/customization` opens `branding`. See [Customization](#customization) below. The class a per-class section edits is in the URL (`?class=server`). |
 | `/admin/config` | Export / import (`config.export_import`): download the configuration file; upload one to see the dry run (summary per section, every change with its old and new values, warnings), then apply it. |
 | `/admin/audit` | Audit log: every change with the user who made it, filterable by actor, record type and action. `?actorId=…` shows one user's changes. |
+| any other path | Not-found page. |
 
 ### Forms are generated from the API
 
 The CI form has two parts:
 
-- The core fields every CI has: name, status, environment, owner, location, hostname, IP, serial and notes.
+- The core fields every CI has: ident, valid from and valid until. Only administrators set the ident (others get a generated one); valid from is required and defaults to now.
 - The class attributes, rendered from `GET /ci-classes/{id}/attributes`. These include inherited
-  definitions, grouped by `groupName` and ordered by `sortOrder`.
+  definitions, grouped by `groupName` and ordered by `sortOrder`. Everything else, name and status included,
+  is a class attribute.
 
 Each `dataType` maps to one input: `text`, `number`/`integer` (min/max), `boolean`, `enum`, `date`, `datetime`,
 `ip`, `cidr`, `reference` (a type-ahead CI picker restricted to `referenceClassId`) and `lookup` (the active values
@@ -91,8 +100,10 @@ administrator (`datamodel.manage`) to Templates or the class editor; everyone el
   the query cache or the URL.
 - The permissions from `/auth/me` hide actions the user cannot use: "+ New CI" and create links per class,
   Edit and Delete on a CI, adding and removing relationships, the History tab (needs `audit.view`), and the
-  Administration sections (Users: `users.manage`; Permission profiles: `profiles.manage`, or read-only with
-  `users.manage`; CI classes, Relationship types, Lookups and Templates: `datamodel.manage`; Audit log: `audit.view`). The API enforces every rule; the UI only avoids offering what it
+  Administration sections (Users and API tokens: `users.manage`; Permission profiles: `profiles.manage`, or read-only with
+  `users.manage`; Identity providers: the Administrator profile only; Areas, CI classes, Relationship types, Dropdowns,
+  Lookups and Templates: `datamodel.manage`; Customization: `customization.manage`; Export / import:
+  `config.export_import`; Audit log: `audit.view`), and "Edit layout" (`customization.manage`). The API enforces every rule; the UI only avoids offering what it
   would refuse. The rules live in `src/lib/permissions.ts` and mirror the server's: class grants apply to exactly
   that class, the "all classes" row to every class, and create/edit/delete imply view.
 - Administration sections are listed, grouped (Access, Data model, System), in `src/pages/admin/sections.ts`
@@ -111,9 +122,11 @@ One settings document (`GET /ui-settings`) applies to every user. The screens re
   operating system's theme for users who have not chosen one in their user menu (kept in `localStorage`).
 - **Navigation** (`src/components/MainNav.vue`): the menu follows `navigation.entries` (order, names, hidden
   entries, sections of classes). Pages and classes the settings do not mention follow in the built-in order, so a
-  new class appears by itself. Pages a user may not open are never shown.
+  new class appears by itself. Pages a user may not open are never shown. Classes sit under collapsible tabs, one per
+  area (the folded tabs are remembered in `localStorage`), and below 820 px the sidebar becomes a drawer. The user
+  menu has a Theme selector.
 - **Dashboard** (`src/pages/dashboard/`): with `dashboard.widgets` set, the dashboard shows those widgets in
-  order (counts by class, status or environment, recently changed CIs, saved searches); otherwise the built-in one.
+  order (counts by class, counts by the values of a lookup list, recently changed CIs, saved searches); otherwise the built-in one.
 - **List views** (`InventoryPage.vue`): per class, the columns (built-in fields or `attributes.<key>`), default sort
   and page size, and default filters. Default filters are written into the URL when the operator navigates to the
   class list without filters (menu, links); a reload or Back keeps the URL as it is, so a cleared filter stays
@@ -127,11 +140,14 @@ One settings document (`GET /ui-settings`) applies to every user. The screens re
   section's field grid narrows to two columns and then one with the section's own width, on small screens and
   in the designers' previews alike. The form keeps every tab in the page, shows the tab of
   the first missing or rejected field and counts errors per tab. Required fields stay editable on a new CI
-  whatever the layout says, or it could not be saved.
+  whatever the layout says, or it could not be saved. A tab is either on the grid or free: on a free tab each
+  section is a window with its own position and size (`lib/freeLayout.ts`, `components/layoutEdit/FreeWindow.vue`),
+  and windows may overlap.
 
 The editor (`src/pages/admin/customization/`) works on the *stored* document of the current version, which keeps
 references to classes that do not exist right now, and saves the whole document with the version it loaded
-(`409 VERSION_CONFLICT` if someone saved in between). Branding and navigation preview live in the real header and
+(`409 VERSION_CONFLICT` if someone saved in between). Its History section lists every saved version and restores
+one by saving it again as the newest. Branding and navigation preview live in the real header and
 menu while the editor is open; the dashboard and list view sections preview inline. The layout section is a
 visual form designer (`admin/customization/LayoutsSection.vue`, `designer/`, edits in `lib/layoutDesign.ts`):
 the canvas is the class's form with every field drawn as it will appear; fields are dragged between sections and
@@ -146,13 +162,13 @@ reports (unknown classes, a required attribute hidden by a layout) are listed ab
 
 ### Errors, states and navigation
 
-- API validation errors (`details[].field`, e.g. `hostname` or `attributes.cpu_cores`) render next to their field.
+- API validation errors (`details[].field`, e.g. `validFrom` or `attributes.cpu_cores`) render next to their field.
 - Every list and panel has designed loading, empty and error states. An unreachable API names the URL it
   tried, and an empty inventory offers "Create your first configuration item".
 - Deleting a CI opens a confirmation that lists every relationship that will break. Removing a relationship
   also confirms.
-- Deleting a class, attribute, relationship type or rule, or a lookup value first asks the API what refers to it
-  (`GET …/{id}/usage`) and lists it. A row still in use cannot be deleted: the dialog offers to archive it instead.
+- Deleting a relationship type or rule, a dropdown list or value, or a legacy lookup value first asks the API what refers to it
+  (`GET …/{id}/usage`) and lists it. Classes and attributes are archived, and purged only after that (see above). A row still in use cannot be deleted: the dialog offers to archive it instead.
 - Related CIs are links. Walking from CI to CI builds a trail in the breadcrumb, for example
   `Inventory › CRM › crm-app-01 › fra1-esx-01 › FRA1 Rack A01`.
 
@@ -163,22 +179,25 @@ src/config.ts          the only place deploy-time config is read
 src/api/schema.d.ts    types generated from backend/openapi.json (do not edit)
 src/api/client.ts      the one HTTP client (openapi-fetch) + ApiError / error-envelope handling
 src/api/queries.ts     TanStack Query composables and cache keys; components never call fetch
-src/api/admin.ts       the same for sign-in, users, permission profiles and the audit log
-src/api/datamodel.ts   the same for classes, attributes, relationship types/rules, lookups, lists and templates
+src/api/admin.ts       the same for sign-in, users, permission profiles, API tokens, own password and the audit log
+src/api/datamodel.ts   the same for areas, classes, attributes, relationship types/rules, lookups, lists and templates
 src/api/uiSettings.ts  the same for UI settings, their versions and images, and configuration export/import
+src/api/               also identity providers, two-factor authentication, schema changes, the CSRF token and the query client
 src/lib/uiSettings.ts  how the settings document is applied: menu merge, list columns, layout tabs and grid
 src/lib/layoutDesign.ts the form designer's edits on a class layout (move, resize, tabs, sections, side by side)
 src/lib/permissions.ts permission checks mirrored from the server
 src/router.ts          routes (Vue Router, HTML5 history) and the setup → sign-in → app guard
 src/stores/            Pinia stores (the session, branding and theme, the one-shot "Created …/Saved …" notice)
-src/components/        shell, breadcrumbs, global search, pickers, dialogs, state views
+src/components/        shell, breadcrumbs, global search, pickers, dialogs, state views;
+                       layoutEdit/ holds the in-page layout editor
 src/pages/             one component per screen; detail/, form/ and dashboard/ hold their parts;
                        admin/datamodel/ holds the data model editors,
                        admin/customization/ and admin/config/ the customization and export/import screens
-src/lib/               formatting, attribute value conversion, the breadcrumb walk trail, drag-and-drop
-                       reordering (reorder.ts), class trees, class icons
-src/styles/tokens.css  design tokens (spacing, type scale, colours); app.css uses only these
-e2e/                   Playwright end-to-end walk (see below)
+src/lib/               pure helpers and composables: formatting, attribute values, list and inventory URL state,
+                       the breadcrumb trail, reordering, class trees and icons, layout editing, navigation
+src/styles/tokens.css  design tokens (spacing, type scale, colours); app.css builds on them
+unit/                  unit tests (`npm run test:unit -w frontend`)
+e2e/                   Playwright end-to-end specs (see below)
 ```
 
 After an API change, regenerate the types with `npm run api:types -w frontend`. This reads
@@ -214,7 +233,7 @@ token are refused, signing out, disabling the account or resetting its password 
 and repeated wrong passwords lock the username with `429`.
 Any page error or Vue warning fails the test.
 
-`a11y.spec.ts` runs axe-core (WCAG 2.1 A and AA rules) on sign-in, the inventory, a CI detail page with its delete
+`a11y.spec.ts` runs axe-core (WCAG 2.1 A and AA rules) on sign-in, the inventory (and its Columns popover, in the light and dark theme), a CI detail page with its delete
 dialog and edit form, the class and attribute editor, users and profiles, My account and the two-factor enrolment
 step. Critical and serious violations fail it; the rest is reported. No rule is turned off; one may only be turned off
 for a single screen, with a comment in the spec saying why.
@@ -250,13 +269,21 @@ and the database is unchanged. Finally the export is imported into the second in
 and creates nothing, and applying it builds the same tables and views. Give both newly created databases for each
 run (CI starts them on ports 3004 and 3005).
 
+The remaining specs in `e2e/` each cover one feature, and the file name says which (API tokens, dropdowns, identity
+providers, inventory columns, in-page layout editing, responsive layout, release regressions, security checks, and so
+on). Two depend on the environment: `core-upgrade.spec.ts` runs only when `E2E_UPGRADE_SNAPSHOT` points at the
+snapshot of an upgraded instance (the upgrade workflow sets it), and the identity provider spec skips its sign-in
+button test unless the API has `PUBLIC_URL` set.
+
 The tests expect the demo inventory (`shadoucmdb seed --demo`) and create their own uniquely named records.
-They run signed in: `e2e/global-setup.ts` completes first-run setup on a database without users, or signs in as
-`E2E_USERNAME` / `E2E_PASSWORD` (an Administrator account, e.g. from `shadoucmdb create-admin`).
+They run signed in: `e2e/global-setup.ts` completes first-run setup on a database without users (it sends the setup
+token, `E2E_SETUP_TOKEN` or else `SETUP_TOKEN`), or signs in as `E2E_USERNAME` / `E2E_PASSWORD` (an Administrator
+account, e.g. from `shadoucmdb create-admin`). Without them it uses `e2e-admin` / `e2e-admin-password`.
 
 ```sh
 npx playwright install chromium                                           # once
 export E2E_USERNAME=admin E2E_PASSWORD=...                                # unless the database has no users yet
+export E2E_SETUP_TOKEN=...                                                # only while the database has no users: the API's SETUP_TOKEN
 API_PROXY_TARGET=http://<api-host>:3000 npm run test:e2e -w frontend      # starts a dev server on :5199
 E2E_BASE_URL=http://localhost:4173 npm run test:e2e -w frontend           # or test an already-served build
 E2E_FRESH_BASE_URL=http://localhost:3001 ...                              # also run first-run.spec.ts
