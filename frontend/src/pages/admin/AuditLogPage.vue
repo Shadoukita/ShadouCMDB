@@ -13,6 +13,7 @@ import { formatDateTime } from "../../lib/format";
 import { useListQuery } from "../../lib/listQuery";
 import { useSessionStore } from "../../stores/session";
 import AuditActor from "./AuditActor.vue";
+import { clientTitle, str } from "./auditClient";
 
 /** Administration › Audit log: every change, who made it, newest first. Filters live in the URL. */
 useDocumentTitle("Audit log");
@@ -101,7 +102,6 @@ function clearFilters() {
   update({ actorId: undefined, actorName: undefined, entityType: undefined, action: undefined });
 }
 
-const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 
 /** A readable name for the changed record, taken from its before/after snapshot. */
 function recordName(e: AuditEntry): string {
@@ -136,20 +136,10 @@ function recordName(e: AuditEntry): string {
   return e.entityId.slice(0, 8);
 }
 
-/** Hover text for sign-in events: the browser and, for revocations and lockouts, why. */
+/** Hover text for purges, and for sign-in, MFA and token rows (see auditClient.ts). */
 function recordTitle(e: AuditEntry): string | undefined {
   if (e.action === "audit.purge") return purgeTitle((e.newValue ?? {}) as Record<string, unknown>);
-  if (e.entityType !== "sessions") return undefined;
-  const snap = (e.newValue ?? {}) as Record<string, unknown>;
-  const session = (snap.session ?? {}) as Record<string, unknown>;
-  const parts = [
-    str(snap.reason) && `Reason: ${snap.reason}`,
-    typeof snap.lockedForSeconds === "number" && `Locked for ${snap.lockedForSeconds}s`,
-    str(session.ipAddress) && str(snap.ipAddress) !== str(session.ipAddress) && `Session opened from ${session.ipAddress}`,
-    str(snap.peerIpAddress) && `Peer address: ${snap.peerIpAddress}`,
-    (str(snap.userAgent) || str(session.userAgent)) && `Browser: ${str(snap.userAgent) ?? str(session.userAgent)}`,
-  ].filter((p): p is string => typeof p === "string");
-  return parts.length ? parts.join("\n") : undefined;
+  return clientTitle(e);
 }
 
 /** Hover text for a purge: the cutoff and how many rows each action lost. */
