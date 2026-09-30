@@ -614,7 +614,7 @@ export interface paths {
         };
         /**
          * What still refers to a ci class
-         * @description Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
+         * @description Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getCiClassUsage"];
         put?: never;
@@ -723,7 +723,7 @@ export interface paths {
         };
         /**
          * What still refers to a attribute definition
-         * @description Requires `datamodel.manage`. Counts of attributeValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
+         * @description Requires `datamodel.manage`. Counts of attributeValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getAttributeDefinitionUsage"];
         put?: never;
@@ -812,7 +812,7 @@ export interface paths {
         };
         /**
          * What still refers to a relationship type
-         * @description Requires `datamodel.manage`. Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
+         * @description Requires `datamodel.manage`. Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getRelationshipTypeUsage"];
         put?: never;
@@ -878,7 +878,7 @@ export interface paths {
         };
         /**
          * What still refers to a relationship rule
-         * @description Requires `datamodel.manage`. Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
+         * @description Requires `datamodel.manage`. Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getRelationshipRuleUsage"];
         put?: never;
@@ -1056,7 +1056,7 @@ export interface paths {
         /**
          * What still refers to a status
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getStatusUsage"];
         put?: never;
@@ -1134,7 +1134,7 @@ export interface paths {
         /**
          * What still refers to a environment
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getEnvironmentUsage"];
         put?: never;
@@ -1212,7 +1212,7 @@ export interface paths {
         /**
          * What still refers to a location
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLocationUsage"];
         put?: never;
@@ -1290,7 +1290,7 @@ export interface paths {
         /**
          * What still refers to a owner
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getOwnerUsage"];
         put?: never;
@@ -1359,7 +1359,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list
-         * @description Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
+         * @description Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLookupListUsage"];
         put?: never;
@@ -1428,7 +1428,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list value
-         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. The counts span every CI class, including ones the caller may not view.
+         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLookupListValueUsage"];
         put?: never;
@@ -3743,14 +3743,19 @@ export interface components {
         UsageCount: {
             kind: string;
             label: string;
-            /** Format: int64 */
-            count: number;
+            /**
+             * Format: int64
+             * @description Null when withheld (see `withheld`)
+             */
+            count: number | null;
+            /** @description True when the count spans CIs of a class the caller may not view: `count` is then null */
+            withheld: boolean;
             /** @description A non-zero count prevents deleting the row; retire it with isActive=false instead */
             blocking: boolean;
         };
         /** @description What still refers to a record, so the UI can warn before a destructive change */
         UsageReport: {
-            /** @description True when a blocking count is non-zero: DELETE would return 409 IN_USE */
+            /** @description True when a blocking count is non-zero: DELETE would return 409 IN_USE (decided on every count, withheld ones included) */
             inUse: boolean;
             data: components["schemas"]["UsageCount"][];
         };

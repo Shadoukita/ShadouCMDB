@@ -14,7 +14,10 @@ use uuid::Uuid;
 use super::areas;
 use super::items::service as items_service;
 use super::schema_changes::{PurgeRequest, PurgeResult, check_purge};
-use super::simple_resource::{self as simple, BoxFuture, ListQuery, Resource, Usage, Writable, bool_filter, non_empty};
+use super::simple_resource::{
+    self as simple, ATTRIBUTE_SPANS, BoxFuture, CLASS_SPANS, EVERY_CLASS_SPANS, ListQuery, RULE_SPANS, Resource, Usage,
+    Writable, bool_filter, non_empty,
+};
 use crate::api::context::RequestContext;
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoQuery, Query, Route, route};
 use crate::api::schemas::{
@@ -298,42 +301,49 @@ impl Resource for CiClasses {
             kind: "configurationItems",
             label: "configuration items",
             sql: "SELECT count(*) FROM configuration_items WHERE class_id = $1 AND deleted_at IS NULL",
+            spans: Some(CLASS_SPANS),
             blocking: true,
         },
         Usage {
             kind: "deletedConfigurationItems",
             label: "deleted configuration items (kept for history)",
             sql: "SELECT count(*) FROM configuration_items WHERE class_id = $1 AND deleted_at IS NOT NULL",
+            spans: Some(CLASS_SPANS),
             blocking: true,
         },
         Usage {
             kind: "subclasses",
             label: "subclasses",
             sql: "SELECT count(*) FROM ci_classes WHERE parent_id = $1",
+            spans: None,
             blocking: true,
         },
         Usage {
             kind: "attributeDefinitions",
             label: "attribute definitions",
             sql: "SELECT count(*) FROM ci_attribute_definitions WHERE class_id = $1",
+            spans: None,
             blocking: true,
         },
         Usage {
             kind: "referencingAttributes",
             label: "reference attributes on other classes pointing at it",
             sql: "SELECT count(*) FROM ci_attribute_definitions WHERE reference_class_id = $1 AND class_id <> $1",
+            spans: None,
             blocking: true,
         },
         Usage {
             kind: "relationshipRules",
             label: "relationship rules",
             sql: "SELECT count(*) FROM relationship_type_rules WHERE source_class_id = $1 OR target_class_id = $1",
+            spans: None,
             blocking: true,
         },
         Usage {
             kind: "permissionGrants",
             label: "permission profile grants (removed with the class)",
             sql: "SELECT count(*) FROM permission_profile_class_permissions WHERE class_id = $1",
+            spans: None,
             blocking: false,
         },
     ];
@@ -627,6 +637,19 @@ pub async fn purge_class_in(
             .collect();
         crud::write_audit(conn, ctx, entries).await?;
     }
+    // The relationships go with the CIs. How many is told only to a caller who
+    // may view the CIs at both ends (GH#268), so the other ends' types join
+    // the purge's classes.
+    let mut classes = model.subtree(id);
+    let ends: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT c.class_id FROM cmdb.ci_relationships e
+         JOIN cmdb.configuration_items c ON c.id IN (e.source_ci_id, e.target_ci_id)
+         WHERE e.source_ci_id = ANY($1) OR e.target_ci_id = ANY($1)",
+    )
+    .bind(&items)
+    .fetch_all(&mut *conn)
+    .await?;
+    classes.extend(ends.into_iter().filter(|c| !classes.contains(c)).collect::<Vec<_>>());
     let mut edge_count = 0;
     loop {
         let edges = items_data::delete_edges_of(conn, &items, crud::AUDIT_BATCH as i64).await?;
@@ -658,14 +681,18 @@ pub async fn purge_class_in(
         sqlx::query("DELETE FROM cmdb.configuration_items WHERE id = ANY($1)").bind(&items).execute(&mut *conn).await
     {
         return Err(match err {
-            sqlx::Error::Database(e) if e.code().as_deref() == Some("23503") => AppError::new(
-                ErrorCode::InUse,
-                format!(
-                    "CIs of other types still reference CIs of \"{}\" in reference fields; clear those values first ({})",
-                    row.key,
-                    e.message()
-                ),
-            ),
+            // The PostgreSQL message names the referencing type's table and
+            // constraint, which the caller may not view (GH#268): logged only.
+            sqlx::Error::Database(e) if e.code().as_deref() == Some("23503") => {
+                tracing::info!(class = %row.key, error = e.message(), "type purge refused: CIs still referenced");
+                AppError::new(
+                    ErrorCode::InUse,
+                    format!(
+                        "CIs of other types still reference CIs of \"{}\" in reference fields; clear those values first",
+                        row.key
+                    ),
+                )
+            }
             other => other.into(),
         });
     }
@@ -675,7 +702,7 @@ pub async fn purge_class_in(
         .await?;
     sqlx::query("DELETE FROM cmdb.ci_attribute_definitions WHERE class_id = $1").bind(id).execute(&mut *conn).await?;
     crud::delete_row(conn, CiClasses::TABLE, id).await?;
-    let purge = Purge { tables: vec![table], classes: model.subtree(id), ..Purge::default() };
+    let purge = Purge { tables: vec![table], classes, ..Purge::default() };
     let without = format!("Purge type {} (its CIs and their relationships deleted)", row.table_name);
     let summary = if purge.reveals(ctx.class_scope(ClassOp::View).as_deref()) {
         let counted =
@@ -1289,6 +1316,7 @@ impl Resource for AttributeDefinitions {
         kind: "attributeValues",
         label: "values stored on configuration items",
         sql: "SELECT cmdb.attribute_value_count($1)",
+        spans: Some(ATTRIBUTE_SPANS),
         blocking: false,
     }];
 
@@ -1674,18 +1702,21 @@ impl Resource for RelationshipTypes {
             kind: "relationships",
             label: "relationships",
             sql: "SELECT count(*) FROM ci_relationships WHERE relationship_type_id = $1 AND deleted_at IS NULL",
+            spans: Some(EVERY_CLASS_SPANS),
             blocking: true,
         },
         Usage {
             kind: "deletedRelationships",
             label: "deleted relationships (kept for history)",
             sql: "SELECT count(*) FROM ci_relationships WHERE relationship_type_id = $1 AND deleted_at IS NOT NULL",
+            spans: Some(EVERY_CLASS_SPANS),
             blocking: true,
         },
         Usage {
             kind: "relationshipRules",
             label: "relationship rules (removed with the type)",
             sql: "SELECT count(*) FROM relationship_type_rules WHERE relationship_type_id = $1",
+            spans: None,
             blocking: false,
         },
     ];
@@ -1828,6 +1859,7 @@ impl Resource for RelationshipRules {
                 AND ((ci_class_is_a(s.class_id, r.source_class_id) AND ci_class_is_a(g.class_id, r.target_class_id))
                   OR (NOT t.is_directional
                       AND ci_class_is_a(g.class_id, r.source_class_id) AND ci_class_is_a(s.class_id, r.target_class_id)))",
+        spans: Some(RULE_SPANS),
         blocking: false,
     }];
 
@@ -2323,6 +2355,119 @@ mod tests {
             };
             assert_eq!(code.as_deref(), expected, "{probe}");
         }
+        db.drop().await;
+    }
+
+    fn counts(report: &simple::UsageReport) -> Vec<(String, Option<i64>, bool)> {
+        report.data.iter().map(|u| (u.kind.clone(), u.count.exact(), u.withheld)).collect()
+    }
+
+    /// GH#265, GH#268: usage counts and a type purge's relationship count cover
+    /// CIs, so they are told only to a manager who may view every class they
+    /// can include; whether something is in use is still decided on them all.
+    #[tokio::test]
+    async fn usage_and_purge_counts_are_withheld_across_classes_the_caller_may_not_view() {
+        use crate::api::context::datamodel_manager;
+        use crate::modules::schema_changes::{self, PreviewRequest};
+        let Some(db) = scratch::database("usage_and_purge_counts_are_withheld").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("gh265-test", "gh265-test");
+
+        let servers: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Servers"}))).await.unwrap();
+        let secrets: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Secrets"}))).await.unwrap();
+        let code: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": secrets.id, "key": "code", "label": "Code", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        let feeds: RelationshipType = simple::create::<RelationshipTypes>(
+            pool,
+            &ctx,
+            &body(json!({"key": "feeds", "name": "Feeds", "forwardLabel": "feeds", "reverseLabel": "fed by"})),
+        )
+        .await
+        .unwrap();
+        let rule: RelationshipRule = simple::create::<RelationshipRules>(
+            pool,
+            &ctx,
+            &body(json!({"relationshipTypeId": feeds.id, "sourceClassId": servers.id, "targetClassId": secrets.id})),
+        )
+        .await
+        .unwrap();
+        let server = items_service::create(pool, &ctx, &body::<CreateItemBody>(json!({"classId": servers.id})))
+            .await
+            .unwrap()
+            .summary
+            .id;
+        let mut hidden = Vec::new();
+        for value in ["a", "b"] {
+            let item = body::<CreateItemBody>(json!({"classId": secrets.id, "attributes": {"code": value}}));
+            hidden.push(items_service::create(pool, &ctx, &item).await.unwrap().summary.id);
+        }
+        let edge = json!({"relationshipTypeId": feeds.id, "sourceCiId": server, "targetCiId": hidden[0]});
+        relationships::create(pool, &ctx, &body::<RelationshipCreate>(edge)).await.unwrap();
+
+        let restricted = datamodel_manager(&[servers.id]);
+        let viewer = datamodel_manager(&[servers.id, secrets.id]);
+
+        // The hidden class: its CI counts are withheld, the data-model counts are not.
+        let report = simple::usage::<CiClasses>(pool, &restricted, secrets.id).await.unwrap();
+        assert!(report.in_use);
+        let c = counts(&report);
+        assert!(c.contains(&("configurationItems".into(), None, true)), "{c:?}");
+        assert!(c.contains(&("deletedConfigurationItems".into(), None, true)), "{c:?}");
+        assert!(c.contains(&("attributeDefinitions".into(), Some(1), false)), "{c:?}");
+        assert!(c.contains(&("relationshipRules".into(), Some(1), false)), "{c:?}");
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["data"][0]["count"], Value::Null, "{json}");
+        assert_eq!(json["data"][0]["withheld"], json!(true), "{json}");
+        let c = counts(&simple::usage::<CiClasses>(pool, &viewer, secrets.id).await.unwrap());
+        assert!(c.contains(&("configurationItems".into(), Some(2), false)), "{c:?}");
+        let c = counts(&simple::usage::<CiClasses>(pool, &restricted, servers.id).await.unwrap());
+        assert!(c.contains(&("configurationItems".into(), Some(1), false)), "{c:?}");
+
+        let c = counts(&simple::usage::<AttributeDefinitions>(pool, &restricted, code.id).await.unwrap());
+        assert_eq!(c, [("attributeValues".to_string(), None, true)]);
+        let c = counts(&simple::usage::<AttributeDefinitions>(pool, &viewer, code.id).await.unwrap());
+        assert_eq!(c, [("attributeValues".to_string(), Some(2), false)]);
+
+        // A relationship type's edges may join any classes; a rule's join its classes.
+        let report = simple::usage::<RelationshipTypes>(pool, &restricted, feeds.id).await.unwrap();
+        assert!(report.in_use);
+        let c = counts(&report);
+        assert!(c.contains(&("relationships".into(), None, true)), "{c:?}");
+        assert!(c.contains(&("relationshipRules".into(), Some(1), false)), "{c:?}");
+        let c = counts(&simple::usage::<RelationshipTypes>(pool, &viewer, feeds.id).await.unwrap());
+        assert!(c.contains(&("relationships".into(), Some(1), false)), "{c:?}");
+        let c = counts(&simple::usage::<RelationshipRules>(pool, &restricted, rule.id).await.unwrap());
+        assert_eq!(c, [("relationships".to_string(), None, true)]);
+        let c = counts(&simple::usage::<RelationshipRules>(pool, &viewer, rule.id).await.unwrap());
+        assert_eq!(c, [("relationships".to_string(), Some(1), false)]);
+
+        // DELETE is still refused on the withheld count, without telling it.
+        let err = simple::remove::<RelationshipTypes>(pool, &restricted, feeds.id).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::InUse);
+        assert!(err.message.contains("still in use (details withheld)"), "{}", err.message);
+        assert!(!err.message.contains(char::is_numeric), "{}", err.message);
+        assert!(err.details.as_ref().is_none_or(|d| d.is_empty()), "{:?}", err.details);
+        let err = simple::remove::<RelationshipTypes>(pool, &viewer, feeds.id).await.unwrap_err();
+        assert!(err.message.contains("1 relationships"), "{}", err.message);
+
+        // Purging the visible type deletes its relationship to a hidden CI: the
+        // relationship count is told only to a viewer of both ends.
+        simple::update::<CiClasses>(pool, &ctx, servers.id, &body(json!({"isActive": false}))).await.unwrap();
+        let request: PreviewRequest =
+            body(json!({"operation": "purgeType", "id": servers.id, "body": {"confirm": servers.key}}));
+        let preview = schema_changes::preview(pool, &restricted, &request).await.unwrap();
+        let summary = &preview.summaries[0];
+        assert!(!summary.contains(char::is_numeric), "{summary}");
+        assert!(summary.contains("their relationships deleted"), "{summary}");
+        let preview = schema_changes::preview(pool, &viewer, &request).await.unwrap();
+        assert!(preview.summaries[0].contains("(1 CIs, 1 relationships deleted)"), "{:?}", preview.summaries);
         db.drop().await;
     }
 

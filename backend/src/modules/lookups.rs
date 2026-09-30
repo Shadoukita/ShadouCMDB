@@ -11,8 +11,10 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::classes::{AttributeDefinition, AttributeDefinitions};
-use super::simple_resource::{self as simple, BoxFuture, ListQuery, Resource, Usage, Writable, bool_filter, non_empty};
-use crate::api::context::RequestContext;
+use super::simple_resource::{
+    self as simple, BoxFuture, LOOKUP_VALUE_SPANS, ListQuery, Resource, Usage, Writable, bool_filter, non_empty,
+};
+use crate::api::context::{Count, RequestContext};
 use crate::api::route::{Check, Route};
 use crate::api::schemas::{
     self, IdOrNone, OwnerKind, QueryBool, Sort, UuidList, description_schema, key_schema, name_schema,
@@ -184,6 +186,7 @@ impl Resource for Statuses {
         kind: "configurationItems",
         label: "configuration items holding the lookup list value with the same id (not blocking)",
         sql: "SELECT cmdb.lookup_value_count($1)",
+        spans: Some(LOOKUP_VALUE_SPANS),
         blocking: false,
     }];
     fn id(row: &Status) -> Uuid {
@@ -332,6 +335,7 @@ impl Resource for Environments {
         kind: "configurationItems",
         label: "configuration items holding the lookup list value with the same id (not blocking)",
         sql: "SELECT cmdb.lookup_value_count($1)",
+        spans: Some(LOOKUP_VALUE_SPANS),
         blocking: false,
     }];
     fn id(row: &Environment) -> Uuid {
@@ -562,12 +566,14 @@ impl Resource for Locations {
             kind: "configurationItems",
             label: "configuration items holding the lookup list value with the same id (not blocking)",
             sql: "SELECT cmdb.lookup_value_count($1)",
+            spans: Some(LOOKUP_VALUE_SPANS),
             blocking: false,
         },
         Usage {
             kind: "childLocations",
             label: "child locations",
             sql: "SELECT count(*) FROM locations WHERE parent_id = $1",
+            spans: None,
             blocking: true,
         },
     ];
@@ -765,6 +771,7 @@ impl Resource for Owners {
         kind: "configurationItems",
         label: "configuration items holding the lookup list value with the same id (not blocking)",
         sql: "SELECT cmdb.lookup_value_count($1)",
+        spans: Some(LOOKUP_VALUE_SPANS),
         blocking: false,
     }];
     fn id(row: &Owner) -> Uuid {
@@ -939,18 +946,21 @@ impl Resource for LookupLists {
             kind: "attributeDefinitions",
             label: "attribute definitions",
             sql: "SELECT count(*) FROM ci_attribute_definitions WHERE lookup_list_id = $1",
+            spans: None,
             blocking: true,
         },
         Usage {
             kind: "childLists",
             label: "lists that depend on it",
             sql: "SELECT count(*) FROM lookup_lists WHERE parent_list_id = $1",
+            spans: None,
             blocking: true,
         },
         Usage {
             kind: "values",
             label: "list values (deleted with the list)",
             sql: "SELECT count(*) FROM lookup_list_values WHERE list_id = $1",
+            spans: None,
             blocking: false,
         },
     ];
@@ -1222,18 +1232,21 @@ impl Resource for LookupListValues {
             kind: "attributeValues",
             label: "attribute values on configuration items",
             sql: "SELECT cmdb.lookup_value_count($1)",
+            spans: Some(LOOKUP_VALUE_SPANS),
             blocking: true,
         },
         Usage {
             kind: "attributeDefaults",
             label: "attribute definitions that use it as default",
             sql: "SELECT count(*) FROM ci_attribute_definitions WHERE data_type = 'lookup' AND default_value = to_jsonb($1::text)",
+            spans: None,
             blocking: true,
         },
         Usage {
             kind: "childValues",
             label: "values of dependent lists that belong to it",
             sql: "SELECT count(*) FROM lookup_list_values WHERE parent_value_id = $1",
+            spans: None,
             blocking: true,
         },
     ];
@@ -1302,8 +1315,24 @@ async fn retire_dependents(conn: &mut PgConnection, ctx: &RequestContext, value_
     .fetch_all(&mut *conn)
     .await?;
     if !used.is_empty() {
-        let summary =
-            used.iter().map(|(l, v, n)| format!("{l}.{v} ({n} configuration items)")).collect::<Vec<_>>().join(", ");
+        // How many CIs store each value is told only to a caller who may view
+        // every class that can store one (GH#266); the values themselves are
+        // data-model rows and always named.
+        let mut spans: Vec<Uuid> = Vec::new();
+        for id in &ids {
+            let classes: Vec<Uuid> = sqlx::query_scalar(LOOKUP_VALUE_SPANS).bind(id).fetch_one(&mut *conn).await?;
+            spans.extend(classes);
+        }
+        let used: Vec<(String, Count)> =
+            used.into_iter().map(|(l, v, n)| (format!("{l}.{v}"), Count::scoped(ctx, &spans, n))).collect();
+        let summary = used
+            .iter()
+            .map(|(value, n)| match n.exact() {
+                Some(n) => format!("{value} ({n} configuration items)"),
+                None => value.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(AppError::new(
             ErrorCode::InUse,
             format!(
@@ -1313,10 +1342,13 @@ async fn retire_dependents(conn: &mut PgConnection, ctx: &RequestContext, value_
         )
         .with_details(
             used.into_iter()
-                .map(|(l, v, n)| FieldError {
+                .map(|(value, n)| FieldError {
                     location: FieldLocation::Body,
                     field: "isActive".into(),
-                    message: format!("{l}.{v} is stored on {n} configuration items"),
+                    message: match n.exact() {
+                        Some(n) => format!("{value} is stored on {n} configuration items"),
+                        None => format!("{value} is stored on configuration items"),
+                    },
                     code: "dependent_value_in_use".into(),
                 })
                 .collect(),
@@ -1383,6 +1415,77 @@ mod tests {
             .fetch_one(pool)
             .await
             .unwrap()
+    }
+
+    /// GH#265, GH#266: how many CIs store a lookup value is told only to a
+    /// manager who may view every class with a field on its list; deleting or
+    /// retiring is still refused on the full count.
+    #[tokio::test]
+    async fn lookup_value_counts_are_withheld_across_classes_the_caller_may_not_view() {
+        use crate::api::context::datamodel_manager;
+        use crate::modules::classes::{AttributeDefinitionCreate, CiClass, CiClasses};
+        let Some(db) = scratch::database("lookup_value_counts_are_withheld").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("gh266-test", "gh266-test");
+        let servers: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Servers"}))).await.unwrap();
+        let secrets: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Secrets"}))).await.unwrap();
+        let maker =
+            simple::create::<LookupLists>(pool, &ctx, &body(json!({"key": "maker", "name": "Maker"}))).await.unwrap();
+        let model = simple::create::<LookupLists>(
+            pool,
+            &ctx,
+            &body(json!({"key": "model", "name": "Model", "parentListId": maker.id})),
+        )
+        .await
+        .unwrap();
+        let value = |list: Uuid, key: &str, parent: Option<Uuid>| {
+            body::<LookupListValueCreate>(json!({"listId": list, "key": key, "name": key, "parentValueId": parent}))
+        };
+        let acme = simple::create::<LookupListValues>(pool, &ctx, &value(maker.id, "acme", None)).await.unwrap();
+        let rocket =
+            simple::create::<LookupListValues>(pool, &ctx, &value(model.id, "rocket", Some(acme.id))).await.unwrap();
+        // Both classes may store a model; only the hidden one does.
+        for class in [servers.id, secrets.id] {
+            let field = body::<AttributeDefinitionCreate>(json!({"classId": class, "key": "model",
+                "label": "Model", "dataType": "lookup", "lookupListId": model.id}));
+            simple::create::<AttributeDefinitions>(pool, &ctx, &field).await.unwrap();
+        }
+        let ci = body::<CreateItemBody>(json!({"classId": secrets.id, "attributes": {"model": rocket.id}}));
+        items::create(pool, &ctx, &ci).await.unwrap();
+
+        let restricted = datamodel_manager(&[servers.id]);
+        let viewer = datamodel_manager(&[servers.id, secrets.id]);
+
+        let report = simple::usage::<LookupListValues>(pool, &restricted, rocket.id).await.unwrap();
+        assert!(report.in_use);
+        let values = report.data.iter().find(|u| u.kind == "attributeValues").unwrap();
+        assert_eq!((values.count.exact(), values.withheld), (None, true));
+        let report = simple::usage::<LookupListValues>(pool, &viewer, rocket.id).await.unwrap();
+        let values = report.data.iter().find(|u| u.kind == "attributeValues").unwrap();
+        assert_eq!((values.count.exact(), values.withheld), (Some(1), false));
+
+        let err = simple::remove::<LookupListValues>(pool, &restricted, rocket.id).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::InUse);
+        assert!(err.message.contains("still in use (details withheld)"), "{}", err.message);
+        assert!(!err.message.contains(char::is_numeric), "{}", err.message);
+        let err = simple::remove::<LookupListValues>(pool, &viewer, rocket.id).await.unwrap_err();
+        assert!(err.message.contains("1 attribute values"), "{}", err.message);
+
+        // Retiring the parent value: the blocking value is named, its count withheld.
+        let retire = body::<LookupListValueUpdate>(json!({"isActive": false}));
+        let err = simple::update::<LookupListValues>(pool, &restricted, acme.id, &retire).await.unwrap_err();
+        assert_eq!(problems(&err), [("isActive", "dependent_value_in_use")]);
+        assert!(err.message.contains("model.rocket"), "{}", err.message);
+        assert!(!err.message.contains(char::is_numeric), "{}", err.message);
+        let detail = &err.details.as_ref().unwrap()[0].message;
+        assert!(!detail.contains(char::is_numeric), "{detail}");
+        let retire = body::<LookupListValueUpdate>(json!({"isActive": false}));
+        let err = simple::update::<LookupListValues>(pool, &viewer, acme.id, &retire).await.unwrap_err();
+        assert!(err.message.contains("model.rocket (1 configuration items)"), "{}", err.message);
+        assert!(simple::get::<LookupListValues>(pool, acme.id).await.unwrap().is_active);
+        db.drop().await;
     }
 
     /// SHAA-268: dependent lists, values and fields; CI writes; retiring and

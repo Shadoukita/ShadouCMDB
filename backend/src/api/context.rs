@@ -216,4 +216,58 @@ impl RequestContext {
             Caller::User(p) => p.permissions.class_scope(op),
         }
     }
+
+    /// Whether the caller may learn aggregates (counts, which values are stored)
+    /// over the CIs of all these classes: only with the view right on each.
+    /// A global right such as `datamodel.manage` never implies it.
+    pub fn may_view_all(&self, classes: &[Uuid]) -> bool {
+        self.class_scope(ClassOp::View).is_none_or(|v| classes.iter().all(|id| v.contains(id)))
+    }
+}
+
+/// A count over CI data told to a client: withheld (`null`) unless the caller
+/// may view every class it spans (GH#265). Build one with [`Count::scoped`];
+/// a bare `Count::Exact` outside it deserves a reason in review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Count {
+    Exact(i64),
+    Withheld,
+}
+
+impl Count {
+    pub fn scoped(ctx: &RequestContext, spans: &[Uuid], n: i64) -> Self {
+        if ctx.may_view_all(spans) { Count::Exact(n) } else { Count::Withheld }
+    }
+
+    pub fn exact(self) -> Option<i64> {
+        match self {
+            Count::Exact(n) => Some(n),
+            Count::Withheld => None,
+        }
+    }
+}
+
+impl Serialize for Count {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.exact().serialize(s)
+    }
+}
+
+/// A user with `datamodel.manage` who may view only these classes (tests of
+/// what data-model answers tell a restricted manager).
+#[cfg(test)]
+pub fn datamodel_manager(view: &[Uuid]) -> RequestContext {
+    use crate::auth::permissions::{ClassRights, Permissions};
+    let permissions = Permissions {
+        global: [GlobalPermission::DatamodelManage].into(),
+        classes: view.iter().map(|id| (*id, ClassRights { view: true, ..Default::default() })).collect(),
+        ..Default::default()
+    };
+    let principal = Principal {
+        user_id: Uuid::new_v4(),
+        username: "modeller".into(),
+        credential: crate::auth::Credential::Token,
+        permissions,
+    };
+    RequestContext::user(Arc::new(principal), "restricted-manager".into())
 }

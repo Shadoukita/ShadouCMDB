@@ -25,10 +25,15 @@ const open = ref(false);
 const usage = useUsage(props.resource, () => props.id, open);
 const del = useRemove(props.resource);
 
-const counts = computed(() => (usage.data.value?.data ?? []).filter((u) => u.count > 0));
+type UsageCount = NonNullable<typeof usage.data.value>["data"][number];
+// A count over CIs of types the user may not view comes back withheld (null):
+// list the kind without a number rather than hide it.
+const counts = computed(() => (usage.data.value?.data ?? []).filter((u) => u.withheld || (u.count ?? 0) > 0));
 const blocking = computed(() => counts.value.filter((u) => u.blocking));
 const cascades = computed(() => counts.value.filter((u) => !u.blocking));
 const inUse = computed(() => !!usage.data.value?.inUse);
+const line = (u: UsageCount) =>
+  u.count === null ? `Any ${u.label} (number withheld: it spans CI types you may not view)` : `${u.count.toLocaleString()} ${u.label}`;
 
 function cancel() {
   del.reset();
@@ -76,7 +81,7 @@ const confirmLabel = computed(() => {
       <template v-if="inUse">
         <p><strong>It cannot be deleted while it is in use:</strong></p>
         <ul>
-          <li v-for="u in blocking" :key="u.kind">{{ u.count.toLocaleString() }} {{ u.label }}</li>
+          <li v-for="u in blocking" :key="u.kind">{{ line(u) }}</li>
         </ul>
         <p v-if="archivable && !archived">
           Archive it instead: existing records keep it, but it can no longer be chosen for new ones.
@@ -89,7 +94,7 @@ const confirmLabel = computed(() => {
         <template v-else>
           <p>These go with it:</p>
           <ul>
-            <li v-for="u in cascades" :key="u.kind">{{ u.count.toLocaleString() }} {{ u.label }}</li>
+            <li v-for="u in cascades" :key="u.kind">{{ line(u) }}</li>
           </ul>
           <p>This cannot be undone.</p>
         </template>
