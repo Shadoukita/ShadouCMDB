@@ -1,6 +1,6 @@
 import type { UiClassLayout } from "../api/uiSettings";
 import { suggestKey } from "./keys";
-import { CORE_FIELDS, GRID_COLUMNS, MAX_COLUMNS, SECTION_GRID, panelLabel, placedPanels, resolveLayout, sectionKind, sectionWidth, type AttributeLike, type PanelKind } from "./uiSettings";
+import { CORE_FIELDS, GRID_COLUMNS, LOCKED_FIELDS, MAX_COLUMNS, SECTION_GRID, panelLabel, placedPanels, resolveLayout, sectionKind, sectionWidth, type AttributeLike, type PanelKind } from "./uiSettings";
 
 /**
  * The form designer's edits (Customization › Detail and form layout) on a class
@@ -23,7 +23,7 @@ export type LayoutTab = NonNullable<UiClassLayout["tabs"]>[number];
 export type LayoutSection = NonNullable<LayoutTab["sections"]>[number];
 export type LayoutField = NonNullable<LayoutSection["fields"]>[number];
 
-export const isCore = (field: string) => CORE_FIELDS.includes(field);
+export const isCore = (field: string) => LOCKED_FIELDS.includes(field);
 
 export interface FieldPlace {
   tab: LayoutTab;

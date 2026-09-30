@@ -33,8 +33,7 @@ export const DEFAULT_SORT = "label";
 /** The most columns a list shows (the saved-view definition's limit). */
 export const MAX_COLUMNS = 50;
 /**
- * A column name: a built-in field or `attributes.<key>`, as list views store them (the API's FIELD_PATTERN),
- * plus criticality, which only the URL can name so far.
+ * A column name: a built-in field or `attributes.<key>`, as list views store them (the API's FIELD_PATTERN).
  */
 const FIELD_PATTERN = /^(?:label|ident|class|criticality|validFrom|validUntil|active|createdAt|updatedAt|attributes\.[a-z][a-z0-9_]{0,62})$/;
 

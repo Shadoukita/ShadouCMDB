@@ -2,6 +2,7 @@
 import { RouterLink } from "vue-router";
 import type { Ci } from "../../api/queries";
 import CiStateBadge from "../../components/CiStateBadge.vue";
+import CriticalityBadge from "../../components/CriticalityBadge.vue";
 import { formatDateTime } from "../../lib/format";
 
 /** Read-only value of one built-in CI field. The class links to the inventory filtered by it. */
@@ -12,6 +13,7 @@ defineProps<{ ci: Ci; field: string }>();
   <bdi v-if="field === 'label'">{{ ci.label }}</bdi>
   <span v-else-if="field === 'ident'" class="mono">{{ ci.ident }}</span>
   <RouterLink v-else-if="field === 'class'" :to="`/cis?classId=${ci.classId}`" dir="auto">{{ ci.class.name }}</RouterLink>
+  <CriticalityBadge v-else-if="field === 'criticality'" :value="ci.criticality" show-unset />
   <template v-else-if="field === 'validFrom'">{{ formatDateTime(ci.validFrom) }}</template>
   <template v-else-if="field === 'validUntil'">
     <template v-if="ci.validUntil">{{ formatDateTime(ci.validUntil) }}</template><span v-else class="muted">Open-ended</span>
