@@ -25,8 +25,9 @@ the database credentials can.
 ## What a backup contains
 
 - **Everything in the database:**
-  - Every system table in the `cmdb` schema: CIs, relationships, the data model
-    (areas, types, fields, relationship types, lookup lists), the deprecated
+  - Every system table in the `cmdb` schema: CIs (with their criticality),
+    relationships, the data model (areas, types, fields, relationship types with
+    their impact direction, lookup lists), the deprecated
     statuses, environments, locations and owners tables, users with their password hashes, permission
     profiles, UI settings including the logo and favicon, the schema change
     history and the full audit log.

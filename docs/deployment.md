@@ -364,8 +364,9 @@ Recorded as an audit.purge entry in audit_log.
 - `--scope auth` (default): `login.success`, `login.failure`, `login.locked`, `logout` and
   `session.revoke` rows, API token `token.use` rows, two-factor `mfa.*` rows, plus `sessions`
   rows that expired more than 30 days ago (and expired sign-in challenges in `mfa_challenges`).
-  `--scope changes`: `create`, `update`, `delete` and `restore` rows, only if you decide to
-  cut change history too.
+  `--scope changes`: `create`, `update`, `delete` and `restore` rows, refused data model
+  previews (`schema_change.refused`) and data exports (`export`), only if you decide to cut
+  change history too.
 - The command needs `MAINTENANCE_DATABASE_URL` and refuses to run without it. Each executed
   run adds an `audit.purge` row (visible in the audit log with `action=audit.purge`) naming
   the database user, client address, OS user, window and the number of rows deleted.
@@ -400,6 +401,20 @@ All optional; every variable is in [`.env.example`](../.env.example).
   concurrent probes wait for the one check in flight, so a flood of anonymous probes costs about one
   database round trip per second. A lost database therefore shows in `/readyz` within about 1 s
   plus `DATABASE_CONNECT_TIMEOUT_MS`.
+- **Impact analysis:** every analysis (`GET /configuration-items/{id}/impact` and its CSV export) is a
+  bounded traversal. `IMPACT_MAX_DEPTH` (default 10, at most 20) and `IMPACT_MAX_NODES` (default 2000,
+  at most 10000) cap the `depth` and `maxNodes` a request may ask for; a larger value is refused with
+  `400`, never lowered. Each analysis reads at most 5 × `maxNodes` relationships and stops after
+  `IMPACT_TIMEOUT_MS` (default 5000, at most 30000; must be below `HTTP_REQUEST_TIMEOUT_SECS`), each
+  query with the time left as its `statement_timeout`; an analysis stopped by a bound answers `200`
+  with the partial result marked `truncated`. `IMPACT_MAX_CONCURRENT` (default 8) caps the analyses
+  running at once (`503 SERVER_BUSY` beyond it) and `IMPACT_MAX_CONCURRENT_PER_USER` (default 2) those
+  of one user and their API tokens (`429 RATE_LIMITED`). **Both caps count per backend process:** with
+  several replicas behind a load balancer, each replica allows that many, so the database sees up to
+  replicas × `IMPACT_MAX_CONCURRENT` analyses and one user up to replicas ×
+  `IMPACT_MAX_CONCURRENT_PER_USER`. Keep `IMPACT_MAX_CONCURRENT` well below `DATABASE_POOL_MAX`: each
+  running analysis holds one connection. The ceilings are compiled in, so a mistyped variable stops
+  the server at startup instead of unbounding the traversal.
 - **Reverse proxy request buffering:** let the proxy receive the whole request body before it
   forwards the request (nginx `proxy_request_buffering on`, the default; HAProxy
   `option http-buffer-request`). Slow clients then tie up the proxy, which is built for many idle

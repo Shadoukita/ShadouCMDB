@@ -64,6 +64,7 @@ const ACTION_SET: Record<Action, true> = {
   "mfa.recovery_code_used": true,
   "mfa.recovery_codes": true,
   "schema_change.refused": true,
+  export: true,
 };
 const ACTIONS = Object.keys(ACTION_SET) as Action[];
 const entityLabel = (t: string) => ENTITY_TYPES.find((e) => e.value === t)?.label ?? t;
