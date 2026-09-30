@@ -194,7 +194,8 @@ test("/usage needs datamodel.manage; without it the counts of hidden CIs are not
     expect((await res.json()).error.code).toBe("FORBIDDEN");
   }
   // The administrator, who holds datamodel.manage, still gets the counts.
-  const usage = await apiGet<{ inUse: boolean }>(request, `/ci-classes/${databaseId}/usage`);
-  expect(usage.inUse).toBe(true);
+  const usage = await apiGet<{ removal: string; data: { kind: string }[] }>(request, `/ci-classes/${databaseId}/usage`);
+  expect(usage.removal).toBe("purge");
+  expect(usage.data.map((u) => u.kind)).toContain("configurationItems");
   await asUser.ctx.dispose();
 });

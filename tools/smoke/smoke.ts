@@ -627,7 +627,8 @@ async function main() {
   check((await get(`/api/v1/configuration-items/${lbItem.id}`)).json.attributes.vip === '10.77.5.5', 'an archived field keeps its stored values');
   await del(`/api/v1/attribute-definitions/${slaRef.id}`);
   const lbUsage = (await get(`/api/v1/ci-classes/${lb.id}/usage`)).json;
-  check(lbUsage.inUse && lbUsage.data.some((u: Json) => u.kind === 'deletedConfigurationItems' && u.count === 1), 'class usage counts deleted CIs');
+  check(lbUsage.data.some((u: Json) => u.kind === 'deletedConfigurationItems' && u.count === 1 && !u.blocking), 'class usage counts deleted CIs');
+  check(lbUsage.removal === 'purge' && !lbUsage.inUse, 'deleted CIs do not block purging a type');
   await del(`/api/v1/ci-classes/${lb.id}`); // archives the type; its table and CIs stay
   check((await get(`/api/v1/ci-classes/${lb.id}`)).json.isActive === false, 'deleting a type archives it');
   await post('/api/v1/configuration-items', { classId: lb.id, attributes: { name: 'archived-class', status: inService, device_role: 'other', algorithm: 'least_conn' } }, 400);

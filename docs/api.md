@@ -405,9 +405,13 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
 - **Delete archives** areas, types and fields (`isActive: false`): the schema, table or column and every value
   stay; nothing new is accepted and the UI hides it. `PATCH {"isActive": true}` restores it. **Purge**
   (`POST …/{id}/purge` with `{"confirm": "<key>"}`) is the only way to drop them, and only once archived.
+  Nothing blocks the archive. `GET …/{id}/usage` of a type or field answers `removal: "purge"`: its blocking
+  counts are what refuses the purge with `409 IN_USE` (subtypes and reference fields of other types for a type,
+  fields using it as their parent field for a field); the other counts (CIs, fields, relationship rules, values)
+  are removed by the purge.
 - Other data model and lookup resources are **deleted** only while nothing refers to them. `GET …/{id}/usage`
-  returns `{ inUse, data: [{ kind, label, count, withheld, blocking }] }`; a blocking count makes `DELETE` answer
-  `409 IN_USE` with the same counts in `details[]`. Deleted CIs and relationships count too: they are kept for
+  returns `{ inUse, removal: "delete", data: [{ kind, label, count, withheld, blocking }] }`; a blocking count
+  makes `DELETE` answer `409 IN_USE` with the same counts in `details[]`; non-blocking ones are deleted with it. Deleted CIs and relationships count too: they are kept for
   history. A count over CIs of a class the caller may not view is withheld (`count: null`, `withheld: true`) and
   left out of `details[]`, but still decides `inUse` and the refusal, whose message then says the row is still in
   use with the details withheld.
