@@ -893,7 +893,10 @@ pub(crate) mod tests {
         let gated = |creds: Creds| {
             let app = app.clone();
             async move {
-                let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &creds, None).await;
+                // A CI read and an admin read get the same answer.
+                let (status, v, _) = call(&app, "GET", "/api/v1/configuration-items", &creds, None).await;
+                let (admin_status, admin_v, _) = call(&app, "GET", "/api/v1/admin/users", &creds, None).await;
+                assert_eq!((status, code(&v)), (admin_status, code(&admin_v)), "{v} / {admin_v}");
                 (status, code(&v).to_owned())
             }
         };
