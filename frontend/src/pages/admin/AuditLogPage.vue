@@ -44,6 +44,9 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   identity_providers: "Identity provider",
   lookup_lists: "Lookup list",
   lookup_list_values: "Lookup list value",
+  import_jobs: "Bulk import",
+  import_settings: "Bulk import settings",
+  import_mappings: "Import mapping",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));
 const ACTION_SET: Record<Action, true> = {
@@ -65,6 +68,8 @@ const ACTION_SET: Record<Action, true> = {
   "mfa.recovery_codes": true,
   "schema_change.refused": true,
   export: true,
+  "import.commit": true,
+  "import.report_read": true,
 };
 const ACTIONS = Object.keys(ACTION_SET) as Action[];
 const entityLabel = (t: string) => ENTITY_TYPES.find((e) => e.value === t)?.label ?? t;

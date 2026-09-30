@@ -32,6 +32,10 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
         "First-run setup, sign-in with a local username and password, sign-out, and the current user's permissions.",
     ),
     ("Configuration items", "CIs: the tracked assets. Includes the relationship graph around a CI."),
+    (
+        "Bulk import",
+        "Import CIs from CSV and Excel files: upload, map columns, dry run, commit. Session only; needs the switch on, cis.import, and the class rights for every row.",
+    ),
     ("Search", "Global search across CIs and their attribute values."),
     (
         "Impact analysis",

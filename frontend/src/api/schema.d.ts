@@ -495,6 +495,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/imports/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether bulk import is on, and its limits
+         * @description Any signed-in user (session only). `enabled` is true when an administrator switched import on and the server configuration allows it; `locked` is true when the server configuration (`IMPORT_ALLOWED=false`) keeps it off. `limits` are the effective upload limits. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["getImportSettings"];
+        /**
+         * Turn bulk import on or off (Administrator)
+         * @description Administrator only (session only). The change is audited as an `update` of `import_settings`. Turning import on while the server configuration forbids it (`IMPORT_ALLOWED=false`) is `409 CONFLICT` with `details[0].code = import_locked`; turning it off always works. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        put: operations["updateImportSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/relationships": {
         parameters: {
             query?: never;
@@ -2155,7 +2179,7 @@ export interface components {
             actorId: string | null;
             actorName: string | null;
             /** @enum {string} */
-            action: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export";
+            action: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read";
             /** @description Table of the changed entity, e.g. configuration_items (sessions for authentication events) */
             entityType: string;
             /** Format: uuid */
@@ -2264,7 +2288,7 @@ export interface components {
             permissionProfiles?: {
                 name: string;
                 description?: string | null;
-                globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+                globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
                 classPermissions?: {
                     class?: string | null;
                     view?: boolean;
@@ -2570,7 +2594,7 @@ export interface components {
         EffectivePermissions: {
             /** @description Holds the built-in Administrator profile (everything below is then all-true) */
             administrator: boolean;
-            global: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+            global: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
             /** @description Rights on every class */
             allClasses: components["schemas"]["ClassRights"];
             /** @description Rights on individual classes, beyond allClasses */
@@ -2886,6 +2910,29 @@ export interface components {
             /** @description Changed fields (updates only) */
             fields: components["schemas"]["FieldChange"][];
         };
+        /** @description The effective limits of an upload. */
+        ImportLimits: {
+            /**
+             * Format: int64
+             * @description Largest file accepted, in bytes (`IMPORT_MAX_FILE_MB`)
+             */
+            maxFileBytes: number;
+            /**
+             * Format: int32
+             * @description Most data rows per file (`IMPORT_MAX_ROWS`)
+             */
+            maxRows: number;
+            /**
+             * Format: int32
+             * @description Most columns per file
+             */
+            maxColumns: number;
+            /**
+             * Format: int32
+             * @description Most characters per cell
+             */
+            maxCellChars: number;
+        };
         ImportResult: {
             /** @enum {string} */
             mode: "dry_run" | "apply";
@@ -2900,6 +2947,14 @@ export interface components {
             warnings: components["schemas"]["ImportWarning"][];
             /** @description References in the imported UI settings that do not resolve after the import (see GET /api/v1/ui-settings) */
             uiSettingsIssues: components["schemas"]["Issue"][];
+        };
+        /** @description Whether bulk import may be used on this instance, and its limits. */
+        ImportSettings: {
+            /** @description Import is switched on and not forbidden by the server configuration. */
+            enabled: boolean;
+            /** @description The server configuration (`IMPORT_ALLOWED=false`) keeps import off; the switch cannot be turned on. */
+            locked: boolean;
+            limits: components["schemas"]["ImportLimits"];
         };
         ImportWarning: {
             /** @description Path in the file */
@@ -3192,7 +3247,7 @@ export interface components {
              *     session only reaches the MFA set-up routes
              */
             requireMfa: boolean;
-            globalPermissions: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+            globalPermissions: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
             classPermissions: components["schemas"]["ClassPermission"][];
             /**
              * Format: int64
@@ -6591,6 +6646,178 @@ export interface operations {
             };
             /** @description Request not completed in time (code REQUEST_TIMEOUT) */
             408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getImportSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportSettings"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateImportSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportSettings"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not application/json */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15010,10 +15237,10 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings";
                 /** @description History of these entities */
                 entityId?: string;
-                action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export";
+                action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read";
                 /** @description Changes made by this user (their id) */
                 actorId?: string;
                 /** @description Case-insensitive substring */
@@ -15818,7 +16045,7 @@ export interface operations {
                     name: string;
                     description?: string | null;
                     /** @description Replaces all global permissions */
-                    globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+                    globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
                     /** @description Replaces all class grants. Entries granting nothing are dropped; one entry per class. */
                     classPermissions?: {
                         /**
@@ -16122,7 +16349,7 @@ export interface operations {
                     name?: string;
                     description?: string | null;
                     /** @description Replaces all global permissions */
-                    globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+                    globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
                     /** @description Replaces all class grants. Entries granting nothing are dropped; one entry per class. */
                     classPermissions?: {
                         /**
@@ -17503,7 +17730,7 @@ export interface operations {
                     permissionProfiles?: {
                         name: string;
                         description?: string | null;
-                        globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view")[];
+                        globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
                         classPermissions?: {
                             class?: string | null;
                             view?: boolean;

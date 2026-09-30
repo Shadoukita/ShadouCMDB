@@ -292,6 +292,18 @@ pub async fn restore<R: Read>(
         }
     }
 
+    // Import files are not in backups: a job that had not finished cannot go
+    // on, so it expires here, in the restore's transaction, before any worker
+    // could claim it (T24). CIs it committed are in the restored tables.
+    exec(
+        &mut tx,
+        "UPDATE cmdb.import_jobs SET status = 'expired', lease_owner = NULL, lease_until = NULL,
+           finished_at = coalesce(finished_at, now()), expires_at = least(expires_at, now())
+         WHERE status NOT IN ('completed', 'completed_with_errors', 'failed', 'cancelled', 'expired')"
+            .into(),
+    )
+    .await?;
+
     let builtin: i64 =
         sqlx::query_scalar("SELECT count(*) FROM permission_profiles WHERE is_builtin").fetch_one(&mut *tx).await?;
     if builtin != 1 {

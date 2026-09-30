@@ -29,7 +29,20 @@ use crate::config::DatabaseConfig;
 /// backups from releases at levels 0014–0020 left it out, and restoring one
 /// first migrates to that level, which creates the table again. Without the
 /// legacy name the restore would refuse that table as missing from the backup.
-pub const EXCLUDED_TABLES: &[&str] = &["sessions", "mfa_challenges", "server_keys", "oidc_login_states"];
+///
+/// Bulk import files, their issue rows and idempotency keys are run data that
+/// holds raw uploaded cells, possibly personal data, and can be large (SHAA-714
+/// §6.3). Job records, saved mappings and the switch are backed up; a restore
+/// expires the jobs that were not finished (see [`restore`]).
+pub const EXCLUDED_TABLES: &[&str] = &[
+    "sessions",
+    "mfa_challenges",
+    "server_keys",
+    "oidc_login_states",
+    "import_job_files",
+    "import_job_issues",
+    "import_idempotency_keys",
+];
 
 /// Schemas of the application's own tables: `cmdb` since migration 0008,
 /// `public` before (and still for the migration bookkeeping table). Areas are

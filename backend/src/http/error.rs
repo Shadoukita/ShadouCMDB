@@ -56,7 +56,7 @@ pub enum ErrorCode {
     /// The request was not completed within HTTP_REQUEST_TIMEOUT_SECS
     RequestTimeout,
     DatabaseUnavailable,
-    /// HTTP_MAX_CONCURRENT_REQUESTS requests are already in progress; retry after the Retry-After header (503)
+    /// HTTP_MAX_CONCURRENT_REQUESTS requests (or the anonymous body budget) are in use; retry after the Retry-After header (503)
     ServerBusy,
     /// The database has migrations pending; run `shadoucmdb migrate` (503)
     SchemaNotMigrated,

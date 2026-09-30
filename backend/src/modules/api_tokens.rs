@@ -622,6 +622,7 @@ pub(crate) mod tests {
             audit: Default::default(),
             encryption: Default::default(),
             impact: Default::default(),
+            imports: Default::default(),
         };
         router(AppState { capacity, ..AppState::new(pool, auth, crate::secrets::Keyring::for_tests()) }, &cfg)
     }

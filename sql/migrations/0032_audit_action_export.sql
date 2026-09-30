@@ -11,7 +11,7 @@
 -- change history: prune-audit removes them with scope `changes` only.
 
 -- ---------------------------------------------------------------------------
--- audit_log: the new event (keeps every action up to 0027)
+-- audit_log: the new event (keeps every action up to 0029)
 -- ---------------------------------------------------------------------------
 ALTER TABLE cmdb.audit_log DROP CONSTRAINT audit_log_action_valid;
 --> statement-breakpoint
@@ -20,7 +20,9 @@ ALTER TABLE cmdb.audit_log ADD CONSTRAINT audit_log_action_valid CHECK (action I
   'login.success', 'login.failure', 'login.locked', 'logout', 'session.revoke',
   'audit.purge', 'token.use',
   'mfa.enrol', 'mfa.disable', 'mfa.failure', 'mfa.recovery_code_used', 'mfa.recovery_codes',
-  'schema_change.refused', 'export'
+  'schema_change.refused',
+  'import.commit', 'import.report_read',
+  'export'
 ));
 --> statement-breakpoint
 ALTER TABLE cmdb.audit_log DROP CONSTRAINT audit_log_values_present;
@@ -32,13 +34,13 @@ ALTER TABLE cmdb.audit_log ADD CONSTRAINT audit_log_values_present CHECK (
   -- Events, not changes: the details are in new_value.
   OR (action IN ('login.success', 'login.failure', 'login.locked', 'logout', 'session.revoke', 'audit.purge', 'token.use',
                  'mfa.enrol', 'mfa.disable', 'mfa.failure', 'mfa.recovery_code_used', 'mfa.recovery_codes',
-                 'schema_change.refused', 'export')
+                 'schema_change.refused', 'import.commit', 'import.report_read', 'export')
       AND old_value IS NULL AND new_value IS NOT NULL)
 );
 --> statement-breakpoint
 
 -- ---------------------------------------------------------------------------
--- prune_audit_log(): export joins the `changes` scope. Same body as 0027
+-- prune_audit_log(): export joins the `changes` scope. Same body as 0029
 -- otherwise; CREATE OR REPLACE keeps the owner and the EXECUTE grants.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION cmdb.prune_audit_log(p_older_than interval, p_scope text, p_dry_run boolean, p_operator text DEFAULT NULL)
@@ -60,8 +62,9 @@ BEGIN
   END IF;
   actions := CASE p_scope
     WHEN 'auth' THEN ARRAY['login.success', 'login.failure', 'login.locked', 'logout', 'session.revoke', 'token.use',
-                           'mfa.enrol', 'mfa.disable', 'mfa.failure', 'mfa.recovery_code_used', 'mfa.recovery_codes']
-    WHEN 'changes' THEN ARRAY['create', 'update', 'delete', 'restore', 'schema_change.refused', 'export']
+                           'mfa.enrol', 'mfa.disable', 'mfa.failure', 'mfa.recovery_code_used', 'mfa.recovery_codes',
+                           'import.report_read']
+    WHEN 'changes' THEN ARRAY['create', 'update', 'delete', 'restore', 'schema_change.refused', 'import.commit', 'export']
   END;
   IF actions IS NULL OR p_dry_run IS NULL THEN
     RAISE EXCEPTION 'prune_audit_log: scope must be auth or changes, and dry_run true or false'

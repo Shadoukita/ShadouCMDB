@@ -307,6 +307,14 @@ pub enum AuditAction {
     /// parameters and row count in new_value, never the rows). Today: the
     /// impact analysis CSV.
     Export,
+    /// One bulk import commit (entity type `import_jobs`; the counts in new_value).
+    #[serde(rename = "import.commit")]
+    #[sqlx(rename = "import.commit")]
+    ImportCommit,
+    /// An administrator read another user's import error report (entity type `import_jobs`).
+    #[serde(rename = "import.report_read")]
+    #[sqlx(rename = "import.report_read")]
+    ImportReportRead,
 }
 
 impl AuditAction {
@@ -330,6 +338,8 @@ impl AuditAction {
             AuditAction::MfaRecoveryCodes => "mfa.recovery_codes",
             AuditAction::SchemaChangeRefused => "schema_change.refused",
             AuditAction::Export => "export",
+            AuditAction::ImportCommit => "import.commit",
+            AuditAction::ImportReportRead => "import.report_read",
         }
     }
 }

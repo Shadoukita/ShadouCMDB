@@ -156,7 +156,16 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     assert!(header.total_rows() > 20, "demo data is in the backup");
     assert_eq!(
         header.excluded_tables,
-        ["cmdb.mfa_challenges", "cmdb.server_keys", "cmdb.sessions"].map(str::to_owned).to_vec()
+        [
+            "cmdb.import_idempotency_keys",
+            "cmdb.import_job_files",
+            "cmdb.import_job_issues",
+            "cmdb.mfa_challenges",
+            "cmdb.server_keys",
+            "cmdb.sessions"
+        ]
+        .map(str::to_owned)
+        .to_vec()
     );
     assert!(!header.tables.iter().any(|t| EXCLUDED_TABLES.contains(&t.name.as_str())));
     // The key ids in use are listed (the key itself is not in the file), and a
@@ -229,6 +238,66 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     let (_, again) = take_backup(&mut cb).await;
     assert_eq!(normalized(&again), normalized(&header));
 
+    drop((ca, cb));
+    a.drop().await;
+    b.drop().await;
+}
+
+/// SHAA-714 §6.3: a backup keeps the import switch, saved mappings and job
+/// records, never uploaded files, issue rows or idempotency keys. A job that
+/// had not finished is expired by the restore itself (T24).
+#[tokio::test]
+async fn import_files_stay_out_of_backups_and_unfinished_jobs_expire_on_restore() {
+    let Some(a) = scratch::database("import_backup_a").await else { return };
+    let Some(b) = scratch::database("import_backup_b").await else { return };
+    populate(&a.pool).await;
+    let mut ca = a.pool.acquire().await.unwrap();
+    let mut cb = b.pool.acquire().await.unwrap();
+    let user: uuid::Uuid = sqlx::query_scalar("SELECT id FROM cmdb.users LIMIT 1").fetch_one(&mut *ca).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "UPDATE cmdb.import_settings SET enabled = true;
+         INSERT INTO cmdb.import_mappings (name, class_key, definition, created_by_name, updated_by_name)
+           VALUES ('Vendor export', 'server', '{{\"columns\": []}}', 'admin', 'admin');
+         INSERT INTO cmdb.import_jobs (id, created_by_id, created_by_name, status, phase, file_name, file_format,
+             file_size, file_sha256, expires_at, lease_owner, lease_until)
+           VALUES ('00000000-0000-4000-8000-0000000000c1', '{user}', 'admin', 'committing', 'commit', 'a.csv', 'csv',
+             3, repeat('a', 64), now() + interval '1 day', 'worker-1', now() + interval '1 minute'),
+                  ('00000000-0000-4000-8000-0000000000c2', '{user}', 'admin', 'completed', NULL, 'b.csv', 'csv',
+             3, repeat('b', 64), now() + interval '1 day', NULL, NULL);
+         INSERT INTO cmdb.import_job_files (job_id, seq, data)
+           VALUES ('00000000-0000-4000-8000-0000000000c1', 0, '\\x613b62'::bytea);
+         INSERT INTO cmdb.import_job_issues (job_id, seq, row_no, severity, code, message, phase)
+           VALUES ('00000000-0000-4000-8000-0000000000c1', 0, 2, 'error', 'required', 'Name is required', 'validate');
+         INSERT INTO cmdb.import_idempotency_keys (user_id, key, operation, job_id)
+           VALUES ('{user}', 'k1', 'commit', '00000000-0000-4000-8000-0000000000c1');"
+    )))
+    .execute(&mut *ca)
+    .await
+    .unwrap();
+
+    let (buf, header) = take_backup(&mut ca).await;
+    let rows = |name: &str| header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
+    assert_eq!((rows("import_jobs"), rows("import_mappings"), rows("import_settings")), (Some(2), Some(1), Some(1)));
+    for gone in ["import_job_files", "import_job_issues", "import_idempotency_keys"] {
+        assert_eq!(rows(gone), None, "{gone} is not backed up");
+    }
+    restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+
+    let jobs: Vec<(String, Option<String>, bool)> =
+        sqlx::query_as("SELECT status, lease_owner, finished_at IS NOT NULL FROM cmdb.import_jobs ORDER BY file_name")
+            .fetch_all(&mut *cb)
+            .await
+            .unwrap();
+    assert_eq!(jobs, [("expired".to_owned(), None, true), ("completed".to_owned(), None, false)]);
+    let (enabled, mappings, transient): (bool, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT enabled FROM cmdb.import_settings), (SELECT count(*) FROM cmdb.import_mappings),
+                (SELECT count(*) FROM cmdb.import_job_files) + (SELECT count(*) FROM cmdb.import_job_issues)
+                + (SELECT count(*) FROM cmdb.import_idempotency_keys)",
+    )
+    .fetch_one(&mut *cb)
+    .await
+    .unwrap();
+    assert_eq!((enabled, mappings, transient), (true, 1, 0));
     drop((ca, cb));
     a.drop().await;
     b.drop().await;
@@ -351,6 +420,17 @@ async fn factory_reset_returns_to_first_run_and_decommission_leaves_nothing() {
     .await
     .unwrap();
     assert_eq!((areas, changes), (0, 0), "the area schema and its history are gone");
+    // Bulk import comes back switched off and empty, with no reset code of its own (T24).
+    let (enabled, import_rows): (bool, i64) = sqlx::query_as(
+        "SELECT (SELECT enabled FROM cmdb.import_settings),
+                (SELECT count(*) FROM cmdb.import_jobs) + (SELECT count(*) FROM cmdb.import_job_files)
+                + (SELECT count(*) FROM cmdb.import_job_issues) + (SELECT count(*) FROM cmdb.import_mappings)
+                + (SELECT count(*) FROM cmdb.import_idempotency_keys)",
+    )
+    .fetch_one(&mut *c)
+    .await
+    .unwrap();
+    assert_eq!((enabled, import_rows), (false, 0));
     drop(c);
     assert!(crate::modules::auth::setup_required(&a.pool).await.unwrap(), "setup is forced");
     crate::seed::seed_system_rows(&a.pool).await.unwrap();
