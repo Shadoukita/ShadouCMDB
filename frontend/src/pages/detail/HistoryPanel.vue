@@ -76,8 +76,8 @@ const actionTone = (action: string) => (action === "delete" ? "danger" : action 
               <span v-else-if="changes(e).length === 0" class="muted">No visible field changes</span>
               <ul v-else class="diff">
                 <li v-for="c in changes(e)" :key="c.key">
-                  <code>{{ c.key }}</code>: <del v-if="c.old !== undefined">{{ c.old }}</del> →
-                  <ins v-if="c.new !== undefined">{{ c.new }}</ins><span v-else class="muted">cleared</span>
+                  <code>{{ c.key }}</code>: <del v-if="c.old !== undefined" dir="auto">{{ c.old }}</del> →
+                  <ins v-if="c.new !== undefined" dir="auto">{{ c.new }}</ins><span v-else class="muted">cleared</span>
                 </li>
               </ul>
             </td>

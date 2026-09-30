@@ -1181,10 +1181,11 @@ pub(crate) mod tests {
         via(ip, ip)
     }
 
-    /// A request whose forwarded headers say `ip`, from TCP peer `peer`.
+    /// A request from client `ip` through trusted proxy `peer`, which forwarded it as sent.
     fn via(ip: &str, peer: &str) -> RequestContext {
         let client = crate::api::context::ClientInfo {
             ip: Some(ip.parse().unwrap()),
+            claimed_ip: Some(ip.parse().unwrap()),
             peer_ip: Some(peer.parse().unwrap()),
             user_agent: Some("audit-test".into()),
             net: Net::of(Some(ip.parse().unwrap())),
@@ -1866,6 +1867,65 @@ pub(crate) mod tests {
             );
         }
         assert!(success[0].3.get("peerIpAddress").is_none(), "no peerIpAddress when it equals ipAddress");
+        db.drop().await;
+    }
+
+    /// GH#282 through the router: `ipAddress`, `sessions.ip_address` and the
+    /// throttle agree on the client a trusted proxy reports; the forged
+    /// leftmost hop is kept only as `claimedIpAddress`. Without a trusted
+    /// proxy, a client's own `X-Forwarded-For` never becomes `ipAddress`.
+    #[tokio::test]
+    async fn the_audit_trail_records_the_client_a_trusted_proxy_reports() {
+        use axum::body::Body as HttpBody;
+        use axum::extract::ConnectInfo;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let Some(db) = scratch::database("the_audit_trail_records_the_client_a_trusted_proxy_reports").await else {
+            return;
+        };
+        let pool = db.pool.clone();
+        setup(&pool, &auth_state(), &HeaderMap::new(), &anon(), body("owner")).await.unwrap();
+        let capacity = crate::http::Capacity::with_sizes(8, 4, Duration::from_secs(10));
+        let post = |app: axum::Router, peer: &str, xff: &str, password: &str| {
+            let body = serde_json::json!({ "username": "owner", "password": password }).to_string();
+            let peer: std::net::SocketAddr = format!("{peer}:40000").parse().unwrap();
+            let req = Request::post("/api/v1/auth/login")
+                .header("content-type", "application/json")
+                .header("x-forwarded-for", xff)
+                .extension(ConnectInfo(peer));
+            async move { app.oneshot(req.body(HttpBody::from(body)).unwrap()).await.unwrap().status().as_u16() }
+        };
+
+        let proxied = crate::modules::api_tokens::tests::app_with_auth(pool.clone(), capacity.clone(), |cfg| {
+            cfg.trusted_proxies = crate::auth::session::TrustedProxies::parse("127.0.0.1").unwrap()
+        });
+        let mut statuses = Vec::new();
+        for i in 0..8 {
+            statuses.push(post(proxied.clone(), "127.0.0.1", &format!("198.51.{i}.9, 127.0.5.20"), "wrong").await);
+        }
+        assert_eq!(statuses.last(), Some(&429), "the real network is locked: {statuses:?}");
+        let locked = auth_rows(&pool, "login.locked").await;
+        let v = &locked.last().expect("a login.locked row").3;
+        assert_eq!((v["ipAddress"].as_str(), v["peerIpAddress"].as_str()), (Some("127.0.5.20"), Some("127.0.0.1")));
+        let claimed = v["claimedIpAddress"].as_str().unwrap_or_default();
+        assert!(claimed.starts_with("198.51.") && claimed.ends_with(".9"), "the forged hop: {claimed}");
+
+        let direct = crate::modules::api_tokens::tests::app_with_auth(pool.clone(), capacity, |_| {});
+        assert_eq!(post(direct, "127.0.6.30", "198.51.100.1", OWNER_PASSWORD.as_str()).await, 200);
+        let success = auth_rows(&pool, "login.success").await;
+        let v = &success.last().unwrap().3;
+        assert_eq!(
+            (v["ipAddress"].as_str(), v["claimedIpAddress"].as_str()),
+            (Some("127.0.6.30"), Some("198.51.100.1"))
+        );
+        assert!(v.get("peerIpAddress").is_none(), "the peer is ipAddress");
+        let ip: Option<String> =
+            sqlx::query_scalar("SELECT host(ip_address) FROM sessions ORDER BY created_at DESC LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(ip.as_deref(), Some("127.0.6.30"));
         db.drop().await;
     }
 

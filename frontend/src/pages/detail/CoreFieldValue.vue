@@ -9,9 +9,9 @@ defineProps<{ ci: Ci; field: string }>();
 </script>
 
 <template>
-  <template v-if="field === 'label'">{{ ci.label }}</template>
+  <bdi v-if="field === 'label'">{{ ci.label }}</bdi>
   <span v-else-if="field === 'ident'" class="mono">{{ ci.ident }}</span>
-  <RouterLink v-else-if="field === 'class'" :to="`/cis?classId=${ci.classId}`">{{ ci.class.name }}</RouterLink>
+  <RouterLink v-else-if="field === 'class'" :to="`/cis?classId=${ci.classId}`" dir="auto">{{ ci.class.name }}</RouterLink>
   <template v-else-if="field === 'validFrom'">{{ formatDateTime(ci.validFrom) }}</template>
   <template v-else-if="field === 'validUntil'">
     <template v-if="ci.validUntil">{{ formatDateTime(ci.validUntil) }}</template><span v-else class="muted">Open-ended</span>

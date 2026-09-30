@@ -1195,6 +1195,44 @@ mod tests {
         db.drop().await;
     }
 
+    /// GH#289: a NUL in a text value is a 400 invalid_character on create and
+    /// update, reported with the class's other attribute errors, and nothing is stored.
+    #[tokio::test]
+    async fn nul_in_text_values_is_refused() {
+        let Some(db) = scratch::database("nul_in_text_values_is_refused").await else { return };
+        let pool = &db.pool;
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        let (server, in_service) = (id_of(pool, "ci_classes", "server").await, status(pool, "in_service").await);
+        let ctx = RequestContext::system("test", "test");
+        let codes = |err: &AppError| -> Vec<(String, String)> {
+            let mut c: Vec<_> = err.details.iter().flatten().map(|d| (d.field.clone(), d.code.clone())).collect();
+            c.sort_unstable();
+            c
+        };
+        let pair = |f: &str, c: &str| (f.to_owned(), c.to_owned());
+
+        let body = json!({ "classId": server,
+            "attributes": { "name": "abc\u{0}def", "status": in_service, "cpu_cores": 0 } });
+        let Err(invalid) = parse::<CreateItemBody>(body) else { panic!("body passed") };
+        let err = create_errors(pool, &ctx, invalid).await;
+        assert_eq!(err.code, ErrorCode::ValidationError);
+        assert_eq!(
+            codes(&err),
+            [pair("attributes.cpu_cores", "too_small"), pair("attributes.name", "invalid_character")]
+        );
+
+        let valid = json!({ "classId": server, "attributes": { "name": "srv-1", "status": in_service } });
+        let Ok(valid) = parse::<CreateItemBody>(valid) else { panic!("body failed") };
+        let item = create(pool, &ctx, &valid).await.unwrap();
+        let body = json!({ "attributes": { "hostname": "a\u{0}", "name": "srv-2" } });
+        let Err(invalid) = parse::<UpdateItemBody>(body) else { panic!("body passed") };
+        let err = update_errors(pool, &ctx, item.summary.id, invalid).await;
+        assert_eq!(codes(&err), [pair("attributes.hostname", "invalid_character")]);
+        let stored = get(pool, &ctx, item.summary.id).await.unwrap();
+        assert_eq!(stored.summary.label, "srv-1");
+        db.drop().await;
+    }
+
     fn user_ctx(administrator: bool) -> RequestContext {
         use crate::auth::permissions::{ClassRights, Permissions};
         let permissions = Permissions { administrator, all_classes: ClassRights::ALL, ..Default::default() };

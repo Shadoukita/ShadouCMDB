@@ -30,7 +30,8 @@ SHAA-77, that this document already requires.
 - **Languages and libraries:** Rust (backend), TypeScript/Vue (UI). Cryptography only through
   vetted crates (`argon2`, `sha2`, `rustls` with *ring*); no home-made crypto.
 - **No secrets in git** (in place, by rule): `.env` is ignored, `.env.example` holds placeholders.
-  Secret scanning in CI (gitleaks) and GitHub push protection (planned).
+  Secret scanning in CI over the whole history (gitleaks, in place); GitHub push protection
+  (repository setting).
 - **Dependencies:** added deliberately. For a new dependency, check maintenance, licence, download
   history and whether we need it at all. Lockfiles (`Cargo.lock`, `package-lock.json`) are
   committed and builds use `--locked` / `npm ci` (in place).
@@ -84,16 +85,16 @@ Required on every PR (in place): `cargo fmt`, `cargo clippy -D warnings`, unit a
 integration tests, `openapi --check`, frontend typecheck and build, the smoke suite, Windows and
 Docker builds.
 
-Planned before `v0.1.0` (SHAA-77 workstreams 1 and 8):
+Security checks (in place; `.github/workflows/supply-chain.yml`, `codeql.yml`, `dast.yml`):
 
 | Check | Tool |
 | --- | --- |
 | Known-vulnerable or disallowed-licence dependencies | `cargo deny`, `npm audit` |
 | Static analysis | CodeQL (Rust, JavaScript/TypeScript) |
-| Secrets in commits | gitleaks, GitHub push protection |
+| Secrets in commits | gitleaks; GitHub push protection (repository setting) |
 | Dependency updates | Dependabot (cargo, npm, GitHub Actions, Docker) |
-| Dynamic testing | OWASP ZAP baseline and API scan against the release binary (`.github/workflows/dast.yml`, rules in `.zap/rules.tsv`; in place) |
-| Penetration test | before each major release, results kept ([v0.1.0](pentest-v0.1.0.md)); its automated part runs on every PR (`frontend/e2e/pentest.spec.ts`, in place) |
+| Dynamic testing | OWASP ZAP baseline and API scan against the release binary (`.github/workflows/dast.yml`, rules in `.zap/rules.tsv`) |
+| Penetration test | before each major release, results kept ([v0.1.0](pentest-v0.1.0.md)); its automated part runs on every PR (`frontend/e2e/pentest.spec.ts`) |
 
 **Security fixes ship with a regression test** that fails on the old code and passes on the new.
 
@@ -104,10 +105,10 @@ documented risk acceptance by the security owner exists.
 
 - Releases are built only by `.github/workflows/release.yml` from a tag on `main`; nobody builds
   release binaries by hand (in place).
-- `SHA256SUMS` for every artefact (in place). An SBOM (CycloneDX) per release, cosign signatures
-  on images and archives, and SLSA provenance (planned).
+- `SHA256SUMS` for every artefact (in place). An SBOM (CycloneDX) per release, cosign keyless
+  signatures on images and archives, and SLSA provenance (in place, [supply chain](../supply-chain.md)).
 - Workflows run with `contents: read` by default and widen permissions per job (in place).
-  Third-party actions pinned to a commit SHA (planned).
+  Third-party actions pinned to a commit SHA, checked in CI (in place).
 - Release notes state the end-of-support date and list the security fixes with their advisories.
 
 ## 6. Maintenance and vulnerability handling
