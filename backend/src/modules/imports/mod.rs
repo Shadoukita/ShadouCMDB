@@ -13,6 +13,7 @@ pub mod jobs;
 pub mod mapping;
 pub mod parse;
 pub mod planner;
+pub mod report;
 pub mod schemas;
 pub mod settings;
 pub mod storage;
@@ -221,6 +222,24 @@ pub fn routes() -> Vec<Route> {
                     Ok(Json(jobs::issues(&api.pool, &api.ctx, &api.imports, id, &q).await?))
                 },
             ),
+        route(Method::GET, "/api/v1/imports/{id}/error-report", "downloadImportErrorReport")
+            .tag(TAG)
+            .summary("The problems as a CSV to fix and upload again")
+            .description(
+                "Columns `Row`, `Severity`, `Column`, `Problem`, `Code`, then every original column of the row \
+                 under its original header; one line per problem, in row order. UTF-8 with a byte order mark, CRLF, \
+                 the file's delimiter (`,` for workbooks). Every field is quoted, and a field a spreadsheet could \
+                 read as a formula (starting with `=` `+` `-` `@`, a tab or a line break) or starting with `'` gets \
+                 a leading `'`; a file uploaded again is recognised as a report by its first five headers and the \
+                 `'` is taken off. At most the 10,000 stored problems. `404` when the job has no problems or its file \
+                 expired. A download by anyone other than the job's owner is audited as `import.report_read`.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                report::download(&api.pool, &api.ctx, &api.imports, id).await
+            }),
         route(Method::POST, "/api/v1/imports/{id}/commit", "commitImport")
             .tag(TAG)
             .summary("Write the rows the dry run checked")

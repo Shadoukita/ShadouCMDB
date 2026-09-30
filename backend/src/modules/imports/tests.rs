@@ -1193,3 +1193,82 @@ async fn a_commit_stops_when_the_owner_loses_the_import_right_and_keeps_earlier_
     .unwrap();
     assert_eq!((event["outcome"].as_str(), event["created"].as_u64()), (Some("failed"), Some(500)), "{event}");
 }
+
+// ---------------------------------------------------------------------------
+// Error report (SHAA-799 part 4, §3.4, §5.1)
+// ---------------------------------------------------------------------------
+
+/// A GET whose body is not JSON: status, headers and body text.
+async fn download(e: &Env, creds: &Creds, uri: &str) -> (u16, HeaderMap, String) {
+    let mut req = Request::builder().uri(uri);
+    if let Some(c) = &creds.cookie {
+        req = req.header(header::COOKIE, c);
+    }
+    let res = e.app.clone().oneshot(req.body(HttpBody::empty()).unwrap()).await.unwrap();
+    let status = res.status().as_u16();
+    let headers = res.headers().clone();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 22).await.unwrap();
+    (status, headers, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_error_report_lists_each_problem_with_its_row_and_audits_other_readers() {
+    let Some(db) = scratch::database("import_error_report").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let bob = user(&e, "bob", &["cis.import"]).await;
+    let id = validated(&e, &alice, "Hostname;Cores\nweb01;=1+1\nweb02;4\n\n@db01;many\n").await;
+    let uri = format!("/api/v1/imports/{id}/error-report");
+
+    let (status, headers, body) = download(&e, &alice, &uri).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(headers[header::CONTENT_TYPE], "text/csv; charset=utf-8");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    let disposition = headers[header::CONTENT_DISPOSITION].to_str().unwrap();
+    assert!(disposition.starts_with("attachment; filename=\"srv-errors.csv\""), "{disposition}");
+    let lines: Vec<&str> = body.strip_prefix('\u{feff}').expect("a byte order mark").split_terminator("\r\n").collect();
+    assert_eq!(lines[0], "\"Row\";\"Severity\";\"Column\";\"Problem\";\"Code\";\"Hostname\";\"Cores\"", "{body}");
+    assert_eq!(lines.len(), 3, "one line per problem, none for the valid row: {body}");
+    assert!(lines[1].starts_with("\"2\";\"error\";\"Cores\";") && lines[1].ends_with(";\"web01\";\"'=1+1\""), "{body}");
+    assert!(lines[2].starts_with("\"5\";\"error\";\"Cores\";") && lines[2].ends_with(";\"'@db01\";\"many\""), "{body}");
+    assert!(!body.contains("web02"), "{body}");
+    let job_uuid = Uuid::parse_str(&id).unwrap();
+    let reads = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_log WHERE action = 'import.report_read' AND entity_id = $1",
+        )
+        .bind(job_uuid)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(reads().await, 0, "the owner's own download is not audited");
+
+    // Someone else's job is not found; an administrator's download is audited (W7).
+    let (status, _, _) = download(&e, &bob, &uri).await;
+    assert_eq!(status, 404);
+    let (status, _, admin_body) = download(&e, &e.admin, &uri).await;
+    assert_eq!((status, admin_body == body), (200, true));
+    assert_eq!(reads().await, 1);
+    let event: Value = sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'import.report_read'")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!((event["fileName"].as_str(), event["ownerName"].as_str()), (Some("srv.csv"), Some("alice")), "{event}");
+
+    // Uploaded again, the report reads as the original cells.
+    let (status, v, _) = upload(&e.app, &alice, CSV_TYPE, Some("srv-errors.csv"), &[], body.into_bytes()).await;
+    assert_eq!(status, 202, "{v}");
+    let again = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let j = job(&e, &alice, &again).await;
+    let cells = &j["file"]["previewRows"][0]["cells"];
+    assert_eq!((cells[5].as_str(), cells[6].as_str()), (Some("web01"), Some("=1+1")), "{j}");
+
+    // A job without problems has no report.
+    let clean = validated(&e, &alice, "Hostname;Cores\nweb09;1\n").await;
+    let (status, _, _) = download(&e, &alice, &format!("/api/v1/imports/{clean}/error-report")).await;
+    assert_eq!(status, 404);
+    db.drop().await;
+}

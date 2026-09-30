@@ -710,6 +710,7 @@ async function main() {
   const validated = await settled(second.id);
   check(validated.status === 'validated' && validated.summary?.create === 1 && validated.summary?.errorRows === 0, 'the dry run plans the row without writing it');
   check((await get(`/api/v1/imports/${second.id}/issues?severity=error`)).json.page.total === 0, 'the dry run found no problems');
+  await get(`/api/v1/imports/${second.id}/error-report`, 404);
   await call('POST', `/api/v1/imports/${second.id}/commit`, { skipErrorRows: 'yes' }, 400);
   const commitHeaders = { 'idempotency-key': `smoke-commit-${RUN}` };
   check((await call('POST', `/api/v1/imports/${second.id}/commit`, { skipErrorRows: false }, 202, commitHeaders)).json.phase === 'commit', 'the commit is queued');
@@ -722,6 +723,16 @@ async function main() {
   await call('DELETE', `/api/v1/configuration-items/${importedCi[0].id}`, undefined, 204);
   await call('DELETE', `/api/v1/imports/${second.id}`, undefined, 204);
   await get(`/api/v1/imports/${second.id}`, 404);
+  const bad = (await call('POST', '/api/v1/imports', 'Name;Status\r\n=smoke-bad;no-such-status\r\n', 202, { ...importHeaders, 'idempotency-key': `smoke-3-${RUN}` })).json;
+  await settled(bad.id);
+  await call('PUT', `/api/v1/imports/${bad.id}/mapping`, serverMapping, 200);
+  await call('POST', `/api/v1/imports/${bad.id}/dry-run`, undefined, 202);
+  check((await settled(bad.id)).summary?.errorRows === 1, 'the dry run finds the bad row');
+  const report = await get(`/api/v1/imports/${bad.id}/error-report`, 200);
+  const reportText = new TextDecoder('utf-8', { ignoreBOM: true }).decode(report.bytes);
+  check(reportText.startsWith('\ufeff"Row";"Severity";"Column";"Problem";"Code";"Name";"Status"\r\n"2";"error";') && reportText.includes('"\'=smoke-bad"')
+    && report.headers.get('cache-control') === 'no-store', 'the error report lists the row, neutralised');
+  await call('DELETE', `/api/v1/imports/${bad.id}`, undefined, 204);
   await call('PUT', '/api/v1/imports/settings', { enabled: false }, 200);
 
   // --- HTTP-level errors ---------------------------------------------------------
