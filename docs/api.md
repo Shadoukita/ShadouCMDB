@@ -228,7 +228,9 @@ and maps the provider's groups to permission profiles.
   [hardening guide](security/hardening.md#enterprise-sign-in) for per-provider notes.
 - **Disabling or deleting a provider** ends the sessions of its accounts, including one a sign-in in progress
   opens: that sign-in is refused (`login.failure`, `reason: "provider_disabled"`), and a session of an account
-  whose provider is disabled is not accepted on any request. A provider with accounts cannot be deleted
+  whose provider is disabled is not accepted on any request. While a provider is disabled, the API tokens of its
+  accounts are refused (`401 UNAUTHENTICATED`, `token.use` outcome `provider_disabled`); they are not revoked and
+  work again once it is enabled, as for a disabled account. A provider with accounts cannot be deleted
   (`409 IN_USE`): disable it.
 
 *OIDC* (authorization code flow with PKCE S256, `state` and `nonce`; confidential or public clients). Set
@@ -409,6 +411,12 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
   and relationships; both appear in the preview and in the recorded schema change. For a caller who may not view
   the type and every type below it, `impact[].rows` is `null`, the message says only that the values or rows are
   deleted, and the summary carries no counts.
+- **The history shows counts only to readers who may view them.** `GET /schema-changes` and `GET
+  /schema-changes/{id}` apply the same rule to the reader: a recorded change that counted stored data (values
+  purged or converted by a type change, assets without a value for a required field left nullable) shows those
+  counts only to a reader with the view right on every type they describe and every type below it. Other readers
+  get `impact[].rows` `null` and a summary and messages without the counts, and `q` searches the summary they see.
+  Records written before migration 0028 show their counts only to users who may view every type.
 - Technical names (`key`) are immutable once created, because imports, reports and SQL depend on them; renaming
   changes only the display name.
 

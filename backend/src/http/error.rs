@@ -122,11 +122,14 @@ pub struct AppError {
     pub details: Option<Vec<FieldError>>,
     /// Seconds, sent as Retry-After (RATE_LIMITED, SERVER_BUSY).
     pub retry_after: Option<u64>,
+    /// Answer no earlier than this (a refused sign-in, GH#216). `api::route`
+    /// waits after the handler returned and gave back its capacity permit.
+    pub hold_until: Option<tokio::time::Instant>,
 }
 
 impl AppError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        AppError { code, message: message.into(), details: None, retry_after: None }
+        AppError { code, message: message.into(), details: None, retry_after: None, hold_until: None }
     }
 
     pub fn validation(details: Vec<FieldError>) -> Self {
@@ -135,6 +138,7 @@ impl AppError {
             message: "Request validation failed".into(),
             details: Some(details),
             retry_after: None,
+            hold_until: None,
         }
     }
 
@@ -159,6 +163,7 @@ impl AppError {
                 code: code.into(),
             }]),
             retry_after: None,
+            hold_until: None,
         }
     }
 

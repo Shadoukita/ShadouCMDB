@@ -560,8 +560,26 @@ pub(crate) mod tests {
         build_app(pool, CookieSecure::Never, capacity)
     }
 
+    /// The real router with `capacity`, and `configure` applied to the authentication settings.
+    pub(crate) fn app_with_auth(
+        pool: sqlx::PgPool,
+        capacity: crate::http::Capacity,
+        configure: impl FnOnce(&mut AuthConfig),
+    ) -> Router {
+        build_app_with(pool, CookieSecure::Never, capacity, configure)
+    }
+
     fn build_app(pool: sqlx::PgPool, cookie_secure: CookieSecure, capacity: crate::http::Capacity) -> Router {
-        let auth = AuthConfig {
+        build_app_with(pool, cookie_secure, capacity, |_| {})
+    }
+
+    fn build_app_with(
+        pool: sqlx::PgPool,
+        cookie_secure: CookieSecure,
+        capacity: crate::http::Capacity,
+        configure: impl FnOnce(&mut AuthConfig),
+    ) -> Router {
+        let mut auth = AuthConfig {
             session_idle: StdDuration::from_secs(3600),
             session_max_age: StdDuration::from_secs(3600),
             cookie_secure,
@@ -569,7 +587,10 @@ pub(crate) mod tests {
             oidc_allowed_hosts: None,
             setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
             setup_token_file: None,
+            trusted_proxies: Default::default(),
+            sign_in_failure_floor: std::time::Duration::ZERO,
         };
+        configure(&mut auth);
         let cfg = Config {
             api_host: "127.0.0.1".into(),
             api_port: 3000,

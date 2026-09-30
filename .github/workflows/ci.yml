@@ -124,7 +124,11 @@ jobs:
           $B migrate
           $B seed --demo
           printf '%s\n' "$E2E_PASSWORD" | $B create-admin --username "$E2E_USERNAME" --display-name "E2E admin" --password-stdin
-          $B serve > serve.log 2>&1 &
+          # Playwright connects from loopback and stands in for the reverse proxy: e2e/pentest.spec.ts picks the
+          # client network with X-Forwarded-For, which is only read from a listed proxy (GH#215). The same test
+          # checks the one-second first lock, which the default one-second hold on refused sign-ins (GH#216) would
+          # use up before the answer arrives; that hold is tested in the backend with a paused clock.
+          TRUSTED_PROXIES=127.0.0.1/32 SIGN_IN_FAILURE_FLOOR_MS=0 $B serve > serve.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/readyz && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/readyz | grep -q '"upToDate":true'
 

@@ -41,11 +41,12 @@
 //! table takes more failures than the global budget allows, and a key with
 //! failures from [`MAX_NETS`] networks is locked for all of them.
 //!
-//! The network comes from the client address the reverse proxy reports (see
-//! [`crate::auth::session::client_ip`]). Without a proxy that overwrites the
-//! forwarding headers, a client can claim any network: it then gets the
-//! account budget instead of the per-network one, and can lock the account
-//! for everyone as before (risk assessment, T1).
+//! The network is the TCP peer's, or, when the peer is one of the operator's
+//! `TRUSTED_PROXIES`, that of the client address the proxies report (see
+//! [`crate::auth::session::throttle_ip`]), so a client cannot choose its
+//! network with a forged `X-Forwarded-For` (GH#215). Behind a proxy that is
+//! not listed, every client shares the proxy's network: failures from any of
+//! them lock the username for all of them, as before GH#187.
 //!
 //! The state is in memory: it resets on restart and is per process. That is
 //! enough to make online guessing impractical (a few attempts per hour per

@@ -90,6 +90,12 @@ pub struct AuthConfig {
     /// `SETUP_TOKEN_FILE`: where a generated setup token is written. `main`
     /// defaults it to `setup-token` next to the env file.
     pub setup_token_file: Option<PathBuf>,
+    /// `TRUSTED_PROXIES`: whose forwarding headers the sign-in throttle reads
+    /// (see [`crate::auth::session::throttle_ip`]).
+    pub trusted_proxies: crate::auth::session::TrustedProxies,
+    /// `SIGN_IN_FAILURE_FLOOR_MS`: the least time a refused sign-in (401) takes,
+    /// so its answer does not tell which names are local accounts (GH#216).
+    pub sign_in_failure_floor: Duration,
 }
 
 /// Who may read `/openapi.json` and the Swagger UI at `/docs`.
@@ -181,6 +187,8 @@ pub struct EncryptionConfig {
     pub previous_key_file: Option<PathBuf>,
 }
 
+/// Well below `HTTP_REQUEST_TIMEOUT_SECS`, which also bounds the refused sign-in.
+const MAX_SIGN_IN_FAILURE_FLOOR_MS: u64 = 10_000;
 const DEFAULT_SESSION_IDLE_MINUTES: u64 = 12 * 60;
 const DEFAULT_SESSION_MAX_AGE_HOURS: u64 = 7 * 24;
 
@@ -589,6 +597,22 @@ impl Config {
             }
         });
         let setup_token_file = r.raw("SETUP_TOKEN_FILE").map(PathBuf::from);
+        let trusted_proxies = r
+            .raw("TRUSTED_PROXIES")
+            .and_then(|s| {
+                crate::auth::session::TrustedProxies::parse(&s)
+                    .map_err(|e| r.errors.push(format!("TRUSTED_PROXIES: {e}")))
+                    .ok()
+            })
+            .unwrap_or_default();
+        let sign_in_failure_floor_ms =
+            r.int::<u64>("SIGN_IN_FAILURE_FLOOR_MS", 0, MAX_SIGN_IN_FAILURE_FLOOR_MS).unwrap_or(1_000);
+        if sign_in_failure_floor_ms >= request_timeout_secs.saturating_mul(1_000) {
+            r.errors.push(format!(
+                "SIGN_IN_FAILURE_FLOOR_MS: {sign_in_failure_floor_ms} ms is not below HTTP_REQUEST_TIMEOUT_SECS \
+                 ({request_timeout_secs} s), so refused sign-ins would time out instead of answering 401"
+            ));
+        }
 
         let encryption = EncryptionConfig {
             key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
@@ -638,6 +662,8 @@ impl Config {
                 oidc_allowed_hosts,
                 setup_token,
                 setup_token_file,
+                trusted_proxies,
+                sign_in_failure_floor: Duration::from_millis(sign_in_failure_floor_ms),
             },
             audit: AuditConfig { capture_client_ip, capture_user_agent, export },
             encryption,
@@ -751,6 +777,27 @@ mod tests {
         assert!(!allowed.allows(&url::Url::parse("https://idp.corp.example/x").unwrap()));
         let err = load_with(&[("OIDC_ALLOWED_HOSTS", "*.example.com")]).unwrap_err().to_string();
         assert!(err.contains("OIDC_ALLOWED_HOSTS"), "{err}");
+    }
+
+    #[test]
+    fn trusted_proxies_and_the_sign_in_failure_floor() {
+        let cfg = load_with(&[]).unwrap();
+        assert!(cfg.auth.trusted_proxies.is_empty(), "unset: no proxy is trusted");
+        assert_eq!(cfg.auth.sign_in_failure_floor, Duration::from_secs(1));
+        let cfg =
+            load_with(&[("TRUSTED_PROXIES", "10.0.0.0/8, 192.0.2.7"), ("SIGN_IN_FAILURE_FLOOR_MS", "0")]).unwrap();
+        assert!(cfg.auth.trusted_proxies.contains("10.1.2.3".parse().unwrap()));
+        assert_eq!(cfg.auth.sign_in_failure_floor, Duration::ZERO);
+        for (key, bad) in [
+            ("TRUSTED_PROXIES", "0.0.0.0/0"),
+            ("TRUSTED_PROXIES", "lb.example.com"),
+            ("SIGN_IN_FAILURE_FLOOR_MS", "60000"),
+        ] {
+            let err = load_with(&[(key, bad)]).unwrap_err().to_string();
+            assert!(err.contains(key), "{err}");
+        }
+        let err = load_with(&[("SIGN_IN_FAILURE_FLOOR_MS", "2000"), ("HTTP_REQUEST_TIMEOUT_SECS", "2")]).unwrap_err();
+        assert!(err.to_string().contains("SIGN_IN_FAILURE_FLOOR_MS"), "{err}");
     }
 
     #[test]
