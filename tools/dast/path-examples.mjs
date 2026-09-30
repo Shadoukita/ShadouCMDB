@@ -6,7 +6,8 @@
 // request was refused 400 while the path was parsed, and no `/{id}` handler was ever attacked. This
 // script signs in to the running server as the scan's administrator, reads one id per resource from
 // its list endpoint (demo data from `seed --demo`), creates the objects the scan may damage (a user,
-// a profile, an identity provider, an API token), and writes the spec with those ids as examples.
+// a profile, an identity provider, an API token, an import job), and writes the spec with those ids
+// as examples.
 //
 //   DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json> [<examples.json>]
 //
@@ -42,7 +43,7 @@ export const LISTED = [
  * Objects created for the scan. The scan changes, disables and deletes what it is given, so it gets
  * objects of its own: never its own account (a password change would end its session) or token.
  */
-export const CREATED = ["admin/profiles", "admin/users", "admin/identity-providers", "admin/api-tokens"];
+export const CREATED = ["admin/profiles", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports"];
 
 /**
  * Resources that may have no row yet; any well-formed value still reaches the handler (404). The
@@ -99,7 +100,10 @@ export function withExamples(spec, examples) {
   return { spec: copy, missing: [...new Set(missing)] };
 }
 
-/** Signs in and returns `request(method, path, body)` resolving to the parsed JSON response. */
+/**
+ * Signs in and returns `request(method, path, body, contentType)` resolving to the parsed JSON
+ * response. `body` is sent as JSON, or as it is when `contentType` is given (a raw-body upload).
+ */
 async function signIn(base, username, password) {
   const login = await fetch(`${base}${PREFIX}auth/login`, {
     method: "POST",
@@ -109,10 +113,11 @@ async function signIn(base, username, password) {
   if (!login.ok) throw new Error(`sign-in as ${username}: ${login.status}`);
   const { csrfToken } = await login.json();
   const cookie = login.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
-  return async (method, path, body) => {
-    const headers = { Cookie: cookie };
-    if (body !== undefined) Object.assign(headers, { "Content-Type": "application/json", "X-CSRF-Token": csrfToken });
-    const response = await fetch(`${base}${PREFIX}${path}`, { method, headers, body: body && JSON.stringify(body) });
+  return async (method, path, body, contentType, extraHeaders = {}) => {
+    const headers = { Cookie: cookie, ...extraHeaders };
+    if (body !== undefined) Object.assign(headers, { "Content-Type": contentType ?? "application/json", "X-CSRF-Token": csrfToken });
+    const payload = body === undefined || contentType ? body : JSON.stringify(body);
+    const response = await fetch(`${base}${PREFIX}${path}`, { method, headers, body: payload });
     if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${await response.text()}`);
     return response.json();
   };
@@ -155,6 +160,14 @@ async function collect(request) {
   examples["admin/api-tokens"] = (
     await request("POST", "admin/api-tokens", { name, profileId: builtin.id, expiresAt })
   ).token.id;
+  // Bulk import is off on a fresh install. The upload is session-only and takes the file as the
+  // body; the job is analysed in the background and the scan may cancel it.
+  await request("PUT", "imports/settings", { enabled: true });
+  examples["imports"] = (
+    await request("POST", "imports", "hostname,description\r\ndast-01,DAST scan target\r\n", "text/csv", {
+      "X-File-Name": "dast-scan-target.csv",
+    })
+  ).id;
   return examples;
 }
 

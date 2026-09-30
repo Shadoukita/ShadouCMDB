@@ -1,0 +1,48 @@
+# Fuzz targets for the bulk import parsers (SHAA-714 §5.2, AC 12). The server
+# is a binary crate, so the targets compile the parser sources by path.
+# Run with: cargo +nightly fuzz run import_csv -- -max_total_time=600
+[package]
+name = "shadoucmdb-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# The parser's own dependencies, as in ../Cargo.toml.
+calamine = { version = "0.36", default-features = false, features = ["dates"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+csv-core = "0.1"
+encoding_rs = "0.8"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+quick-xml = "0.41"
+serde = { version = "1", features = ["derive"] }
+utoipa = { version = "6", features = ["uuid", "chrono", "preserve_order", "preserve_path_order"] }
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "import_csv"
+path = "fuzz_targets/import_csv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_xlsx_preflight"
+path = "fuzz_targets/import_xlsx_preflight.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_xlsx"
+path = "fuzz_targets/import_xlsx.rs"
+test = false
+doc = false
+bench = false

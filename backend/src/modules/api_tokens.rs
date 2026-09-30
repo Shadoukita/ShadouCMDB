@@ -573,11 +573,32 @@ pub(crate) mod tests {
         build_app_with(pool, cookie_secure, capacity, |_| {})
     }
 
+    /// The real router with these bulk import limits.
+    pub(crate) fn app_with_imports(pool: sqlx::PgPool, imports: crate::config::ImportConfig) -> Router {
+        build_app_full(
+            pool,
+            CookieSecure::Never,
+            crate::http::Capacity::new(512, StdDuration::from_secs(10)),
+            |_| {},
+            imports,
+        )
+    }
+
     fn build_app_with(
         pool: sqlx::PgPool,
         cookie_secure: CookieSecure,
         capacity: crate::http::Capacity,
         configure: impl FnOnce(&mut AuthConfig),
+    ) -> Router {
+        build_app_full(pool, cookie_secure, capacity, configure, Default::default())
+    }
+
+    fn build_app_full(
+        pool: sqlx::PgPool,
+        cookie_secure: CookieSecure,
+        capacity: crate::http::Capacity,
+        configure: impl FnOnce(&mut AuthConfig),
+        imports: crate::config::ImportConfig,
     ) -> Router {
         let mut auth = AuthConfig {
             session_idle: StdDuration::from_secs(3600),
@@ -622,9 +643,10 @@ pub(crate) mod tests {
             audit: Default::default(),
             encryption: Default::default(),
             impact: Default::default(),
-            imports: Default::default(),
+            imports: imports.clone(),
         };
-        router(AppState { capacity, ..AppState::new(pool, auth, crate::secrets::Keyring::for_tests()) }, &cfg)
+        let state = AppState::new(pool, auth, crate::secrets::Keyring::for_tests()).importing(&imports);
+        router(AppState { capacity, ..state }, &cfg)
     }
 
     #[derive(Default, Clone)]
@@ -938,7 +960,7 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
-    fn session_of(me: &Value, headers: &HeaderMap) -> Creds {
+    pub(crate) fn session_of(me: &Value, headers: &HeaderMap) -> Creds {
         let cookie = headers
             .get_all(header::SET_COOKIE)
             .iter()

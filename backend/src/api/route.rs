@@ -197,6 +197,78 @@ impl<T: IntoParams + DeserializeOwned + Send + 'static> QueryInput for Query<T> 
 pub trait BodyInput: Sized + Send + 'static {
     fn schema() -> Option<RefOr<Schema>>;
     fn parse(body: Option<Value>) -> Result<Self, AppError>;
+
+    /// Reads the request body: by default the whole of it, as JSON, up to
+    /// `limit` bytes. [`RawBody`] hands over the stream instead.
+    fn read(
+        headers: &HeaderMap,
+        body: RequestBody,
+        limit: usize,
+        _media: &'static [&'static str],
+        budget: Option<&crate::http::Capacity>,
+    ) -> impl Future<Output = Result<Self, AppError>> + Send {
+        async move { Self::parse(read_body(headers, body, limit, budget).await?) }
+    }
+}
+
+/// A body that is not JSON (an uploaded file), declared with
+/// [`RouteBuilder::raw_body`]: the handler gets the stream, never the whole
+/// body in memory. The `Content-Type` has been checked against the route's
+/// list (`415` otherwise) and a declared `Content-Length` above the limit is
+/// refused (`413`) before anything is read; the handler must count what it
+/// reads against the same limit.
+pub struct RawBody {
+    /// One of the route's media types (its essence, lower case).
+    pub content_type: &'static str,
+    /// `Content-Length`, when the client sent one.
+    pub declared_length: Option<u64>,
+    pub limit: usize,
+    pub body: RequestBody,
+}
+
+impl BodyInput for RawBody {
+    fn schema() -> Option<RefOr<Schema>> {
+        let schema = utoipa::openapi::schema::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::schema::Type::String)
+            .format(Some(utoipa::openapi::schema::SchemaFormat::KnownFormat(
+                utoipa::openapi::schema::KnownFormat::Binary,
+            )))
+            .into();
+        Some(RefOr::T(schema))
+    }
+    fn parse(_: Option<Value>) -> Result<Self, AppError> {
+        Err(AppError::internal())
+    }
+    fn read(
+        headers: &HeaderMap,
+        body: RequestBody,
+        limit: usize,
+        media: &'static [&'static str],
+        // Nothing is read here: the handler gets the stream.
+        _budget: Option<&crate::http::Capacity>,
+    ) -> impl Future<Output = Result<Self, AppError>> + Send {
+        let essence = headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(';').next())
+            .map(|e| e.trim().to_ascii_lowercase());
+        let declared = headers
+            .get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok());
+        async move {
+            let content_type = media.iter().find(|m| essence.as_deref() == Some(**m)).copied().ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::UnsupportedMediaType,
+                    format!("The request body must be one of: {}", media.join(", ")),
+                )
+            })?;
+            if declared.is_some_and(|n| n > limit as u64) {
+                return Err(AppError::new(ErrorCode::PayloadTooLarge, "Request body is too large"));
+            }
+            Ok(RawBody { content_type, declared_length: declared, limit, body })
+        }
+    }
 }
 
 /// The route takes no body.
@@ -392,6 +464,48 @@ impl Output for Binary {
     }
 }
 
+/// A CSV file to download (`text/csv; charset=utf-8`), never cached. The
+/// file name is reduced to `[A-Za-z0-9._-]` (at most 100 characters) and also
+/// sent as RFC 5987 `filename*`, so it cannot inject a header (§5.1).
+pub struct CsvDownload {
+    pub file_name: String,
+    pub body: axum::body::Body,
+}
+
+/// A file name safe in `Content-Disposition`: `[A-Za-z0-9._-]`, at most 100 characters.
+pub fn safe_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' })
+        .take(100)
+        .collect();
+    if cleaned.trim_matches(['.', '_']).is_empty() { "download.csv".into() } else { cleaned }
+}
+
+impl Output for CsvDownload {
+    fn doc() -> Option<ResponseDoc> {
+        let schema = utoipa::openapi::schema::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::schema::Type::String)
+            .content_media_type("text/csv")
+            .into();
+        Some(ResponseDoc { name: String::new(), schema: RefOr::T(schema), nested: Vec::new(), media_type: "text/csv" })
+    }
+    fn respond(self, status: StatusCode) -> Response {
+        let name = safe_file_name(&self.file_name);
+        let encoded = percent_encoding::utf8_percent_encode(&name, percent_encoding::NON_ALPHANUMERIC).to_string();
+        let disposition = format!("attachment; filename=\"{name}\"; filename*=UTF-8''{encoded}");
+        let headers = [
+            (header::CONTENT_TYPE, HeaderValue::from_static("text/csv; charset=utf-8")),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("attachment")),
+            ),
+        ];
+        (status, headers, self.body).into_response()
+    }
+}
+
 /// A CSV file (`text/csv; charset=utf-8`), e.g. an export. Documented as `text/csv`.
 pub struct Csv(pub String);
 
@@ -540,6 +654,10 @@ pub struct Route {
     pub path_params: Vec<Parameter>,
     pub query_params: Vec<Parameter>,
     pub body: Option<RefOr<Schema>>,
+    /// Media types of a raw body ([`RouteBuilder::raw_body`]); empty for JSON.
+    pub body_media: &'static [&'static str],
+    /// The route bounds its own duration instead of `HTTP_REQUEST_TIMEOUT_SECS`.
+    pub own_timeout: bool,
     pub response: Option<ResponseDoc>,
     pub handler: MethodRouter<AppState>,
 }
@@ -558,6 +676,8 @@ pub struct RouteBuilder {
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
     body_limit: Option<usize>,
+    body_media: &'static [&'static str],
+    own_timeout: bool,
     unlimited: bool,
 }
 
@@ -576,6 +696,8 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         errors: Vec::new(),
         also_returns: Vec::new(),
         body_limit: None,
+        body_media: &[],
+        own_timeout: false,
         unlimited: false,
     }
 }
@@ -656,6 +778,15 @@ impl RouteBuilder {
         self.body_limit = Some(bytes);
         self
     }
+    /// The body is a file of one of these media types, up to `limit` bytes,
+    /// handed to the handler as a stream ([`RawBody`]). The route is exempt
+    /// from `HTTP_REQUEST_TIMEOUT_SECS`: the handler bounds its own duration.
+    pub fn raw_body(mut self, media: &'static [&'static str], limit: usize) -> Self {
+        self.body_media = media;
+        self.body_limit = Some(limit);
+        self.own_timeout = true;
+        self.errors(&[ErrorCode::PayloadTooLarge, ErrorCode::RequestTimeout])
+    }
     pub fn also_returns(mut self, status: StatusCode, description: impl Into<String>) -> Self {
         self.also_returns.push((status, description.into()));
         self
@@ -685,6 +816,7 @@ impl RouteBuilder {
             _ => BODY_LIMIT,
         });
         let (method, operation_id) = (self.method.clone(), Arc::<str>::from(self.operation_id.as_str()));
+        let body_media = self.body_media;
 
         let handler = move |State(state): State<AppState>,
                             uri: Uri,
@@ -727,7 +859,7 @@ impl RouteBuilder {
                             capacity.check_public()?;
                         }
                         let limit = capacity.public_body_timeout;
-                        let read = read_body(&headers, body, body_limit, Some(capacity));
+                        let read = B::read(&headers, body, body_limit, body_media, Some(capacity));
                         let body = tokio::time::timeout(limit, read).await.map_err(|_| {
                             AppError::new(
                                 ErrorCode::RequestTimeout,
@@ -737,9 +869,9 @@ impl RouteBuilder {
                         (if unlimited { None } else { Some(capacity.acquire(true)?) }, body)
                     } else {
                         let permit = state.capacity.acquire(false)?;
-                        (Some(permit), read_body(&headers, body, body_limit, None).await?)
+                        (Some(permit), B::read(&headers, body, body_limit, body_media, None).await?)
                     };
-                    let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
+                    let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, body);
                     let api = Api {
                         pool: state.pool,
                         ctx,
@@ -785,6 +917,8 @@ impl RouteBuilder {
             path_params: P::params(),
             query_params: Q::params(),
             body: B::schema(),
+            body_media: self.body_media,
+            own_timeout: self.own_timeout,
             response,
             handler: on(filter, handler),
         }

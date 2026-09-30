@@ -138,14 +138,16 @@ async function call(
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       ...headers,
     },
-    body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
+    body: body === undefined ? undefined : typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body),
     // The OIDC routes answer browser navigations with 302: check the redirect itself.
     redirect: 'manual',
   });
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const binary = /^(image\/|text\/csv)/.test(res.headers.get('content-type') ?? '');
+  const contentType = res.headers.get('content-type') ?? '';
+  const binary = /^image\//.test(contentType);
   const text = binary ? '' : new TextDecoder().decode(bytes);
-  const json = text ? JSON.parse(text) : undefined;
+  // CSV downloads are text but not JSON.
+  const json = text && !/^text\/csv/.test(contentType) ? JSON.parse(text) : undefined;
   calls++;
   const op = operationFor(method, url);
   if (op) {
@@ -709,6 +711,43 @@ async function main() {
   check((await call('PUT', '/api/v1/imports/settings', { enabled: true }, 200)).json.enabled === true, 'an administrator turns bulk import on');
   await call('PUT', '/api/v1/imports/settings', { enabled: 'yes' }, 400);
   check((await call('PUT', '/api/v1/imports/settings', { enabled: false }, 200)).json.enabled === false, 'and off again');
+  await call('POST', '/api/v1/imports', 'Name\r\nx\r\n', 403, { 'content-type': 'text/csv', 'x-file-name': 'off.csv' });
+  await call('PUT', '/api/v1/imports/settings', { enabled: true }, 200);
+  const template = await get('/api/v1/imports/template?classKey=server', 200);
+  const templateText = new TextDecoder('utf-8', { ignoreBOM: true }).decode(template.bytes);
+  check(templateText.startsWith('\ufeff"Ident",') && template.headers.get('cache-control') === 'no-store', 'the import template is a CSV headed by Ident, not cached');
+  await get('/api/v1/imports/template?classKey=doesnotexist', 404);
+  const importCsv = 'Name;Status\r\nsmoke-import-01;in_service\r\n';
+  const importHeaders = { 'content-type': 'text/csv', 'x-file-name': encodeURIComponent('smoke ü.csv'), 'idempotency-key': `smoke-${RUN}` };
+  await call('POST', '/api/v1/imports', importCsv, 415, { ...importHeaders, 'content-type': 'text/plain' });
+  await call('POST', '/api/v1/imports', importCsv, 400, { 'content-type': 'text/csv' });
+  const uploaded = (await call('POST', '/api/v1/imports', importCsv, 202, importHeaders)).json;
+  check(uploaded.file?.name === 'smoke ü.csv' && uploaded.status === 'queued', 'the upload is stored and queued for analysis');
+  const again = (await call('POST', '/api/v1/imports', importCsv, 202, importHeaders)).json;
+  check(again.id === uploaded.id, 'the same Idempotency-Key returns the same import');
+  const settled = async (id: string) => {
+    let job: Json;
+    for (let i = 0; i < 100; i++) {
+      job = (await call('GET', `/api/v1/imports/${id}`, undefined, 200, {}, { cover: i === 0 })).json;
+      if (job.status !== 'queued' && job.status !== 'analysing') return job;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return job;
+  };
+  let analysed = await settled(uploaded.id);
+  check(analysed.status === 'ready' && analysed.file.rowCount === 1 && analysed.file.delimiter === ';' && analysed.columns[0]?.header === 'Name', 'the worker analyses the file');
+  check((await get('/api/v1/imports')).json.data.some((j: Json) => j.id === uploaded.id), 'the import is listed');
+  await call('PATCH', `/api/v1/imports/${uploaded.id}/file-options`, { hasHeaderRow: false }, 202);
+  analysed = await settled(uploaded.id);
+  check(analysed.status === 'ready' && analysed.file.rowCount === 2, 'changing the file options analyses it again');
+  await call('DELETE', `/api/v1/imports/${uploaded.id}`, undefined, 204);
+  const second = (await call('POST', '/api/v1/imports', importCsv, 202, { ...importHeaders, 'idempotency-key': `smoke-2-${RUN}` })).json;
+  await settled(second.id);
+  check((await call('POST', `/api/v1/imports/${second.id}/cancel`, undefined, 202)).json.status === 'cancelled', 'an import can be cancelled');
+  await call('POST', `/api/v1/imports/${second.id}/cancel`, undefined, 409);
+  await call('DELETE', `/api/v1/imports/${second.id}`, undefined, 204);
+  await get(`/api/v1/imports/${second.id}`, 404);
+  await call('PUT', '/api/v1/imports/settings', { enabled: false }, 200);
 
   // --- HTTP-level errors ---------------------------------------------------------
   console.log('\n# HTTP errors');

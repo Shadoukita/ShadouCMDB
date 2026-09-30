@@ -519,6 +519,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your imports, newest first
+         * @description Requires `cis.import`. The caller's jobs; administrators may pass `all=true` for every user's. Also while bulk import is off, so remaining jobs can be seen and removed. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["listImports"];
+        put?: never;
+        /**
+         * Upload a CSV or XLSX file for import
+         * @description Requires `cis.import`. The body is the file itself (not JSON, not multipart), with `Content-Type: text/csv` or `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`; any other type is `415`. The format is decided by the file's first bytes: a password-protected workbook or an `.xls` is `415` with `workbook_encrypted_or_xls`, a file that does not match the declared type `415` with `unsupported_format`. The file name goes in the `X-File-Name` header, percent-encoded UTF-8 (1–255 characters, no control or invisible formatting characters, no path), never in the URL. An optional `Idempotency-Key` (1–128 visible ASCII characters, kept 24 h) returns the job it created before. Answers `202` with the job, `queued` for analysis, once the last byte is stored. Limits: `IMPORT_MAX_FILE_MB` (`413`), `IMPORT_UPLOAD_TIMEOUT_SECS` for the whole upload and 60 s without data (`408`, `upload_timeout`), and `429` with `import_busy` (an import of yours is running), `import_limit` (20 unfinished imports), `import_rate` (30 uploads an hour) or `import_storage_full` (the server's stored-upload cap). `403` with `import_disabled` while bulk import is off. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["createImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An empty CSV with the column names of a class
+         * @description Requires `cis.import`. One header row: `Ident` and the labels of the class's active attributes, every field quoted and neutralised against formula injection. `404` for a class the caller cannot import into, the same as for an unknown key. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["downloadImportTemplate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An import job, for polling
+         * @description Requires `cis.import`. The caller's job, or any job for an administrator; `404` otherwise, the same as for a job that does not exist. Poll every 1 s for the first 10 s, then every 2 s, then every 5 s after a minute. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["getImport"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an import, its file and its row problems
+         * @description Requires `cis.import`. Never touches CIs. `409` while the job is running (cancel it first). Also while bulk import is off, so uploaded files can be removed. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        delete: operations["deleteImport"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/{id}/file-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change how the file is read (sheet, encoding, delimiter, header row)
+         * @description Requires `cis.import`. The analysis runs again and the mapping and any dry run are dropped. In `ready`, or after an analysis that failed. `sheet` is for workbooks, `encoding` and `delimiter` for CSV files. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        patch: operations["updateImportFileOptions"];
+        trace?: never;
+    };
+    "/api/v1/imports/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop an import
+         * @description Requires `cis.import`. Analysis and dry run stop at once; a commit stops after its current batch of at most 500 rows, and the rows committed so far stay. `409` once the job has ended. Also while bulk import is off. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["cancelImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/relationships": {
         parameters: {
             query?: never;
@@ -2621,7 +2729,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "IDEMPOTENCY_KEY_REUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
                 message: string;
                 details?: {
                     /** @enum {string} */
@@ -2910,6 +3018,216 @@ export interface components {
             /** @description Changed fields (updates only) */
             fields: components["schemas"]["FieldChange"][];
         };
+        /** @description One column of the file. */
+        ImportColumn: {
+            /**
+             * Format: int32
+             * @description 0-based
+             */
+            index: number;
+            /** @description The header cell, or "Column A" … without a header row */
+            header: string;
+            /** @description The first three non-empty values, each at most 200 characters */
+            samples: string[];
+        };
+        /** @description One mapped column of the file. */
+        ImportColumnMapping: {
+            /**
+             * Format: int32
+             * @description 0-based column of the file
+             */
+            index: number;
+            target: components["schemas"]["ImportColumnTarget"];
+            emptyCells?: components["schemas"]["ImportEmptyCells"] | null;
+            options?: components["schemas"]["ImportColumnOptions"] | null;
+        };
+        /** @description Per-column overrides of the job's options. */
+        ImportColumnOptions: {
+            decimalSeparator?: string | null;
+            dateFormat?: components["schemas"]["ImportDateFormat"] | null;
+            /** @description IANA time zone for date-time values without an offset */
+            timeZone?: string | null;
+        };
+        /** @description Where a column goes. */
+        ImportColumnTarget: {
+            key: string;
+            match?: components["schemas"]["ImportTargetMatch"] | null;
+            /** @enum {string} */
+            kind: "attribute";
+        } | {
+            typeKey: string;
+            direction: components["schemas"]["ImportRelationshipDirection"];
+            match: components["schemas"]["ImportTargetMatch"];
+            /** @enum {string} */
+            kind: "relationship";
+        } | {
+            /** @enum {string} */
+            kind: "ident";
+        } | {
+            /** @enum {string} */
+            kind: "validFrom";
+        } | {
+            /** @enum {string} */
+            kind: "validUntil";
+        } | {
+            /** @enum {string} */
+            kind: "ignore";
+        };
+        /** @description Counts of a commit. */
+        ImportCommitCounts: {
+            /** Format: int32 */
+            created: number;
+            /** Format: int32 */
+            updated: number;
+            /** Format: int32 */
+            unchanged: number;
+            /**
+             * Format: int32
+             * @description Rows with dry-run errors that `skipErrorRows` left out
+             */
+            skipped: number;
+            /**
+             * Format: int32
+             * @description Rows that failed at commit
+             */
+            failed: number;
+            /** Format: int32 */
+            relationshipsAdded: number;
+        };
+        /** @enum {string} */
+        ImportDateFormat: "YYYY-MM-DD" | "DD.MM.YYYY" | "MM/DD/YYYY";
+        ImportDryRun: {
+            /** Format: date-time */
+            finishedAt: string;
+            stale: boolean;
+            staleReason?: components["schemas"]["ImportStaleReason"] | null;
+        };
+        /**
+         * @description What an empty cell does to an existing CI (§2.3).
+         * @enum {string}
+         */
+        ImportEmptyCells: "ignore" | "clear";
+        /**
+         * @description A CSV file's text encoding.
+         * @enum {string}
+         */
+        ImportEncoding: "utf-8" | "windows-1252" | "iso-8859-1";
+        ImportFieldChange: {
+            /** @description `attributes.<key>`, `ident`, `validFrom`, `validUntil` or `relationships.<typeKey>` */
+            field: string;
+            old: unknown;
+            new: unknown;
+        };
+        /** @description The uploaded file as the analysis found it. */
+        ImportFile: {
+            name: string;
+            format: components["schemas"]["ImportFileFormat"];
+            /**
+             * Format: int64
+             * @description Bytes
+             */
+            size: number;
+            /** @description SHA-256 (hex) of the file; null while it is uploading */
+            sha256?: string | null;
+            /** @description XLSX: the worksheets, in workbook order */
+            sheets: string[];
+            /** @description XLSX: the hidden worksheets among `sheets` */
+            hiddenSheets: string[];
+            /** @description XLSX: the worksheet read */
+            sheet?: string | null;
+            encoding?: components["schemas"]["ImportEncoding"] | null;
+            /** @description CSV: the delimiter read */
+            delimiter?: string | null;
+            hasHeaderRow: boolean;
+            /**
+             * Format: int32
+             * @description Data rows (null until analysed)
+             */
+            rowCount?: number | null;
+            /** Format: int32 */
+            columnCount?: number | null;
+            /** @description The first 20 data rows as read, for the step 1 preview */
+            previewRows: components["schemas"]["ImportPreviewRow"][];
+        };
+        /** @enum {string} */
+        ImportFileFormat: "csv" | "xlsx";
+        /** @description A bulk import job (§3.1). */
+        ImportJob: {
+            /** Format: uuid */
+            id: string;
+            status: components["schemas"]["ImportStatus"];
+            phase?: components["schemas"]["ImportPhase"] | null;
+            file: components["schemas"]["ImportFile"];
+            /** @description The file's columns with three sample values each (empty until analysed) */
+            columns: components["schemas"]["ImportColumn"][];
+            /** @description The target class (set with the mapping) */
+            classKey?: string | null;
+            mapping?: components["schemas"]["ImportMapping"] | null;
+            /**
+             * Format: uuid
+             * @description The saved mapping the mapping came from, if any (informational)
+             */
+            mappingId?: string | null;
+            progress: components["schemas"]["ImportProgress"];
+            summary?: components["schemas"]["ImportSummary"] | null;
+            /** @description The first 50 planned rows of the dry run */
+            preview: components["schemas"]["ImportPlannedRow"][];
+            dryRun?: components["schemas"]["ImportDryRun"] | null;
+            error?: components["schemas"]["ImportJobError"] | null;
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: components["schemas"]["ImportOwner"];
+            /**
+             * Format: date-time
+             * @description When the file is deleted (24 h after the last activity or the end of the job)
+             */
+            expiresAt: string;
+            /** Format: date-time */
+            finishedAt?: string | null;
+        };
+        /** @description Why a job stopped. */
+        ImportJobError: {
+            code: string;
+            message: string;
+            /**
+             * Format: int32
+             * @description The row it concerns (the header is row 1)
+             */
+            row?: number | null;
+            /**
+             * Format: int32
+             * @description The 0-based column it concerns
+             */
+            column?: number | null;
+        };
+        ImportJobList: {
+            data: components["schemas"]["ImportJobSummary"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description A job in lists: without columns, mapping and preview. */
+        ImportJobSummary: {
+            /** Format: uuid */
+            id: string;
+            status: components["schemas"]["ImportStatus"];
+            phase?: components["schemas"]["ImportPhase"] | null;
+            fileName: string;
+            fileFormat: components["schemas"]["ImportFileFormat"];
+            /** Format: int64 */
+            fileSize: number;
+            /** Format: int32 */
+            rowCount?: number | null;
+            classKey?: string | null;
+            progress: components["schemas"]["ImportProgress"];
+            summary?: components["schemas"]["ImportSummary"] | null;
+            error?: components["schemas"]["ImportJobError"] | null;
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: components["schemas"]["ImportOwner"];
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date-time */
+            finishedAt?: string | null;
+        };
         /** @description The effective limits of an upload. */
         ImportLimits: {
             /**
@@ -2933,6 +3251,94 @@ export interface components {
              */
             maxCellChars: number;
         };
+        /** @description The mapping of a job (`PUT /imports/{id}/mapping`). Columns not listed are ignored. */
+        ImportMapping: {
+            /** @description The target class, by key */
+            classKey: string;
+            mode: components["schemas"]["ImportMode"];
+            key?: components["schemas"]["ImportMatchKey"] | null;
+            emptyCells?: components["schemas"]["ImportEmptyCells"];
+            options?: components["schemas"]["ImportMappingOptions"];
+            columns: components["schemas"]["ImportColumnMapping"][];
+        };
+        /** @description The job's options (§3.2). */
+        ImportMappingOptions: {
+            /** @description Trim spaces around text values (default true) */
+            trim?: boolean;
+            decimalSeparator?: string;
+            dateFormat?: components["schemas"]["ImportDateFormat"];
+            /** @description IANA time zone for date-time values without an offset (default UTC) */
+            timeZone?: string;
+            /** @description Separates several relationship targets in one cell (default `;`) */
+            listSeparator?: string;
+        };
+        /**
+         * @description How the other CI of a reference or relationship is found.
+         * @enum {string}
+         */
+        ImportMatchBy: "ident" | "label" | "attribute";
+        ImportMatchKey: {
+            /** @description `ident` or `attributes.<key>` (a text, integer, IP or CIDR attribute) */
+            field: string;
+        };
+        /** @enum {string} */
+        ImportMode: "create_only" | "update_only" | "create_or_update";
+        ImportOwner: {
+            /**
+             * Format: uuid
+             * @description Null once the user was deleted
+             */
+            id?: string | null;
+            name: string;
+        };
+        /**
+         * @description What `queued` and `progress` refer to.
+         * @enum {string}
+         */
+        ImportPhase: "analyse" | "validate" | "commit";
+        /** @description A planned row in the dry run's sample (at most 50). */
+        ImportPlannedRow: {
+            /** Format: int32 */
+            row: number;
+            outcome: components["schemas"]["ImportRowOutcome"];
+            /**
+             * Format: uuid
+             * @description The matched CI (updates and unchanged rows)
+             */
+            ciId?: string | null;
+            /** @description Its label, or the label the new CI will get */
+            ciLabel?: string | null;
+            changes: components["schemas"]["ImportFieldChange"][];
+        };
+        /** @description A data row as step 1 previews it. */
+        ImportPreviewRow: {
+            /**
+             * Format: int32
+             * @description Row number in the file (the header is row 1)
+             */
+            row: number;
+            cells: string[];
+        };
+        ImportProgress: {
+            /**
+             * Format: int32
+             * @description Rows done in the current phase
+             */
+            done: number;
+            /** Format: int32 */
+            total: number;
+            /**
+             * Format: int64
+             * @description Jobs ahead of this one while it is queued
+             */
+            queuePosition?: number | null;
+            /** Format: date-time */
+            startedAt?: string | null;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @enum {string} */
+        ImportRelationshipDirection: "outgoing" | "incoming";
         ImportResult: {
             /** @enum {string} */
             mode: "dry_run" | "apply";
@@ -2948,6 +3354,8 @@ export interface components {
             /** @description References in the imported UI settings that do not resolve after the import (see GET /api/v1/ui-settings) */
             uiSettingsIssues: components["schemas"]["Issue"][];
         };
+        /** @enum {string} */
+        ImportRowOutcome: "create" | "update" | "unchanged" | "error";
         /** @description Whether bulk import may be used on this instance, and its limits. */
         ImportSettings: {
             /** @description Import is switched on and not forbidden by the server configuration. */
@@ -2955,6 +3363,39 @@ export interface components {
             /** @description The server configuration (`IMPORT_ALLOWED=false`) keeps import off; the switch cannot be turned on. */
             locked: boolean;
             limits: components["schemas"]["ImportLimits"];
+        };
+        /** @enum {string} */
+        ImportStaleReason: "model_changed" | "expired";
+        /**
+         * @description Where a job is (§3.1).
+         * @enum {string}
+         */
+        ImportStatus: "uploading" | "queued" | "analysing" | "ready" | "validating" | "validated" | "committing" | "completed" | "completed_with_errors" | "failed" | "cancelled" | "expired";
+        /** @description Counts of the dry run, and of the commit once it ran. */
+        ImportSummary: {
+            /** Format: int32 */
+            create: number;
+            /** Format: int32 */
+            update: number;
+            /** Format: int32 */
+            unchanged: number;
+            /** Format: int32 */
+            errorRows: number;
+            /** Format: int32 */
+            warnings: number;
+            /** Format: int32 */
+            relationshipsToAdd: number;
+            /**
+             * Format: int32
+             * @description Problems found, including those beyond the 10,000 stored
+             */
+            issuesTotal: number;
+            committed?: components["schemas"]["ImportCommitCounts"] | null;
+        };
+        ImportTargetMatch: {
+            by: components["schemas"]["ImportMatchBy"];
+            /** @description Required with `by: attribute` */
+            attributeKey?: string | null;
         };
         ImportWarning: {
             /** @description Path in the file */
@@ -4421,7 +4862,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -4430,7 +4871,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -4520,7 +4961,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -4529,7 +4970,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -4619,7 +5060,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -4628,7 +5069,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -4866,7 +5307,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -4875,7 +5316,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -5047,7 +5488,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -5056,7 +5497,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -5163,7 +5604,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -5172,7 +5613,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -5280,7 +5721,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -5389,7 +5830,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -5398,7 +5839,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -5874,7 +6315,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -6181,7 +6622,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -6474,7 +6915,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -6579,7 +7020,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Too many failed password attempts (code RATE_LIMITED); see the Retry-After header */
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -6816,8 +7257,695 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listImports: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Only jobs in this status */
+                status?: "uploading" | "queued" | "analysing" | "ready" | "validating" | "validated" | "committing" | "completed" | "completed_with_errors" | "failed" | "cancelled" | "expired";
+                all?: "true" | "false";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportJobList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                "text/csv": string;
+            };
+        };
+        responses: {
+            /** @description Success */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportJob"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The Idempotency-Key was already used for another operation or target (code IDEMPOTENCY_KEY_REUSED, details[0].code idempotency_key_reused). Nothing was changed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    downloadImportTemplate: {
+        parameters: {
+            query: {
+                /** @description The class to import into, by key */
+                classKey: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportJob"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateImportFileOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description XLSX: the worksheet to read (default: the first visible one) */
+                    sheet?: string | null;
+                    encoding?: components["schemas"]["ImportEncoding"] | null;
+                    /** @description CSV: `,` `;` `\t` or `|` (default: detected from the first line) */
+                    delimiter?: string | null;
+                    /** @description Whether the first row holds the column names (default true) */
+                    hasHeaderRow?: boolean | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportJob"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    cancelImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportJob"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7025,7 +8153,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -7313,7 +8441,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -7511,7 +8639,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -7821,7 +8949,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -7949,7 +9077,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -8164,7 +9292,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -8477,7 +9605,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -8778,7 +9906,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -9013,7 +10141,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -9349,7 +10477,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -9562,7 +10690,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -9771,7 +10899,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -10077,7 +11205,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -10361,7 +11489,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -10661,7 +11789,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -11037,7 +12165,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -13297,7 +14425,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -13598,7 +14726,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -13887,7 +15015,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -14189,7 +15317,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -14602,7 +15730,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -14936,7 +16064,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -15116,7 +16244,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -15497,7 +16625,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -15798,7 +16926,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -15920,7 +17048,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -16128,7 +17256,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -16444,7 +17572,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -16562,7 +17690,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -16770,7 +17898,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -17153,7 +18281,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -17488,7 +18616,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -17606,7 +18734,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -17807,7 +18935,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body is not application/json */
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
                     [name: string]: unknown;
