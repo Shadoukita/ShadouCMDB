@@ -15,9 +15,9 @@ sign-ins; only bodies that arrive in pieces can then get `503`. A full anonymous
 `503` at once, without reading the body. No configuration, API or schema change.
 
 Request buffering at the reverse proxy is now defence in depth rather than required for sign-in to
-stay available. The [deployment guide][deployment-buffering] still recommends it, together with a
-per-address limit on the sign-in routes, because each slow request otherwise holds a server
-connection until the timeout.
+stay available. The [hardening checklist][hardening-proxy] in the ShadouCMDB documentation still
+recommends it, together with a per-address limit on the sign-in routes, because each slow request
+otherwise holds a server connection until the timeout.
 
 [GH#283]: https://github.com/Shadoukita/ShadouCMDB/issues/283
-[deployment-buffering]: docs/deployment.md#hardening-settings
+[hardening-proxy]: https://github.com/Shadoukita/ShadouCMDB-Documentation/blob/main/src/content/docs/security/hardening-checklist.md#tls-reverse-proxy
