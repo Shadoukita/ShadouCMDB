@@ -697,22 +697,29 @@ impl RouteBuilder {
                     // the server buffer up to body_limit bytes only to be answered 401.
                     let ctx = authorise(&state, &headers, rule, client, used).await?;
                     // The permit is taken only once the caller is authorised, so rejected
-                    // requests never hold capacity. Public routes draw from their own pool
-                    // and get a short deadline for their body, so anonymous callers cannot
-                    // hold the capacity signed-in users need; only the health routes
-                    // (`unlimited`) take none.
+                    // requests never hold capacity; only the health routes (`unlimited`)
+                    // take none. Public routes draw from their own pool, and only once
+                    // their body is in (GH#283): the body gets a short deadline and a
+                    // shared byte budget instead, so slow anonymous senders hold neither
+                    // the permits of real sign-ins nor the capacity signed-in users need.
                     let public = access == Access::Public;
-                    let _permit = if unlimited { None } else { Some(state.capacity.acquire(public)?) };
-                    let body = if public {
-                        let limit = state.capacity.public_body_timeout;
-                        tokio::time::timeout(limit, read_body(&headers, body, body_limit)).await.map_err(|_| {
+                    let (_permit, body) = if public {
+                        let capacity = &state.capacity;
+                        if !unlimited {
+                            capacity.check_public()?;
+                        }
+                        let limit = capacity.public_body_timeout;
+                        let read = read_body(&headers, body, body_limit, Some(capacity));
+                        let body = tokio::time::timeout(limit, read).await.map_err(|_| {
                             AppError::new(
                                 ErrorCode::RequestTimeout,
                                 format!("The request body was not received within {} s", limit.as_secs()),
                             )
-                        })??
+                        })??;
+                        (if unlimited { None } else { Some(capacity.acquire(true)?) }, body)
                     } else {
-                        read_body(&headers, body, body_limit).await?
+                        let permit = state.capacity.acquire(false)?;
+                        (Some(permit), read_body(&headers, body, body_limit, None).await?)
                     };
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
                     let api = Api { pool: state.pool, ctx, auth: state.auth, headers, readiness: state.readiness };
@@ -829,17 +836,48 @@ pub const PUBLIC_BODY_LIMIT: usize = 64 * 1024;
 /// refused without reading, a larger streamed body as soon as it passes the limit.
 /// JSON is the only accepted body type. An empty body counts as no body
 /// (clients often send Content-Type: application/json on DELETE).
-async fn read_body(headers: &HeaderMap, body: RequestBody, limit: usize) -> Result<Option<Value>, AppError> {
+///
+/// With a `budget` (public routes), every byte counts against the shared
+/// public body budget as it arrives, until the body is parsed: 503
+/// SERVER_BUSY once the budget is spent. Bytes are counted as received, not
+/// as declared, so a slow sender holds only what it has actually sent.
+async fn read_body(
+    headers: &HeaderMap,
+    body: RequestBody,
+    limit: usize,
+    budget: Option<&crate::http::Capacity>,
+) -> Result<Option<Value>, AppError> {
     let too_large = || AppError::new(ErrorCode::PayloadTooLarge, "Request body is too large");
     let declared =
         headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
     if declared.is_some_and(|n| n > limit as u64) {
         return Err(too_large());
     }
-    let bytes = match axum::body::to_bytes(body, limit).await {
-        Ok(b) => b,
-        Err(e) if is_length_limit(&e) => return Err(too_large()),
-        Err(e) => return Err(root_error(&format!("Failed to read the request body: {e}"), "bad_request")),
+    let unreadable =
+        |e: &dyn std::fmt::Display| root_error(&format!("Failed to read the request body: {e}"), "bad_request");
+    let (bytes, _reserved) = match budget {
+        None => match axum::body::to_bytes(body, limit).await {
+            Ok(b) => (b, None),
+            Err(e) if is_length_limit(&e) => return Err(too_large()),
+            Err(e) => return Err(unreadable(&e)),
+        },
+        Some(capacity) => {
+            use http_body_util::BodyExt;
+            let (mut body, mut buf, mut reserved) = (body, Vec::new(), None::<tokio::sync::OwnedSemaphorePermit>);
+            while let Some(frame) = body.frame().await {
+                let Ok(data) = frame.map_err(|e| unreadable(&e))?.into_data() else { continue };
+                if buf.len() + data.len() > limit {
+                    return Err(too_large());
+                }
+                let more = capacity.reserve_public_body(data.len())?;
+                match &mut reserved {
+                    Some(r) => r.merge(more),
+                    None => reserved = Some(more),
+                }
+                buf.extend_from_slice(&data);
+            }
+            (axum::body::Bytes::from(buf), reserved)
+        }
     };
     if bytes.is_empty() {
         return Ok(None);
@@ -886,7 +924,7 @@ mod tests {
 
     use axum::body::{Body, Bytes};
     use axum::http::{Request, header};
-    use futures_util::stream;
+    use futures_util::{StreamExt, stream};
     use serde_json::json;
     use tower::ServiceExt;
 
@@ -1026,33 +1064,52 @@ mod tests {
         db.drop().await;
     }
 
-    /// PR #212 review: anonymous callers that send a public route's body slowly
-    /// must not hold the capacity signed-in users need, and must be cut off
-    /// after HTTP_HEADER_READ_TIMEOUT_SECS instead of HTTP_REQUEST_TIMEOUT_SECS.
+    /// PR #212 review and GH#283: anonymous callers that send a public route's
+    /// body slowly must hold neither the public permits real sign-ins need nor
+    /// the capacity of signed-in users, must hold no more memory than the
+    /// public body budget, and must be cut off after HTTP_HEADER_READ_TIMEOUT_SECS
+    /// instead of HTTP_REQUEST_TIMEOUT_SECS.
     #[tokio::test]
     async fn slow_public_bodies_cannot_exhaust_the_capacity_of_signed_in_users() {
         let Some(db) = scratch::database("slow_public_bodies_cannot_exhaust_capacity").await else { return };
         const PUBLIC: usize = 2;
-        let capacity = Capacity::with_sizes(1, PUBLIC, Duration::from_millis(500));
+        const SLOW: usize = PUBLIC * 4;
+        const SENT: &[u8] = b"{\"username\":";
+        const BUDGET: usize = SLOW * SENT.len() + 64;
+        let capacity = Capacity::with_body_budget(1, PUBLIC, BUDGET, Duration::from_millis(500));
         let app = app_with_capacity(db.pool.clone(), capacity.clone());
         let session = set_up_owner(&app).await;
         let (login, me) = ("/api/v1/auth/login", "/api/v1/auth/me");
-        let never = || Body::from_stream(stream::pending::<Result<Bytes, std::convert::Infallible>>());
+        let trickle = || {
+            let first = stream::once(async { Ok::<_, std::convert::Infallible>(Bytes::from_static(SENT)) });
+            Body::from_stream(first.chain(stream::pending()))
+        };
 
-        // Fill the public pool with sign-ins whose body never arrives.
+        // More sign-ins than the public pool has permits, each stuck after its first bytes.
         let started = Instant::now();
-        let slow: Vec<_> = (0..PUBLIC)
+        let slow: Vec<_> = (0..SLOW)
             .map(|_| {
                 let app = app.clone();
-                tokio::spawn(async move { send(&app, "POST", login, &Creds::default(), never(), Some(100)).await })
+                tokio::spawn(async move { send(&app, "POST", login, &Creds::default(), trickle(), Some(100)).await })
             })
             .collect();
-        while capacity.available(true) > 0 {
+        while capacity.available_body_bytes() > BUDGET - SLOW * SENT.len() {
             assert!(started.elapsed() < Duration::from_secs(5), "the slow sign-ins never started");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        // They hold no public permit, so a real sign-in still gets through.
+        assert_eq!(capacity.available(true), PUBLIC, "a body in transit holds a public permit");
+        let good = json!({ "username": "owner", "password": "correct horse battery" }).to_string();
+        assert!(good.len() <= 64);
+        assert_eq!(send(&app, "POST", login, &Creds::default(), Body::from(good), None).await.0, 200);
+        // What they hold is bounded by the body budget: a body past it is refused.
+        let (status, code, headers) =
+            send_full(&app, "POST", login, &Creds::default(), Body::from(vec![b' '; 65]), None).await;
+        assert_eq!((status, code.as_str()), (503, "SERVER_BUSY"));
+        assert_eq!(headers.get(header::RETRY_AFTER).and_then(|v| v.to_str().ok()), Some("1"));
 
-        // One more is refused at once, without reading its body.
+        // A full public pool refuses at once, without reading the body.
+        let held: Vec<_> = (0..PUBLIC).map(|_| capacity.acquire(true).unwrap()).collect();
         let (body, polled) = spy_body(10);
         let (status, code, headers) = send_full(&app, "POST", login, &Creds::default(), body, Some(10)).await;
         assert_eq!((status, code.as_str()), (503, "SERVER_BUSY"));
@@ -1072,13 +1129,16 @@ mod tests {
         for path in ["/healthz", "/readyz", "/api/v1/version"] {
             assert_eq!(send(&app, "GET", path, &Creds::default(), Body::empty(), None).await.0, 200, "{path}");
         }
+        drop(held);
 
-        // The slow bodies time out after the short public deadline, not the 120 s request timeout.
+        // The slow bodies time out after the short public deadline, not the 120 s request
+        // timeout, and give back what they held.
         for task in slow {
             assert_eq!(task.await.unwrap(), (408, "REQUEST_TIMEOUT".into()));
         }
         assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(capacity.available(true), PUBLIC, "public permits were not released");
+        assert_eq!(capacity.available_body_bytes(), BUDGET, "the body budget was not given back");
 
         // The reverse: a full global pool refuses signed-in requests, while sign-in still works.
         let held = capacity.acquire(false).unwrap();
