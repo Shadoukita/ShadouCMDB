@@ -349,7 +349,10 @@ several; their effective permissions are the union.
   the source CI's class and `view` on the target's. A relationship with an endpoint the user may not view
   answers `404`, and creating one to such a CI fails with the same `not_found` field error as a missing CI.
 - The `GET …/{id}/usage` routes of the data model and lookups need `datamodel.manage`, like the changes they
-  prepare: their counts span every CI class.
+  prepare. A count over CIs (CIs of a type, stored values of a field or lookup value, relationships) is told only
+  to a user who may view every class it can include; otherwise it is `null` with `withheld: true`. The same
+  applies to the counts in a `409 IN_USE` refusal, in a refused retire of a lookup value, and in a type purge's
+  relationship count ([GH#265](https://github.com/Shadoukita/ShadouCMDB/issues/265)).
 - Moving a CI to another class needs `edit` on the old class and `create` on the new one.
 
 **The built-in Administrator profile** holds every permission, including every class. It cannot be changed or
@@ -394,8 +397,11 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
   stay; nothing new is accepted and the UI hides it. `PATCH {"isActive": true}` restores it. **Purge**
   (`POST …/{id}/purge` with `{"confirm": "<key>"}`) is the only way to drop them, and only once archived.
 - Other data model and lookup resources are **deleted** only while nothing refers to them. `GET …/{id}/usage`
-  returns `{ inUse, data: [{ kind, label, count, blocking }] }`; a blocking count makes `DELETE` answer `409
-  IN_USE` with the same counts in `details[]`. Deleted CIs and relationships count too: they are kept for history.
+  returns `{ inUse, data: [{ kind, label, count, withheld, blocking }] }`; a blocking count makes `DELETE` answer
+  `409 IN_USE` with the same counts in `details[]`. Deleted CIs and relationships count too: they are kept for
+  history. A count over CIs of a class the caller may not view is withheld (`count: null`, `withheld: true`) and
+  left out of `details[]`, but still decides `inUse` and the refusal, whose message then says the row is still in
+  use with the details withheld.
   Archive them with `PATCH {"isActive": false}` instead.
 - **Data-loss guards** answer `422 SCHEMA_CHANGE_REFUSED` and change nothing: a `dataType` change that some
   stored value would not survive (up to five are named); `isRequired: true` (a `NOT NULL` column) while any
