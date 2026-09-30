@@ -64,7 +64,6 @@ pub fn generate_key(args: GenerateKeyArgs) -> anyhow::Result<()> {
     );
     println!("  3. Keep a copy apart from the database backups (password vault or escrow): without it, restored");
     println!("     backups have no usable two-factor enrolments or identity provider secrets.");
-    println!("     See docs/security/hardening.md#encryption-key.");
     Ok(())
 }
 
@@ -100,8 +99,7 @@ fn known_keys(configured: Option<(KeyId, Option<KeyId>)>, no_key: bool, secrets:
         None if !no_key => bail!(
             "ENCRYPTION_KEY_FILE is not set, so every encrypted {secrets} would count as undecryptable. Nothing was \
              changed. Run the command with the service's environment (e.g. --env-file <the service's env file>); \
-             only if the key is lost and none is configured, pass --no-key. See \
-             docs/security/hardening.md#encryption-key."
+             only if the key is lost and none is configured, pass --no-key."
         ),
         Some(_) if no_key => bail!(
             "--no-key was given, but ENCRYPTION_KEY_FILE is set. Nothing was changed. Leave out --no-key to keep the \
@@ -303,7 +301,7 @@ pub async fn report(conn: &mut PgConnection, cfg: &EncryptionConfig) -> anyhow::
             println!(
                 "  WARNING: ENCRYPTION_KEY_FILE is not set. `serve` does not start without it. Create a key with \
                  \"shadoucmdb generate-encryption-key --out <path>\" and set ENCRYPTION_KEY_FILE before restarting \
-                 the service; see docs/security/hardening.md#encryption-key."
+                 the service."
             );
             None
         }

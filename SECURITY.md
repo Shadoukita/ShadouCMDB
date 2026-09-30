@@ -5,9 +5,6 @@ file explains how to report a vulnerability, what happens after you do, and whic
 security fixes. It is our coordinated vulnerability disclosure (CVD) policy under the EU Cyber
 Resilience Act (CRA, Annex I Part II).
 
-Operators: the [hardening guide](docs/security/hardening.md) covers secure deployment. The
-other security documents are listed in [docs/security](docs/security/README.md).
-
 ## Reporting a vulnerability
 
 **Do not open a public issue, pull request or discussion for a vulnerability.**
@@ -42,8 +39,7 @@ proof of concept needs them, describe them instead.
 
 We keep you informed at least every 14 days until the fix ships. If a vulnerability is being
 actively exploited, we move faster than the table above, and we are legally required to notify
-the authorities (ENISA and the BSI) within 24 hours; see the
-[CRA reporting runbook](docs/security/cra-incident-reporting.md). That notification does not
+the authorities (ENISA and the BSI) within 24 hours. That notification does not
 make your report public.
 
 When the fix is released we publish a GitHub security advisory with a description, the affected
@@ -61,8 +57,7 @@ disclosure date with them.
 | `0.1.x` (pre-release, `0.1.0-rc.*`) | Yes, until `0.1.0` is released. Release candidates are for evaluation, not production. |
 
 Support period: **5 years from the release of each major version** (the CRA default). Each release will state its end-of-support date
-(month and year) in its release notes, and this table will list it. See
-[support period](docs/security/support-period.md) for what "supported" means.
+(month and year) in its release notes, and this table will list it.
 
 Security fixes are free of charge. Where we can, they ship as their own patch release, separate
 from new features, so you can apply them without taking on other changes.

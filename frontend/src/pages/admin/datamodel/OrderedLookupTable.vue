@@ -9,10 +9,9 @@ import RecordDialog, { type FieldSpec } from "../../../components/RecordDialog.v
 import { moveItem, useDragReorder } from "../../../lib/reorder";
 
 /**
- * A short, ordered lookup list (statuses, environments, the values of an
- * admin-defined list): drag or arrow to reorder (the order of pickers), add,
- * edit, archive, restore and delete with a usage check. `readonly` shows the
- * rows only (the retired status and environment tables, kept for history).
+ * The values of a lookup list, short and ordered: drag or arrow to reorder
+ * (the order of pickers), add, edit, archive, restore and delete with a usage
+ * check.
  */
 export interface Row {
   id: string;
@@ -25,16 +24,16 @@ export interface Row {
 }
 
 const props = defineProps<{
-  resource: "statuses" | "environments" | "lookup-list-values";
-  /** "status", "environment", "value" */
+  resource: "lookup-list-values";
+  /** "value" */
   noun: string;
   title: string;
   rows: Row[] | undefined;
   loading: boolean;
   error: unknown;
   refetch: () => void;
-  /** The add/edit dialog; not needed when `readonly`. */
-  fields?: FieldSpec[];
+  /** The add/edit dialog. */
+  fields: FieldSpec[];
   /** Extra columns after Name and Key. */
   columns?: { key: string; label: string }[];
   /** Merged into every create body (e.g. the list id of a value). */
@@ -44,8 +43,6 @@ const props = defineProps<{
   /** The rows are a filtered part of a longer list: reordering keeps the sort orders they had among the rest. */
   partial?: boolean;
   emptyHint: string;
-  /** View only: no add, edit, reorder, archive or delete. */
-  readonly?: boolean;
 }>();
 const slots = defineSlots<{ cell(props: { row: Row; column: string }): unknown; empty(): unknown; toolbar(): unknown }>();
 
@@ -120,10 +117,8 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
       <h2>{{ title }}</h2>
       <span v-if="rows" class="muted">{{ rows.length }}</span>
       <span v-if="reorder.isPending.value || patch.isPending.value" class="spinner" aria-label="Saving" />
-      <template v-if="!readonly">
-        <span class="muted">Drag a row, or use the arrows, to set the order of pickers.</span>
-        <button type="button" class="btn btn-primary btn-sm" style="margin-left: auto" @click="open(null)">+ Add {{ noun }}</button>
-      </template>
+      <span class="muted">Drag a row, or use the arrows, to set the order of pickers.</span>
+      <button type="button" class="btn btn-primary btn-sm" style="margin-left: auto" @click="open(null)">+ Add {{ noun }}</button>
     </div>
     <div v-if="notice || reorder.isError.value || patch.isError.value" class="panel-body">
       <div v-if="notice" class="alert" role="status">{{ notice }}</div>
@@ -133,34 +128,31 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
     <form v-if="slots.toolbar" class="toolbar" role="search" @submit.prevent><slot name="toolbar" /></form>
     <div v-if="error" class="panel-body"><ErrorAlert :error="error" :on-retry="refetch" /></div>
     <LoadingState v-else-if="loading" />
-    <EmptyState v-else-if="list.length === 0" :title="`No ${noun === 'status' ? 'statuses' : `${noun}s`} yet`">
+    <EmptyState v-else-if="list.length === 0" :title="`No ${noun}s yet`">
       {{ emptyHint }}
       <template #actions>
-        <button v-if="!readonly" type="button" class="btn btn-primary" @click="open(null)">+ Add {{ noun }}</button>
+        <button type="button" class="btn btn-primary" @click="open(null)">+ Add {{ noun }}</button>
         <slot name="empty" />
       </template>
     </EmptyState>
     <div v-else class="table-wrap">
-      <table :class="['data', { reorderable: !readonly }]">
+      <table class="data reorderable">
         <thead>
           <tr>
-            <th v-if="!readonly" scope="col" class="drag-col"><span class="sr-only">Drag to reorder</span></th>
+            <th scope="col" class="drag-col"><span class="sr-only">Drag to reorder</span></th>
             <th scope="col">Name</th>
             <th scope="col">Key</th>
             <th v-for="c in columns ?? []" :key="c.key" scope="col">{{ c.label }}</th>
             <th scope="col">Description</th>
             <th scope="col">Status</th>
-            <template v-if="!readonly">
-              <th scope="col">Order</th>
-              <th scope="col"><span class="sr-only">Actions</span></th>
-            </template>
+            <th scope="col">Order</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in list" :key="r.id" v-bind="readonly ? {} : dnd.row(r.id)" :class="{ disabled: !r.isActive }">
-            <td v-if="!readonly" class="drag-handle" aria-hidden="true" title="Drag to reorder">⠿</td>
-            <td v-if="readonly">{{ r.name }}</td>
-            <td v-else><button type="button" class="btn-link" @click="open(r)">{{ r.name }}</button></td>
+          <tr v-for="r in list" :key="r.id" v-bind="dnd.row(r.id)" :class="{ disabled: !r.isActive }">
+            <td class="drag-handle" aria-hidden="true" title="Drag to reorder">⠿</td>
+            <td><button type="button" class="btn-link" @click="open(r)">{{ r.name }}</button></td>
             <td class="mono">{{ r.key }}</td>
             <td v-for="c in columns ?? []" :key="c.key">
               <slot v-if="slots.cell" name="cell" :row="r" :column="c.key" />
@@ -171,11 +163,11 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
               <span v-if="r.isActive" class="badge ok">Active</span>
               <span v-else class="badge off">Archived</span>
             </td>
-            <td v-if="!readonly" class="order-buttons">
+            <td class="order-buttons">
               <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || list.indexOf(r) === 0" :aria-label="`Move ${r.name} up`" @click="step(r, -1)">↑</button>
               <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || list.indexOf(r) === list.length - 1" :aria-label="`Move ${r.name} down`" @click="step(r, 1)">↓</button>
             </td>
-            <td v-if="!readonly" class="row-actions">
+            <td class="row-actions">
               <button type="button" class="btn btn-sm" :aria-label="`Edit ${r.name}`" @click="open(r)">Edit</button>
               <button v-if="r.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Archive ${r.name}`" @click="setActive(r, false)">Archive</button>
               <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Restore ${r.name}`" @click="setActive(r, true)">Restore</button>
@@ -197,11 +189,10 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
   </section>
 
   <RecordDialog
-    v-if="!readonly"
     :open="dialogOpen"
     :title="editing ? `Edit ${noun} “${editing.name}”` : `New ${noun}`"
     :submit-label="editing ? 'Save' : `Add ${noun}`"
-    :fields="fields ?? []"
+    :fields="fields"
     :record="editing"
     :defaults="createDefaults"
     :save="save"

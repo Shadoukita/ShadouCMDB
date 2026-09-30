@@ -51,7 +51,7 @@ When the UI and API are on different origins, add the UI origin to the backend's
 | `/admin/classes` | Data model › CI classes: the class tree in menu order. Drag a row (or use ↑/↓) to reorder among its siblings; archive/restore; `?archived=show` lists archived classes. |
 | `/admin/classes/new`, `/admin/classes/:id` | Class editor: name, key (fixed after creation), parent, abstract, icon, colour; archive, delete (refused with the usage counts while anything refers to it). Below it, the **attribute editor**: every attribute defined on the class by form section, with drag-and-drop (or ↑/↓) ordering that also moves an attribute into another section; add/edit type, required, enum values, lookup list, reference class, validation, default value, help text and section; archive/restore/delete. Inherited attributes are listed read-only with a link to the class that defines them. |
 | `/admin/relationships` | Relationship types (reorder, edit labels, archive, delete) and, for the selected type (`?type=…`), its rules: which source and target classes it may connect. |
-| `/admin/lookups/:kind` | Lookups: `statuses` and `environments` (ordered, reorderable), `locations` and `owners` (searched, filtered, sorted and paged by the API; state in the URL), and `lists`, the administrator's own value lists (`?list=…`) with their ordered, coloured values. |
+| `/admin/lookups`, `/admin/lookups/:kind` | Former Lookups section; redirects to `/admin/dropdowns` (`/admin/lookups/lists?list=…` keeps its list). Status, environment, location and owner are the lookup lists of the same name. |
 | `/admin/templates` | Starter templates: what each contains and how much already exists; one click installs the IT infrastructure starter (idempotent). On an empty install it explains that the CMDB has no data model yet. |
 | `/admin/customization/:section` | Customization (`customization.manage`): `branding`, `navigation`, `dashboard`, `list-views`, `layouts` and `history`. See [Customization](#customization) below. The class a per-class section edits is in the URL (`?class=server`). |
 | `/admin/config` | Export / import (`config.export_import`): download the configuration file; upload one to see the dry run (summary per section, every change with its old and new values, warnings), then apply it. |
@@ -100,7 +100,7 @@ administrator (`datamodel.manage`) to Templates or the class editor; everyone el
 
 ### Customization
 
-One settings document (`GET /ui-settings`, see `docs/api.md`) applies to every user. The screens read the
+One settings document (`GET /ui-settings`) applies to every user. The screens read the
 *effective* settings; anything a section leaves out keeps the built-in behaviour, so `{}` is the stock UI.
 
 - **Branding** (`src/stores/branding.ts`): app name, logo and favicon come from the public
@@ -173,7 +173,7 @@ src/router.ts          routes (Vue Router, HTML5 history) and the setup → sign
 src/stores/            Pinia stores (the session, branding and theme, the one-shot "Created …/Saved …" notice)
 src/components/        shell, breadcrumbs, global search, pickers, dialogs, state views
 src/pages/             one component per screen; detail/, form/ and dashboard/ hold their parts;
-                       admin/datamodel/ and admin/lookups/ hold the data model editors,
+                       admin/datamodel/ holds the data model editors,
                        admin/customization/ and admin/config/ the customization and export/import screens
 src/lib/               formatting, attribute value conversion, the breadcrumb walk trail, drag-and-drop
                        reordering (reorder.ts), class trees, class icons
@@ -216,8 +216,8 @@ Any page error or Vue warning fails the test.
 
 `a11y.spec.ts` runs axe-core (WCAG 2.1 A and AA rules) on sign-in, the inventory, a CI detail page with its delete
 dialog and edit form, the class and attribute editor, users and profiles, My account and the two-factor enrolment
-step. Critical and serious violations fail it; the rest is reported. What it covers and what it does not is in
-[docs/accessibility.md](../docs/accessibility.md).
+step. Critical and serious violations fail it; the rest is reported. No rule is turned off; one may only be turned off
+for a single screen, with a comment in the spec saying why.
 
 `first-run.spec.ts` walks the real first-run setup, nothing mocked, and only runs when `E2E_FRESH_BASE_URL` points
 at a second API whose database is migrated but has no user. It creates the first administrator there, so give it

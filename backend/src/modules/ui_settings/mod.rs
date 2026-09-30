@@ -58,7 +58,7 @@ pub struct UiAsset {
     pub size: i32,
     /// Hex SHA-256 of the file (also its ETag)
     pub sha256: String,
-    /// Where to load it from; the `v` parameter changes with the content, so it can be cached
+    /// Where to load it from; the `v` parameter changes with the content
     pub url: String,
     #[serde(serialize_with = "ts::serialize")]
     pub updated_at: DateTime<Utc>,
@@ -555,8 +555,8 @@ pub async fn serve_asset(
     let common = |etag: &str| {
         vec![
             (header::ETAG, HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("\"\""))),
-            // Revalidate every time: a new upload must show up at once (the URL's ?v= also changes).
-            (header::CACHE_CONTROL, HeaderValue::from_static("public, no-cache")),
+            // No Cache-Control here: `http::security_headers` sets `no-store` on every API path and
+            // would overwrite it. A new upload shows at once either way (the URL's ?v= also changes).
             (header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
             (header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(ASSET_CSP)),
         ]
@@ -583,8 +583,7 @@ pub fn routes() -> Vec<Route> {
             .summary("The UI settings every user sees")
             .description(
                 "Any signed-in user may read them; the web UI applies them for everyone. `settings` is the effective \
-                 document: entries that refer to classes, attributes, statuses, environments or locations that do not \
-                 exist are left out and listed in `issues` (they stay in the stored document, see the versions).",
+                 document: entries that refer to classes, attributes or lookup lists that do not exist are left out and listed in `issues` (they stay in the stored document, see the versions).",
             )
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 Ok(Json(get(&api.pool).await?))
@@ -646,8 +645,8 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("The logo or favicon image")
             .description(
-                "Public (the login page shows it). Answers with the image bytes, an ETag and `Cache-Control: no-cache`; \
-                 send `If-None-Match` to get 304 Not Modified. Served with a sandboxing Content-Security-Policy.",
+                "Public (the login page shows it). Answers with the image bytes, an ETag and `Cache-Control: no-store` \
+                 (like every API response); send `If-None-Match` to get 304 Not Modified. Served with a sandboxing Content-Security-Policy.",
             )
             .public()
             .errors(&[ErrorCode::NotFound])
@@ -742,6 +741,19 @@ mod tests {
         let (status, _, _) =
             call(&app, "PUT", "/api/v1/ui-settings", &s, Some(put(json!({ "layouts": [html] })))).await;
         assert_eq!(status, 400);
+        // The deprecated v1 `panels` are write-only, not secret: their labels are one line (SHAA-765).
+        for label in ["Ops\nTeam", "\u{202E}evil"] {
+            let v1 = json!({ "classKey": "server", "panels": [{ "key": "p", "label": label, "fields": [] }] });
+            let (status, v, _) =
+                call(&app, "PUT", "/api/v1/ui-settings", &s, Some(put(json!({ "layouts": [v1] })))).await;
+            assert_eq!(status, 400, "{label:?}: {v}");
+            assert_eq!(v["error"]["details"][0]["field"], "settings.layouts.0.panels.0.label", "{v}");
+            assert_eq!(v["error"]["details"][0]["code"], "invalid_character", "{v}");
+        }
+        // Secrets stay exempt: a tab in a login password is a wrong password, not a 400.
+        let wrong = json!({ "username": "owner", "password": "correct\thorse battery" });
+        let (status, v, _) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(wrong)).await;
+        assert_eq!(status, 401, "{v}");
 
         let (status, saved, _) =
             call(&app, "PUT", "/api/v1/ui-settings", &s, Some(put(json!({ "layouts": [layout.clone()] })))).await;

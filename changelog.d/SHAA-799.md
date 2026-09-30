@@ -11,8 +11,7 @@ later changes of this release):
   also needs the class rights for every row.
 - **New server settings:** `IMPORT_ALLOWED` (set `false` to keep import off whatever an
   administrator sets), `IMPORT_MAX_FILE_MB`, `IMPORT_MAX_ROWS`, `IMPORT_MAX_STORED_MB`,
-  `IMPORT_UPLOAD_TIMEOUT_SECS` and `IMPORT_WORKERS`. See `.env.example` and
-  [deployment](docs/deployment.md#hardening-settings).
+  `IMPORT_UPLOAD_TIMEOUT_SECS` and `IMPORT_WORKERS`. See `.env.example`.
 - **Audit:** two new events, `import.commit` (kept with the change history, `prune-audit --scope
   changes`) and `import.report_read` (kept with the authentication events, scope `auth`). Import
   job and saved-mapping entries of a class the reader may not view are left out of the audit log

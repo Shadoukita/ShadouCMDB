@@ -10,7 +10,7 @@ export type ClassRight = "view" | "create" | "edit" | "delete";
 export const GLOBAL_PERMISSIONS: { key: GlobalPermission; label: string; hint: string }[] = [
   { key: "users.manage", label: "Manage users", hint: "Create, edit, disable and delete users; reset passwords; assign profiles" },
   { key: "profiles.manage", label: "Manage permission profiles", hint: "Create, edit, clone and delete permission profiles" },
-  { key: "datamodel.manage", label: "Manage the data model", hint: "CI classes, attributes, relationship types and rules, lookups" },
+  { key: "datamodel.manage", label: "Manage the data model", hint: "CI classes, attributes, relationship types and rules, lookup lists" },
   { key: "customization.manage", label: "Manage customization", hint: "Branding, navigation, dashboards and layouts" },
   { key: "config.export_import", label: "Export and import configuration", hint: "Export or import the whole configuration" },
   { key: "audit.view", label: "View the audit log", hint: "Read the change history of every record" },

@@ -7,7 +7,6 @@
 | `backend/` | The only database client: the Rust server `shadoucmdb` (`Cargo.toml`, `src/`, sqlx offline query data in `.sqlx/`, generated `openapi.json`). |
 | `frontend/` | Vue 3 + Vite + TanStack Query web UI. Talks to the API only. |
 | `sql/` | Database artifacts: migrations, bootstrap scripts, ER diagram. |
-| `docs/` | Architecture, API, deployment and data-model documentation. |
 | `changelog.d/` | Pending changelog entries, one file per change, collected into `CHANGELOG.md` at release ([Changelog](#changelog)). |
 | `tools/` | Smoke test (`smoke/smoke.ts`, runs against any API URL), the in-place upgrade check (`upgrade/upgrade-check.ts`), the LDAPS integration test against a real directory (`ldap-it/`, [README](tools/ldap-it/README.md)), the OpenAPI diff script, the pinned CycloneDX generator for the SBOM (`sbom/`, own lockfile), and the changelog collector (`changelog/collect.mjs`). |
 | `.github/` | CI, upgrade, supply-chain, CodeQL and release workflows, Dependabot config, pull request template. |
@@ -27,7 +26,6 @@
    (in-place upgrade from each published release, no data lost or changed), **Supply chain**
    (cargo-deny, npm audit, gitleaks, SBOM, dependency review, actions pinned by SHA), **CodeQL** and, for
    PRs that touch the pipeline, **Release** as a dry run. Squash-merge, then delete the branch.
-   What each check does and how to fix a failure: [docs/supply-chain.md](docs/supply-chain.md).
 
 Never push directly to `main` or a `release/*` branch, force-push a shared branch, or rewrite merged
 history.
@@ -62,7 +60,7 @@ history.
   GitHub Action is pinned by commit SHA with the version in a comment (`uses: owner/repo@<sha> # v1.2.3`).
 - **Schema changes go through `sql/migrations/`.** See [`sql/README.md`](sql/README.md).
 - **PostgreSQL is external.** No code may assume `localhost` or a co-located database.
-- Keep `README.md`, `docs/` and `sql/diagrams/` accurate in the same PR as the change that affects them.
+- Keep `README.md` and `sql/diagrams/` accurate in the same PR as the change that affects them.
 
 ## Changelog
 
@@ -78,17 +76,18 @@ one file to [`changelog.d/`](changelog.d/):
   `Changed`, `Added`, `Fixed`.
 - **Body:** the text operators read, in the same style as the released entries: what changed and why,
   the issue link, and an **Upgrade:** (or **Action on upgrade**) paragraph whenever an operator has to
-  do something. Put the link reference definitions the entry uses (`[SHAA-123]: docs/api.md#...`) at
-  its end. One entry per file, no `#`/`##`/`###` headings below the first line.
+  do something. Put the link reference definitions the entry uses
+  (`[GH#45]: https://github.com/Shadoukita/ShadouCMDB/issues/45`) at its end. One entry per file, no
+  `#`/`##`/`###` headings below the first line.
 
 ```md
 ### Fixed: the inventory sorts by attributes again
 
-`GET /api/v1/configuration-items` takes `sort=attributes.<key>` again ([SHAA-335]). ...
+`GET /api/v1/configuration-items` takes `sort=attributes.<key>` again ([GH#112]). ...
 
 **Upgrade:** nothing to do.
 
-[SHAA-335]: docs/api.md
+[GH#112]: https://github.com/Shadoukita/ShadouCMDB/issues/112
 ```
 
 To change an entry that is still pending, edit its fragment; to drop it, delete the file. CI runs
@@ -136,7 +135,9 @@ Every version is released from its maintenance branch: `X.Y.0` and all `X.Y.Z` p
 version accordingly.
 
 1. **Bump the version** on `release/X.Y.x` in `backend/Cargo.toml` (`version = "1.2.0"`, or `"1.2.0-rc.1"` for a
-   pre-release) and refresh the lockfile with `cargo update -p shadoucmdb --offline`. For a stable
+   pre-release), refresh the lockfile with `cargo update -p shadoucmdb --offline` and regenerate the API
+   document, whose `info.version` is this version (`shadoucmdb openapi --out openapi.json` in `backend/`;
+   CI's `openapi --check` fails until it is committed). For a stable
    version, **collect the changelog** in the same PR:
 
    ```sh
@@ -169,8 +170,7 @@ version accordingly.
      Linux binaries, tests both images, pushes them, signs them with cosign and attaches the SBOM and
      SLSA provenance, verifies that, then pulls and runs each platform again;
    - writes the CycloneDX SBOM, signs every archive, the SBOM and `SHA256SUMS` with cosign (keyless),
-     records SLSA build provenance, and verifies all of it
-     ([docs/supply-chain.md](docs/supply-chain.md));
+     records SLSA build provenance, and verifies all of it;
    - publishes the GitHub Release with the three archives, the SBOM, `SHA256SUMS`, the
      `.sigstore.json` signatures and the provenance.
 
@@ -180,11 +180,10 @@ version accordingly.
 4. **Check the result:** the release page lists
    `shadoucmdb-<version>-{linux-x64.tar.gz,linux-arm64.tar.gz,windows-x64.zip}`,
    `shadoucmdb-<version>.cdx.json`, `shadoucmdb-<version>.provenance.jsonl`, `SHA256SUMS` and a
-   `.sigstore.json` for each of them, and the verification steps in
-   [docs/supply-chain.md](docs/supply-chain.md#verifying-a-download) pass for one archive and the image.
+   `.sigstore.json` for each of them, and `cosign verify-blob` and `gh attestation verify` pass for one
+   archive (`cosign verify` for the image).
 5. **Add the tag to the upgrade matrix** (`from:` in
-   [`.github/workflows/upgrade.yml`](.github/workflows/upgrade.yml)) and to the table in
-   [docs/operator-setup.md](docs/operator-setup.md#upgrade-paths-tested-in-ci), in a PR to `main`,
+   [`.github/workflows/upgrade.yml`](.github/workflows/upgrade.yml)) in a PR to `main`,
    so every later change is tested against an upgrade from it. In the same PR, **carry the changelog
    section to `main`**: copy `## 1.2.0 (...)` from the release branch into `main`'s `CHANGELOG.md`
    (below *Unreleased*, newest version first) and `git rm` the fragments the collector deleted that

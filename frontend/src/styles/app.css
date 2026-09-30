@@ -1420,7 +1420,7 @@ nav.tabs a[aria-current="page"] {
 .layout-panels > :not(.lg-sec) {
   grid-column: 1 / -1;
 }
-/* ---------- Free tabs (docs/data-model.md › Free tabs) ----------
+/* ---------- Free tabs ----------
  * The windows of a free tab (lg-win) sit in the tab's area (lg-free) where their frames say, the higher z
  * on top, and each scrolls its own content under a title bar that stays in view; a collapsed one is its
  * title bar. Below 820px of tab width and in print nothing is positioned: the windows stack at the full

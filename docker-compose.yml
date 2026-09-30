@@ -3,10 +3,18 @@
 # external database described in .env (see .env.example). Point
 # PGHOST/DATABASE_URL at any reachable PostgreSQL 14+.
 #
+# Credentials are split by service:
+#   .env          every service; the API role (shadoucmdb_app) connection.
+#   .env.migrate  `migrate` only, optional: MIGRATION_DATABASE_URL (schema
+#                 owner) and MAINTENANCE_DATABASE_URL. Never read by `api`.
+# `api` and `seed` blank both owner-side URLs, so they stay out of the
+# running server even if they are still in .env. Needs Docker Compose 2.24 or later.
+#
 #   cp .env.example .env                        # then edit the connection settings
 #   openssl rand -base64 32 > encryption.key && chmod 600 encryption.key && sudo chown 65532:65532 encryption.key
-#                                               # the key `serve` needs (docs/security/hardening.md#encryption-key)
-#   docker compose run --rm migrate             # apply migrations
+#                                               # the key `serve` needs
+#   install -m 600 /dev/null .env.migrate       # then add MIGRATION_DATABASE_URL (and MAINTENANCE_DATABASE_URL)
+#   docker compose run --rm migrate             # apply migrations as the schema owner
 #   docker compose run --rm seed                # check system rows (the data model starts empty)
 #   docker compose run --rm seed seed --template it_infrastructure   # starter data model
 #   docker compose run --rm seed seed --demo    # the starter data model plus a small demo inventory
@@ -37,15 +45,32 @@ services:
       - encryption_key
     environment:
       ENCRYPTION_KEY_FILE: /run/secrets/encryption_key
+      # The schema owner and maintenance roles never reach the running server:
+      # these override any value in .env (empty counts as unset).
+      MIGRATION_DATABASE_URL: ""
+      MAINTENANCE_DATABASE_URL: ""
 
+  # Also the service for the other schema-owner commands (`restore`,
+  # `factory-reset`, `decommission`) and for `prune-audit`, which needs
+  # MAINTENANCE_DATABASE_URL: `docker compose run --rm migrate <command>`.
+  # Instead of .env.migrate you can pass the owner URL per run with
+  # `docker compose run --rm -e MIGRATION_DATABASE_URL=... migrate`.
   migrate:
     <<: *shadoucmdb
+    env_file:
+      - path: .env
+      - path: .env.migrate
+        required: false
     command: ["migrate"]
     profiles: ["tools"]
 
+  # `seed` runs as the API role, so it gets neither owner-side URL either.
   seed:
     <<: *shadoucmdb
     command: ["seed"]
+    environment:
+      MIGRATION_DATABASE_URL: ""
+      MAINTENANCE_DATABASE_URL: ""
     profiles: ["tools"]
 
 secrets:

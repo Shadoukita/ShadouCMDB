@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool};
 use utoipa::ToSchema;
-use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
+use utoipa::openapi::schema::{AnyOfBuilder, ArrayBuilder, ObjectBuilder, Schema, Type};
 use uuid::Uuid;
 
 use super::sso::{self, LDAP, OIDC};
@@ -196,6 +196,11 @@ pub struct IdentityProvider {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Every identity provider, as a bare JSON array (not paginated).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(transparent)]
+pub struct IdentityProviderList(pub Vec<IdentityProvider>);
+
 fn text(max: usize) -> Schema {
     ObjectBuilder::new().schema_type(Type::String).min_length(Some(1)).max_length(Some(max)).pattern(Some(r"\S")).into()
 }
@@ -217,7 +222,10 @@ fn url_schema() -> Schema {
 }
 
 fn secret_schema() -> Schema {
-    schemas::nullable_string_schema(4096)
+    AnyOfBuilder::new()
+        .item(schemas::secret_builder().max_length(Some(4096)))
+        .item(ObjectBuilder::new().schema_type(Type::Null))
+        .into()
 }
 
 fn claim_schema() -> Schema {
@@ -238,7 +246,7 @@ fn scopes_schema() -> Schema {
 }
 
 fn pem_schema() -> Schema {
-    schemas::nullable_string_schema(65536)
+    schemas::multiline_text_schema(65536)
 }
 
 fn mappings_schema() -> Schema {
@@ -1398,10 +1406,10 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, BASE, "listIdentityProviders")
             .tag(ROUTE_TAG)
             .summary("List OIDC providers and LDAP/AD directories with their group mappings (secrets are never returned)")
-            .description(ADMIN_ONLY)
+            .description(format!("{ADMIN_ONLY} Answers a plain array of every provider; the list is not paginated."))
             .requires(manage)
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
-                Ok(Json(list(&api.pool, &api.auth, &api.ctx).await?))
+                Ok(Json(IdentityProviderList(list(&api.pool, &api.auth, &api.ctx).await?)))
             }),
         route(Method::GET, BY_ID, "getIdentityProvider")
             .tag(ROUTE_TAG)
@@ -1578,6 +1586,10 @@ mod tests {
         let oidc_id: Uuid = oidc["id"].as_str().unwrap().parse().unwrap();
         let ldap_id: Uuid = ldap["id"].as_str().unwrap().parse().unwrap();
         let by_id = |id: Uuid| format!("{BASE}/{id}");
+
+        // IdentityProviderList is a plain array on the wire, not `{ data }`.
+        let (status, list, _) = call(&app, "GET", BASE, &admin, None).await;
+        assert_eq!((status, list.as_array().map(Vec::len)), (200, Some(2)), "{list}");
 
         type Stored = (Option<String>, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>, Option<i32>);
         let stored = async |id: Uuid| -> Stored {
