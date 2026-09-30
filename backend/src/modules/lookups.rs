@@ -400,7 +400,7 @@ pub struct Location {
 }
 
 pub(crate) fn address_schema() -> utoipa::openapi::schema::Schema {
-    schemas::nullable_string_schema(1000)
+    schemas::multiline_text_schema(1000)
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

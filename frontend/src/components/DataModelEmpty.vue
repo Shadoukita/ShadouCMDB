@@ -15,7 +15,8 @@ const session = useSessionStore();
   <EmptyState title="No CI classes are defined yet">
     <template v-if="session.can('datamodel.manage')">
       Before anyone can record a configuration item, the CMDB needs a data model: the classes of things you track
-      (servers, applications, databases…), their attributes and the statuses a CI can have. Install the IT infrastructure
+      (servers, applications, databases…), their attributes and the lookup lists they pick from, such as status and
+      environment. Install the IT infrastructure
       starter to begin with a ready-made model, or build your own under Administration.
     </template>
     <template v-else>

@@ -29,7 +29,7 @@ export type CiCreateBody = NonNullable<paths["/api/v1/configuration-items"]["pos
 export type CiUpdateBody = NonNullable<paths["/api/v1/configuration-items/{id}"]["patch"]["requestBody"]>["content"]["application/json"];
 export type RelationshipCreateBody = NonNullable<paths["/api/v1/relationships"]["post"]["requestBody"]>["content"]["application/json"];
 
-/** Largest page the API serves; used for small reference lists (classes, statuses, ...). */
+/** Largest page the API serves; used for small reference lists (classes, lookup lists, ...). */
 export const MAX_PAGE = 200;
 
 export const keys = {
@@ -44,7 +44,6 @@ export const keys = {
   classes: ["ci-classes"] as const,
   classAttributes: (classId: string) => ["ci-classes", classId, "attributes"] as const,
   relTypes: (sourceClassId: string, targetClassId: string) => ["relationship-types", sourceClassId, targetClassId] as const,
-  lookup: (kind: LookupKind) => ["lookup", kind] as const,
 };
 
 // ---------- Configuration items ----------
@@ -280,53 +279,4 @@ export function useAttributesOfClasses(classIds: MaybeRefOrGetter<readonly strin
   return computed(() =>
     results.value.every((r) => r.data) ? new Map(ids.value.map((id, i) => [id, results.value[i].data!])) : undefined,
   );
-}
-
-// ---------- Older lookups (Administration › Lookups; CIs use lookup list attributes instead) ----------
-
-export type LookupKind = "statuses" | "environments" | "locations" | "owners";
-
-export interface LookupOption {
-  id: string;
-  /** Stable key (statuses, environments, locations); UI settings refer to lookups by key. */
-  key?: string;
-  name: string;
-  isActive: boolean;
-  depth?: number;
-  hint?: string;
-}
-
-export function useLookup(kind: LookupKind) {
-  return useQuery({
-    queryKey: keys.lookup(kind),
-    staleTime: 5 * 60_000,
-    queryFn: async ({ signal }): Promise<LookupOption[]> => {
-      const common = { limit: MAX_PAGE, sort: kind === "owners" ? "name" : "sortOrder" } as const;
-      switch (kind) {
-        case "statuses": {
-          const r = await unwrap(api.GET("/api/v1/statuses", { params: { query: { ...common, sort: "sortOrder" } }, signal }));
-          return r.data.map((s) => ({ id: s.id, key: s.key, name: s.name, isActive: s.isActive }));
-        }
-        case "environments": {
-          const r = await unwrap(api.GET("/api/v1/environments", { params: { query: { ...common, sort: "sortOrder" } }, signal }));
-          return r.data.map((s) => ({ id: s.id, key: s.key, name: s.name, isActive: s.isActive }));
-        }
-        case "owners": {
-          const r = await unwrap(api.GET("/api/v1/owners", { params: { query: { limit: MAX_PAGE, sort: "name" } }, signal }));
-          return r.data.map((o) => ({ id: o.id, name: o.name, isActive: o.isActive, hint: o.kind }));
-        }
-        case "locations": {
-          const r = await unwrap(api.GET("/api/v1/locations", { params: { query: { limit: MAX_PAGE, sort: "name" } }, signal }));
-          return flattenTree(r.data, bySortOrder).map(({ item, depth }) => ({
-            id: item.id,
-            key: item.key,
-            name: item.name,
-            isActive: item.isActive,
-            depth,
-            hint: item.locationType,
-          }));
-        }
-      }
-    },
-  });
 }
