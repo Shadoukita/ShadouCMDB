@@ -270,6 +270,11 @@ async fn confirm(
 ) -> Result<RecoveryCodes, AppError> {
     let me = me(ctx)?;
     let mut tx = pool.begin().await?;
+    // The user's row first, as a sign-in locks it before opening a session:
+    // one that checked for an authenticator before this commits either
+    // committed its session first (which the sweep below ends) or waits and
+    // is refused (GH#303).
+    auth_data::lock_sign_in(&mut tx, me.user_id).await?;
     let Some(t) = data::get_totp(&mut tx, me.user_id, true).await? else {
         return Err(AppError::conflict("Start the set-up first (POST /api/v1/auth/mfa/totp)"));
     };
@@ -878,6 +883,82 @@ pub(crate) mod tests {
         assert_eq!((last.0.as_str(), last.1["reason"].as_str()), ("mfa.disable", Some("admin_reset")));
         let (status, _, _) = call(&app, "DELETE", &reset, &session, None).await;
         assert_eq!(status, 403, "the reset route is not an enrolment route");
+        db.drop().await;
+    }
+
+    /// GH#303: a password sign-in and the confirming of an authenticator
+    /// serialize on the user's row, so no password-only session outlives the
+    /// confirm, whichever of the two takes the row first.
+    #[tokio::test]
+    async fn a_password_sign_in_racing_a_confirm_gets_no_password_only_session() {
+        let Some(db) = scratch::database("a_password_sign_in_racing_a_confirm_gets_no_password_only_session").await
+        else {
+            return;
+        };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, me) = setup(&app).await;
+        let owner: Uuid = me["user"]["id"].as_str().unwrap().parse().unwrap();
+        let own: Uuid = sqlx::query_scalar("SELECT id FROM sessions").fetch_one(pool).await.unwrap();
+        let unverified = async || -> i64 {
+            sqlx::query_scalar("SELECT count(*) FROM sessions WHERE NOT mfa_verified").fetch_one(pool).await.unwrap()
+        };
+        let start = json!({ "currentPassword": PASSWORD });
+        let step = settled_step().await;
+
+        // The sign-in locks the row first (its session not yet committed):
+        // the confirm waits for it, then ends the session.
+        let (status, _, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(start.clone())).await;
+        assert_eq!(status, 201);
+        let secret = stored_seed(pool).await;
+        let mut signing_in = pool.begin().await.unwrap();
+        auth_data::record_login(&mut signing_in, owner).await.unwrap().expect("the owner");
+        let body = json!({ "code": totp::code_at(&secret, step) });
+        let ((status, v, _), ()) =
+            tokio::join!(call(&app, "POST", "/api/v1/auth/mfa/totp/confirm", &session, Some(body)), async move {
+                let awaited = crate::modules::auth::tests::a_lock_is_awaited(pool).await;
+                assert!(awaited, "the confirm waits for the sign-in's lock on the user's row");
+                let hash = crate::auth::session::token_hash("racing sign-in");
+                let max_age = std::time::Duration::from_secs(600);
+                auth_data::create_session(&mut signing_in, owner, &hash, "csrf", max_age, None, None, false)
+                    .await
+                    .unwrap();
+                signing_in.commit().await.unwrap();
+            });
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(unverified().await, 0, "the password-only session committed first is ended");
+        let recovery = v["codes"][0].as_str().unwrap().to_owned();
+
+        // The confirm locks the row first: a sign-in that found no
+        // authenticator waits for it, then gets no session but a 401.
+        let off = json!({ "currentPassword": PASSWORD, "code": recovery });
+        let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(off)).await;
+        assert_eq!(status, 204, "{v}");
+        let (status, _, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(start)).await;
+        assert_eq!(status, 201);
+        let mut confirming = pool.begin().await.unwrap();
+        auth_data::lock_sign_in(&mut confirming, owner).await.unwrap().expect("the owner");
+        let (password, anonymous) = (json!({ "username": "owner", "password": PASSWORD }), Creds::default());
+        let ((status, v, _), ()) =
+            tokio::join!(call(&app, "POST", "/api/v1/auth/login", &anonymous, Some(password)), async move {
+                let awaited = crate::modules::auth::tests::a_lock_is_awaited(pool).await;
+                assert!(awaited, "the sign-in waits for the confirm's lock on the user's row");
+                data::confirm_totp(&mut confirming, owner, step).await.unwrap();
+                auth_data::mark_session_mfa_verified(&mut confirming, own).await.unwrap();
+                auth_data::delete_unverified_sessions(&mut confirming, owner, Some(own)).await.unwrap();
+                confirming.commit().await.unwrap();
+            });
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+        assert!(v["error"]["message"].as_str().unwrap().contains("Two-factor authentication was set up"), "{v}");
+        assert_eq!(unverified().await, 0, "no password-only session after the confirm");
+        let reason: Option<String> = sqlx::query_scalar(
+            "SELECT new_value->>'reason' FROM audit_log WHERE action = 'login.failure' ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(reason.as_deref(), Some("mfa_enrolled"));
+        // Signing in again asks for the code.
+        password_step(&app).await;
         db.drop().await;
     }
 

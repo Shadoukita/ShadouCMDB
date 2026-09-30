@@ -173,7 +173,9 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, session_id: Uuid, csrf_token:
 /// checked against, None when an identity provider checked it. The user's row
 /// is locked first; a password changed since, or an account disabled or
 /// deleted since, gets no session but a 401 (GH#209), as does an account
-/// whose identity provider was disabled or deleted since (GH#250).
+/// whose identity provider was disabled or deleted since (GH#250), and a
+/// password-only sign-in (`Password`, `Ldap`) to an account whose
+/// authenticator was confirmed since (GH#303).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_session(
     pool: &PgPool,
@@ -207,7 +209,16 @@ pub(crate) async fn try_open_session(
     let mut tx = pool.begin().await?;
     // First, so the row is locked before anything the reset or disable also takes.
     let stamp = data::record_login(&mut tx, user_id).await?;
-    if let Some(changed) = changed_since(&mut tx, stamp, verified).await? {
+    let mut changed = changed_since(&mut tx, stamp, verified).await?;
+    // A password alone was enough when checked; an authenticator confirmed
+    // since (under the lock on the row) asks for its code (GH#303).
+    if changed.is_none()
+        && matches!(method, LoginMethod::Password | LoginMethod::Ldap)
+        && mfa_data::get_totp(&mut tx, user_id, false).await?.is_some_and(|t| t.confirmed)
+    {
+        changed = Some(Changed::MfaEnrolled);
+    }
+    if let Some(changed) = changed {
         drop(tx);
         return Ok(Err(refused(pool, request, username, changed).await?));
     }
@@ -240,6 +251,9 @@ pub(crate) enum Changed {
     Account,
     /// The account's identity provider was disabled or deleted (GH#250).
     Provider,
+    /// An authenticator was set up for the account after the password was
+    /// checked; password sign-ins only (GH#303).
+    MfaEnrolled,
 }
 
 impl Changed {
@@ -248,6 +262,7 @@ impl Changed {
         match self {
             Changed::Account => "account_changed",
             Changed::Provider => "provider_disabled",
+            Changed::MfaEnrolled => "mfa_enrolled",
         }
     }
 }
@@ -256,6 +271,9 @@ impl From<Changed> for AppError {
     fn from(changed: Changed) -> Self {
         let message = match changed {
             Changed::Account => "The account was changed during the sign-in; enter your username and password again",
+            Changed::MfaEnrolled => {
+                "Two-factor authentication was set up for this account during the sign-in; sign in again and enter the code from your authenticator app"
+            }
             Changed::Provider => {
                 "The identity provider of this account was disabled during the sign-in; ask an administrator"
             }
@@ -280,10 +298,10 @@ async fn changed_since(
     }
 }
 
-/// A sign-in refused because the account or its provider changed while it
-/// was checked (GH#209, GH#250): logged and audited.
+/// A sign-in refused because the account, its provider or its second factor
+/// changed while it was checked (GH#209, GH#250, GH#303): logged and audited.
 async fn refused(pool: &PgPool, ctx: &RequestContext, username: &str, changed: Changed) -> Result<Changed, AppError> {
-    tracing::warn!(user = %username, ip = ?ctx.client.ip, reason = changed.reason(), "sign-in refused: the account or its identity provider changed while it was checked");
+    tracing::warn!(user = %username, ip = ?ctx.client.ip, reason = changed.reason(), "sign-in refused: the account, its identity provider or its second factor changed while it was checked");
     record_failure(pool, ctx, username, Some(changed.reason()), None).await?;
     Ok(changed)
 }
