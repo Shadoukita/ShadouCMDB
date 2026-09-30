@@ -81,6 +81,11 @@ pub struct JobData {
     pub by_list: HashMap<Uuid, Vec<(Uuid, String, String)>>,
     /// relationship type → (source class, target class) of every rule, and whether it is directional.
     pub rules: HashMap<Uuid, (bool, Vec<(Uuid, Uuid)>)>,
+    /// The dimensions a reference or relationship column can find a pending CI by.
+    /// Only these go into [`Pending`], so its size follows the mapping, not the row width.
+    pub pending_dims: HashSet<DimKey>,
+    /// Some column finds pending CIs by ident or label ([`Pending::by_key`] is read).
+    pub pending_by_key: bool,
 }
 
 impl JobData {
@@ -123,7 +128,18 @@ impl JobData {
                 e.1.push((s, g));
             }
         }
-        Ok(JobData { resolved, model, values, by_list, rules })
+        let pending_lookups: Vec<&Lookup> = resolved
+            .columns
+            .iter()
+            .filter_map(|c| match &c.target {
+                Target::Attribute { reference: Some(lookup), .. } | Target::Relationship { lookup, .. } => Some(lookup),
+                _ => None,
+            })
+            .filter(|l| l.pending)
+            .collect();
+        let pending_dims = pending_lookups.iter().flat_map(|l| dims(l)).map(|d| d.key()).collect();
+        let pending_by_key = pending_lookups.iter().any(|l| matches!(l.by, MatchBy::Ident | MatchBy::Label));
+        Ok(JobData { resolved, model, values, by_list, rules, pending_dims, pending_by_key })
     }
 
     /// The type allows an edge from a CI of class `source` to one of `target`.
@@ -770,12 +786,15 @@ pub async fn plan_chunk<'j>(
         &labels.values().flatten().cloned().chain(drafts.iter().filter_map(|d| d.ident.clone())).collect::<Vec<_>>(),
     )
     .await?;
-    // Canonical values of the class's own lookup fields, for the CIs rows create.
+    // Canonical values of the class's own fields that later rows can find a
+    // created CI by, for the CIs rows create.
     let own_dims: Vec<(usize, Dim)> = r
         .columns
         .iter()
         .filter_map(|col| match &col.target {
-            Target::Attribute { def, reference: None } => {
+            Target::Attribute { def, reference: None }
+                if job.pending_dims.contains(&DimKey::Field(r.defs[*def].id)) =>
+            {
                 let f = model.fields.iter().find(|f| f.id == r.defs[*def].id)?;
                 super::mapping::matchable(f.data_type).then(|| (*def, Dim::Field(f.clone())))
             }
@@ -1107,7 +1126,7 @@ fn plan_row(
             let title_label = title_value(r, &d).and_then(|t| labels.get(&t).cloned().flatten());
             p.label = title_label.clone().or_else(|| d.ident.clone());
             // Later rows may refer to this CI (T9). The dry run knows them all already.
-            if !c.grow_pending {
+            if !c.grow_pending || !job.pending_dims.contains(&DimKey::Label) {
             } else if let Some(l) = &title_label
                 && let Some(cv) = label_canon.get(l)
             {
@@ -1118,6 +1137,7 @@ fn plan_row(
                 c.pending.add(DimKey::Label, cv.clone(), row.number, id);
             }
             if c.grow_pending
+                && job.pending_dims.contains(&DimKey::Ident)
                 && let Some(i) = &d.ident
                 && let Some(cv) = label_canon.get(i)
             {
@@ -1132,6 +1152,7 @@ fn plan_row(
                 }
             }
             if c.grow_pending
+                && job.pending_by_key
                 && let Some(k) = &canon
             {
                 c.pending.by_key.entry(k.clone()).or_insert(row.number);
@@ -1383,7 +1404,7 @@ pub struct RowKeys {
     key_raw: Option<String>,
     ident: Option<String>,
     title: Option<String>,
-    /// (definition index, raw value) of the class's matchable attributes.
+    /// (definition index, raw value) of the class's attributes a pending CI can be found by.
     own: Vec<(usize, String)>,
 }
 
@@ -1397,6 +1418,7 @@ pub fn keys_of(job: &JobData, rows: &[Row]) -> Vec<RowKeys> {
                 .attrs
                 .iter()
                 .filter(|(def, _, _)| super::mapping::matchable(r.defs[*def].data_type))
+                .filter(|(def, _, _)| job.pending_dims.contains(&DimKey::Field(r.defs[*def].id)))
                 .filter_map(
                     |(def, _, cell)| if let Cell::Value(v) = cell { Some((*def, value_text(v)?)) } else { None },
                 )
@@ -1482,8 +1504,11 @@ pub async fn whole(
             r.creates() && !dup && !matched && (k.key_raw.is_some() || !r.updates() || r.key.is_none())
         })
         .collect();
-    let titles: Vec<String> =
-        creates.iter().filter_map(|k| k.title.clone()).collect::<HashSet<_>>().into_iter().collect();
+    let titles: Vec<String> = if job.pending_dims.contains(&DimKey::Label) {
+        creates.iter().filter_map(|k| k.title.clone()).collect::<HashSet<_>>().into_iter().collect()
+    } else {
+        Vec::new()
+    };
     let labels: HashMap<String, Option<String>> = match &r.title_field {
         Some(f) if !titles.is_empty() => {
             let mut out = HashMap::new();
@@ -1512,10 +1537,14 @@ pub async fn whole(
         let id = Uuid::new_v4();
         w.new_ids.insert(k.number, id);
         let label = k.title.as_ref().and_then(|t| labels.get(t).cloned().flatten()).or_else(|| k.ident.clone());
-        if let Some(cv) = label.as_ref().and_then(|l| label_canon.get(l)) {
+        if let Some(cv) =
+            label.as_ref().and_then(|l| label_canon.get(l)).filter(|_| job.pending_dims.contains(&DimKey::Label))
+        {
             w.pending.add(DimKey::Label, cv.clone(), k.number, id);
         }
-        if let Some(cv) = k.ident.as_ref().and_then(|i| label_canon.get(i)) {
+        if let Some(cv) =
+            k.ident.as_ref().and_then(|i| label_canon.get(i)).filter(|_| job.pending_dims.contains(&DimKey::Ident))
+        {
             w.pending.add(DimKey::Ident, cv.clone(), k.number, id);
         }
         for (def, raw) in &k.own {
@@ -1523,7 +1552,7 @@ pub async fn whole(
                 w.pending.add(DimKey::Field(r.defs[*def].id), cv.clone(), k.number, id);
             }
         }
-        if let Some(cv) = k.key_raw.as_ref().and_then(|raw| key_canon.get(raw)) {
+        if let Some(cv) = k.key_raw.as_ref().and_then(|raw| key_canon.get(raw)).filter(|_| job.pending_by_key) {
             w.pending.by_key.entry(cv.clone()).or_insert(k.number);
         }
     }
