@@ -33,6 +33,11 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     ("Configuration items", "CIs: the tracked assets. Includes the relationship graph around a CI."),
     ("Search", "Global search across CIs and their attribute values."),
+    (
+        "Impact analysis",
+        "Which CIs are affected if a CI fails (downstream) and which it depends on (upstream), along the relationship \
+         types that propagate impact. Bounded, and limited to the CIs the caller may view.",
+    ),
     ("Relationships", "Typed, directional edges between CIs. Removal is a soft delete."),
     (
         "CI classes",

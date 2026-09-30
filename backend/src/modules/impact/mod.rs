@@ -8,8 +8,12 @@
 //! through, returns or counts a CI the caller may not view.
 
 pub mod engine;
+#[cfg(test)]
+mod perf;
 pub mod schemas;
 pub mod service;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

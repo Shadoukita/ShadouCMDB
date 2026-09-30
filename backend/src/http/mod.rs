@@ -730,6 +730,7 @@ mod tests {
             auth: auth.clone(),
             audit: AuditConfig::default(),
             encryption: Default::default(),
+            impact: Default::default(),
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth, crate::secrets::Keyring::for_tests()), &cfg)

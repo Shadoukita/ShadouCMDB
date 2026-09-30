@@ -115,7 +115,7 @@ impl Traversal {
 }
 
 /// Which edges a walk follows for the configured impact directions.
-fn hop_types(types: &[TypeRow], wanted: Option<&[Uuid]>, way: Way) -> HopTypes {
+pub(crate) fn hop_types(types: &[TypeRow], wanted: Option<&[Uuid]>, way: Way) -> HopTypes {
     let mut out = HopTypes::default();
     for t in types.iter().filter(|t| wanted.is_none_or(|w| w.contains(&t.id))) {
         let Some(dir) = ImpactDirection::parse(&t.impact_direction) else { continue };
@@ -308,6 +308,35 @@ pub async fn traverse(conn: &mut PgConnection, roots: &[Uuid], opts: &Options<'_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A statement cancelled by the deadline rolls back to the hop's savepoint:
+    /// the snapshot stays usable for the rest of the analysis.
+    #[tokio::test]
+    async fn a_cancelled_hop_leaves_the_snapshot_usable() {
+        let Some(db) = crate::db::scratch::database("a_cancelled_hop_leaves_the_snapshot_usable").await else { return };
+        let mut tx = db.pool.begin().await.unwrap();
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY").execute(&mut *tx).await.unwrap();
+        let before: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM relationship_types").fetch_one(&mut *tx).await.unwrap();
+        let mut sp = tx.begin().await.unwrap();
+        data::set_statement_timeout(&mut sp, 1).await.unwrap();
+        let err = sqlx::query("SELECT pg_sleep(1)").execute(&mut *sp).await.unwrap_err();
+        assert!(is_query_canceled(&err), "{err}");
+        sp.rollback().await.unwrap();
+        // Another session's change is not seen: still the same snapshot.
+        sqlx::query(
+            "INSERT INTO relationship_types (key, name, forward_label, reverse_label) VALUES ('x', 'x', 'x', 'x')",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let after: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM relationship_types").fetch_one(&mut *tx).await.unwrap();
+        let isolation: String = sqlx::query_scalar("SHOW transaction_isolation").fetch_one(&mut *tx).await.unwrap();
+        assert_eq!((after, isolation.as_str()), (before, "repeatable read"));
+        tx.commit().await.unwrap();
+        db.drop().await;
+    }
 
     fn t(id: u128, dir: &str) -> TypeRow {
         TypeRow {

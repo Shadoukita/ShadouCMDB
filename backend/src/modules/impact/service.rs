@@ -568,6 +568,16 @@ pub async fn settings(pool: &PgPool, state: &ImpactState) -> Result<ImpactSettin
     })
 }
 
+/// The CSV of an analysis, without recording an export (tests).
+#[cfg(test)]
+pub async fn csv_of(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &ImpactQuery) -> String {
+    let state = std::sync::Arc::new(ImpactState::default());
+    match analyse(pool, ctx, &state, root_id, q).await {
+        Ok(a) => csv(&a),
+        Err(e) => panic!("analysis failed: {e:?}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

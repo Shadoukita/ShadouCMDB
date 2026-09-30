@@ -100,22 +100,18 @@ fn push_branch(
     }
 }
 
-/// The edges leading from `frontier` to CIs outside `visited` that the hop
-/// may reach, oldest first (then by id), at most `limit`.
-pub async fn hop(
-    conn: &mut PgConnection,
+/// The query of one hop (see [`hop`]); `prefix` goes in front (`EXPLAIN …` in tests).
+fn hop_query(
+    prefix: &str,
     frontier: &[Uuid],
     visited: &[Uuid],
     types: &HopTypes,
     reach: Reach<'_>,
     limit: i64,
-) -> sqlx::Result<Vec<HopEdge>> {
-    if frontier.is_empty() || types.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut qb = QueryBuilder::<Postgres>::new(
-        "SELECT id, relationship_type_id, from_id, next_id, next_class_id, source_ci_id, target_ci_id FROM (",
-    );
+) -> QueryBuilder<Postgres> {
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
+        "{prefix}SELECT id, relationship_type_id, from_id, next_id, next_class_id, source_ci_id, target_ci_id FROM ("
+    ));
     let mut first = true;
     for (next, from, ids) in
         [("source_ci_id", "target_ci_id", &types.to_source), ("target_ci_id", "source_ci_id", &types.to_target)]
@@ -130,7 +126,38 @@ pub async fn hop(
         push_branch(&mut qb, next, from, ids, frontier, visited, reach);
     }
     qb.push(") e ORDER BY created_at, id LIMIT ").push_bind(limit);
+    qb
+}
+
+/// The edges leading from `frontier` to CIs outside `visited` that the hop
+/// may reach, oldest first (then by id), at most `limit`.
+pub async fn hop(
+    conn: &mut PgConnection,
+    frontier: &[Uuid],
+    visited: &[Uuid],
+    types: &HopTypes,
+    reach: Reach<'_>,
+    limit: i64,
+) -> sqlx::Result<Vec<HopEdge>> {
+    if frontier.is_empty() || types.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut qb = hop_query("", frontier, visited, types, reach, limit);
     qb.build_query_as::<HopEdge>().persistent(false).fetch_all(conn).await
+}
+
+/// The plan of one hop's query, as `EXPLAIN (FORMAT JSON)` returns it.
+#[cfg(test)]
+pub async fn explain_hop(
+    conn: &mut PgConnection,
+    frontier: &[Uuid],
+    visited: &[Uuid],
+    types: &HopTypes,
+    reach: Reach<'_>,
+    limit: i64,
+) -> sqlx::Result<serde_json::Value> {
+    let mut qb = hop_query("EXPLAIN (FORMAT JSON) ", frontier, visited, types, reach, limit);
+    qb.build_query_scalar::<serde_json::Value>().persistent(false).fetch_one(conn).await
 }
 
 /// Per CI in `targets`: how many propagating edges lead into it from a CI in
