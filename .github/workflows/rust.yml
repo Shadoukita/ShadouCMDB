@@ -20,6 +20,12 @@ env:
   PGPASSWORD: ci-only-password
   DATABASE_SSL: disable
 
+defaults:
+  run:
+    # An explicit `shell: bash` runs with -o pipefail (the default shell does not),
+    # so `cmd | tee file` fails the step when cmd fails (GH#335).
+    shell: bash
+
 jobs:
   linux:
     name: Linux x64 + arm64 (PostgreSQL integration, systemd)
@@ -188,7 +194,8 @@ jobs:
           curl -sf http://127.0.0.1:3001/readyz | grep -q '"upToDate":true'
           sudo systemctl stop shadoucmdb
           sudo journalctl -u shadoucmdb --no-pager | tail -20
-          sudo journalctl -u shadoucmdb --no-pager | grep -q "server stopped"
+          # Not grep -q: it stops reading at the first match, and under pipefail the writer's SIGPIPE fails the step.
+          sudo journalctl -u shadoucmdb --no-pager | grep "server stopped" > /dev/null
 
       - name: aarch64-unknown-linux-gnu (cross-build, run verify under QEMU)
         run: |
@@ -333,4 +340,5 @@ jobs:
           docker stats --no-stream cmdb
           docker stop cmdb
           docker logs cmdb | tail -3
-          docker logs cmdb | grep -q "server stopped"
+          # Not grep -q: it stops reading at the first match, and under pipefail the writer's SIGPIPE fails the step.
+          docker logs cmdb | grep "server stopped" > /dev/null
