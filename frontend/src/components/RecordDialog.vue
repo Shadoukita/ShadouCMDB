@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { ApiError } from "../api/client";
+import { changedFields } from "../lib/changes";
 import { keyError, suggestKey } from "../lib/keys";
 import FormErrorBanner from "../pages/form/FormErrorBanner.vue";
 import FormField from "../pages/form/FormField.vue";
@@ -37,7 +38,7 @@ const props = defineProps<{
   record: Record<string, unknown> | null;
   /** Initial values for a new row. */
   defaults?: Record<string, Value>;
-  /** Sends the body (create: every field; edit: the fields that may change). Resolves with a confirmation. */
+  /** Sends the body (create: every field; edit: only the fields the user changed). Resolves with a confirmation. */
   save: (body: Record<string, unknown>, isNew: boolean) => Promise<string>;
   idPrefix: string;
 }>();
@@ -48,6 +49,8 @@ const keyTouched = ref(false);
 const busy = ref(false);
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
+/** The body as seeded, to send only changed fields on edit. */
+let initial: Record<string, unknown> = {};
 const isNew = computed(() => !props.record);
 
 function seed() {
@@ -57,6 +60,7 @@ function seed() {
     v[f.name] = f.type === "checkbox" ? raw === true || (raw === undefined && !props.record && f.name === "isActive") : raw == null ? "" : String(raw);
   }
   values.value = v;
+  initial = body();
   keyTouched.value = !!props.record;
   error.value = null;
   local.value = {};
@@ -76,7 +80,10 @@ watch(
   },
 );
 
-const readOnly = (f: FieldSpec) => !isNew.value && !!f.createOnly;
+// A declaration, not an arrow: seed() runs (and calls body()) before this line on first setup.
+function readOnly(f: FieldSpec) {
+  return !isNew.value && !!f.createOnly;
+}
 const fieldErrors = computed(() => ({ ...(error.value instanceof ApiError ? error.value.fieldErrors() : {}), ...local.value }));
 const unplaced = computed(() =>
   error.value instanceof ApiError ? error.value.details.filter((d) => !props.fields.some((f) => f.name === d.field)) : [],
@@ -115,9 +122,14 @@ async function submit() {
     document.getElementById(`${props.idPrefix}-${first}`)?.focus();
     return;
   }
+  const out = isNew.value ? body() : changedFields(body(), initial);
+  if (!isNew.value && Object.keys(out).length === 0) {
+    emit("close");
+    return;
+  }
   busy.value = true;
   try {
-    const message = await props.save(body(), isNew.value);
+    const message = await props.save(out, isNew.value);
     emit("saved", message);
     emit("close");
   } catch (e) {

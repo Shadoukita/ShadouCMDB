@@ -179,6 +179,23 @@ pub async fn delete_user_sessions(
         .await
 }
 
+/// Ends a user's sessions that did not prove a second factor, except `keep`
+/// (the caller's own): once an authenticator is confirmed, a password-only
+/// session must not act on the account (GH#292).
+pub async fn delete_unverified_sessions(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    keep: Option<Uuid>,
+) -> sqlx::Result<Vec<EndedSession>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "{ENDED} s.user_id = $1 AND NOT s.mfa_verified AND s.id IS DISTINCT FROM $2 {ENDED_COLUMNS}"
+    )))
+    .bind(user_id)
+    .bind(keep)
+    .fetch_all(conn)
+    .await
+}
+
 /// Whether the session still exists (it was not ended since the request was authenticated).
 /// Whether the session proved a second factor; None once it has ended.
 pub async fn session_mfa_verified(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<bool>> {
