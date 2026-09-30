@@ -22,8 +22,8 @@ const TYPE_LABEL: Record<string, string> = { system: "system", user: "user", api
 
 <template>
   <span class="actor">
-    <RouterLink v-if="to && entry.actorName" :to="to">{{ entry.actorName }}</RouterLink>
-    <template v-else-if="entry.actorName">{{ entry.actorName }}</template>
+    <RouterLink v-if="to && entry.actorName" :to="to" dir="auto">{{ entry.actorName }}</RouterLink>
+    <bdi v-else-if="entry.actorName">{{ entry.actorName }}</bdi>
     <span v-else class="muted">unknown</span>
     <span v-if="entry.actorType !== 'user'" class="muted"> ({{ TYPE_LABEL[entry.actorType] ?? entry.actorType }})</span>
   </span>

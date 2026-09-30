@@ -271,7 +271,7 @@ test.describe("administrators: required two-factor authentication and reset", ()
   });
 
   test("a holder without two-factor is sent straight to the set-up, then into the app", async ({ browser }) => {
-    test.slow(); // two argon2id checks: sign-in and the set-up
+    test.slow(); // argon2id checks: three sign-ins and the set-up
     const page = await newPage(browser);
     await page.goto("/cis");
     await page.getByLabel("Username").fill(USERNAME);
@@ -286,13 +286,38 @@ test.describe("administrators: required two-factor authentication and reset", ()
     await expect(page).toHaveURL(at("/two-factor-setup", "?redirect=/account"));
     await snap(page, "mfa-forced-setup");
 
-    await enrol(page, "mfa-forced");
+    // A second browser signs in with the password before the set-up and waits on the same screen.
+    const other = await newPage(browser);
+    await other.goto("/cis");
+    await other.getByLabel("Username").fill(USERNAME);
+    await other.getByLabel("Password").fill(PASSWORD);
+    await other.getByRole("button", { name: "Sign in" }).click();
+    await expect(other).toHaveURL(at("/two-factor-setup", "?redirect=/cis"), ARGON2);
+
+    const { app } = await enrol(page, "mfa-forced");
     await expect(page).toHaveURL(at("/account"));
     await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
     const panel = page.getByRole("region", { name: "Two-factor authentication" });
     await expect(panel.getByText("On", { exact: true })).toBeVisible();
     await expect(panel.getByText("Required", { exact: true })).toBeVisible();
     await page.context().close();
+
+    // The second browser proved no code, so confirming the authenticator ended its session (GH#292): its
+    // next request answers 401 and it is sent to sign-in, where it now needs a code. The set-up screen
+    // was only a stop on the way, so sign-in leads on to where the user was going.
+    await other.locator("#mfa-currentPassword").fill(PASSWORD);
+    await other.getByRole("button", { name: "Set up authenticator app" }).click();
+    await expect(other).toHaveURL(at("/login", "?redirect=/cis"));
+    await expect(other.getByText("Your session has ended.")).toBeVisible();
+    await other.getByLabel("Username").fill(USERNAME);
+    await other.getByLabel("Password").fill(PASSWORD);
+    await other.getByRole("button", { name: "Sign in" }).click();
+    await expect(other.getByLabel("Authentication code")).toBeFocused(ARGON2);
+    await other.getByLabel("Authentication code").fill(await app.next());
+    await other.getByRole("button", { name: "Verify" }).click();
+    await expect(other).toHaveURL(at("/cis"), ARGON2);
+    await expect(other.getByRole("navigation", { name: "Main" })).toBeVisible();
+    await other.context().close();
   });
 
   test("user management shows who has two-factor and resets it", async ({ page, request }) => {
