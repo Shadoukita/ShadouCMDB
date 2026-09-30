@@ -11,11 +11,10 @@ that proxy reports (read right to left, skipping listed proxies). The first forw
 which the client controls, is kept in audit rows as the new `claimedIpAddress` when it differs;
 `peerIpAddress` (the TCP peer) is unchanged.
 
-**Upgrade:** behind a reverse proxy, list it in `TRUSTED_PROXIES` (see the
-[deployment guide][deployment]). Without that, new audit rows, sessions and token uses record the
+**Upgrade:** behind a reverse proxy, list its address or CIDR range in `TRUSTED_PROXIES`
+(comma-separated). Without that, new audit rows, sessions and token uses record the
 proxy's address as `ipAddress`, with the forwarded client address in `claimedIpAddress`. Rows
 written before the upgrade are not changed. Audit exports and SIEM rules that read `ipAddress`
 keep working; rules that should see the client's own claim read `claimedIpAddress`.
 
 [GH#282]: https://github.com/Shadoukita/ShadouCMDB/issues/282
-[deployment]: docs/deployment.md#https-and-session-cookies
