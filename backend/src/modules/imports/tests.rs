@@ -630,9 +630,14 @@ async fn a_slow_upload_holds_no_connection_between_chunks() {
     let request = tokio::spawn(async move { app.oneshot(req).await.unwrap() });
     for b in b"Name\nweb01\n" {
         tx.send(Ok(axum::body::Bytes::copy_from_slice(&[*b]))).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(40)).await;
-        // Between two bytes the upload holds no pool connection.
-        assert_eq!(e.pool.size() as usize - e.pool.num_idle(), 0, "a connection is held while waiting for the client");
+        // Between two bytes the upload holds no pool connection. sqlx returns
+        // a released connection from a spawned task after a ping, so wait for
+        // the pool to settle: a connection held across the wait never does.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while e.pool.size() as usize - e.pool.num_idle() > 0 {
+            assert!(tokio::time::Instant::now() < deadline, "a connection is held while waiting for the client");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
     drop(tx);
     let res = request.await.unwrap();
