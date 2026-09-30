@@ -20,7 +20,7 @@ use super::jobs::{ctx_user, require_enabled};
 use super::schemas::{ColumnOptions, ColumnTarget, EmptyCells, ImportMode, JobOwner, MappingOptions, MatchKey};
 use super::suggest::normalise;
 use super::{MAX_COLUMNS, body_field, coded};
-use crate::api::context::RequestContext;
+use crate::api::context::{ActorType, RequestContext};
 use crate::api::route::Check;
 use crate::api::schemas::patch_trimmed;
 use crate::auth::permissions::ClassOp;
@@ -87,7 +87,7 @@ impl MappingDefinition {
     }
 
     /// Structural problems, reported under `prefix` (e.g. `definition`).
-    fn check(&self, prefix: &str) -> Vec<FieldError> {
+    pub(crate) fn check(&self, prefix: &str) -> Vec<FieldError> {
         let mut errors = Vec::new();
         if self.columns.len() > MAX_COLUMNS as usize {
             errors.push(body_field(&format!("{prefix}.columns"), "At most 200 columns", "too_many"));
@@ -476,4 +476,115 @@ pub async fn delete(pool: &PgPool, ctx: &RequestContext, id: Uuid, version: i32)
     crud::write_audit(&mut tx, ctx, vec![entry]).await?;
     tx.commit().await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Config export and import (§6.2)
+// ---------------------------------------------------------------------------
+
+/// A saved mapping as the configuration file carries it.
+#[derive(Debug)]
+pub(crate) struct ConfigMapping {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub class_key: String,
+    pub definition: MappingDefinition,
+}
+
+/// Every saved mapping, by class key and name. A stored definition that no
+/// longer parses is left out (and logged), as `GET` would refuse it too.
+pub(crate) async fn all_for_config(conn: &mut PgConnection) -> sqlx::Result<Vec<ConfigMapping>> {
+    let rows: Vec<Row> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("{SELECT} ORDER BY m.class_key, lower(m.name), m.name, m.id")))
+            .fetch_all(conn)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let dto = r.dto().ok()?;
+            Some(ConfigMapping {
+                id: dto.id,
+                name: dto.name,
+                description: dto.description,
+                class_key: dto.class_key,
+                definition: dto.definition,
+            })
+        })
+        .collect())
+}
+
+/// Creates the mapping (`existing` is `None`) or replaces the description and
+/// definition of `existing`, which keeps its name. Audited like the API, with
+/// `actor_type = import` (§6.2). The config import holds its own lock, so the
+/// instance limit is checked here without locking the table.
+pub(crate) async fn config_write(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    existing: Option<Uuid>,
+    name: &str,
+    description: Option<&str>,
+    class_key: &str,
+    definition: &MappingDefinition,
+) -> Result<Uuid, AppError> {
+    let mut actx = ctx.clone();
+    actx.actor.actor_type = ActorType::Import;
+    let description = description.map(str::trim).filter(|d| !d.is_empty());
+    let user = user_name(ctx);
+    let (id, before) = match existing {
+        None => {
+            let count: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM cmdb.import_mappings").fetch_one(&mut *conn).await?;
+            if count >= MAX_SAVED {
+                return Err(coded(
+                    ErrorCode::Conflict,
+                    "This instance already has 500 saved mappings. Delete one you no longer need.",
+                    "limit_reached",
+                ));
+            }
+            let inserted: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
+                "INSERT INTO cmdb.import_mappings
+                   (name, description, class_key, definition, created_by_id, created_by_name, updated_by_id, updated_by_name)
+                 VALUES ($1, $2, $3, $4, $5, $6, $5, $6) RETURNING id",
+            )
+            .bind(name.trim())
+            .bind(description)
+            .bind(class_key)
+            .bind(sqlx::types::Json(definition))
+            .bind(ctx_user(ctx))
+            .bind(&user)
+            .fetch_one(&mut *conn)
+            .await;
+            match inserted {
+                Err(e) if is_duplicate_name(&e) => return Err(duplicate_name()),
+                other => (other?, None),
+            }
+        }
+        Some(id) => {
+            let before = fetch(conn, id, true).await?.ok_or_else(|| not_found(id))?;
+            sqlx::query(
+                "UPDATE cmdb.import_mappings SET description = $2, definition = $3, version = version + 1,
+                   updated_by_id = $4, updated_by_name = $5
+                 WHERE id = $1",
+            )
+            .bind(id)
+            .bind(description)
+            .bind(sqlx::types::Json(definition))
+            .bind(ctx_user(ctx))
+            .bind(&user)
+            .execute(&mut *conn)
+            .await?;
+            (id, Some(before))
+        }
+    };
+    let after = fetch(conn, id, false).await?.ok_or_else(AppError::internal)?;
+    let entry = AuditEntry {
+        action: if before.is_some() { AuditAction::Update } else { AuditAction::Create },
+        entity_type: "import_mappings",
+        entity_id: id,
+        old_value: before.map(|b| b.audit_value()),
+        new_value: Some(after.audit_value()),
+    };
+    crud::write_audit(conn, &actx, vec![entry]).await?;
+    Ok(id)
 }

@@ -30,9 +30,9 @@ use crate::auth::permissions::GlobalPermission;
 
 pub const FORMAT: &str = "shadoucmdb.config";
 /// Version 2 adds areas (and the area of each class), version 3 dependent
-/// lookup lists (the parent of a list, a value and a field); versions 1 and 2
-/// are still read.
-pub const FORMAT_VERSION: i32 = 3;
+/// lookup lists (the parent of a list, a value and a field), version 4 saved
+/// import mappings; versions 1 to 3 are still read.
+pub const FORMAT_VERSION: i32 = 4;
 
 fn yes() -> bool {
     true
@@ -504,18 +504,44 @@ fn profiles_schema() -> Schema {
     list::<ProfileSpec>(1000)
 }
 
+// ---------------------------------------------------------------------------
+// Saved import mappings
+// ---------------------------------------------------------------------------
+
+/// A saved import mapping (SHAA-714 §6.2), matched by class key and name
+/// (case-insensitive). Its class, attributes and relationship types are
+/// referenced by key, so it moves between installs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportMappingSpec {
+    #[schema(min_length = 1, max_length = 100)]
+    #[serde(deserialize_with = "trimmed")]
+    pub name: String,
+    #[schema(max_length = 500)]
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Key of the class the mapping imports into
+    #[schema(schema_with = key_schema)]
+    pub class_key: String,
+    pub definition: crate::modules::imports::saved::MappingDefinition,
+}
+
+fn import_mappings_schema() -> Schema {
+    list::<ImportMappingSpec>(crate::modules::imports::saved::MAX_SAVED as usize)
+}
+
 fn exported_at_schema() -> Schema {
     schemas::nullable_string_schema(64)
 }
 
-/// A whole configuration: data model, lookups, permission profiles and UI settings (no users, passwords or CIs)
+/// A whole configuration: data model, lookups, permission profiles, UI settings and saved import mappings (no users, passwords or CIs)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 3 and reads 1 to 3
-    #[schema(minimum = 1, maximum = 3)]
+    /// File format version; this server writes version 4 and reads 1 to 4
+    #[schema(minimum = 1, maximum = 4)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]
@@ -534,6 +560,10 @@ pub struct ConfigFile {
     pub permission_profiles: Option<Vec<ProfileSpec>>,
     #[serde(default)]
     pub ui_settings: Option<UiSettingsSection>,
+    /// Saved import mappings (version 4). Left out of an export when the caller does not hold `cis.import`.
+    #[schema(schema_with = import_mappings_schema)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_mappings: Option<Vec<ImportMappingSpec>>,
 }
 
 impl crate::api::route::Check for ConfigFile {

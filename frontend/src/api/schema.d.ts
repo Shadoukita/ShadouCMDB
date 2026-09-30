@@ -2208,7 +2208,7 @@ export interface paths {
         };
         /**
          * Download the whole configuration as one JSON file
-         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookups (statuses, environments, locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched.
+         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookups (statuses, environments, locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings including the logo and favicon, and saved import mappings. Never contains users, passwords, sessions, CIs, relationships, import jobs or the import switch. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched. Likewise `importMappings` is only present when the caller holds `cis.import`, and holds only the mappings of classes the caller can view.
          */
         get: operations["exportConfig"];
         put?: never;
@@ -2230,7 +2230,7 @@ export interface paths {
         put?: never;
         /**
          * Import a configuration file (dry run or apply)
-         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and name (case-insensitive); an existing one gets the file's description and definition. Keys the target lacks are warnings, and mappings of classes the caller cannot view are skipped. Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["importConfig"];
         delete?: never;
@@ -2489,7 +2489,7 @@ export interface components {
             edit: boolean;
             delete: boolean;
         };
-        /** @description A whole configuration: data model, lookups, permission profiles and UI settings (no users, passwords or CIs) */
+        /** @description A whole configuration: data model, lookups, permission profiles, UI settings and saved import mappings (no users, passwords or CIs) */
         ConfigFile: {
             /**
              * @description Always "shadoucmdb.config"
@@ -2498,7 +2498,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 3 and reads 1 to 3
+             * @description File format version; this server writes version 4 and reads 1 to 4
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -2518,6 +2518,13 @@ export interface components {
                 }[];
             }[];
             uiSettings?: components["schemas"]["UiSettingsSection"] | null;
+            importMappings?: {
+                name: string;
+                description?: string | null;
+                /** @description Stable machine key, lower_snake_case */
+                classKey: string;
+                definition: components["schemas"]["ImportMappingDefinition"];
+            }[];
         };
         ConfigurationItem: {
             /** Format: uuid */
@@ -17824,7 +17831,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 3 and reads 1 to 3
+                     * @description File format version; this server writes version 4 and reads 1 to 4
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
@@ -17844,6 +17851,13 @@ export interface operations {
                         }[];
                     }[];
                     uiSettings?: components["schemas"]["UiSettingsSection"] | null;
+                    importMappings?: {
+                        name: string;
+                        description?: string | null;
+                        /** @description Stable machine key, lower_snake_case */
+                        classKey: string;
+                        definition: components["schemas"]["ImportMappingDefinition"];
+                    }[];
                 };
             };
         };

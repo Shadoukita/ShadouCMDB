@@ -31,6 +31,8 @@ use super::classes::{
     AttributeDataType, AttributeDefinition, AttributeDefinitions, CiClass, CiClasses, RelationshipRule,
     RelationshipRules, RelationshipType, RelationshipTypes, ValidationRules,
 };
+use super::imports::saved;
+use super::imports::schemas::ColumnTarget;
 use super::lookups::{
     Environment, Environments, Location, Locations, LookupList, LookupListValue, LookupListValues, LookupLists, Owner,
     Owners, Status, Statuses,
@@ -42,7 +44,7 @@ use super::ui_settings::document::{self, Issue, UiSettingsDocument};
 use super::ui_settings::{self as ui};
 use crate::api::context::RequestContext;
 use crate::api::route::{Body, In, Json, NoBody, NoPath, NoQuery, Query, Route, WithHeaders, route};
-use crate::auth::permissions::{ClassRights, GlobalPermission};
+use crate::auth::permissions::{ClassOp, ClassRights, GlobalPermission};
 use crate::data::crud::{self, ColumnSet};
 use crate::data::ui_settings as ui_data;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
@@ -207,6 +209,8 @@ struct Ids {
     values: HashMap<(String, String), Uuid>,
     /// lower(name) -> id; the built-in profile included
     profiles: HashMap<String, Uuid>,
+    /// (class key, lower(name)) -> id
+    mappings: HashMap<(String, String), Uuid>,
 }
 
 struct Snapshot {
@@ -457,6 +461,20 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         }
     }
 
+    let mapping_specs: Vec<ImportMappingSpec> = saved::all_for_config(conn)
+        .await?
+        .into_iter()
+        .map(|m| {
+            ids.mappings.insert((m.class_key.clone(), m.name.to_lowercase()), m.id);
+            ImportMappingSpec {
+                name: m.name,
+                description: m.description,
+                class_key: m.class_key,
+                definition: m.definition,
+            }
+        })
+        .collect();
+
     let file = ConfigFile {
         format: FORMAT.into(),
         format_version: FORMAT_VERSION,
@@ -506,23 +524,32 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         }),
         permission_profiles: Some(profile_specs),
         ui_settings: Some(ui_section),
+        import_mappings: Some(mapping_specs),
     };
     Ok(Snapshot { file, ids, builtin_profile })
 }
 
 /// GH#186: the permission profiles section is only exported to callers who may
 /// read profiles on their own admin API (`profiles.manage` or `users.manage`);
-/// for anyone else it is left out of the file.
+/// for anyone else it is left out of the file. Likewise saved import mappings
+/// need `cis.import`, and only those of classes the caller can view are
+/// written (SHAA-714 §6.2, D9).
 pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, AppError> {
     // One snapshot: REPEATABLE READ so every section comes from the same moment.
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *tx).await?;
-    let mut file = snapshot(&mut tx).await?.file;
+    let Snapshot { mut file, ids, .. } = snapshot(&mut tx).await?;
     tx.commit().await?;
     let reads_profiles =
         ctx.require(GlobalPermission::ProfilesManage).or_else(|_| ctx.require(GlobalPermission::UsersManage));
     if reads_profiles.is_err() {
         file.permission_profiles = None;
+    }
+    if ctx.require(GlobalPermission::CisImport).is_err() {
+        file.import_mappings = None;
+    } else if let Some(mappings) = file.import_mappings.as_mut() {
+        mappings
+            .retain(|m| ids.classes.get(&m.class_key).is_some_and(|c| ctx.require_class(*c, ClassOp::View).is_ok()));
     }
     Ok(file)
 }
@@ -556,7 +583,12 @@ struct Decoded {
     favicon: Option<(ImageType, Vec<u8>)>,
 }
 
-fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning>) -> Result<Decoded, AppError> {
+fn validate(
+    file: &ConfigFile,
+    snap: &Snapshot,
+    ctx: &RequestContext,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<Decoded, AppError> {
     let mut e = Vec::new();
     let empty_dm = DataModelSection::default();
     let empty_lk = LookupSection::default();
@@ -860,6 +892,11 @@ fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning
         }
     }
 
+    // Saved import mappings
+    if let Some(mappings) = &file.import_mappings {
+        validate_mappings(mappings, file, snap, ctx, &mut e, warnings);
+    }
+
     // Images
     let mut decoded = Decoded { logo: None, favicon: None };
     if let Some(ui_section) = &file.ui_settings {
@@ -887,6 +924,115 @@ fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning
         err.message =
             format!("The file has {} problem(s); nothing was imported", err.details.as_ref().map_or(0, Vec::len));
         Err(err)
+    }
+}
+
+/// §6.2: a mapping's class, attribute and relationship-type keys that do not
+/// exist (here or in the file) are warnings, and the mapping is still saved:
+/// it applies once they exist. A mapping of an existing class the caller
+/// cannot view is skipped, so the import never writes one they could not
+/// read (D9). Everything the saved-mapping API refuses is refused here too.
+fn validate_mappings(
+    mappings: &[ImportMappingSpec],
+    file: &ConfigFile,
+    snap: &Snapshot,
+    ctx: &RequestContext,
+    e: &mut Vec<FieldError>,
+    warnings: &mut Vec<ImportWarning>,
+) {
+    let (file_dm, here_dm) =
+        (file.data_model.clone().unwrap_or_default(), snap.file.data_model.clone().unwrap_or_default());
+    let parents: HashMap<&str, Option<&str>> =
+        here_dm.classes.iter().chain(file_dm.classes.iter()).map(|c| (c.key.as_str(), c.parent.as_deref())).collect();
+    let attrs: HashSet<(&str, &str)> = here_dm
+        .attributes
+        .iter()
+        .chain(file_dm.attributes.iter())
+        .map(|a| (a.class.as_str(), a.key.as_str()))
+        .collect();
+    let types: HashSet<&str> =
+        here_dm.relationship_types.iter().chain(file_dm.relationship_types.iter()).map(|t| t.key.as_str()).collect();
+    let has_attribute = |class: &str, key: &str| {
+        let mut at = Some(class);
+        let mut hops = 0;
+        while let Some(c) = at {
+            if attrs.contains(&(c, key)) {
+                return true;
+            }
+            at = parents.get(c).copied().flatten();
+            hops += 1;
+            if hops > parents.len() {
+                break;
+            }
+        }
+        false
+    };
+
+    let mut seen = HashSet::new();
+    let mut creates = 0i64;
+    for (i, m) in mappings.iter().enumerate() {
+        let p = format!("importMappings.{i}");
+        if m.name.is_empty() {
+            problem(e, format!("{p}.name"), "required", "Required");
+        } else if m.name.chars().count() > 100 {
+            problem(e, format!("{p}.name"), "too_long", "At most 100 characters");
+        }
+        if m.description.as_deref().is_some_and(|d| d.chars().count() > 500) {
+            problem(e, format!("{p}.description"), "too_long", "At most 500 characters");
+        }
+        let merge_key = (m.class_key.clone(), m.name.to_lowercase());
+        if !seen.insert(merge_key.clone()) {
+            problem(
+                e,
+                format!("{p}.name"),
+                "duplicate",
+                format!("\"{}\" appears more than once for this class", m.name),
+            );
+        }
+        e.extend(m.definition.check(&format!("{p}.definition")).into_iter().map(|mut x| {
+            x.location = FieldLocation::Body;
+            x
+        }));
+        if let Some(class_id) = snap.ids.classes.get(&m.class_key)
+            && ctx.require_class(*class_id, ClassOp::View).is_err()
+        {
+            warnings.push(ImportWarning {
+                path: p,
+                message: format!("You cannot view class \"{}\"; the mapping \"{}\" was skipped", m.class_key, m.name),
+            });
+            continue;
+        }
+        if !parents.contains_key(m.class_key.as_str()) {
+            warnings.push(ImportWarning {
+                path: format!("{p}.classKey"),
+                message: format!("Class \"{}\" does not exist; the mapping applies once it does", m.class_key),
+            });
+        }
+        for (j, c) in m.definition.columns.iter().enumerate() {
+            let missing = match &c.target {
+                ColumnTarget::Attribute { key, .. } if !has_attribute(&m.class_key, key) => {
+                    Some(format!("Field \"{key}\" does not exist on class \"{}\"", m.class_key))
+                }
+                ColumnTarget::Relationship { type_key, .. } if !types.contains(type_key.as_str()) => {
+                    Some(format!("Relationship type \"{type_key}\" does not exist"))
+                }
+                _ => None,
+            };
+            if let Some(message) = missing {
+                warnings.push(ImportWarning { path: format!("{p}.definition.columns.{j}.target"), message });
+            }
+        }
+        if !snap.ids.mappings.contains_key(&merge_key) {
+            creates += 1;
+        }
+    }
+    if snap.ids.mappings.len() as i64 + creates > saved::MAX_SAVED {
+        problem(
+            e,
+            "importMappings".into(),
+            "limit_reached",
+            format!("An instance holds at most {} saved mappings; this file would exceed that", saved::MAX_SAVED),
+        );
     }
 }
 
@@ -1033,7 +1179,7 @@ async fn run(
         file
     };
     let mut warnings = Vec::new();
-    let decoded = validate(file, &snap, &mut warnings)?;
+    let decoded = validate(file, &snap, ctx, &mut warnings)?;
     let Snapshot { file: current, ids, .. } = snap;
     let cur_dm = current.data_model.unwrap_or_default();
     let cur_lk = current.lookups.unwrap_or_default();
@@ -1511,6 +1657,54 @@ async fn run(
         }
     }
 
+    // ---- saved import mappings (merged by class key and name, never deleted) ----
+    if let Some(list) = &file.import_mappings {
+        let names: HashSet<String> =
+            list.iter().map(|m| format!("{}.{}", m.class_key, m.name.to_lowercase())).collect();
+        let here: Vec<String> = im.ids.mappings.keys().map(|(c, n)| format!("{c}.{n}")).collect();
+        im.section("importMappings", not_in_file(here.iter(), &names));
+        let old: HashMap<(String, String), &ImportMappingSpec> = current
+            .import_mappings
+            .iter()
+            .flatten()
+            .map(|m| ((m.class_key.clone(), m.name.to_lowercase()), m))
+            .collect();
+        for (i, m) in list.iter().enumerate() {
+            let key = (m.class_key.clone(), m.name.to_lowercase());
+            if let Some(c) = im.ids.classes.get(&m.class_key)
+                && im.ctx.require_class(*c, ClassOp::View).is_err()
+            {
+                continue; // warned about in validate
+            }
+            let path = format!("importMappings.{i}");
+            let label = format!("{}.{}", m.class_key, m.name);
+            let existing = im.ids.mappings.get(&key).copied();
+            let fields = match old.get(&key) {
+                // The name keeps its current spelling; only description and definition are replaced.
+                Some(before) => diff(*before, &ImportMappingSpec { name: before.name.clone(), ..m.clone() }),
+                None => Vec::new(),
+            };
+            if existing.is_some() && fields.is_empty() {
+                im.record("importMappings", label, None, Vec::new());
+                continue;
+            }
+            let id = saved::config_write(
+                im.conn,
+                im.ctx,
+                existing,
+                &m.name,
+                m.description.as_deref(),
+                &m.class_key,
+                &m.definition,
+            )
+            .await
+            .map_err(|e| at(&path, e))?;
+            im.ids.mappings.insert(key, id);
+            let action = if existing.is_some() { ChangeAction::Update } else { ChangeAction::Create };
+            im.record("importMappings", label, Some(action), fields);
+        }
+    }
+
     // ---- UI settings ----
     let mut ui_settings_issues = Vec::new();
     if let Some(section) = &file.ui_settings {
@@ -1622,7 +1816,7 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
 /// `config.export_import` lets a file in, not past the permission each section
 /// needs on its own admin API: the data model and lookups (which run DDL) need
 /// `datamodel.manage`, UI settings need `customization.manage`, permission
-/// profiles need `profiles.manage`. Checked for dry runs too, before anything
+/// profiles need `profiles.manage`, saved import mappings `cis.import`. Checked for dry runs too, before anything
 /// touches the database. Each profile is still bounded by what the importing
 /// user holds.
 fn check_sections(ctx: &RequestContext, file: &ConfigFile) -> Result<(), AppError> {
@@ -1648,6 +1842,9 @@ fn check_sections(ctx: &RequestContext, file: &ConfigFile) -> Result<(), AppErro
     }
     if file.permission_profiles.as_ref().is_some_and(|p| !p.is_empty()) {
         ctx.require(GlobalPermission::ProfilesManage)?;
+    }
+    if file.import_mappings.as_ref().is_some_and(|m| !m.is_empty()) {
+        ctx.require(GlobalPermission::CisImport)?;
     }
     Ok(())
 }
@@ -1686,12 +1883,14 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "Data model (classes, attributes, relationship types and rules), lookups (statuses, environments, \
                  locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings \
-                 including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. \
+                 including the logo and favicon, and saved import mappings. Never contains users, passwords, \
+                 sessions, CIs, relationships, import jobs or the import switch. \
                  Everything refers to everything else by key, so the file imports into another install. Answers \
                  with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the \
                  caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on \
                  `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves \
-                 the target's profiles untouched.",
+                 the target's profiles untouched. Likewise `importMappings` is only present when the caller holds \
+                 `cis.import`, and holds only the mappings of classes the caller can view.",
             )
             .requires(GlobalPermission::ConfigExportImport)
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
@@ -1716,7 +1915,10 @@ pub fn routes() -> Vec<Route> {
                  an attribute required while CIs lack a value) fails with the same error the admin API gives, with \
                  the file path prefixed. A non-empty `dataModel` or `lookups` section also requires \
                  `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty \
-                 `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot \
+                 `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section \
+                 `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and \
+                 name (case-insensitive); an existing one gets the file's description and definition. Keys the \
+                 target lacks are warnings, and mappings of classes the caller cannot view are skipped. Profiles cannot \
                  grant more than the importing user holds (403). Every applied change is audited.",
             )
             .requires(GlobalPermission::ConfigExportImport)
@@ -1862,6 +2064,7 @@ mod tests {
             lookups: None,
             permission_profiles: Some(vec![profile]),
             ui_settings: None,
+            import_mappings: None,
         };
         import(&db.pool, &RequestContext::system("test", "test"), &file, ImportMode::Apply).await.unwrap();
 
@@ -1882,6 +2085,137 @@ mod tests {
         }
 
         db.drop().await;
+    }
+
+    /// SHAA-714 §6.2, AC10: saved import mappings round-trip through format
+    /// version 4, merge by class key and name, need `cis.import`, stay within
+    /// the classes the caller can view, and are audited with `actor_type = import`.
+    #[tokio::test]
+    async fn import_mappings_round_trip() {
+        use crate::api::route::BodyInput;
+        let Some(src) = scratch::database("config_mappings_src").await else { return };
+        let Some(dst) = scratch::database("config_mappings_dst").await else { return };
+        let system = RequestContext::system("test", "test");
+        crate::seed::install_template(&src.pool, "it_infrastructure").await.unwrap();
+        let (class, attr): (String, String) = sqlx::query_as(
+            "SELECT c.key, d.key FROM cmdb.ci_attribute_definitions d JOIN cmdb.ci_classes c ON c.id = d.class_id
+             WHERE NOT c.is_abstract ORDER BY c.key, d.key LIMIT 1",
+        )
+        .fetch_one(&src.pool)
+        .await
+        .unwrap();
+        let definition = |attr: &str| -> saved::MappingDefinition {
+            serde_json::from_value(serde_json::json!({
+                "mode": "create_or_update",
+                "key": { "field": format!("attributes.{attr}") },
+                "columns": [
+                    { "header": "Name", "target": { "kind": "attribute", "key": attr } },
+                    { "header": "Notes", "target": { "kind": "ignore" } },
+                ],
+            }))
+            .unwrap()
+        };
+        let mut conn = src.pool.acquire().await.unwrap();
+        for (name, description) in [("Vendor layout", Some("From the vendor portal")), ("Plain", None)] {
+            saved::config_write(&mut conn, &system, None, name, description, &class, &definition(&attr)).await.unwrap();
+        }
+        drop(conn);
+
+        // Export writes version 4 with the section; the JSON parses back.
+        let file = export(&src.pool, &system).await.unwrap();
+        assert_eq!(file.format_version, 4);
+        let mappings = file.import_mappings.clone().unwrap();
+        assert_eq!(mappings.len(), 2, "{mappings:?}");
+        let raw = serde_json::to_value(&file).unwrap();
+        let Ok(parsed) = Body::<ConfigFile>::parse(Some(raw)) else { panic!("export does not parse") };
+        assert_eq!(parsed.0, file);
+
+        // Into an empty install: created, then the same file changes nothing.
+        let applied = import(&dst.pool, &system, &file, ImportMode::Apply).await.unwrap();
+        let section = applied.summary.iter().find(|s| s.section == "importMappings").unwrap();
+        assert_eq!((section.created, section.updated, section.unchanged), (2, 0, 0));
+        let back = export(&dst.pool, &system).await.unwrap().import_mappings.unwrap();
+        assert_eq!(back, mappings);
+        let audits = || async {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM audit_log WHERE entity_type = 'import_mappings' AND actor_type = 'import'",
+            )
+            .fetch_one(&dst.pool)
+            .await
+            .unwrap()
+        };
+        assert_eq!(audits().await, 2);
+        let again = import(&dst.pool, &system, &file, ImportMode::Apply).await.unwrap();
+        let section = again.summary.iter().find(|s| s.section == "importMappings").unwrap();
+        assert_eq!((section.created, section.updated, section.unchanged), (0, 0, 2));
+        assert_eq!(audits().await, 2);
+
+        // Matched by class and name ignoring case: the definition and description are
+        // replaced, the name keeps its spelling. A field the target lacks is a warning.
+        let mut changed = ConfigFile { data_model: None, lookups: None, ui_settings: None, ..file.clone() };
+        changed.permission_profiles = None;
+        let m = &mut changed.import_mappings.as_mut().unwrap()[0];
+        m.name = m.name.to_uppercase();
+        m.description = Some("Changed".into());
+        m.definition = definition("no_such_field");
+        let res = import(&dst.pool, &system, &changed, ImportMode::Apply).await.unwrap();
+        let section = res.summary.iter().find(|s| s.section == "importMappings").unwrap();
+        assert_eq!((section.created, section.updated, section.unchanged), (0, 1, 1), "{:?}", res.changes);
+        assert!(res.warnings.iter().any(|w| w.message.contains("no_such_field")), "{:?}", res.warnings);
+        let (name, description): (String, Option<String>) = sqlx::query_as(
+            "SELECT name, description FROM cmdb.import_mappings WHERE class_key = $1 AND lower(name) = lower($2)",
+        )
+        .bind(&class)
+        .bind(&mappings[0].name)
+        .fetch_one(&dst.pool)
+        .await
+        .unwrap();
+        assert_eq!((name.as_str(), description.as_deref()), (mappings[0].name.as_str(), Some("Changed")));
+        assert_eq!(audits().await, 3);
+
+        // A class that does not exist here: a warning, and the mapping is kept.
+        let mut orphan = changed.clone();
+        orphan.import_mappings = Some(vec![ImportMappingSpec { class_key: "not_here".into(), ..mappings[1].clone() }]);
+        let res = import(&dst.pool, &system, &orphan, ImportMode::DryRun).await.unwrap();
+        assert!(res.warnings.iter().any(|w| w.path == "importMappings.0.classKey"), "{:?}", res.warnings);
+        assert_eq!(res.summary.iter().find(|s| s.section == "importMappings").unwrap().created, 1);
+
+        // The same class and name twice in one file.
+        let mut twice = changed.clone();
+        twice.import_mappings = Some(vec![mappings[1].clone(), mappings[1].clone()]);
+        let err = import(&dst.pool, &system, &twice, ImportMode::DryRun).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::ValidationError);
+        assert!(err.details.unwrap().iter().any(|d| d.field == "importMappings.1.name" && d.code == "duplicate"));
+
+        // Without cis.import: not exported, and a file with mappings is refused.
+        let no_import = user_ctx(&dst.pool, "exporter", &[GlobalPermission::ConfigExportImport]).await;
+        let exported = export(&dst.pool, &no_import).await.unwrap();
+        assert_eq!(exported.import_mappings, None);
+        assert!(serde_json::to_value(&exported).unwrap().get("importMappings").is_none());
+        let err = import(&dst.pool, &no_import, &changed, ImportMode::DryRun).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::Forbidden);
+        assert!(err.message.contains("cis.import"), "{err}");
+
+        // With cis.import but no view right on the class: nothing exported, and the
+        // import skips the mapping with a warning instead of writing it.
+        let importer =
+            user_ctx(&dst.pool, "importer", &[GlobalPermission::ConfigExportImport, GlobalPermission::CisImport]).await;
+        assert_eq!(export(&dst.pool, &importer).await.unwrap().import_mappings, Some(Vec::new()));
+        let res = import(&dst.pool, &importer, &changed, ImportMode::Apply).await.unwrap();
+        assert!(res.warnings.iter().any(|w| w.message.contains("cannot view")), "{:?}", res.warnings);
+        assert!(res.changes.iter().all(|c| c.section != "importMappings"), "{:?}", res.changes);
+        assert_eq!(audits().await, 3);
+
+        // An unknown version is refused; version 3 files (no section) still import.
+        let err = import(&dst.pool, &system, &ConfigFile { format_version: 5, ..changed.clone() }, ImportMode::DryRun)
+            .await
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("versions 1 to 4"), "{err:?}");
+        let v3 = ConfigFile { format_version: 3, import_mappings: None, ..changed };
+        import(&dst.pool, &system, &v3, ImportMode::DryRun).await.unwrap();
+
+        src.drop().await;
+        dst.drop().await;
     }
 
     /// GH#289: a configuration file with a NUL anywhere, including free-form
