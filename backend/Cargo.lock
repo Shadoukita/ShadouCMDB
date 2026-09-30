@@ -1999,6 +1999,7 @@ dependencies = [
  "ldap3",
  "mimalloc",
  "mime_guess",
+ "percent-encoding",
  "regex",
  "reqwest",
  "ring",
