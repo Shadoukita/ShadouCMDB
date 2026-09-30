@@ -271,7 +271,7 @@ test.describe("administrators: required two-factor authentication and reset", ()
   });
 
   test("a holder without two-factor is sent straight to the set-up, then into the app", async ({ browser }) => {
-    test.slow(); // argon2id checks: three sign-ins and two set-ups
+    test.slow(); // argon2id checks: three sign-ins and the set-up
     const page = await newPage(browser);
     await page.goto("/cis");
     await page.getByLabel("Username").fill(USERNAME);
@@ -302,29 +302,19 @@ test.describe("administrators: required two-factor authentication and reset", ()
     await expect(panel.getByText("Required", { exact: true })).toBeVisible();
     await page.context().close();
 
-    // The second browser proved no code, so it stays limited. Starting a set-up there is refused (409),
-    // and the screen then says the authenticator is set up and asks for a sign-in with a code instead.
+    // The second browser proved no code, so confirming the authenticator ended its session (GH#292): its
+    // next request answers 401 and it is sent to sign-in, where it now needs a code.
     await other.locator("#mfa-currentPassword").fill(PASSWORD);
     await other.getByRole("button", { name: "Set up authenticator app" }).click();
-    await expect(other.getByRole("heading", { level: 1, name: "Sign in again with a code" })).toBeVisible(ARGON2);
-    await expect(other.getByText("Your authenticator app is already set up")).toBeVisible();
-    await expect(other.getByRole("button", { name: "Set up authenticator app" })).toHaveCount(0);
-    // A reload shows the same, straight from the session, and keeps where the user was going.
-    await other.reload();
-    await expect(other).toHaveURL(at("/two-factor-setup", "?redirect=/cis"));
-    await expect(other.getByRole("heading", { level: 1, name: "Sign in again with a code" })).toBeVisible();
-    await snap(other, "mfa-forced-sign-in-again");
-
-    await other.getByRole("button", { name: "Sign out and sign in with a code" }).click();
-    await expect(other).toHaveURL(at("/login", "?redirect=/cis"));
+    await expect(other).toHaveURL((url) => url.pathname === "/login");
+    await expect(other.getByText("Your session has ended.")).toBeVisible();
     await other.getByLabel("Username").fill(USERNAME);
     await other.getByLabel("Password").fill(PASSWORD);
     await other.getByRole("button", { name: "Sign in" }).click();
     await expect(other.getByLabel("Authentication code")).toBeFocused(ARGON2);
     await other.getByLabel("Authentication code").fill(await app.next());
     await other.getByRole("button", { name: "Verify" }).click();
-    await expect(other).toHaveURL(at("/cis"), ARGON2);
-    await expect(other.getByRole("navigation", { name: "Main" })).toBeVisible();
+    await expect(other.getByRole("navigation", { name: "Main" })).toBeVisible(ARGON2);
     await other.context().close();
   });
 
