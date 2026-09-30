@@ -316,6 +316,11 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
   write `create` and `update` rows (see [data model](data-model.md#auditing)). A token that can no longer
   authenticate (revoked, expired, owner disabled, profile deleted) is recorded at most once a minute per outcome;
   the next row counts the requests left out in `unrecordedRefusals`.
+- The `path` of a `token.use` row names the CI or relationship requested, if any (`/configuration-items/{id}`,
+  `/configuration-items/{id}/graph`, `/relationships/{id}`). A reader whose profile limits the classes they may view
+  sees that id replaced with `{hidden}` (e.g. `/api/v1/configuration-items/{hidden}/graph`) when they may not view
+  the CI, or both endpoints of the relationship; the rest of the row is shown. This applies to rows written before
+  the check too, since the path is judged when it is read.
 
 **First run.** While there are no users, `GET /api/v1/setup` returns `{"setupRequired": true}` and
 `POST /api/v1/setup` creates the first administrator and signs them in. Its body carries `setupToken`: the

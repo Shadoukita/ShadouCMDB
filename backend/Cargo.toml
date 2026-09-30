@@ -34,6 +34,8 @@ ipnetwork = "0.21"
 # LDAP/AD sign-in: rustls with ring (LDAPS and StartTLS), no OpenSSL.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 mime_guess = "2"
+# Decodes the id in a token.use path before the audit log judges it; already in the tree through axum.
+percent-encoding = "2"
 regex = "1"
 # OIDC discovery, JWKS and token requests. rustls with the ring provider we configure
 # ourselves (the same one sqlx uses), so no second crypto library enters the build.
