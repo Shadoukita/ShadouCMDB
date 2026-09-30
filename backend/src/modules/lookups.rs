@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::classes::{AttributeDefinition, AttributeDefinitions};
 use super::simple_resource::{
-    self as simple, BoxFuture, EVERY_CLASS_SPANS, LOOKUP_VALUE_SPANS, ListQuery, Resource, Usage, Writable,
+    self as simple, BoxFuture, CRITICALITY_VALUE_SPANS, LOOKUP_VALUE_SPANS, ListQuery, Resource, Usage, Writable,
     bool_filter, non_empty,
 };
 use crate::api::context::{Count, RequestContext};
@@ -1272,7 +1272,7 @@ impl Resource for LookupListValues {
             kind: "criticality",
             label: "configuration items with this criticality",
             sql: "SELECT count(*) FROM configuration_items WHERE criticality_value_id = $1",
-            spans: Some(EVERY_CLASS_SPANS),
+            spans: Some(CRITICALITY_VALUE_SPANS),
             blocking: true,
         },
         Usage {
@@ -1495,6 +1495,20 @@ mod tests {
         assert!(report.in_use);
         let values = report.data.iter().find(|u| u.kind == "attributeValues").unwrap();
         assert_eq!((values.count.exact(), values.withheld), (None, true));
+        // No CI can hold a model as its criticality: that count is told, not withheld.
+        let criticality = report.data.iter().find(|u| u.kind == "criticality").unwrap();
+        assert_eq!((criticality.count.exact(), criticality.withheld), (Some(0), false));
+        // A value of the system list Criticality can be on a CI of any class.
+        let high: Uuid = sqlx::query_scalar(
+            "SELECT v.id FROM lookup_list_values v JOIN lookup_lists l ON l.id = v.list_id
+             WHERE l.system_role = 'criticality' AND v.key = 'high'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let report = simple::usage::<LookupListValues>(pool, &restricted, high).await.unwrap();
+        let criticality = report.data.iter().find(|u| u.kind == "criticality").unwrap();
+        assert_eq!((criticality.count.exact(), criticality.withheld), (None, true));
         let report = simple::usage::<LookupListValues>(pool, &viewer, rocket.id).await.unwrap();
         let values = report.data.iter().find(|u| u.kind == "attributeValues").unwrap();
         assert_eq!((values.count.exact(), values.withheld), (Some(1), false));
