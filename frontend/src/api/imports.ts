@@ -19,7 +19,14 @@ export type ImportEncoding = Schemas["ImportEncoding"];
 export type ImportFile = Schemas["ImportFile"];
 export type ImportJobMapping = Schemas["ImportMapping"];
 export type ImportColumnTarget = Schemas["ImportColumnTarget"];
+export type ImportColumnMapping = Schemas["ImportColumnMapping"];
+export type ImportIssue = Schemas["ImportIssue"];
+export type ImportPlannedRow = Schemas["ImportPlannedRow"];
+export type ImportMappingSuggestion = Schemas["ImportMappingSuggestion"];
+export type ImportMappingDefinition = Schemas["ImportMappingDefinition"];
+export type SavedImportMapping = Schemas["SavedImportMapping"];
 export type ImportListQuery = NonNullable<paths["/api/v1/imports"]["get"]["parameters"]["query"]>;
+export type ImportIssueQuery = NonNullable<paths["/api/v1/imports/{id}/issues"]["get"]["parameters"]["query"]>;
 export type ImportFileOptions = NonNullable<paths["/api/v1/imports/{id}/file-options"]["patch"]["requestBody"]>["content"]["application/json"];
 
 /** The two content types the upload accepts; anything else is 415. */
@@ -34,6 +41,11 @@ export const importKeys = {
   lists: ["imports", "list"] as const,
   list: (q: ImportListQuery) => ["imports", "list", q] as const,
   job: (id: string) => ["imports", "job", id] as const,
+  /** Keyed by the dry run's end, so a new check never shows the previous one's problems. */
+  issues: (id: string, run: string, q: ImportIssueQuery) => ["imports", "issues", id, run, q] as const,
+  suggestion: (id: string, classKey: string, mappingId: string) => ["imports", "suggestion", id, classKey, mappingId] as const,
+  mappings: ["import-mappings"] as const,
+  mappingList: (classKey: string) => ["import-mappings", classKey] as const,
 };
 
 // ---------- Settings ----------
@@ -142,6 +154,44 @@ export const useUpdateImportFileOptions = () =>
     unwrap(api.PATCH("/api/v1/imports/{id}/file-options", { params: { path: { id } }, body: options })),
   );
 
+/**
+ * Saves the mapping (`200`, back to `ready`, any dry run discarded). A `400` lists every problem with its
+ * `details[].field` (`columns[3].target.key`, `key.field`, `attributes.os`), placed by lib/importMapping.ts.
+ */
+export const useSetImportMapping = () =>
+  useJobMutation(({ id, mapping }: { id: string; mapping: ImportJobMapping }) =>
+    unwrap(api.PUT("/api/v1/imports/{id}/mapping", { params: { path: { id } }, body: mapping })),
+  );
+
+/** Starts the check (`202`, `validating`); the job is then polled. `409` without a mapping, `429 import_busy`. */
+export const useStartImportDryRun = () =>
+  useJobMutation((id: string) => unwrap(api.POST("/api/v1/imports/{id}/dry-run", { params: { path: { id } } })));
+
+/** The row problems of the last dry run, paged and filtered on the server. */
+export function useImportIssues(id: MaybeRefOrGetter<string>, run: MaybeRefOrGetter<string | undefined>, query: MaybeRefOrGetter<ImportIssueQuery>) {
+  return useQuery(() => {
+    const jobId = toValue(id);
+    const r = toValue(run) ?? "";
+    const q = toValue(query);
+    return {
+      queryKey: importKeys.issues(jobId, r, q),
+      enabled: !!r,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/imports/{id}/issues", { params: { path: { id: jobId }, query: q }, signal })),
+      placeholderData: keepPreviousData,
+    };
+  });
+}
+
+/**
+ * Starts the import (`202`, `committing`). With `skipErrorRows` the rows the check found errors in are left out;
+ * without it a check with error rows is refused (`409 has_error_rows`), as is a stale one (`dry_run_stale`).
+ */
+export const useCommitImport = () =>
+  useJobMutation(({ id, skipErrorRows }: { id: string; skipErrorRows: boolean }) =>
+    unwrap(api.POST("/api/v1/imports/{id}/commit", { params: { path: { id } }, body: { skipErrorRows } })),
+  );
+
 /** Stops a running job; a commit stops after its current batch. Also works while import is turned off. */
 export const useCancelImport = () =>
   useJobMutation((id: string) => unwrap(api.POST("/api/v1/imports/{id}/cancel", { params: { path: { id } } })));
@@ -155,6 +205,71 @@ export function useDeleteImport() {
       qc.removeQueries({ queryKey: importKeys.job(id) });
       qc.invalidateQueries({ queryKey: importKeys.lists });
     },
+  });
+}
+
+// ---------- Mapping suggestion and saved mappings ----------
+
+/**
+ * The server's auto-match for a class (§3.3), optionally starting from a saved mapping. When no saved mapping
+ * is asked for and exactly one of the class has the file's headers, the server applies it (`savedMapping.byHeaders`).
+ */
+export function useImportMappingSuggestion(
+  id: MaybeRefOrGetter<string>,
+  classKey: MaybeRefOrGetter<string>,
+  mappingId: MaybeRefOrGetter<string>,
+  enabled: MaybeRefOrGetter<boolean> = true,
+) {
+  return useQuery(() => {
+    const jobId = toValue(id);
+    const key = toValue(classKey);
+    const saved = toValue(mappingId);
+    return {
+      queryKey: importKeys.suggestion(jobId, key, saved),
+      enabled: !!key && toValue(enabled),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(
+          api.GET("/api/v1/imports/{id}/mapping-suggestion", {
+            params: { path: { id: jobId }, query: saved ? { classKey: key, mappingId: saved } : { classKey: key } },
+            signal,
+          }),
+        ),
+      staleTime: Infinity,
+      retry: false,
+    };
+  });
+}
+
+/** Saved mappings of a class, shared by everyone who may import into it (D9). Unpaged: at most 500 per instance. */
+export function useImportMappings(classKey: MaybeRefOrGetter<string>) {
+  return useQuery(() => {
+    const key = toValue(classKey);
+    return {
+      queryKey: importKeys.mappingList(key),
+      enabled: !!key,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/import-mappings", { params: { query: { classKey: key } }, signal })),
+    };
+  });
+}
+
+export type NewImportMapping = { name: string; description: string | null; classKey: string; definition: ImportMappingDefinition };
+
+export function useCreateImportMapping() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: NewImportMapping) => unwrap(api.POST("/api/v1/import-mappings", { body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: importKeys.mappings }),
+  });
+}
+
+/** Creator or administrator; `409 VERSION_CONFLICT` if someone saved it in between. */
+export function useUpdateImportMapping() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string; version: number; name?: string; description?: string | null; definition?: ImportMappingDefinition }) =>
+      unwrap(api.PATCH("/api/v1/import-mappings/{id}", { params: { path: { id } }, body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: importKeys.mappings }),
   });
 }
 
@@ -190,5 +305,11 @@ export const importDownloads = {
     const request = api.GET("/api/v1/imports/template", { params: { query: { classKey } }, parseAs: "blob" });
     const blob = (await unwrap(request)) as unknown as Blob;
     save(blob, attachmentName((await request).response, `${classKey}-template.csv`));
+  },
+  /** The rows with problems, with their original columns, neutralised against formula injection (§3.4). */
+  async errorReport(job: { id: string; file: { name: string } }) {
+    const request = api.GET("/api/v1/imports/{id}/error-report", { params: { path: { id: job.id } }, parseAs: "blob" });
+    const blob = (await unwrap(request)) as unknown as Blob;
+    save(blob, attachmentName((await request).response, `${job.file.name.replace(/\.[^.]+$/, "")}-errors.csv`));
   },
 };

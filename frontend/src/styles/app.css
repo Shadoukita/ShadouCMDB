@@ -1921,3 +1921,113 @@ table.data td.fill {
 .import-preview td.cell-clip {
   max-width: 220px;
 }
+.import-mapping-settings {
+  display: grid;
+  gap: var(--sp-3);
+  max-width: 720px;
+  margin-bottom: var(--sp-4);
+}
+.import-mapping-settings fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.import-mapping-settings legend {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  padding: 0;
+}
+.import-mapping-options summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.import-mapping-options[open] summary {
+  margin-bottom: var(--sp-2);
+}
+.import-mapping td {
+  vertical-align: top;
+}
+.import-mapping select,
+.import-mapping input {
+  max-width: 100%;
+}
+.import-samples {
+  font-size: var(--fs-xs);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-col-options {
+  display: grid;
+  gap: 2px;
+  font-size: var(--fs-sm);
+  min-width: 200px;
+}
+.import-mapping .error {
+  font-size: var(--fs-sm);
+  color: var(--c-danger);
+  margin-top: 2px;
+  white-space: normal;
+}
+.import-mapping tr.has-error td:first-child {
+  box-shadow: inset 3px 0 0 var(--c-danger);
+}
+.status-error {
+  color: var(--c-danger);
+  font-weight: 600;
+}
+.error-summary {
+  margin: var(--sp-2) 0 0;
+  padding-left: var(--sp-5);
+}
+.import-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-5);
+  list-style: none;
+  margin: var(--sp-2) 0;
+  padding: 0;
+}
+.import-count-error {
+  color: var(--c-danger);
+}
+.import-result {
+  margin: var(--sp-2) 0;
+}
+/* 1.4.10: at narrow widths the mapping table becomes one card per file column, with the same labels. */
+@media (max-width: 640px) {
+  .import-mapping table,
+  .import-mapping tbody,
+  .import-mapping tr,
+  .import-mapping td {
+    display: block;
+    width: 100%;
+  }
+  .import-mapping thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .import-mapping tr {
+    border-bottom: 1px solid var(--c-border-strong);
+    padding: var(--sp-2) 0;
+  }
+  .import-mapping td {
+    border: 0;
+    white-space: normal;
+  }
+  .import-mapping td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--c-text-muted);
+  }
+  .import-samples {
+    max-width: none;
+  }
+}

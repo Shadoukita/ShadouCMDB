@@ -8,13 +8,15 @@ import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import { useDocumentTitle } from "../../lib/composables";
-import { lastReachableStep, shownStep, stepOf, STEPS, type WizardStep } from "../../lib/imports";
+import { lastReachableStep, shownStep, stepOf, type WizardStep } from "../../lib/imports";
 import { useImportAccess } from "../../lib/useImportAccess";
 import { useSessionStore } from "../../stores/session";
+import CheckStep from "./CheckStep.vue";
+import CommitStep from "./CommitStep.vue";
 import FileStep from "./FileStep.vue";
-import ImportProgress from "./ImportProgress.vue";
 import ImportStatusBadge from "./ImportStatusBadge.vue";
 import ImportStepper from "./ImportStepper.vue";
+import MappingStep from "./MappingStep.vue";
 import UploadStep from "./UploadStep.vue";
 
 /**
@@ -57,19 +59,26 @@ watch(step, async () => {
 });
 
 function onUploaded(j: ImportJob) {
-  // The class chosen in the inventory travels on to the mapping step.
-  const classKey = typeof route.query.classKey === "string" ? route.query.classKey : undefined;
-  router.replace({ path: `/imports/${j.id}`, query: classKey ? { classKey } : {} });
+  // The class chosen in the inventory, and the job a corrected file replaces, travel on to the mapping step.
+  const query: Record<string, string> = {};
+  if (presetClassKey.value) query.classKey = presetClassKey.value;
+  if (presetFromJob.value) query.fromJob = presetFromJob.value;
+  router.replace({ path: `/imports/${j.id}`, query });
 }
 function toMapping() {
   router.push({ path: `/imports/${id.value}`, query: { ...route.query, step: "2" } });
 }
+/** The check or the import started: the job's own step takes over, with no stale filters of an earlier check. */
+function toJobStep() {
+  router.replace({ path: `/imports/${id.value}` });
+}
+const presetClassKey = computed(() => (typeof route.query.classKey === "string" ? route.query.classKey : undefined));
+const presetFromJob = computed(() => (typeof route.query.fromJob === "string" ? route.query.fromJob : undefined));
 
 const committedRows = computed(() => {
   const c = data.value?.summary?.committed;
   return c ? c.created + c.updated + c.unchanged : 0;
 });
-const stepLabel = computed(() => STEPS.find((s) => s.step === step.value)!.label);
 </script>
 
 <template>
@@ -144,19 +153,9 @@ const stepLabel = computed(() => STEPS.find((s) => s.step === step.value)!.label
       </div>
 
       <FileStep v-if="step === 1" :job="data" @next="toMapping" />
-      <!-- Steps 2 to 4 follow with the mapping, dry-run and commit API (SHAA-799 part 4). -->
-      <section v-else class="panel" aria-labelledby="step-heading">
-        <div class="panel-header"><h2 id="step-heading" tabindex="-1">{{ stepLabel }}</h2></div>
-        <div class="panel-body">
-          <ImportProgress
-            v-if="data.status === 'validating' || data.status === 'committing'"
-            :label="data.status === 'validating' ? 'Checking rows…' : 'Importing rows…'"
-            :done="data.progress.done"
-            :total="data.progress.total"
-          />
-          <p class="muted">This step is not available in this build yet.</p>
-        </div>
-      </section>
+      <MappingStep v-else-if="step === 2" :job="data" :preset-class-key="presetClassKey" :preset-from-job="presetFromJob" @checking="toJobStep" />
+      <CheckStep v-else-if="step === 3" :job="data" @committing="toJobStep" />
+      <CommitStep v-else :job="data" />
     </template>
   </template>
 </template>
