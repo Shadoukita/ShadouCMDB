@@ -51,7 +51,7 @@ test("new CI: General first, valid from is now, double-click fills dates in", as
   // General (core fields and the ungrouped Code), then the class's group; no "Other".
   await expect(page.locator("form .layout-panel > summary h2")).toHaveText(["General", "Lifecycle"]);
   const general = page.locator("form .layout-panel").first();
-  await expect(general.locator("label")).toHaveText(["Ident", /^Valid from/, "Valid until", "Code"]);
+  await expect(general.locator("label")).toHaveText(["Ident", /^Valid from/, "Valid until", "Criticality", "Code"]);
 
   // Valid from starts at the moment the form opened, in local time; valid until is open-ended.
   const from = await page.locator("#f-valid-from").inputValue();

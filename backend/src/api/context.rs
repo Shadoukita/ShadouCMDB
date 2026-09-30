@@ -140,14 +140,34 @@ impl RequestContext {
         }
     }
 
-    /// Context for a bulk import or discovery run that calls the services
-    /// without going through HTTP; its audit rows carry `actor_type = import`.
-    #[allow(dead_code)] // seam for the import/discovery modules
+    /// Context for a discovery run or another system import that calls the
+    /// services without going through HTTP; its audit rows carry `actor_type = import`.
+    /// It is the system caller, which may do anything: **bulk import
+    /// (`modules/imports`) must not use it** and uses [`Self::import_for_user`].
+    #[allow(dead_code)] // seam for the discovery module
     pub fn import(source: impl Into<String>, run_id: impl Into<String>) -> Self {
         RequestContext {
             caller: Caller::System,
             actor: Actor { actor_type: ActorType::Import, id: None, name: Some(source.into()) },
             request_id: run_id.into(),
+            client: ClientInfo::default(),
+        }
+    }
+
+    /// Bulk import on behalf of a user (SHAA-714 §3.6, T22): the user's
+    /// permissions as their profiles give them now (rebuilt for every chunk),
+    /// audited with `actor_type = import`, the user as actor and
+    /// `request_id = import:<jobId>`.
+    pub fn import_for_user(principal: Arc<Principal>, job: uuid::Uuid) -> Self {
+        let actor = Actor {
+            actor_type: ActorType::Import,
+            id: Some(principal.user_id.to_string()),
+            name: Some(principal.username.clone()),
+        };
+        RequestContext {
+            caller: Caller::User(principal),
+            actor,
+            request_id: format!("import:{job}"),
             client: ClientInfo::default(),
         }
     }

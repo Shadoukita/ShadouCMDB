@@ -5,12 +5,20 @@
 //! (D3) on top of the class rights, which every row is still checked against.
 
 pub mod analyse;
+pub mod commit;
+pub mod convert;
 pub mod csv_safe;
+pub mod dry_run;
 pub mod jobs;
+pub mod mapping;
 pub mod parse;
+pub mod planner;
+pub mod report;
+pub mod saved;
 pub mod schemas;
 pub mod settings;
 pub mod storage;
+pub mod suggest;
 pub mod template;
 #[cfg(test)]
 mod tests;
@@ -60,6 +68,8 @@ const UPLOAD_ROUTE_LIMIT: usize = 200 * 1024 * 1024;
 
 const JOBS: &str = "/api/v1/imports";
 const JOB: &str = "/api/v1/imports/{id}";
+const MAPPINGS: &str = "/api/v1/import-mappings";
+const MAPPING: &str = "/api/v1/import-mappings/{id}";
 
 pub fn routes() -> Vec<Route> {
     vec![
@@ -171,6 +181,109 @@ pub fn routes() -> Vec<Route> {
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<UpdateFileOptions>>| async move {
                 Ok(Json(jobs::update_file_options(&api.pool, &api.ctx, &api.imports, id, &b).await?))
             }),
+        route(Method::GET, "/api/v1/imports/{id}/mapping-suggestion", "suggestImportMapping")
+            .tag(TAG)
+            .summary("A first mapping for the file, from its headers")
+            .description(
+                "Headers are compared ignoring case, surrounding spaces and runs of spaces, `_`, `-` and `.`. Per \
+                 column: the saved mapping's target for the header (with `mappingId`, or when exactly one saved \
+                 mapping of the class has the same set of headers as the file), else an attribute key, `ident`, \
+                 `valid from` or `valid until`, else the label of exactly one attribute or relationship type (its \
+                 forward label for outgoing, reverse label for incoming). A target goes to the first column only. \
+                 References and relationships match by label. `ident` is never suggested for new CIs to \
+                 non-administrators. Nothing is stored: send the mapping with `PUT /imports/{id}/mapping`. A class \
+                 the caller cannot import into is `400 unknown_class`, the same as an unknown key.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(|api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<suggest::SuggestQuery>, NoBody>| async move {
+                Ok(Json(suggest::suggest(&api.pool, &api.ctx, &api.imports, id, &q).await?))
+            }),
+        route(Method::PUT, "/api/v1/imports/{id}/mapping", "setImportMapping")
+            .tag(TAG)
+            .summary("Set how the file's columns map to the class")
+            .description(
+                "Checked against the file's columns and the data model; every problem is reported at once in \
+                 `details`, with `field` such as `columns[3].target.key`. Any dry run is dropped and the job is \
+                 `ready`. In `ready` or `validated`; `409` while a step runs.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<schemas::ImportMapping>>| async move {
+                Ok(Json(jobs::set_mapping(&api.pool, &api.ctx, &api.imports, id, &b).await?))
+            }),
+        route(Method::POST, "/api/v1/imports/{id}/dry-run", "startImportDryRun")
+            .tag(TAG)
+            .summary("Check every row without writing anything")
+            .description(
+                "Runs the rows through the same validation as the CI API and records what each would do, and every \
+                 problem. `409` without a mapping (`mapping_required`) or while a step runs (`invalid_state`); \
+                 `429 import_busy` while another import of the job's owner runs.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .status(StatusCode::ACCEPTED)
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::RateLimited])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(jobs::start_dry_run(&api.pool, &api.ctx, &api.imports, id).await?))
+            }),
+        route(Method::GET, "/api/v1/imports/{id}/issues", "listImportIssues")
+            .tag(TAG)
+            .summary("The problems the dry run and the commit found, by row")
+            .description(
+                "In row order. `value` is the cell, cut to 200 characters. At most 10,000 problems are stored per \
+                 job; `summary.issuesTotal` counts them all. Empty once the file was deleted (24 h after the last \
+                 activity).",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<schemas::ListImportIssuesQuery>, NoBody>| async move {
+                    Ok(Json(jobs::issues(&api.pool, &api.ctx, &api.imports, id, &q).await?))
+                },
+            ),
+        route(Method::GET, "/api/v1/imports/{id}/error-report", "downloadImportErrorReport")
+            .tag(TAG)
+            .summary("The problems as a CSV to fix and upload again")
+            .description(
+                "Columns `Row`, `Severity`, `Column`, `Problem`, `Code`, then every original column of the row \
+                 under its original header; one line per problem, in row order. UTF-8 with a byte order mark, CRLF, \
+                 the file's delimiter (`,` for workbooks). Every field is quoted, and a field a spreadsheet could \
+                 read as a formula (starting with `=` `+` `-` `@`, a tab or a line break) or starting with `'` gets \
+                 a leading `'`; a file uploaded again is recognised as a report by its first five headers and the \
+                 `'` is taken off. At most the 10,000 stored problems. `404` when the job has no problems or its file \
+                 expired. A download by anyone other than the job's owner is audited as `import.report_read`. \
+                 `429` when the caller already downloads 2 reports, `503` when the server sends 8; a client that \
+                 reads nothing for 30 s, or takes more than 15 minutes, is cut off.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::RateLimited, ErrorCode::ServerBusy])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                report::download(&api.pool, &api.ctx, &api.imports, id).await
+            }),
+        route(Method::POST, "/api/v1/imports/{id}/commit", "commitImport")
+            .tag(TAG)
+            .summary("Write the rows the dry run checked")
+            .description(
+                "Queues the commit (`202`, then `committing`). Rows are written in file order, 500 per transaction, \
+                 and planned again against the current data, so changes since the dry run are caught; each row is \
+                 applied completely or not at all. Rows the dry run found errors in are never written. `409` with \
+                 `details[0].code`: `dry_run_required`, `dry_run_stale` (the data model changed, or the dry run is \
+                 older than 24 hours), `has_error_rows` (send `skipErrorRows: true` to import the other rows) or \
+                 `invalid_state`. `429 import_busy` while another import of the job's owner runs. An optional \
+                 `Idempotency-Key` returns the job as it is now instead of starting a second commit.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .status(StatusCode::ACCEPTED)
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::RateLimited, ErrorCode::IdempotencyKeyReused])
+            .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<schemas::CommitImport>>| async move {
+                Ok(Json(commit::start(&api.pool, &api.ctx, &api.imports, &api.headers, id, &b).await?))
+            }),
         route(Method::POST, "/api/v1/imports/{id}/cancel", "cancelImport")
             .tag(TAG)
             .summary("Stop an import")
@@ -199,5 +312,79 @@ pub fn routes() -> Vec<Route> {
                 jobs::delete(&api.pool, &api.ctx, id).await?;
                 Ok(NoContent)
             }),
+        route(Method::GET, MAPPINGS, "listImportMappings")
+            .tag(TAG)
+            .summary("Saved mappings, by name")
+            .description(
+                "Every saved mapping of a class the caller can view (at most 500 per instance, so not paged). \
+                 Saved mappings are shared with everyone who has `cis.import`.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<saved::ListSavedMappingsQuery>, NoBody>| async move {
+                    Ok(Json(saved::list(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
+        route(Method::POST, MAPPINGS, "createImportMapping")
+            .tag(TAG)
+            .summary("Save a mapping for files with the same layout")
+            .description(
+                "Needs view on the class; a class the caller cannot view is `400 unknown_class`, the same as an \
+                 unknown key. Names are unique per class (`409 duplicate_name`). At most 500 per instance \
+                 (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). The definition's targets are \
+                 checked when it is applied to a file. Audited as a `create` of `import_mappings`.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .status(StatusCode::CREATED)
+            .errors(&[ErrorCode::Conflict])
+            .handle(
+                |api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<saved::CreateSavedImportMapping>>| async move {
+                    Ok(Json(saved::create(&api.pool, &api.ctx, &api.imports, &b).await?))
+                },
+            ),
+        route(Method::GET, MAPPING, "getImportMapping")
+            .tag(TAG)
+            .summary("A saved mapping")
+            .description("`404` when its class is hidden from the caller, the same as for a mapping that does not exist.")
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(saved::get(&api.pool, &api.ctx, id).await?))
+            }),
+        route(Method::PATCH, MAPPING, "updateImportMapping")
+            .tag(TAG)
+            .summary("Rename or change a saved mapping (creator or Administrator)")
+            .description(
+                "Send the `version` you loaded; `409 VERSION_CONFLICT` if someone saved in between. The class cannot \
+                 change. Only the user who saved it and administrators may change it (`403`). Audited as an \
+                 `update` of `import_mappings` with the old and new definition.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Forbidden, ErrorCode::Conflict, ErrorCode::VersionConflict])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<saved::UpdateSavedImportMapping>>| async move {
+                    Ok(Json(saved::update(&api.pool, &api.ctx, &api.imports, id, &b).await?))
+                },
+            ),
+        route(Method::DELETE, MAPPING, "deleteImportMapping")
+            .tag(TAG)
+            .summary("Delete a saved mapping (creator or Administrator)")
+            .description(
+                "`?version=` is the version you loaded (`409 VERSION_CONFLICT` otherwise). Jobs that used the \
+                 mapping keep their own copy. Audited as a `delete` of `import_mappings`.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Forbidden, ErrorCode::VersionConflict])
+            .handle(
+                |api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<saved::DeleteSavedMappingQuery>, NoBody>| async move {
+                    saved::delete(&api.pool, &api.ctx, id, q.version).await?;
+                    Ok(NoContent)
+                },
+            ),
     ]
 }

@@ -39,6 +39,11 @@ async fn env(pool: &PgPool, cfg: ImportConfig) -> Env {
 
 /// A user holding a profile with these global rights and full rights on every class.
 async fn user(e: &Env, name: &str, global: &[&str]) -> Creds {
+    user_in(e, name, global, None).await
+}
+
+/// A user with these global rights and full rights on `classes` only (every class for `None`).
+async fn user_in(e: &Env, name: &str, global: &[&str], classes: Option<&[&str]>) -> Creds {
     let profile: Uuid = sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ($1) RETURNING id")
         .bind(format!("{name} profile"))
         .fetch_one(&e.pool)
@@ -52,14 +57,21 @@ async fn user(e: &Env, name: &str, global: &[&str]) -> Creds {
             .await
             .unwrap();
     }
-    sqlx::query(
-        "INSERT INTO permission_profile_class_permissions (profile_id, class_id, can_view, can_create, can_edit, can_delete)
-         VALUES ($1, NULL, true, true, true, true)",
-    )
-    .bind(profile)
-    .execute(&e.pool)
-    .await
-    .unwrap();
+    let class_ids: Vec<Option<Uuid>> = match classes {
+        None => vec![None],
+        Some(ids) => ids.iter().map(|c| Some(c.parse().unwrap())).collect(),
+    };
+    for class_id in class_ids {
+        sqlx::query(
+            "INSERT INTO permission_profile_class_permissions (profile_id, class_id, can_view, can_create, can_edit, can_delete)
+             VALUES ($1, $2, true, true, true, true)",
+        )
+        .bind(profile)
+        .bind(class_id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    }
     let body = json!({ "username": name, "displayName": name, "password": "a long enough password",
         "profileIds": [profile] });
     let (status, v, _) = call(&e.app, "POST", "/api/v1/admin/users", &e.admin, Some(body)).await;
@@ -650,4 +662,1101 @@ fn tokio_stream_from(
     mut rx: tokio::sync::mpsc::Receiver<Result<axum::body::Bytes, std::io::Error>>,
 ) -> impl futures_util::Stream<Item = Result<axum::body::Bytes, std::io::Error>> {
     futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx))
+}
+
+// ---------------------------------------------------------------------------
+// Mapping and dry run (SHAA-799 part 4)
+// ---------------------------------------------------------------------------
+
+/// A class `srv` with a required text `hostname` (the title) and an integer `cores`.
+async fn server_class(e: &Env) -> String {
+    let (status, class, _) =
+        call(&e.app, "POST", "/api/v1/ci-classes", &e.admin, Some(json!({ "key": "srv", "name": "Server" }))).await;
+    assert_eq!(status, 201, "{class}");
+    let class_id = class["id"].as_str().unwrap().to_owned();
+    let mut host_id = String::new();
+    for (key, label, t, required) in [("hostname", "Hostname", "text", true), ("cores", "Cores", "integer", false)] {
+        let body = json!({ "classId": class_id, "key": key, "label": label, "dataType": t, "isRequired": required });
+        let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+        if key == "hostname" {
+            host_id = v["id"].as_str().unwrap().to_owned();
+        }
+    }
+    let (status, v, _) = call(
+        &e.app,
+        "PATCH",
+        &format!("/api/v1/ci-classes/{class_id}"),
+        &e.admin,
+        Some(json!({ "titleAttributeId": host_id })),
+    )
+    .await;
+    assert_eq!(status, 200, "{v}");
+    class_id
+}
+
+async fn server(e: &Env, class: &str, host: &str, cores: i64) -> String {
+    let body = json!({ "classId": class, "attributes": { "hostname": host, "cores": cores } });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/configuration-items", &e.admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    v["id"].as_str().unwrap().to_owned()
+}
+
+fn server_mapping() -> Value {
+    json!({
+        "classKey": "srv",
+        "mode": "create_or_update",
+        "key": { "field": "attributes.hostname" },
+        "columns": [
+            { "index": 0, "target": { "kind": "attribute", "key": "hostname" } },
+            { "index": 1, "target": { "kind": "attribute", "key": "cores" } }
+        ]
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_plans_every_row_and_writes_nothing() {
+    let Some(db) = scratch::database("import_dry_run_plans_rows").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let class = server_class(&e).await;
+    let web01 = server(&e, &class, "web01", 8).await;
+    server(&e, &class, "ops01", 2).await;
+
+    let file = "Hostname;Cores\nweb01;12\nops01;2\nweb02;16\ndb01;many\nWEB03;4\nweb03 ;2\n";
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("srv.csv"), &[], file.as_bytes().to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    assert_eq!(job(&e, &e.admin, &id).await["status"], "ready");
+
+    // No mapping yet: the dry run is refused.
+    let dry = format!("/api/v1/imports/{id}/dry-run");
+    let (status, v, _) = call(&e.app, "POST", &dry, &e.admin, None).await;
+    assert_eq!((status, detail(&v)), (409, "mapping_required"), "{v}");
+
+    // Problems in the mapping come back all at once, with their field.
+    let put = format!("/api/v1/imports/{id}/mapping");
+    let mut bad = server_mapping();
+    bad["key"] = json!({ "field": "attributes.nope" });
+    bad["columns"][1]["target"]["key"] = json!("nope");
+    let (status, v, _) = call(&e.app, "PUT", &put, &e.admin, Some(bad)).await;
+    assert_eq!(status, 400, "{v}");
+    let fields: Vec<&str> =
+        v["error"]["details"].as_array().unwrap().iter().filter_map(|d| d["field"].as_str()).collect();
+    assert!(fields.contains(&"columns[1].target.key"), "{v}");
+
+    let (status, v, _) = call(&e.app, "PUT", &put, &e.admin, Some(server_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!((v["status"].as_str(), v["mapping"]["classKey"].as_str()), (Some("ready"), Some("srv")));
+
+    let (status, v, _) = call(&e.app, "POST", &dry, &e.admin, None).await;
+    assert_eq!(status, 202, "{v}");
+    assert_eq!((v["status"].as_str(), v["phase"].as_str()), (Some("queued"), Some("validate")));
+    let cis_before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    drain(&e.pool).await;
+
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(j["status"], "validated", "{j}");
+    let s = &j["summary"];
+    assert_eq!(
+        (s["create"].as_u64(), s["update"].as_u64(), s["unchanged"].as_u64(), s["errorRows"].as_u64()),
+        (Some(1), Some(1), Some(1), Some(3)),
+        "{j}"
+    );
+    assert_eq!(j["dryRun"]["stale"], false);
+    let update = j["preview"].as_array().unwrap().iter().find(|p| p["outcome"] == "update").unwrap();
+    assert_eq!((update["row"].as_u64(), update["ciId"].as_str()), (Some(2), Some(web01.as_str())));
+    assert_eq!(update["changes"], json!([{ "field": "attributes.cores", "old": 8, "new": 12 }]));
+    let created = j["preview"].as_array().unwrap().iter().find(|p| p["outcome"] == "create").unwrap();
+    assert_eq!(created["ciLabel"], "web02");
+
+    // Read-only: nothing was written.
+    let cis_after: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(cis_after, cis_before);
+    let (_, ci, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items/{web01}"), &e.admin, None).await;
+    assert_eq!(ci["attributes"]["cores"], 8);
+
+    let issues = format!("/api/v1/imports/{id}/issues");
+    let (status, v, _) = call(&e.app, "GET", &format!("{issues}?severity=error"), &e.admin, None).await;
+    assert_eq!(status, 200, "{v}");
+    let got: Vec<(u64, &str)> = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["row"].as_u64().unwrap(), i["code"].as_str().unwrap()))
+        .collect();
+    assert_eq!(got, vec![(5, "invalid_type"), (6, "duplicate_key_in_file"), (7, "duplicate_key_in_file")], "{v}");
+    let cores = &v["data"][0];
+    assert_eq!(
+        (cores["column"].as_u64(), cores["header"].as_str(), cores["value"].as_str()),
+        (Some(1), Some("Cores"), Some("many"))
+    );
+    let (_, v, _) = call(&e.app, "GET", &format!("{issues}?code=invalid_type&limit=1"), &e.admin, None).await;
+    assert_eq!(v["page"]["total"], 1, "{v}");
+
+    // A new mapping drops the dry run and its problems.
+    let (status, v, _) = call(&e.app, "PUT", &put, &e.admin, Some(server_mapping())).await;
+    assert_eq!((status, v["summary"].is_null()), (200, true), "{v}");
+    let (_, v, _) = call(&e.app, "GET", &issues, &e.admin, None).await;
+    assert_eq!(v["page"]["total"], 0, "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_stops_when_the_owner_loses_the_import_right() {
+    let Some(db) = scratch::database("import_dry_run_owner_revoked").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let (status, v, _) =
+        upload(&e.app, &alice, CSV_TYPE, Some("a.csv"), &[], b"Hostname;Cores\nweb09;1\n".to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, v, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &alice, Some(server_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/dry-run"), &alice, None).await;
+    assert_eq!(status, 202, "{v}");
+    sqlx::query("DELETE FROM permission_profile_global_permissions WHERE permission = 'cis.import'")
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(
+        (j["status"].as_str(), j["error"]["code"].as_str()),
+        (Some("failed"), Some("permission_revoked")),
+        "{j}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Commit (SHAA-799 part 4, §2.6)
+// ---------------------------------------------------------------------------
+
+/// Uploads `file`, maps it with [`server_mapping`] and runs the dry run.
+async fn validated(e: &Env, creds: &Creds, file: &str) -> String {
+    let (status, v, _) = upload(&e.app, creds, CSV_TYPE, Some("srv.csv"), &[], file.as_bytes().to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, v, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), creds, Some(server_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/dry-run"), creds, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    assert_eq!(job(e, creds, &id).await["status"], "validated");
+    id
+}
+
+/// `POST /imports/{id}/commit`, with an optional `Idempotency-Key`.
+async fn commit(e: &Env, creds: &Creds, id: &str, skip: bool, key: Option<&str>) -> (u16, Value) {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/imports/{id}/commit"))
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(c) = &creds.cookie {
+        req = req.header(header::COOKIE, c);
+    }
+    if let Some(c) = &creds.csrf {
+        req = req.header("x-csrf-token", c);
+    }
+    if let Some(k) = key {
+        req = req.header("idempotency-key", k);
+    }
+    let body = json!({ "skipErrorRows": skip }).to_string();
+    let res = e.app.clone().oneshot(req.body(HttpBody::from(body)).unwrap()).await.unwrap();
+    let status = res.status().as_u16();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 22).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+fn committed(j: &Value) -> (u64, u64, u64, u64, u64) {
+    let c = &j["summary"]["committed"];
+    let n = |k: &str| c[k].as_u64().unwrap_or(u64::MAX);
+    (n("created"), n("updated"), n("unchanged"), n("skipped"), n("failed"))
+}
+
+async fn count(pool: &PgPool, sql: &str, job: &str) -> i64 {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_owned())).bind(format!("import:{job}")).fetch_one(pool).await.unwrap()
+}
+
+/// The type table of `srv`, for triggers that fail rows only at commit.
+async fn srv_table(pool: &PgPool) -> String {
+    sqlx::query_scalar(
+        "SELECT format('%I.%I', table_schema, table_name) FROM information_schema.columns
+         WHERE table_name = 'srv' AND column_name = 'hostname'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+fn hosts(n: usize) -> String {
+    let mut file = String::from("Hostname;Cores\n");
+    for i in 0..n {
+        file.push_str(&format!("host-{i:05};{}\n", i % 64));
+    }
+    file
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_writes_the_valid_rows_and_audits_them() {
+    let Some(db) = scratch::database("import_commit_writes").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let class = server_class(&e).await;
+    let web01 = server(&e, &class, "web01", 8).await;
+    let ops01 = server(&e, &class, "ops01", 2).await;
+    // A title longer than a label: the label is its first 500 characters, trimmed (T9).
+    let long = format!("{} {}", "x".repeat(499), "y".repeat(100));
+    let file = format!("Hostname;Cores\nweb01;12\nops01;2\nweb02;16\ndb01;many\n{long};1\n");
+    let id = validated(&e, &e.admin, &file).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(j["summary"]["errorRows"], 1, "{j}");
+    let planned_label = j["preview"].as_array().unwrap().iter().find(|p| p["row"] == 6).unwrap()["ciLabel"].clone();
+    assert_eq!(planned_label, json!("x".repeat(499)));
+
+    // Error rows need skipErrorRows.
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!((status, detail(&v)), (409, "has_error_rows"), "{v}");
+    let (status, v) = commit(&e, &e.admin, &id, true, Some("commit-1")).await;
+    assert_eq!(status, 202, "{v}");
+    assert_eq!((v["status"].as_str(), v["phase"].as_str()), (Some("queued"), Some("commit")));
+    // The same key again: the job as it is, no second commit.
+    let (status, v) = commit(&e, &e.admin, &id, true, Some("commit-1")).await;
+    assert_eq!((status, v["status"].as_str()), (202, Some("queued")), "{v}");
+    drain(&e.pool).await;
+
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(j["status"], "completed_with_errors", "{j}");
+    assert_eq!(committed(&j), (2, 1, 1, 1, 0), "{j}");
+    let (_, ci, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items/{web01}"), &e.admin, None).await;
+    assert_eq!((ci["attributes"]["cores"].as_i64(), ci["version"].as_i64()), (Some(12), Some(2)), "{ci}");
+    let label: String = sqlx::query_scalar("SELECT label FROM configuration_items WHERE label LIKE 'xxx%'")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(json!(label), planned_label, "the dry run's label is the stored one (T9)");
+
+    // Audit (§4.3): per CI as the owner via import, nothing for the unchanged row, one import.commit.
+    let per_ci = count(
+        &e.pool,
+        "SELECT count(*) FROM audit_log WHERE request_id = $1 AND entity_type = 'configuration_items'
+           AND actor_type = 'import' AND actor_name = 'admin'",
+        &id,
+    )
+    .await;
+    assert_eq!(per_ci, 3);
+    let unchanged: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE entity_id = $1 AND request_id LIKE 'import:%'")
+            .bind(Uuid::parse_str(&ops01).unwrap())
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(unchanged, 0);
+    let event: Value = sqlx::query_scalar(
+        "SELECT new_value FROM audit_log WHERE action = 'import.commit' AND entity_type = 'import_jobs' AND entity_id = $1",
+    )
+    .bind(Uuid::parse_str(&id).unwrap())
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (event["outcome"].as_str(), event["created"].as_u64(), event["skipped"].as_u64(), event["classKey"].as_str()),
+        (Some("completed_with_errors"), Some(2), Some(1), Some("srv")),
+        "{event}"
+    );
+
+    // A job commits once.
+    let (status, v) = commit(&e, &e.admin, &id, true, None).await;
+    assert_eq!((status, detail(&v)), (409, "invalid_state"), "{v}");
+
+    // The same file again: nothing changes and nothing is audited (D1).
+    let again = validated(&e, &e.admin, &file).await;
+    let (status, v) = commit(&e, &e.admin, &again, true, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &again).await;
+    assert_eq!(committed(&j), (0, 0, 4, 1, 0), "{j}");
+    let per_ci = count(
+        &e.pool,
+        "SELECT count(*) FROM audit_log WHERE request_id = $1 AND entity_type = 'configuration_items'",
+        &again,
+    )
+    .await;
+    assert_eq!(per_ci, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_commit_needs_a_current_dry_run() {
+    let Some(db) = scratch::database("import_commit_stale").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let class = server_class(&e).await;
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("s.csv"), &[], hosts(3).into_bytes()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, v, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &e.admin, Some(server_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!((status, detail(&v)), (409, "dry_run_required"), "{v}");
+
+    let id = validated(&e, &e.admin, &hosts(3)).await;
+    // The data model changes after the dry run (T14).
+    let body = json!({ "classId": class, "key": "rack", "label": "Rack", "dataType": "text" });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(
+        (j["dryRun"]["stale"].as_bool(), j["dryRun"]["staleReason"].as_str()),
+        (Some(true), Some("model_changed"))
+    );
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!((status, detail(&v)), (409, "dry_run_stale"), "{v}");
+
+    // A dry run older than 24 hours.
+    let id = validated(&e, &e.admin, &hosts(3)).await;
+    sqlx::query("UPDATE import_jobs SET dry_run_finished_at = now() - interval '25 hours' WHERE id = $1")
+        .bind(Uuid::parse_str(&id).unwrap())
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!((status, detail(&v)), (409, "dry_run_stale"), "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_row_failing_only_at_commit_is_failed_and_the_other_499_are_written() {
+    let Some(db) = scratch::database("import_commit_replay").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let table = srv_table(&e.pool).await;
+    // A rule the plan step does not know: only the database refuses the row (T2).
+    for sql in [
+        "CREATE FUNCTION public.refuse_boom() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN IF NEW.hostname = 'host-00250' THEN
+           RAISE EXCEPTION 'refused' USING ERRCODE = 'check_violation'; END IF; RETURN NEW; END $$"
+            .to_owned(),
+        format!(
+            "CREATE TRIGGER refuse_boom BEFORE INSERT ON {table} FOR EACH ROW EXECUTE FUNCTION public.refuse_boom()"
+        ),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&e.pool).await.unwrap();
+    }
+    let id = validated(&e, &e.admin, &hosts(500)).await;
+    assert_eq!(job(&e, &e.admin, &id).await["summary"]["create"], 500);
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(j["status"], "completed_with_errors", "{j}");
+    assert_eq!(committed(&j), (499, 0, 0, 0, 1), "{j}");
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 499);
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/v1/imports/{id}/issues?severity=error"), &e.admin, None).await;
+    let rows: Vec<u64> = v["data"].as_array().unwrap().iter().map(|i| i["row"].as_u64().unwrap()).collect();
+    assert_eq!(rows, vec![252], "{v}");
+    let per_ci = count(
+        &e.pool,
+        "SELECT count(*) FROM audit_log WHERE request_id = $1 AND entity_type = 'configuration_items'",
+        &id,
+    )
+    .await;
+    assert_eq!(per_ci, 499);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deadlock_runs_the_chunk_again_and_it_commits_once() {
+    let Some(db) = scratch::database("import_commit_deadlock").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let table = srv_table(&e.pool).await;
+    // The first insert of the commit loses a deadlock (T3); a sequence is not rolled back.
+    for sql in [
+        "CREATE SEQUENCE public.deadlock_once".to_owned(),
+        "CREATE FUNCTION public.deadlock_once() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN IF nextval('public.deadlock_once') = 1 THEN
+           RAISE EXCEPTION 'deadlock detected' USING ERRCODE = 'deadlock_detected'; END IF; RETURN NEW; END $$"
+            .to_owned(),
+        format!(
+            "CREATE TRIGGER deadlock_once BEFORE INSERT ON {table} FOR EACH ROW EXECUTE FUNCTION public.deadlock_once()"
+        ),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&e.pool).await.unwrap();
+    }
+    let id = validated(&e, &e.admin, &hosts(20)).await;
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed"), (20, 0, 0, 0, 0)), "{j}");
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 20);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_killed_commit_resumes_after_its_cursor_and_a_stalled_worker_is_fenced() {
+    let Some(db) = scratch::database("import_commit_resume").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+
+    // The worker dies after the first chunk; the next one resumes after the cursor.
+    let id = validated(&e, &e.admin, &hosts(1_200)).await;
+    let job_id = Uuid::parse_str(&id).unwrap();
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    super::commit::test_hooks::die_after(job_id, 1);
+    drain(&e.pool).await;
+    let (status, cursor): (String, i32) =
+        sqlx::query_as("SELECT status, committed_through_row FROM import_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), cursor), ("committing", 501));
+    sqlx::query("UPDATE import_jobs SET lease_until = now() - interval '1 second' WHERE id = $1")
+        .bind(job_id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed"), (1_200, 0, 0, 0, 0)), "{j}");
+    let (all, distinct): (i64, i64) = sqlx::query_as("SELECT count(*), count(DISTINCT label) FROM configuration_items")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!((all, distinct), (1_200, 1_200), "no row was written twice");
+    let events =
+        count(&e.pool, "SELECT count(*) FROM audit_log WHERE action = 'import.commit' AND $1 <> ''", &id).await;
+    assert_eq!(events, 1);
+
+    // Worker A stalls past its lease, B takes the job over: A's chunk is rolled back (T13).
+    let file: String = hosts(1_800).lines().skip(1_201).map(|l| format!("{l}\n")).collect();
+    let id = validated(&e, &e.admin, &format!("Hostname;Cores\n{file}")).await;
+    let job_id = Uuid::parse_str(&id).unwrap();
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    let a = worker::claim(&e.pool, "worker-a").await.unwrap().unwrap();
+    sqlx::query("UPDATE import_jobs SET lease_until = now() - interval '1 second' WHERE id = $1")
+        .bind(job_id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let b = worker::claim(&e.pool, "worker-b").await.unwrap().unwrap();
+    assert_eq!((b.job, b.epoch), (a.job, a.epoch + 1));
+    let cfg = ImportConfig::default();
+    let lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    super::commit::run(&e.pool, &cfg, &a, &lost).await;
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 1_200, "A wrote nothing");
+    let (_stop, mut rx) = watch::channel(false);
+    worker::work(&e.pool, &std::sync::Arc::new(cfg), b, &mut rx).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed"), (600, 0, 0, 0, 0)), "{j}");
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 1_800);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_stops_when_the_owner_loses_the_import_right_and_keeps_earlier_chunks() {
+    let Some(db) = scratch::database("import_commit_revoked").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let id = validated(&e, &alice, &hosts(700)).await;
+    let job_id = Uuid::parse_str(&id).unwrap();
+    let (status, v) = commit(&e, &alice, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    super::commit::test_hooks::die_after(job_id, 1);
+    drain(&e.pool).await;
+    sqlx::query("DELETE FROM permission_profile_global_permissions WHERE permission = 'cis.import'")
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE import_jobs SET lease_until = now() - interval '1 second' WHERE id = $1")
+        .bind(job_id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(
+        (j["status"].as_str(), j["error"]["code"].as_str(), committed(&j)),
+        (Some("failed"), Some("permission_revoked"), (500, 0, 0, 0, 0)),
+        "{j}"
+    );
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 500);
+    let event: Value = sqlx::query_scalar(
+        "SELECT new_value FROM audit_log WHERE action = 'import.commit' AND entity_id = $1 AND actor_type = 'import'
+           AND actor_name = 'alice'",
+    )
+    .bind(job_id)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!((event["outcome"].as_str(), event["created"].as_u64()), (Some("failed"), Some(500)), "{event}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_cancelled_while_queued_writes_nothing_and_is_audited_once() {
+    let Some(db) = scratch::database("import_commit_cancel_queued").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let id = validated(&e, &e.admin, &hosts(3)).await;
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!((status, v["status"].as_str()), (202, Some("queued")), "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/cancel"), &e.admin, None).await;
+    assert_eq!((status, v["status"].as_str()), (202, Some("cancelled")), "{v}");
+    drain(&e.pool).await;
+
+    assert_eq!(job(&e, &e.admin, &id).await["status"], "cancelled");
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 0);
+    // No worker ever held it, so the cancel itself writes the one import.commit (§4.3).
+    let events: Vec<Value> = sqlx::query_scalar(
+        "SELECT new_value FROM audit_log WHERE action = 'import.commit' AND entity_id = $1
+           AND actor_type = 'import' AND actor_name = 'admin' AND request_id = 'import:' || $1::text",
+    )
+    .bind(Uuid::parse_str(&id).unwrap())
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!((events[0]["outcome"].as_str(), events[0]["created"].as_u64()), (Some("cancelled"), Some(0)));
+
+    // A dry run that is cancelled is no commit: no event.
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("b.csv"), &[], hosts(2).into_bytes()).await;
+    assert_eq!(status, 202, "{v}");
+    let other = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, v, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{other}/mapping"), &e.admin, Some(server_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{other}/dry-run"), &e.admin, None).await;
+    assert_eq!(status, 202, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{other}/cancel"), &e.admin, None).await;
+    assert_eq!(status, 202, "{v}");
+    let events = count(&e.pool, "SELECT count(*) FROM audit_log WHERE request_id = $1", &other).await;
+    assert_eq!(events, 0);
+}
+
+/// `srv` with a reference attribute `peer` (to `srv`) and a `depends_on`
+/// relationship type from `srv` to `srv`.
+async fn linked_server_class(e: &Env) -> (String, Uuid) {
+    let class = server_class(e).await;
+    let body = json!({
+        "classId": class, "key": "peer", "label": "Peer", "dataType": "reference", "referenceClassId": class
+    });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let depends: Uuid = sqlx::query_scalar(
+        "INSERT INTO relationship_types (key, name, forward_label, reverse_label)
+         VALUES ('depends_on', 'Depends on', 'depends on', 'required by') RETURNING id",
+    )
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id) VALUES ($1, $2, $2)",
+    )
+    .bind(depends)
+    .bind(class.parse::<Uuid>().unwrap())
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    (class, depends)
+}
+
+fn linked_mapping() -> Value {
+    let by_host = json!({ "by": "attribute", "attributeKey": "hostname" });
+    json!({
+        "classKey": "srv",
+        "mode": "create_or_update",
+        "key": { "field": "attributes.hostname" },
+        "columns": [
+            { "index": 0, "target": { "kind": "attribute", "key": "hostname" } },
+            { "index": 1, "target": { "kind": "attribute", "key": "cores" } },
+            { "index": 2, "target": { "kind": "attribute", "key": "peer", "match": by_host } },
+            { "index": 3, "target": {
+                "kind": "relationship", "typeKey": "depends_on", "direction": "outgoing", "match": by_host
+            } }
+        ]
+    })
+}
+
+async fn validated_linked(e: &Env, file: &str) -> String {
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("linked.csv"), &[], file.as_bytes().to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, v, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &e.admin, Some(linked_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/dry-run"), &e.admin, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    assert_eq!(job(e, &e.admin, &id).await["status"], "validated");
+    id
+}
+
+async fn ci_id(pool: &PgPool, label: &str) -> Uuid {
+    sqlx::query_scalar("SELECT id FROM configuration_items WHERE label = $1").bind(label).fetch_one(pool).await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn references_reach_cis_of_earlier_rows_and_relationships_are_only_added() {
+    let Some(db) = scratch::database("import_commit_references").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let (class, depends) = linked_server_class(&e).await;
+    let web01 = server(&e, &class, "web01", 8).await;
+    let db01 = server(&e, &class, "db01", 4).await;
+    let edge = json!({ "relationshipTypeId": depends, "sourceCiId": web01, "targetCiId": db01 });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/relationships", &e.admin, Some(edge)).await;
+    assert_eq!(status, 201, "{v}");
+
+    // Row 2 refers to CIs in the database; row 3 to the CI row 2 creates
+    // (pending); row 4 leaves web01's existing relationship out; row 5 names
+    // the CI of row 6, which is created later (forward).
+    let file = "Hostname,Cores,Peer,Depends on\n\
+                app01,4,web01,db01;web01;db01\n\
+                app02,4,app01,app01\n\
+                web01,8,,\n\
+                app03,4,app04,\n\
+                app04,4,,\n";
+    let id = validated_linked(&e, file).await;
+    let j = job(&e, &e.admin, &id).await;
+    let s = &j["summary"];
+    assert_eq!(
+        (s["create"].as_u64(), s["unchanged"].as_u64(), s["errorRows"].as_u64()),
+        (Some(3), Some(1), Some(1)),
+        "{j}"
+    );
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/v1/imports/{id}/issues?severity=error"), &e.admin, None).await;
+    let got: Vec<(u64, &str, &str)> = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["row"].as_u64().unwrap(), i["code"].as_str().unwrap(), i["header"].as_str().unwrap()))
+        .collect();
+    assert_eq!(got, vec![(5, "reference_to_later_row", "Peer")], "{v}");
+
+    let (status, v) = commit(&e, &e.admin, &id, true, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed_with_errors"), (3, 0, 1, 1, 0)), "{j}");
+    // app01 → db01, app01 → web01 (the second db01 in the cell is the same edge), app02 → app01.
+    assert_eq!(j["summary"]["committed"]["relationshipsAdded"], 3, "{j}");
+
+    let (app01, app02) = (ci_id(&e.pool, "app01").await, ci_id(&e.pool, "app02").await);
+    let (_, ci, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items/{app02}"), &e.admin, None).await;
+    assert_eq!(ci["attributes"]["peer"], json!(app01.to_string()), "the pending CI of row 2: {ci}");
+    let (_, ci, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items/{app01}"), &e.admin, None).await;
+    assert_eq!(ci["attributes"]["peer"], json!(web01), "{ci}");
+    let skipped: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE label = 'app03'")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(skipped, 0);
+
+    let mut edges: Vec<(String, String)> = sqlx::query_as(
+        "SELECT s.label, t.label FROM ci_relationships r
+           JOIN configuration_items s ON s.id = r.source_ci_id JOIN configuration_items t ON t.id = r.target_ci_id
+          WHERE r.relationship_type_id = $1",
+    )
+    .bind(depends)
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    edges.sort();
+    let pair = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+    assert_eq!(
+        edges,
+        vec![pair("app01", "db01"), pair("app01", "web01"), pair("app02", "app01"), pair("web01", "db01")],
+        "web01's relationship was left out of the file and stays"
+    );
+    let audited = count(
+        &e.pool,
+        "SELECT count(*) FROM audit_log WHERE request_id = $1 AND entity_type = 'ci_relationships' AND actor_type = 'import'",
+        &id,
+    )
+    .await;
+    assert_eq!(audited, 3);
+
+    // Again: every edge exists already, so nothing is added.
+    let again = validated_linked(&e, "Hostname,Cores,Peer,Depends on\napp01,4,web01,db01;web01\n").await;
+    let (status, v) = commit(&e, &e.admin, &again, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &again).await;
+    assert_eq!((committed(&j), &j["summary"]["committed"]["relationshipsAdded"]), ((0, 0, 1, 0, 0), &json!(0)), "{j}");
+}
+
+// ---------------------------------------------------------------------------
+// Error report (SHAA-799 part 4, §3.4, §5.1)
+// ---------------------------------------------------------------------------
+
+/// A GET whose body is not JSON: status, headers and body text.
+async fn download(e: &Env, creds: &Creds, uri: &str) -> (u16, HeaderMap, String) {
+    let mut req = Request::builder().uri(uri);
+    if let Some(c) = &creds.cookie {
+        req = req.header(header::COOKIE, c);
+    }
+    let res = e.app.clone().oneshot(req.body(HttpBody::empty()).unwrap()).await.unwrap();
+    let status = res.status().as_u16();
+    let headers = res.headers().clone();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 22).await.unwrap();
+    (status, headers, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_error_report_lists_each_problem_with_its_row_and_audits_other_readers() {
+    let Some(db) = scratch::database("import_error_report").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let bob = user(&e, "bob", &["cis.import"]).await;
+    let id = validated(&e, &alice, "Hostname;Cores\nweb01;=1+1\nweb02;4\n\n@db01;many\n").await;
+    let uri = format!("/api/v1/imports/{id}/error-report");
+
+    let (status, headers, body) = download(&e, &alice, &uri).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(headers[header::CONTENT_TYPE], "text/csv; charset=utf-8");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    let disposition = headers[header::CONTENT_DISPOSITION].to_str().unwrap();
+    assert!(disposition.starts_with("attachment; filename=\"srv-errors.csv\""), "{disposition}");
+    let lines: Vec<&str> = body.strip_prefix('\u{feff}').expect("a byte order mark").split_terminator("\r\n").collect();
+    assert_eq!(lines[0], "\"Row\";\"Severity\";\"Column\";\"Problem\";\"Code\";\"Hostname\";\"Cores\"", "{body}");
+    assert_eq!(lines.len(), 3, "one line per problem, none for the valid row: {body}");
+    assert!(lines[1].starts_with("\"2\";\"error\";\"Cores\";") && lines[1].ends_with(";\"web01\";\"'=1+1\""), "{body}");
+    assert!(lines[2].starts_with("\"5\";\"error\";\"Cores\";") && lines[2].ends_with(";\"'@db01\";\"many\""), "{body}");
+    assert!(!body.contains("web02"), "{body}");
+    let job_uuid = Uuid::parse_str(&id).unwrap();
+    let reads = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_log WHERE action = 'import.report_read' AND entity_id = $1",
+        )
+        .bind(job_uuid)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(reads().await, 0, "the owner's own download is not audited");
+
+    // Someone else's job is not found; an administrator's download is audited (W7).
+    let (status, _, _) = download(&e, &bob, &uri).await;
+    assert_eq!(status, 404);
+    let (status, _, admin_body) = download(&e, &e.admin, &uri).await;
+    assert_eq!((status, admin_body == body), (200, true));
+    assert_eq!(reads().await, 1);
+    let event: Value = sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'import.report_read'")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!((event["fileName"].as_str(), event["ownerName"].as_str()), (Some("srv.csv"), Some("alice")), "{event}");
+
+    // Uploaded again, the report reads as the original cells.
+    let (status, v, _) = upload(&e.app, &alice, CSV_TYPE, Some("srv-errors.csv"), &[], body.into_bytes()).await;
+    assert_eq!(status, 202, "{v}");
+    let again = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let j = job(&e, &alice, &again).await;
+    let cells = &j["file"]["previewRows"][0]["cells"];
+    assert_eq!((cells[5].as_str(), cells[6].as_str()), (Some("web01"), Some("=1+1")), "{j}");
+
+    // A job without problems has no report.
+    let clean = validated(&e, &alice, "Hostname;Cores\nweb09;1\n").await;
+    let (status, _, _) = download(&e, &alice, &format!("/api/v1/imports/{clean}/error-report")).await;
+    assert_eq!(status, 404);
+    db.drop().await;
+}
+
+// ---------------------------------------------------------------------------
+// Saved mappings and suggestions (SHAA-799 part 4, D9, §3.3)
+// ---------------------------------------------------------------------------
+
+/// A saved-mapping definition: `hostname` from "hostname", the other headers ignored.
+fn definition(headers: &[&str], extra: Value) -> Value {
+    let mut columns: Vec<Value> = headers
+        .iter()
+        .map(|h| {
+            let target = if *h == "hostname" {
+                json!({ "kind": "attribute", "key": "hostname" })
+            } else {
+                json!({ "kind": "ignore" })
+            };
+            json!({ "header": h, "target": target })
+        })
+        .collect();
+    if let Value::Array(more) = extra {
+        for m in more {
+            let h = m["header"].clone();
+            columns.retain(|c| c["header"] != h);
+            columns.push(m);
+        }
+    }
+    json!({ "mode": "create_or_update", "key": { "field": "attributes.hostname" }, "columns": columns })
+}
+
+async fn vm_class(e: &Env) -> String {
+    let (status, class, _) =
+        call(&e.app, "POST", "/api/v1/ci-classes", &e.admin, Some(json!({ "key": "vm", "name": "VM" }))).await;
+    assert_eq!(status, 201, "{class}");
+    class["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn saved_mappings_are_shared_per_class_and_only_their_creator_changes_them() {
+    let Some(db) = scratch::database("import_saved_mappings").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let srv = server_class(&e).await;
+    vm_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let bob = user_in(&e, "bob", &["cis.import"], Some(&[srv.as_str()])).await;
+    let carol = user(&e, "carol", &[]).await;
+    let def = definition(&["hostname", "Cores"], json!([]));
+    let body = |name: &str, class: &str| json!({ "name": name, "classKey": class, "definition": def });
+
+    let (status, v, _) = call(&e.app, "GET", "/api/v1/import-mappings", &carol, None).await;
+    assert_eq!(status, 403, "{v}");
+    let (status, m, _) =
+        call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body(" Vendor export ", "srv"))).await;
+    assert_eq!(status, 201, "{m}");
+    assert_eq!((m["name"].as_str(), m["version"].as_i64()), (Some("Vendor export"), Some(1)));
+    assert_eq!((m["createdBy"]["name"].as_str(), m["classKey"].as_str()), (Some("alice"), Some("srv")));
+    assert_eq!(
+        m["definition"]["columns"][0],
+        json!({ "header": "hostname", "target": { "kind": "attribute", "key": "hostname" } })
+    );
+    let srv_mapping = m["id"].as_str().unwrap().to_owned();
+
+    // Names are unique per class, ignoring case (T18); the same name on another class is fine.
+    let (status, v, _) =
+        call(&e.app, "POST", "/api/v1/import-mappings", &bob, Some(body("VENDOR EXPORT", "srv"))).await;
+    assert_eq!((status, detail(&v)), (409, "duplicate_name"), "{v}");
+    let (status, v, _) =
+        call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body("Vendor export", "vm"))).await;
+    assert_eq!(status, 201, "{v}");
+    let vm_mapping = v["id"].as_str().unwrap().to_owned();
+
+    // A class bob cannot view is refused like an unknown one, and its mappings are hidden.
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/import-mappings", &bob, Some(body("Mine", "vm"))).await;
+    assert_eq!((status, detail(&v)), (400, "unknown_class"), "{v}");
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/import-mappings", &bob, Some(body("Mine", "nope"))).await;
+    assert_eq!((status, detail(&v)), (400, "unknown_class"), "{v}");
+    let (_, v, _) = call(&e.app, "GET", "/api/v1/import-mappings", &bob, None).await;
+    let ids: Vec<&str> = v["data"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
+    assert_eq!(ids, [srv_mapping.as_str()], "{v}");
+    let (status, _, _) = call(&e.app, "GET", &format!("/api/v1/import-mappings/{vm_mapping}"), &bob, None).await;
+    assert_eq!(status, 404);
+    let (_, v, _) = call(&e.app, "GET", "/api/v1/import-mappings?classKey=vm", &alice, None).await;
+    assert_eq!(v["data"].as_array().unwrap().len(), 1, "{v}");
+
+    // Definitions are checked for duplicate headers and size.
+    let dup = definition(&["hostname", "Host Name", "host_name"], json!([]));
+    let (status, v, _) = call(
+        &e.app,
+        "POST",
+        "/api/v1/import-mappings",
+        &alice,
+        Some(json!({ "name": "Dup", "classKey": "srv", "definition": dup })),
+    )
+    .await;
+    assert_eq!((status, detail(&v)), (400, "duplicate_header"), "{v}");
+    let long: Vec<String> = (0..70).map(|i| format!("{i:03}{}", "x".repeat(997))).collect();
+    let long: Vec<&str> = long.iter().map(String::as_str).collect();
+    let (status, v, _) = call(
+        &e.app,
+        "POST",
+        "/api/v1/import-mappings",
+        &alice,
+        Some(json!({ "name": "Big", "classKey": "srv", "definition": definition(&long, json!([])) })),
+    )
+    .await;
+    assert_eq!((status, detail(&v)), (400, "too_large"), "{v}");
+
+    // Only the creator (or an administrator) changes it, with the version they loaded.
+    let one = format!("/api/v1/import-mappings/{srv_mapping}");
+    let (status, v, _) = call(&e.app, "PATCH", &one, &bob, Some(json!({ "version": 1, "name": "Taken" }))).await;
+    assert_eq!(status, 403, "{v}");
+    let patch = json!({ "version": 1, "name": "Vendor", "description": "From the vendor portal" });
+    let (status, v, _) = call(&e.app, "PATCH", &one, &alice, Some(patch.clone())).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!((v["version"].as_i64(), v["description"].as_str()), (Some(2), Some("From the vendor portal")));
+    let (status, v, _) = call(&e.app, "PATCH", &one, &alice, Some(patch)).await;
+    assert_eq!((status, v["error"]["code"].as_str()), (409, Some("VERSION_CONFLICT")), "{v}");
+    let (status, v, _) =
+        call(&e.app, "PATCH", &one, &e.admin, Some(json!({ "version": 2, "description": null }))).await;
+    assert_eq!(
+        (status, v["description"].is_null(), v["updatedBy"]["name"].as_str()),
+        (200, true, Some("admin")),
+        "{v}"
+    );
+
+    let (status, _, _) = call(&e.app, "DELETE", &format!("{one}?version=3"), &bob, None).await;
+    assert_eq!(status, 403);
+    let (status, v, _) = call(&e.app, "DELETE", &format!("{one}?version=1"), &alice, None).await;
+    assert_eq!(status, 409, "{v}");
+    let (status, _, _) = call(&e.app, "DELETE", &format!("{one}?version=3"), &alice, None).await;
+    assert_eq!(status, 204);
+    let (status, _, _) = call(&e.app, "GET", &one, &alice, None).await;
+    assert_eq!(status, 404);
+
+    // Every change is audited with its class key, for the audit visibility rule (T21).
+    let audit: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT action::text, coalesce(new_value ->> 'classKey', old_value ->> 'classKey')
+         FROM audit_log WHERE entity_type = 'import_mappings' ORDER BY id",
+    )
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    let srv_key = Some("srv".to_owned());
+    assert_eq!(
+        audit,
+        [
+            ("create".into(), srv_key.clone()),
+            ("create".into(), Some("vm".into())),
+            ("update".into(), srv_key.clone()),
+            ("update".into(), srv_key.clone()),
+            ("delete".into(), srv_key)
+        ]
+    );
+
+    // At most 500 per instance.
+    sqlx::query(
+        "INSERT INTO import_mappings (name, class_key, definition, created_by_name, updated_by_name)
+         SELECT 'm' || n, 'srv', '{}', 'x', 'x' FROM generate_series(1, 499) n",
+    )
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body("One more", "srv"))).await;
+    assert_eq!((status, detail(&v)), (409, "limit_reached"), "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_suggestion_matches_headers_by_saved_mapping_key_and_label() {
+    let Some(db) = scratch::database("import_mapping_suggestion").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let srv = server_class(&e).await;
+    for (key, label) in [("serial_no", "Serial number"), ("depends_note", "Depends on")] {
+        let body = json!({ "classId": srv, "key": key, "label": label, "dataType": "text" });
+        let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+    }
+    for (key, forward, reverse) in [("runs_on", "Runs on", "Hosts"), ("depends_on", "Depends on", "Required by")] {
+        let t: Uuid = sqlx::query_scalar(
+            "INSERT INTO relationship_types (key, name, forward_label, reverse_label) VALUES ($1, $1, $2, $3) RETURNING id",
+        )
+        .bind(key)
+        .bind(forward)
+        .bind(reverse)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id) VALUES ($1, $2, $2)",
+        )
+        .bind(t)
+        .bind(srv.parse::<Uuid>().unwrap())
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    }
+    vm_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+
+    let headers = ["hostname", "Serial-Number", "Runs on", "Hosts", "Depends on", "Ident", "Cores", "cores", "Notes"];
+    let file = format!("{}\nweb01;S1;app01;;;;4;4;x\n", headers.join(";"));
+    let (status, v, _) = upload(&e.app, &alice, CSV_TYPE, Some("srv.csv"), &[], file.into_bytes()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let suggest = format!("/api/v1/imports/{id}/mapping-suggestion?classKey=srv");
+    let vias = |v: &Value| -> Vec<(Value, Value)> {
+        v["matchedBy"].as_array().unwrap().iter().map(|m| (m["via"].clone(), m["hint"].clone())).collect()
+    };
+    let (key, label, saved, none) = (json!("key"), json!("label"), json!("saved_mapping"), Value::Null);
+
+    // alice is no administrator: the ident column is not suggested for new CIs.
+    let (status, v, _) = call(&e.app, "GET", &suggest, &alice, None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(
+        vias(&v),
+        [
+            (key.clone(), none.clone()),
+            (label.clone(), none.clone()),
+            (label.clone(), none.clone()),
+            (label.clone(), none.clone()),
+            (none.clone(), json!("ambiguous_label")),
+            (none.clone(), json!("ident_admin_only")),
+            (key.clone(), none.clone()),
+            (none.clone(), json!("duplicate_target")),
+            (none.clone(), none.clone()),
+        ],
+        "{v}"
+    );
+    let m = &v["mapping"];
+    assert_eq!(
+        (m["mode"].as_str(), m["key"]["field"].as_str()),
+        (Some("create_or_update"), Some("attributes.hostname"))
+    );
+    assert_eq!(
+        m["columns"][2]["target"],
+        json!({ "kind": "relationship", "typeKey": "runs_on", "direction": "outgoing", "match": { "by": "label" } })
+    );
+    assert_eq!(m["columns"][3]["target"]["direction"], "incoming");
+    assert!(v["savedMapping"].is_null());
+    // The suggestion is a mapping the job accepts.
+    let (status, j, _) = call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &alice, Some(m.clone())).await;
+    assert_eq!(status, 200, "{j}");
+
+    // An administrator gets the ident column, and it becomes the key.
+    let (status, v, _) = call(&e.app, "GET", &suggest, &e.admin, None).await;
+    assert_eq!((status, &v["matchedBy"][5]["via"]), (200, &key), "{v}");
+    assert_eq!(v["mapping"]["key"]["field"], "ident");
+
+    // A saved mapping with exactly the file's headers is picked by itself.
+    // "Cores" and "cores" are one header to a definition.
+    let distinct: Vec<&str> = headers.iter().copied().filter(|h| *h != "cores").collect();
+    let notes = json!([{ "header": "Notes", "target": { "kind": "attribute", "key": "cores" } }]);
+    let body = json!({ "name": "Vendor", "classKey": "srv", "definition": definition(&distinct, notes) });
+    let (status, first, _) = call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body)).await;
+    assert_eq!(status, 201, "{first}");
+    let (_, v, _) = call(&e.app, "GET", &suggest, &alice, None).await;
+    assert_eq!(v["savedMapping"], json!({ "id": first["id"], "name": "Vendor", "byHeaders": true }), "{v}");
+    assert!(vias(&v).iter().all(|(via, _)| *via == saved), "{v}");
+    let cols = v["mapping"]["columns"].as_array().unwrap();
+    let notes_col = cols.iter().find(|c| c["index"] == 8).unwrap();
+    assert_eq!(notes_col["target"], json!({ "kind": "attribute", "key": "cores" }));
+
+    // Two with the same headers: none is picked unless asked for by id.
+    let body = json!({ "name": "Other", "classKey": "srv", "definition": definition(&distinct, json!([])) });
+    let (status, second, _) = call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body)).await;
+    assert_eq!(status, 201, "{second}");
+    let (_, v, _) = call(&e.app, "GET", &suggest, &alice, None).await;
+    assert!(v["savedMapping"].is_null(), "{v}");
+    let second_id = second["id"].as_str().unwrap();
+    let (_, v, _) = call(&e.app, "GET", &format!("{suggest}&mappingId={second_id}"), &alice, None).await;
+    assert_eq!(
+        (v["savedMapping"]["name"].as_str(), v["savedMapping"]["byHeaders"].as_bool()),
+        (Some("Other"), Some(false))
+    );
+
+    // A mapping of another class, and a class alice cannot import into, are refused.
+    let body = json!({ "name": "VM", "classKey": "vm", "definition": definition(&["hostname"], json!([])) });
+    let (_, vm_map, _) = call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body)).await;
+    let (status, v, _) =
+        call(&e.app, "GET", &format!("{suggest}&mappingId={}", vm_map["id"].as_str().unwrap()), &alice, None).await;
+    assert_eq!((status, detail(&v)), (400, "mapping_class_mismatch"), "{v}");
+    let (status, v, _) =
+        call(&e.app, "GET", &format!("/api/v1/imports/{id}/mapping-suggestion?classKey=nope"), &alice, None).await;
+    assert_eq!((status, detail(&v)), (400, "unknown_class"), "{v}");
 }

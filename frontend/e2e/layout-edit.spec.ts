@@ -153,7 +153,7 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
   // The page the editor was opened from shows the saved layout without a reload.
   const tabs = origin.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
-  await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "History"]);
+  await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "Impact", "History"]);
   // Done closes the editor's window.
   await closeEditor(page);
 
@@ -165,7 +165,7 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   const viewer = await signInUi(browser, VIEWER, PASSWORD);
   await viewer.goto(`/cis/${ci.id}`);
   const vtabs = viewer.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
-  await expect(vtabs).toHaveText(["General", "Hardware", "Relationship map"]);
+  await expect(vtabs).toHaveText(["General", "Hardware", "Relationship map", "Impact"]);
   await expect(viewer.locator(".layout-panels > details > summary h2")).toContainText(["Lifecycle"]);
   await expect(viewer.locator(".layout-panels").getByText("Asset tag", { exact: true })).toHaveCount(0);
   await expect(viewer.getByRole("button", { name: "Edit layout" })).toHaveCount(0);
@@ -421,7 +421,7 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   // The detail page: the note on General, the panels on Links instead of their usual places; History keeps its tab.
   await page.goto(`/cis/${ci.id}`);
   const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
-  await expect(tabs).toHaveText(["General", "Links", "Relationship map", "History"]);
+  await expect(tabs).toHaveText(["General", "Links", "Relationship map", "Impact", "History"]);
   const heads = page.locator(".layout-panels > details > summary h2");
   await expect(heads).toContainText(["General", "Before you edit", "Record"]);
   await expect(page.locator(".layout-panels .note-text strong")).toHaveText("Ops");

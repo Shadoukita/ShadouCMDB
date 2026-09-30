@@ -56,10 +56,11 @@ const AFFECTS: Record<Resource, readonly (readonly unknown[])[]> = {
   areas: [["areas"], ["technical-names"], ["ci-classes"], ["cis"], ["schema-changes"], dmKeys.templates],
   "ci-classes": [["areas"], ["technical-names"], ["ci-classes"], ["attribute-definitions"], ["relationship-rules"], ["relationship-types"], ["cis"], ["schema-changes"], dmKeys.templates],
   "attribute-definitions": [["technical-names"], ["ci-classes"], ["attribute-definitions"], ["cis", "detail"], ["schema-changes"], dmKeys.templates],
-  "relationship-types": [["relationship-types"], ["relationship-rules"], ["relationships"], ["cis", "graph"], dmKeys.templates],
+  "relationship-types": [["relationship-types"], ["relationship-rules"], ["relationships"], ["cis", "graph"], ["cis", "impact"], ["impact-settings"], dmKeys.templates],
   "relationship-rules": [["relationship-rules"], ["relationship-types"], dmKeys.templates],
   "lookup-lists": [["lookup-lists"], ["lookup-list-values"], ["ci-classes"], ["attribute-definitions"]],
-  "lookup-list-values": [["lookup-list-values"], ["cis", "detail"]],
+  // Criticality is a lookup list: its values show in CI lists and impact results too.
+  "lookup-list-values": [["lookup-list-values"], ["cis"]],
 };
 
 export function invalidateResource(qc: QueryClient, resource: Resource) {

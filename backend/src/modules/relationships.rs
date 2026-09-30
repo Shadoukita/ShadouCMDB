@@ -200,7 +200,7 @@ async fn load_row(conn: &mut PgConnection, id: Uuid) -> Result<RelationshipRow, 
     data::get(conn, id).await?.ok_or_else(|| AppError::missing("Relationship", id))
 }
 
-async fn load(conn: &mut PgConnection, id: Uuid) -> Result<Relationship, AppError> {
+pub(crate) async fn load(conn: &mut PgConnection, id: Uuid) -> Result<Relationship, AppError> {
     load_row(conn, id).await.map(Relationship::from)
 }
 

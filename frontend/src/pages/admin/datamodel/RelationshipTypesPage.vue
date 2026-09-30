@@ -18,7 +18,7 @@ import DeleteRowButton from "../../../components/DeleteRowButton.vue";
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
-import RecordDialog, { type FieldSpec } from "../../../components/RecordDialog.vue";
+import RecordDialog, { type FieldSpec, type SelectOption } from "../../../components/RecordDialog.vue";
 import { useDocumentTitle } from "../../../lib/composables";
 import { useListQuery } from "../../../lib/listQuery";
 import { moveItem, useDragReorder } from "../../../lib/reorder";
@@ -92,6 +92,36 @@ function setActive(t: RelationshipType, isActive: boolean) {
   );
 }
 
+// ---------- Impact propagation ----------
+type ImpactDirection = RelationshipType["impactDirection"];
+/**
+ * The impact settings in words from the type's own labels ("When the target fails, the source is
+ * affected (source runs on target)"). A symmetric type offers only none and both: its ends mean the same.
+ */
+function impactOptions(values: Record<string, string | boolean>, record: Record<string, unknown> | null): SelectOption[] {
+  const fwd = String(values.forwardLabel || "…");
+  const rev = String(values.reverseLabel || "…");
+  const directional = record ? record.isDirectional !== false : values.isDirectional !== false;
+  return [
+    { value: "none", label: "Does not propagate impact" },
+    ...(directional
+      ? [
+          { value: "target_to_source", label: `When the target fails, the source is affected (source ${fwd} target)` },
+          { value: "source_to_target", label: `When the source fails, the target is affected (target ${rev} source)` },
+        ]
+      : []),
+    { value: "both", label: directional ? "Both ways: either end failing affects the other" : `Both ways: either end failing affects the other (${fwd})` },
+  ];
+}
+const IMPACT_LABEL: Record<ImpactDirection, string> = {
+  none: "—",
+  target_to_source: "Target → source",
+  source_to_target: "Source → target",
+  both: "Both ways",
+};
+const impactTitle = (t: RelationshipType) =>
+  impactOptions({ forwardLabel: t.forwardLabel, reverseLabel: t.reverseLabel }, t).find((o) => o.value === t.impactDirection)?.label ?? "";
+
 // ---------- Type dialog ----------
 const TYPE_FIELDS: FieldSpec[] = [
   { name: "name", label: "Name", type: "text", required: true, hint: "e.g. Runs on" },
@@ -99,6 +129,14 @@ const TYPE_FIELDS: FieldSpec[] = [
   { name: "forwardLabel", label: "Label from the source", type: "text", required: true, hint: "Source → target, e.g. “runs on”" },
   { name: "reverseLabel", label: "Label from the target", type: "text", required: true, hint: "Target → source, e.g. “hosts”" },
   { name: "isDirectional", label: "Direction", type: "checkbox", createOnly: true, text: "Directional (source and target differ in meaning)" },
+  {
+    name: "impactDirection",
+    label: "Impact propagation",
+    type: "select",
+    wide: true,
+    options: impactOptions,
+    hint: "Which way a failure travels across relationships of this type, for impact analysis",
+  },
   { name: "description", label: "Description", type: "textarea" },
 ];
 const dialogOpen = ref(false);
@@ -184,6 +222,7 @@ const ruleLabel = (r: { sourceClassId: string; targetClassId: string }) =>
             <th scope="col">Key</th>
             <th scope="col">Source → target</th>
             <th scope="col">Target → source</th>
+            <th scope="col">Impact</th>
             <th scope="col">Rules</th>
             <th scope="col">Status</th>
             <th scope="col">Order</th>
@@ -206,6 +245,10 @@ const ruleLabel = (r: { sourceClassId: string; targetClassId: string }) =>
             <td class="mono">{{ t.key }}</td>
             <td>{{ t.forwardLabel }}</td>
             <td>{{ t.reverseLabel }}</td>
+            <td :title="impactTitle(t)">
+              <span v-if="t.impactDirection === 'none'" class="muted">{{ IMPACT_LABEL.none }}</span>
+              <template v-else>{{ IMPACT_LABEL[t.impactDirection] }}</template>
+            </td>
             <td>{{ rules.data.value ? rulesOf(t.id).length : "" }}</td>
             <td>
               <span v-if="t.isActive" class="badge ok">Active</span>
@@ -306,7 +349,7 @@ const ruleLabel = (r: { sourceClassId: string; targetClassId: string }) =>
     :submit-label="editing ? 'Save' : 'Create relationship type'"
     :fields="TYPE_FIELDS"
     :record="editing"
-    :defaults="{ isDirectional: true }"
+    :defaults="{ isDirectional: true, impactDirection: 'none' }"
     :save="saveType"
     id-prefix="rt"
     @close="dialogOpen = false"

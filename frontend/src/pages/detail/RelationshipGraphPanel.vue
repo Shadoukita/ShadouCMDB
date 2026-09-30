@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import { RouterLink } from "vue-router";
 import { useGraph, type Ci } from "../../api/queries";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import { plural } from "../../lib/format";
+import { graphRows } from "../../lib/graphTree";
 import type { TrailStep } from "../../lib/trail";
 import GraphTree from "./GraphTree.vue";
 
@@ -17,6 +19,7 @@ const depth = ref(3);
 const direction = ref<"both" | "outgoing" | "incoming">("outgoing");
 const graph = useGraph(() => props.ci.id, depth, direction);
 const hops = (d: number) => plural(d, "hop");
+const rows = computed(() => (graph.data.value ? graphRows(graph.data.value, props.ci.id, direction.value) : []));
 </script>
 
 <template>
@@ -49,7 +52,17 @@ const hops = (d: number) => plural(d, "hop");
       <div v-if="graph.data.value.truncated" class="alert alert-warn">
         The graph was truncated by the API's node limit. Reduce the depth for a complete picture.
       </div>
-      <GraphTree :graph="graph.data.value" :root-id="ci.id" :direction="direction" :self="self" :trail="trail" />
+      <GraphTree :rows="rows" :root="{ label: ci.label, className: ci.class.name }" label="Relationship map" :self="self" :trail="trail">
+        <template #actions="{ row, tabindex }">
+          {{ " " }}<RouterLink
+            class="tree-action"
+            :to="`/cis/${row.node.id}/impact`"
+            :tabindex="tabindex"
+            :title="`Analyse the impact of ${row.node.label}`"
+            >Analyse impact</RouterLink
+          >
+        </template>
+      </GraphTree>
       <p class="muted" style="margin-top: var(--sp-4)">
         {{ graph.data.value.nodes.length }} CIs, {{ graph.data.value.edges.length }} relationships within {{ hops(depth) }}.
       </p>

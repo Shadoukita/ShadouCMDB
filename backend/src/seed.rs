@@ -139,8 +139,14 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
     let mut values: Vec<(Uuid, &str, Val)> = Vec::new();
     let mut insert = async |ci: DemoCi<'static>| -> anyhow::Result<Uuid> {
         let class_id = must(&cls, ci.class)?;
-        let new =
-            items::NewItem { class_id, ident: None, valid_from: None, valid_until: None, criticality_value_id: None };
+        let new = items::NewItem {
+            id: None,
+            class_id,
+            ident: None,
+            valid_from: None,
+            valid_until: None,
+            criticality_value_id: None,
+        };
         let id = items::insert(&mut tx, &new).await?;
         values.push((id, "name", Val::Text(ci.name)));
         values.push((id, "status", Val::Lookup(lookup("status", ci.status.unwrap_or("in_service"))?)));

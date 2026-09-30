@@ -213,6 +213,12 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
     }
 }
 
+/// A deadlock or serialization failure: the transaction lost a race with
+/// another one and can simply be run again.
+pub fn is_retryable(err: &sqlx::Error) -> bool {
+    pg_error(err).is_some_and(|pg| matches!(pg.code(), "40P01" | "40001"))
+}
+
 /// Connection-level failures: the database is unreachable or went away.
 pub fn is_connection_error(err: &sqlx::Error) -> bool {
     match err {

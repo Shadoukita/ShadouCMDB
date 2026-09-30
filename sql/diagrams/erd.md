@@ -12,7 +12,8 @@ Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_sc
 [`../migrations/0015_lookup_parent_lists.sql`](../migrations/0015_lookup_parent_lists.sql) and
 [`../migrations/0016_core_ci_model.sql`](../migrations/0016_core_ci_model.sql) and
 [`../migrations/0018_audit_hash_chain.sql`](../migrations/0018_audit_hash_chain.sql) and
-[`../migrations/0021_stateless_oidc_start.sql`](../migrations/0021_stateless_oidc_start.sql)
+[`../migrations/0021_stateless_oidc_start.sql`](../migrations/0021_stateless_oidc_start.sql) and
+[`../migrations/0029_bulk_import.sql`](../migrations/0029_bulk_import.sql)
 (`sessions.ip_address` from [`../migrations/0006_auth_audit.sql`](../migrations/0006_auth_audit.sql); the columns
 added by [`0022`](../migrations/0022_api_token_creator.sql) to [`0026`](../migrations/0026_identity_provider_secret_encryption.sql)
 and [`0028`](../migrations/0028_schema_change_redaction.sql) on `api_tokens`, `identity_providers`, `sessions`,
