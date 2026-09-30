@@ -779,12 +779,12 @@ mod tests {
         let single = json!({"type": "string", "maxLength": 100});
         let nullable = json!({"anyOf": [{"type": "string"}, {"type": "null"}]});
         let multi = json!({"anyOf": [{"type": "string"}, {"type": "null"}], "x-multiline": true});
-        let secret = json!({"type": "string", "writeOnly": true});
+        let write_only = json!({"type": "string", "writeOnly": true});
         let password = json!({"type": "string", "format": "password"});
 
         for s in ["a\u{1}b", "\u{8}", "\u{B}", "\u{C}", "\u{1B}[31m", "\u{1F}", "\u{7F}", "\u{85}", "\u{9B}", "\u{9F}"]
         {
-            for schema in [&single, &multi, &secret, &json!({})] {
+            for schema in [&single, &multi, &write_only, &json!({})] {
                 assert!(bad(schema, s), "{s:?} in {schema}");
             }
         }
@@ -794,7 +794,7 @@ mod tests {
             assert!(bad(&single, s), "{s:?}");
             assert!(bad(&nullable, s), "{s:?}");
             assert!(codes(multi.clone(), json!(s)).is_empty(), "{s:?}");
-            assert!(codes(secret.clone(), json!(s)).is_empty(), "{s:?}");
+            assert!(codes(write_only.clone(), json!(s)).is_empty(), "{s:?}");
             // Free-form values (e.g. CI attributes at the body level) are checked by their own rules.
             assert!(codes(json!({}), json!(s)).is_empty(), "{s:?}");
         }
