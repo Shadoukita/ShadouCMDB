@@ -185,28 +185,46 @@ impl Decoder {
 /// Puts a delimiter into every blank line outside quotes. csv-core skips blank
 /// lines, but a spreadsheet counts them as rows, and row numbers must match
 /// what the user sees. The blank record this makes is skipped by the caller.
+///
+/// Quotes are followed as csv-core reads them: a `"` opens a quoted field
+/// only at the start of a field (elsewhere it is data), and `""` inside one
+/// is an escaped quote.
 struct BlankLines {
     delimiter: u8,
-    quoted: bool,
+    field: Field,
     at_line_start: bool,
     prev_cr: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Field {
+    Start,
+    Unquoted,
+    Quoted,
+    /// A `"` inside a quoted field: the end of the quotes, or half of `""`.
+    QuoteInQuoted,
+}
+
 impl BlankLines {
     fn new(delimiter: u8) -> Self {
-        BlankLines { delimiter, quoted: false, at_line_start: true, prev_cr: false }
+        BlankLines { delimiter, field: Field::Start, at_line_start: true, prev_cr: false }
     }
 
     fn transform(&mut self, input: &[u8], out: &mut Vec<u8>) {
         for &b in input {
-            match b {
-                b'"' => self.quoted = !self.quoted,
-                b'\n' if !self.quoted && self.prev_cr => {}
-                b'\r' | b'\n' if !self.quoted && self.at_line_start => out.push(self.delimiter),
-                _ => {}
+            let line_end = (b == b'\r' || b == b'\n') && self.field != Field::Quoted;
+            if line_end && self.at_line_start && !(b == b'\n' && self.prev_cr) {
+                out.push(self.delimiter);
             }
-            self.at_line_start = !self.quoted && (b == b'\r' || b == b'\n');
-            self.prev_cr = b == b'\r' && !self.quoted;
+            self.field = match (self.field, b) {
+                (Field::Quoted, b'"') => Field::QuoteInQuoted,
+                (Field::Quoted, _) => Field::Quoted,
+                (Field::Start | Field::QuoteInQuoted, b'"') => Field::Quoted,
+                _ if line_end || b == self.delimiter => Field::Start,
+                _ => Field::Unquoted,
+            };
+            self.at_line_start = line_end;
+            self.prev_cr = line_end && b == b'\r';
             out.push(b);
         }
     }
@@ -507,6 +525,23 @@ mod tests {
         })
         .unwrap();
         assert_eq!(numbers, [(1, "h".into()), (2, "a".into()), (4, "x\ny".into()), (6, "b".into())]);
+    }
+
+    #[test]
+    fn a_quote_inside_an_unquoted_field_is_data() {
+        // `a"b` opens no quotes, so the blank line inside "c\n\nd" stays as it is.
+        let (_, r) = rows(b"h\na\"b,\"c\n\nd\"\n", Encoding::Utf8, Some(b',')).unwrap();
+        assert_eq!(r, [vec!["h"], vec!["a\"b", "c\n\nd"]]);
+        // Escaped quotes and a blank line after them still count as a row.
+        let mut numbers = Vec::new();
+        read(&b"h\na\"b\n\n\"x\"\"\ny\"\n\r\n\r\nz\n"[..], Encoding::Utf8, None, &LIMITS, &mut |r: Row| {
+            if !r.is_blank() {
+                numbers.push((r.number, r.cells[0].display()));
+            }
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert_eq!(numbers, [(1, "h".into()), (2, "a\"b".into()), (4, "x\"\ny".into()), (7, "z".into())]);
     }
 
     #[test]

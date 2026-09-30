@@ -273,6 +273,9 @@ async fn uploads_are_refused_at_their_limits() {
         (None, "required"),
         (Some("a%2Fb.csv"), "invalid_character"),
         (Some("a%0Ab.csv"), "invalid_character"),
+        // U+202E RIGHT-TO-LEFT OVERRIDE and U+200B ZERO WIDTH SPACE.
+        (Some("report%E2%80%AEvsc.xlsx"), "invalid_character"),
+        (Some("a%E2%80%8Bb.csv"), "invalid_character"),
         (Some("%FF.csv"), "invalid_format"),
     ] {
         let (status, v, _) = up(CSV_TYPE, name, CSV.to_vec()).await;
