@@ -174,10 +174,13 @@ The root `Dockerfile` builds a small multi-arch (amd64/arm64), non-root image of
 `docker run --rm --env-file .env shadoucmdb migrate`, then `docker run -d --env-file .env -p 3000:3000 shadoucmdb`.
 
 `docker-compose.yml` builds the same image and reads `.env`. It contains **no** database service.
+The schema owner's connection goes into `.env.migrate`, which only the `migrate` service reads; the
+running `api` never receives it.
 
 ```sh
-cp .env.example .env                     # point it at your PostgreSQL
+cp .env.example .env                     # point it at your PostgreSQL (as shadoucmdb_app)
 openssl rand -base64 32 > encryption.key && chmod 600 encryption.key && sudo chown 65532:65532 encryption.key
+install -m 600 /dev/null .env.migrate    # add MIGRATION_DATABASE_URL and MAINTENANCE_DATABASE_URL
 docker compose run --rm migrate          # apply migrations
 docker compose run --rm seed             # system rows (`seed seed --demo` adds the IT template and sample CIs)
 docker compose up api                    # http://localhost:3000/readyz
