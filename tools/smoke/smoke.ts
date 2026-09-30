@@ -1586,7 +1586,19 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 4 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 5 }, 400);
+  // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
+  const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
+  const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };
+  const mappingDry = (await post('/api/v1/admin/config/import?mode=dry_run', mappingFile, 200)).json;
+  check(mappingDry.summary.some((s: Json) => s.section === 'importMappings' && s.created === 1) && !mappingDry.applied, 'a dry run reports the saved mapping it would create');
+  await post('/api/v1/admin/config/import?mode=apply', mappingFile, 200);
+  const mappingAgain = (await post('/api/v1/admin/config/import?mode=apply', { ...mappingFile, importMappings: [{ ...cfgMapping, name: cfgMapping.name.toUpperCase() }] }, 200)).json;
+  check(mappingAgain.summary.some((s: Json) => s.section === 'importMappings' && s.unchanged === 1 && s.created === 0), 'saved mappings are matched by class and name, ignoring case');
+  const cfgSaved = (await get('/api/v1/import-mappings?classKey=server')).json.data.find((m: Json) => m.name === cfgMapping.name);
+  check(cfgSaved?.definition?.columns?.length === 2, 'the imported mapping is a saved mapping');
+  check((await get('/api/v1/admin/config/export')).json.importMappings.some((m: Json) => m.name === cfgMapping.name && m.classKey === 'server'), 'the export carries the saved mapping');
+  if (cfgSaved) await del(`/api/v1/import-mappings/${cfgSaved.id}?version=${cfgSaved.version}`, 204);
   await post('/api/v1/admin/config/import', file, 400); // mode is required
   await post('/api/v1/admin/config/import?mode=later', file, 400);
 
