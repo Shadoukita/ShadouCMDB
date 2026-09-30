@@ -248,6 +248,10 @@ async function showProblems(list: MappingProblem[]) {
   await nextTick();
   summary.value?.focus();
 }
+/** A changed column drops its own problems; the next check finds any that remain. */
+function clearColumnProblems(i: number) {
+  if (rowProblems.value.has(i)) problems.value = problems.value.filter((p) => p.column !== i);
+}
 function focusProblem(p: MappingProblem) {
   document.getElementById(p.column !== undefined ? `import-map-${p.column}` : (p.control ?? "import-mapping-table"))?.focus();
 }
@@ -542,6 +546,7 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
                     :aria-invalid="rowProblems.has(i) || undefined"
                     :aria-describedby="rowProblems.has(i) ? `import-col-${i}-error` : undefined"
                     :disabled="!editable || busy"
+                    @change="clearColumnProblems(i)"
                   >
                     <option value="ignore">Do not import</option>
                     <optgroup label="Core fields">

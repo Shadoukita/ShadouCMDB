@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { useQueryClient } from "@tanstack/vue-query";
+import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { importDownloads, useCancelImport, type ImportJob } from "../../api/imports";
-import { useCiClasses } from "../../api/queries";
+import { keys, useCiClasses } from "../../api/queries";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import { FINAL, RUNNING } from "../../lib/imports";
 import { useSessionStore } from "../../stores/session";
 import ImportProgress from "./ImportProgress.vue";
 
@@ -18,6 +20,18 @@ const props = defineProps<{ job: ImportJob }>();
 const session = useSessionStore();
 const classes = useCiClasses();
 const cancel = useCancelImport();
+
+// Once the import ends, the inventory, its counts (the sidebar's too) and relationships have changed.
+const qc = useQueryClient();
+watch(
+  () => props.job.status,
+  (now, before) => {
+    if (before && RUNNING.has(before) && FINAL.has(now)) {
+      qc.invalidateQueries({ queryKey: keys.cis });
+      qc.invalidateQueries({ queryKey: ["relationships"] });
+    }
+  },
+);
 
 const running = computed(() => props.job.status === "committing" || (props.job.status === "queued" && props.job.phase === "commit"));
 const counts = computed(() => props.job.summary?.committed ?? null);

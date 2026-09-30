@@ -121,6 +121,10 @@ code,
   color: var(--c-sidebar-text);
   font-size: var(--fs-md);
 }
+/* Class counts: the page's muted grey is unreadable on the dark sidebar (6.9:1 here, 5.2:1 on a hovered or active row). */
+.shell-nav a .muted {
+  color: #a7b1be;
+}
 .shell-nav a:hover {
   background: var(--c-sidebar-active);
   text-decoration: none;
@@ -321,12 +325,12 @@ code,
   background: var(--c-primary-hover);
 }
 .btn-danger {
-  background: var(--c-danger);
-  border-color: var(--c-danger);
+  background: var(--c-danger-solid);
+  border-color: var(--c-danger-solid);
   color: #fff;
 }
 .btn-danger:hover {
-  background: var(--c-danger-hover);
+  background: var(--c-danger-solid-hover);
 }
 .btn-sm {
   height: 22px;
@@ -1945,8 +1949,14 @@ table.data td.fill {
 .import-mapping-options[open] summary {
   margin-bottom: var(--sp-2);
 }
+/* Mapping rows hold stacked controls: they grow with their content instead of the one-line data row. */
 .import-mapping td {
   vertical-align: top;
+  height: auto;
+  padding-top: var(--sp-1);
+  padding-bottom: var(--sp-1);
+  white-space: normal;
+  overflow: visible;
 }
 .import-mapping select,
 .import-mapping input {
@@ -1960,14 +1970,22 @@ table.data td.fill {
   white-space: nowrap;
 }
 .import-col-options {
-  display: grid;
-  gap: 2px;
   font-size: var(--fs-sm);
   min-width: 200px;
 }
+.import-col-options label,
+.import-col-options select,
+.import-col-options input,
+.import-col-options .muted {
+  display: block;
+}
+.import-col-options select,
+.import-col-options input {
+  margin: 2px 0 var(--sp-1);
+}
 .import-mapping .error {
   font-size: var(--fs-sm);
-  color: var(--c-danger);
+  color: var(--c-danger-text);
   margin-top: 2px;
   white-space: normal;
 }
@@ -1975,7 +1993,7 @@ table.data td.fill {
   box-shadow: inset 3px 0 0 var(--c-danger);
 }
 .status-error {
-  color: var(--c-danger);
+  color: var(--c-danger-text);
   font-weight: 600;
 }
 .error-summary {
@@ -1991,7 +2009,7 @@ table.data td.fill {
   padding: 0;
 }
 .import-count-error {
-  color: var(--c-danger);
+  color: var(--c-danger-text);
 }
 .import-result {
   margin: var(--sp-2) 0;

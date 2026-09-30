@@ -11,6 +11,7 @@ import {
   type ImportIssueQuery,
   type ImportJob,
 } from "../../api/imports";
+import { useCiClasses, useClassAttributes } from "../../api/queries";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
@@ -36,7 +37,8 @@ const checking = computed(() => props.job.status === "validating" || (props.job.
 const checked = computed(() => props.job.status === "validated" || props.job.status === "expired");
 const summary = computed(() => props.job.summary);
 const stale = computed(() => !!props.job.dryRun?.stale || props.job.status === "expired");
-const rowsTotal = computed(() => (summary.value ? summary.value.create + summary.value.update + summary.value.unchanged + summary.value.errorRows : 0));
+/** Rows the planned-changes sample is drawn from: unchanged rows are only counted. */
+const rowsChanging = computed(() => (summary.value ? summary.value.create + summary.value.update + summary.value.errorRows : 0));
 
 // Elapsed time, ticking only while the check runs.
 const now = ref(Date.now());
@@ -146,7 +148,16 @@ const OUTCOME = {
   unchanged: { icon: "=", label: "Unchanged" },
   error: { icon: "!", label: "Error" },
 } as const;
+// Changed fields are named by key (`attributes.os`); show the class's labels.
+const classes = useCiClasses();
+const classId = computed(() => classes.data.value?.find((c) => c.key === props.job.classKey)?.id);
+const attributes = useClassAttributes(classId);
+const attributeLabels = computed(() => new Map((attributes.data.value ?? []).map((a) => [a.key, a.label])));
 const fieldLabel = (f: string) => {
+  if (f.startsWith("attributes.")) {
+    const label = attributeLabels.value.get(f.slice("attributes.".length));
+    if (label) return label;
+  }
   const key = f.replace(/^attributes\./, "").replace(/^relationships\./, "");
   if (f === "ident") return "Ident";
   if (f === "validFrom") return "Valid from";
@@ -217,7 +228,10 @@ const fieldLabel = (f: string) => {
     <template v-if="summary && !checking">
       <div v-if="job.preview.length" class="table-wrap import-preview">
         <table class="data">
-          <caption>Planned changes: showing the first {{ job.preview.length }} of {{ rowsTotal.toLocaleString() }} rows</caption>
+          <caption>
+            Planned changes: {{ job.preview.length < rowsChanging ? `showing the first ${job.preview.length} of` : "all" }}
+            {{ rowsChanging.toLocaleString() }} {{ rowsChanging === 1 ? "row" : "rows" }} that create, update or fail
+          </caption>
           <thead>
             <tr>
               <th scope="col" class="num">Row</th>
@@ -237,9 +251,7 @@ const fieldLabel = (f: string) => {
               <td class="wrap">
                 <template v-if="r.changes.length">
                   <div v-for="c in r.changes" :key="c.field">
-                    <strong>{{ fieldLabel(c.field) }}:</strong>
-                    <template v-if="r.outcome === 'update'"> {{ changeText(c.old) }} → </template>
-                    {{ changeText(c.new) }}
+                    <strong>{{ fieldLabel(c.field) }}:</strong> {{ r.outcome === "update" ? `${changeText(c.old)} → ` : "" }}{{ changeText(c.new) }}
                   </div>
                 </template>
                 <span v-else class="muted">–</span>
