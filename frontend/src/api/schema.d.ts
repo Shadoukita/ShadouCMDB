@@ -1592,7 +1592,7 @@ export interface paths {
         };
         /**
          * The logo or favicon image
-         * @description Public (the login page shows it). Answers with the image bytes, an ETag and `Cache-Control: no-cache`; send `If-None-Match` to get 304 Not Modified. Served with a sandboxing Content-Security-Policy.
+         * @description Public (the login page shows it). Answers with the image bytes, an ETag and `Cache-Control: no-store` (like every API response); send `If-None-Match` to get 304 Not Modified. Served with a sandboxing Content-Security-Policy.
          */
         get: operations["getUiAsset"];
         /**
@@ -3362,7 +3362,7 @@ export interface components {
             size: number;
             /** @description Hex SHA-256 of the file (also its ETag) */
             sha256: string;
-            /** @description Where to load it from; the `v` parameter changes with the content, so it can be cached */
+            /** @description Where to load it from; the `v` parameter changes with the content */
             url: string;
             /** Format: date-time */
             updatedAt: string;
