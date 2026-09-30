@@ -72,17 +72,31 @@ server {
     ssl_prefer_server_ciphers off;
     ssl_session_tickets off;
 
-    client_max_body_size 1m;   # the server rejects larger bodies anyway
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For $remote_addr;   # replaces, not $proxy_add_x_forwarded_for
+    proxy_set_header Forwarded "";
+
+    client_max_body_size 1m;   # the server's limit for API requests
 
     location / {
         proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-For $remote_addr;   # replaces, not $proxy_add_x_forwarded_for
-        proxy_set_header Forwarded "";
+    }
+
+    # Configuration import accepts files up to 16 MiB.
+    location = /api/v1/admin/config/import {
+        client_max_body_size 16m;
+        proxy_pass http://127.0.0.1:3000;
     }
 }
 ```
+
+The server limits request bodies to 1 MiB, except configuration import
+(`POST /api/v1/admin/config/import`, 16 MiB) and the sign-in and other anonymous routes (64 KiB).
+A proxy limit below these makes the proxy answer 413 before the request reaches the server. If you
+don't use configuration import, drop the second `location` block. Caddy sets no body size limit by
+default, so the sample below needs no change; if you add a `request_body { max_size … }` directive,
+allow 16 MiB on the import path.
 
 Caddy (automatic certificates; TLS 1.2+ by default):
 
