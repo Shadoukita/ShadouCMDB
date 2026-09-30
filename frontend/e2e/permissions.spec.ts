@@ -340,20 +340,20 @@ test("audit.view shows a class-restricted auditor no values of CIs they may not 
   await apiSend(request, "PATCH", `/relationships/${edge.id}`, { notes: secret });
 
   type Entry = { entityId: string; oldValue: Record<string, unknown> | null; newValue: Record<string, unknown> | null; redacted: boolean };
-  const log = async (who: ApiSession, query: string) => {
+  const page = async (who: ApiSession, query: string) => {
     const res = await who.get(`/audit-log?${query}&limit=200`);
     expect(res.status(), await res.text()).toBe(200);
-    return ((await res.json()) as { data: Entry[] }).data;
+    return (await res.json()) as { data: Entry[]; page: { total: number } };
   };
+  const log = async (who: ApiSession, query: string) => (await page(who, query)).data;
   try {
-    // The CI itself stays hidden (404, as for an unknown id), and so do its values in the audit log: the rows are listed, the values are not.
+    // The CI itself stays hidden (404, as for an unknown id), and so does its history: its audit entries and those of
+    // its relationships are neither listed nor counted (GH#264), so the total reveals nothing about them either.
     await expectError(await auditor.get(`/configuration-items/${crmDb}`), 404, "NOT_FOUND");
-    const dbRows = await log(auditor, `entityType=configuration_items&entityId=${crmDb}`);
-    expect(dbRows.length).toBeGreaterThan(0);
-    for (const row of dbRows) expect(row).toMatchObject({ oldValue: null, newValue: null, redacted: true });
-    const edgeRows = await log(auditor, `entityType=ci_relationships&entityId=${edge.id}`);
-    expect(edgeRows.length).toBeGreaterThan(0);
-    for (const row of edgeRows) expect(row).toMatchObject({ oldValue: null, newValue: null, redacted: true });
+    for (const query of [`entityType=configuration_items&entityId=${crmDb}`, `entityType=ci_relationships&entityId=${edge.id}`]) {
+      expect((await apiGet<{ page: { total: number } }>(request, `/audit-log?${query}`)).page.total).toBeGreaterThan(0);
+      expect(await page(auditor, query)).toMatchObject({ data: [], page: { total: 0 } });
+    }
     // Nowhere in the whole CI and relationship history does the secret or crm-db's name appear.
     const everything = JSON.stringify([...(await log(auditor, "entityType=configuration_items")), ...(await log(auditor, "entityType=ci_relationships"))]);
     expect(everything).not.toContain("crm-db");
