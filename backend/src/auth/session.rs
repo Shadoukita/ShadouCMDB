@@ -107,7 +107,7 @@ pub fn session_token<'h>(cfg: &AuthConfig, headers: &'h HeaderMap) -> Option<&'h
 }
 
 /// The pending second-factor challenge the request names, read like [`session_token`].
-pub fn mfa_token<'h>(cfg: &AuthConfig, headers: &'h HeaderMap) -> Option<&'h str> {
+pub fn second_factor_challenge<'h>(cfg: &AuthConfig, headers: &'h HeaderMap) -> Option<&'h str> {
     cookie(headers, if secure_cookies(cfg, headers) { HOST_MFA_COOKIE } else { MFA_COOKIE })
 }
 
@@ -451,9 +451,9 @@ mod tests {
         }
         assert_eq!(session_token(&cfg, &https("shadoucmdb_session=tossed; __Host-shadoucmdb_session=")), None);
         assert_eq!(session_token(&cfg, &https("shadoucmdb_session=tossed")), None);
-        assert_eq!(mfa_token(&cfg, &https("shadoucmdb_mfa=tossed")), None);
+        assert_eq!(second_factor_challenge(&cfg, &https("shadoucmdb_mfa=tossed")), None);
         assert_eq!(oidc_state(&cfg, &https("shadoucmdb_oidc=tossed")), None);
-        assert_eq!(mfa_token(&cfg, &https("shadoucmdb_mfa=x; __Host-shadoucmdb_mfa=m")), Some("m"));
+        assert_eq!(second_factor_challenge(&cfg, &https("shadoucmdb_mfa=x; __Host-shadoucmdb_mfa=m")), Some("m"));
         assert_eq!(oidc_state(&cfg, &https("__Host-shadoucmdb_oidc=o; shadoucmdb_oidc=x")), Some("o"));
         // COOKIE_SECURE=always reads the __Host- names whatever the request says.
         let always = test_config(CookieSecure::Always);
@@ -461,7 +461,7 @@ mod tests {
         // Plain HTTP answers set, and so read, the plain names only.
         let http = headers(&[("cookie", "__Host-shadoucmdb_session=h; shadoucmdb_session=p; shadoucmdb_mfa=m")]);
         assert_eq!(session_token(&cfg, &http), Some("p"));
-        assert_eq!(mfa_token(&cfg, &http), Some("m"));
+        assert_eq!(second_factor_challenge(&cfg, &http), Some("m"));
         assert_eq!(session_token(&test_config(CookieSecure::Never), &https("__Host-shadoucmdb_session=h")), None);
         assert_eq!(session_token(&cfg, &HeaderMap::new()), None);
     }

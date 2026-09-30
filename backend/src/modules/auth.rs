@@ -620,7 +620,7 @@ async fn login_mfa(
     ctx: &RequestContext,
     b: MfaLoginBody,
 ) -> Result<WithCookies<Json<Session>>, AppError> {
-    let Some(token) = session::mfa_token(&auth.config, headers) else { return Err(sign_in_expired()) };
+    let Some(token) = session::second_factor_challenge(&auth.config, headers) else { return Err(sign_in_expired()) };
     let hash = session::token_hash(token);
     // Wait for the username's turn before locking anything.
     let Some(pending) = mfa_data::take_challenge(&mut *pool.acquire().await?, &hash).await? else {
