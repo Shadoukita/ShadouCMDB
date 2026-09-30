@@ -278,7 +278,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -288,7 +288,7 @@
             }
           },
           "429": {
-            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
             "content": {
               "application/json": {
                 "schema": {
@@ -389,7 +389,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -399,7 +399,7 @@
             }
           },
           "429": {
-            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
             "content": {
               "application/json": {
                 "schema": {
@@ -495,7 +495,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -505,7 +505,7 @@
             }
           },
           "429": {
-            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
             "content": {
               "application/json": {
                 "schema": {
@@ -751,7 +751,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -761,7 +761,7 @@
             }
           },
           "429": {
-            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
             "content": {
               "application/json": {
                 "schema": {
@@ -949,7 +949,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -959,7 +959,7 @@
             }
           },
           "429": {
-            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
             "content": {
               "application/json": {
                 "schema": {
@@ -1078,7 +1078,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1088,7 +1088,7 @@
             }
           },
           "429": {
-            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
             "content": {
               "application/json": {
                 "schema": {
@@ -1209,7 +1209,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1337,7 +1337,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1347,7 +1347,7 @@
             }
           },
           "429": {
-            "description": "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header",
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
             "content": {
               "application/json": {
                 "schema": {
@@ -2016,7 +2016,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2395,7 +2395,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2932,7 +2932,877 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/imports": {
+      "get": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Your imports, newest first",
+        "description": "Requires `cis.import`. The caller's jobs; administrators may pass `all=true` for every user's. Also while bulk import is off, so remaining jobs can be seen and removed. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "listImports",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only jobs in this status",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Where a job is (§3.1).",
+              "enum": [
+                "uploading",
+                "queued",
+                "analysing",
+                "ready",
+                "validating",
+                "validated",
+                "committing",
+                "completed",
+                "completed_with_errors",
+                "failed",
+                "cancelled",
+                "expired"
+              ]
+            }
+          },
+          {
+            "name": "all",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "false",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJobList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Upload a CSV or XLSX file for import",
+        "description": "Requires `cis.import`. The body is the file itself (not JSON, not multipart), with `Content-Type: text/csv` or `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`; any other type is `415`. The format is decided by the file's first bytes: a password-protected workbook or an `.xls` is `415` with `workbook_encrypted_or_xls`, a file that does not match the declared type `415` with `unsupported_format`. The file name goes in the `X-File-Name` header, percent-encoded UTF-8 (1–255 characters, no control characters, no path), never in the URL. An optional `Idempotency-Key` (1–128 visible ASCII characters, kept 24 h) returns the job it created before. Answers `202` with the job, `queued` for analysis, once the last byte is stored. Limits: `IMPORT_MAX_FILE_MB` (`413`), `IMPORT_UPLOAD_TIMEOUT_SECS` for the whole upload and 60 s without data (`408`, `upload_timeout`), and `429` with `import_busy` (an import of yours is running), `import_limit` (20 unfinished imports), `import_rate` (30 uploads an hour) or `import_storage_full` (the server's stored-upload cap). `403` with `import_disabled` while bulk import is off. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "createImport",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "text/csv": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The Idempotency-Key was already used for another operation or target (code IDEMPOTENCY_KEY_REUSED, details[0].code idempotency_key_reused). Nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/imports/template": {
+      "get": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "An empty CSV with the column names of a class",
+        "description": "Requires `cis.import`. One header row: `Ident` and the labels of the class's active attributes, every field quoted and neutralised against formula injection. `404` for a class the caller cannot import into, the same as for an unknown key. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "downloadImportTemplate",
+        "parameters": [
+          {
+            "name": "classKey",
+            "in": "query",
+            "description": "The class to import into, by key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 63,
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "text/csv"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/imports/{id}": {
+      "get": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "An import job, for polling",
+        "description": "Requires `cis.import`. The caller's job, or any job for an administrator; `404` otherwise, the same as for a job that does not exist. Poll every 1 s for the first 10 s, then every 2 s, then every 5 s after a minute. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "getImport",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Delete an import, its file and its row problems",
+        "description": "Requires `cis.import`. Never touches CIs. `409` while the job is running (cancel it first). Also while bulk import is off, so uploaded files can be removed. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "deleteImport",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/imports/{id}/file-options": {
+      "patch": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Change how the file is read (sheet, encoding, delimiter, header row)",
+        "description": "Requires `cis.import`. The analysis runs again and the mapping and any dry run are dropped. In `ready`, or after an analysis that failed. `sheet` is for workbooks, `encoding` and `delimiter` for CSV files. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "updateImportFileOptions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "How to read the file; `None` is \"detect\" (§3.2 `updateImportFileOptions`).",
+                "properties": {
+                  "sheet": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "XLSX: the worksheet to read (default: the first visible one)"
+                  },
+                  "encoding": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/ImportEncoding",
+                        "description": "CSV: the encoding (default: from the byte order mark, else UTF-8 when valid, else Windows-1252)"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "delimiter": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "CSV: `,` `;` `\\t` or `|` (default: detected from the first line)",
+                    "pattern": "^[,;\\t|]$"
+                  },
+                  "hasHeaderRow": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ],
+                    "description": "Whether the first row holds the column names (default true)"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/imports/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Stop an import",
+        "description": "Requires `cis.import`. Analysis and dry run stop at once; a commit stops after its current batch of at most 500 rows, and the rows committed so far stay. `409` once the job has ended. Also while bulk import is off. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "cancelImport",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
             "content": {
               "application/json": {
                 "schema": {
@@ -3263,7 +4133,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3605,7 +4475,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3928,7 +4798,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4323,7 +5193,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4478,7 +5348,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4883,7 +5753,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5303,7 +6173,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5673,7 +6543,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6184,7 +7054,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6686,7 +7556,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6942,7 +7812,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7279,7 +8149,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7652,7 +8522,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8035,7 +8905,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8383,7 +9253,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8883,7 +9753,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11959,7 +12829,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12336,7 +13206,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12794,7 +13664,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13183,7 +14053,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13668,7 +14538,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14080,7 +14950,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14299,7 +15169,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14961,7 +15831,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15328,7 +16198,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15470,7 +16340,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15799,7 +16669,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16209,7 +17079,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16350,7 +17220,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16657,7 +17527,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -17240,7 +18110,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -17765,7 +18635,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -17911,7 +18781,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -18272,7 +19142,7 @@
             }
           },
           "415": {
-            "description": "Body is not application/json",
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -20330,6 +21200,7 @@
                   "INVALID_NAME",
                   "SCHEMA_CHANGE_REFUSED",
                   "SECRET_REQUIRED",
+                  "IDEMPOTENCY_KEY_REUSED",
                   "LAST_ADMINISTRATOR",
                   "RATE_LIMITED",
                   "MFA_REQUIRED",
@@ -20679,6 +21550,724 @@
         },
         "additionalProperties": false
       },
+      "ImportColumn": {
+        "type": "object",
+        "description": "One column of the file.",
+        "required": [
+          "index",
+          "header",
+          "samples"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "0-based",
+            "minimum": 0
+          },
+          "header": {
+            "type": "string",
+            "description": "The header cell, or \"Column A\" … without a header row"
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The first three non-empty values, each at most 200 characters"
+          }
+        }
+      },
+      "ImportColumnMapping": {
+        "type": "object",
+        "description": "One mapped column of the file.",
+        "required": [
+          "index",
+          "target"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "0-based column of the file",
+            "minimum": 0
+          },
+          "target": {
+            "$ref": "#/components/schemas/ImportColumnTarget"
+          },
+          "emptyCells": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportEmptyCells",
+                "description": "Overrides the job's `emptyCells` for this column"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "options": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportColumnOptions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportColumnOptions": {
+        "type": "object",
+        "description": "Per-column overrides of the job's options.",
+        "properties": {
+          "decimalSeparator": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[.,]$"
+          },
+          "dateFormat": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportDateFormat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeZone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "IANA time zone for date-time values without an offset"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportColumnTarget": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "An attribute of the class or an ancestor, by key",
+            "required": [
+              "key",
+              "kind"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "match": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ImportTargetMatch",
+                    "description": "Required for reference attributes"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "attribute"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A relationship type, by key, in one direction",
+            "required": [
+              "typeKey",
+              "direction",
+              "match",
+              "kind"
+            ],
+            "properties": {
+              "typeKey": {
+                "type": "string"
+              },
+              "direction": {
+                "$ref": "#/components/schemas/ImportRelationshipDirection"
+              },
+              "match": {
+                "$ref": "#/components/schemas/ImportTargetMatch"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "relationship"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "ident"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "validFrom"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "validUntil"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "ignore"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Where a column goes."
+      },
+      "ImportCommitCounts": {
+        "type": "object",
+        "description": "Counts of a commit.",
+        "required": [
+          "created",
+          "updated",
+          "unchanged",
+          "skipped",
+          "failed",
+          "relationshipsAdded"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "unchanged": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rows with dry-run errors that `skipErrorRows` left out",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rows that failed at commit",
+            "minimum": 0
+          },
+          "relationshipsAdded": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "ImportDateFormat": {
+        "type": "string",
+        "enum": [
+          "YYYY-MM-DD",
+          "DD.MM.YYYY",
+          "MM/DD/YYYY"
+        ]
+      },
+      "ImportDryRun": {
+        "type": "object",
+        "required": [
+          "finishedAt",
+          "stale"
+        ],
+        "properties": {
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "staleReason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportStaleReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ImportEmptyCells": {
+        "type": "string",
+        "description": "What an empty cell does to an existing CI (§2.3).",
+        "enum": [
+          "ignore",
+          "clear"
+        ]
+      },
+      "ImportEncoding": {
+        "type": "string",
+        "description": "A CSV file's text encoding.",
+        "enum": [
+          "utf-8",
+          "windows-1252",
+          "iso-8859-1"
+        ]
+      },
+      "ImportFieldChange": {
+        "type": "object",
+        "required": [
+          "field",
+          "old",
+          "new"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "`attributes.<key>`, `ident`, `validFrom`, `validUntil` or `relationships.<typeKey>`"
+          },
+          "old": {},
+          "new": {}
+        }
+      },
+      "ImportFile": {
+        "type": "object",
+        "description": "The uploaded file as the analysis found it.",
+        "required": [
+          "name",
+          "format",
+          "size",
+          "sheets",
+          "hiddenSheets",
+          "hasHeaderRow",
+          "previewRows"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ImportFileFormat"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes"
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 (hex) of the file; null while it is uploading"
+          },
+          "sheets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "XLSX: the worksheets, in workbook order"
+          },
+          "hiddenSheets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "XLSX: the hidden worksheets among `sheets`"
+          },
+          "sheet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "XLSX: the worksheet read"
+          },
+          "encoding": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportEncoding",
+                "description": "CSV: the encoding read"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delimiter": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "CSV: the delimiter read"
+          },
+          "hasHeaderRow": {
+            "type": "boolean"
+          },
+          "rowCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Data rows (null until analysed)",
+            "minimum": 0
+          },
+          "columnCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "previewRows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportPreviewRow"
+            },
+            "description": "The first 20 data rows as read, for the step 1 preview"
+          }
+        }
+      },
+      "ImportFileFormat": {
+        "type": "string",
+        "enum": [
+          "csv",
+          "xlsx"
+        ]
+      },
+      "ImportJob": {
+        "type": "object",
+        "description": "A bulk import job (§3.1).",
+        "required": [
+          "id",
+          "status",
+          "file",
+          "columns",
+          "progress",
+          "preview",
+          "createdAt",
+          "createdBy",
+          "expiresAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImportStatus"
+          },
+          "phase": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportPhase"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "file": {
+            "$ref": "#/components/schemas/ImportFile"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportColumn"
+            },
+            "description": "The file's columns with three sample values each (empty until analysed)"
+          },
+          "classKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The target class (set with the mapping)"
+          },
+          "mapping": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportMapping"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mappingId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The saved mapping the mapping came from, if any (informational)"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ImportProgress"
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportSummary",
+                "description": "Null before the first dry run"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "preview": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportPlannedRow"
+            },
+            "description": "The first 50 planned rows of the dry run"
+          },
+          "dryRun": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportDryRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportJobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdBy": {
+            "$ref": "#/components/schemas/ImportOwner"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the file is deleted (24 h after the last activity or the end of the job)"
+          },
+          "finishedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ImportJobError": {
+        "type": "object",
+        "description": "Why a job stopped.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "row": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The row it concerns (the header is row 1)",
+            "minimum": 0
+          },
+          "column": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The 0-based column it concerns",
+            "minimum": 0
+          }
+        }
+      },
+      "ImportJobList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportJobSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportJobSummary": {
+        "type": "object",
+        "description": "A job in lists: without columns, mapping and preview.",
+        "required": [
+          "id",
+          "status",
+          "fileName",
+          "fileFormat",
+          "fileSize",
+          "progress",
+          "createdAt",
+          "createdBy",
+          "expiresAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImportStatus"
+          },
+          "phase": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportPhase"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "fileFormat": {
+            "$ref": "#/components/schemas/ImportFileFormat"
+          },
+          "fileSize": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rowCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "classKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ImportProgress"
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportJobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdBy": {
+            "$ref": "#/components/schemas/ImportOwner"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "ImportLimits": {
         "type": "object",
         "description": "The effective limits of an upload.",
@@ -20715,6 +22304,241 @@
           }
         },
         "additionalProperties": false
+      },
+      "ImportMapping": {
+        "type": "object",
+        "description": "The mapping of a job (`PUT /imports/{id}/mapping`). Columns not listed are ignored.",
+        "required": [
+          "classKey",
+          "mode",
+          "columns"
+        ],
+        "properties": {
+          "classKey": {
+            "type": "string",
+            "description": "The target class, by key"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ImportMode"
+          },
+          "key": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportMatchKey",
+                "description": "How rows find existing CIs; omitted for `create_only`"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "emptyCells": {
+            "$ref": "#/components/schemas/ImportEmptyCells"
+          },
+          "options": {
+            "$ref": "#/components/schemas/ImportMappingOptions"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportColumnMapping"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportMappingOptions": {
+        "type": "object",
+        "description": "The job's options (§3.2).",
+        "properties": {
+          "trim": {
+            "type": "boolean",
+            "description": "Trim spaces around text values (default true)"
+          },
+          "decimalSeparator": {
+            "type": "string",
+            "pattern": "^[.,]$"
+          },
+          "dateFormat": {
+            "$ref": "#/components/schemas/ImportDateFormat"
+          },
+          "timeZone": {
+            "type": "string",
+            "description": "IANA time zone for date-time values without an offset (default UTC)"
+          },
+          "listSeparator": {
+            "type": "string",
+            "description": "Separates several relationship targets in one cell (default `;`)",
+            "maxLength": 1,
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportMatchBy": {
+        "type": "string",
+        "description": "How the other CI of a reference or relationship is found.",
+        "enum": [
+          "ident",
+          "label",
+          "attribute"
+        ]
+      },
+      "ImportMatchKey": {
+        "type": "object",
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "`ident` or `attributes.<key>` (a text, integer, IP or CIDR attribute)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportMode": {
+        "type": "string",
+        "enum": [
+          "create_only",
+          "update_only",
+          "create_or_update"
+        ]
+      },
+      "ImportOwner": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Null once the user was deleted"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ImportPhase": {
+        "type": "string",
+        "description": "What `queued` and `progress` refer to.",
+        "enum": [
+          "analyse",
+          "validate",
+          "commit"
+        ]
+      },
+      "ImportPlannedRow": {
+        "type": "object",
+        "description": "A planned row in the dry run's sample (at most 50).",
+        "required": [
+          "row",
+          "outcome",
+          "changes"
+        ],
+        "properties": {
+          "row": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ImportRowOutcome"
+          },
+          "ciId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The matched CI (updates and unchanged rows)"
+          },
+          "ciLabel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its label, or the label the new CI will get"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportFieldChange"
+            }
+          }
+        }
+      },
+      "ImportPreviewRow": {
+        "type": "object",
+        "description": "A data row as step 1 previews it.",
+        "required": [
+          "row",
+          "cells"
+        ],
+        "properties": {
+          "row": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Row number in the file (the header is row 1)",
+            "minimum": 0
+          },
+          "cells": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ImportProgress": {
+        "type": "object",
+        "required": [
+          "done",
+          "total",
+          "updatedAt"
+        ],
+        "properties": {
+          "done": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rows done in the current phase"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "queuePosition": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Jobs ahead of this one while it is queued"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ImportRelationshipDirection": {
+        "type": "string",
+        "enum": [
+          "outgoing",
+          "incoming"
+        ]
       },
       "ImportResult": {
         "type": "object",
@@ -20776,6 +22600,15 @@
         },
         "additionalProperties": false
       },
+      "ImportRowOutcome": {
+        "type": "string",
+        "enum": [
+          "create",
+          "update",
+          "unchanged",
+          "error"
+        ]
+      },
       "ImportSettings": {
         "type": "object",
         "description": "Whether bulk import may be used on this instance, and its limits.",
@@ -20795,6 +22628,111 @@
           },
           "limits": {
             "$ref": "#/components/schemas/ImportLimits"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportStaleReason": {
+        "type": "string",
+        "enum": [
+          "model_changed",
+          "expired"
+        ]
+      },
+      "ImportStatus": {
+        "type": "string",
+        "description": "Where a job is (§3.1).",
+        "enum": [
+          "uploading",
+          "queued",
+          "analysing",
+          "ready",
+          "validating",
+          "validated",
+          "committing",
+          "completed",
+          "completed_with_errors",
+          "failed",
+          "cancelled",
+          "expired"
+        ]
+      },
+      "ImportSummary": {
+        "type": "object",
+        "description": "Counts of the dry run, and of the commit once it ran.",
+        "required": [
+          "create",
+          "update",
+          "unchanged",
+          "errorRows",
+          "warnings",
+          "relationshipsToAdd",
+          "issuesTotal"
+        ],
+        "properties": {
+          "create": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "update": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "unchanged": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "errorRows": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "warnings": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "relationshipsToAdd": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "issuesTotal": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Problems found, including those beyond the 10,000 stored",
+            "minimum": 0
+          },
+          "committed": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportCommitCounts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ImportTargetMatch": {
+        "type": "object",
+        "required": [
+          "by"
+        ],
+        "properties": {
+          "by": {
+            "$ref": "#/components/schemas/ImportMatchBy"
+          },
+          "attributeKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Required with `by: attribute`"
           }
         },
         "additionalProperties": false

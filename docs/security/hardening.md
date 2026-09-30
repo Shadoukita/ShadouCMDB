@@ -137,6 +137,9 @@ configured. Nothing below is on in a fresh install.
 | LDAP/AD directories | LDAPS (636) or LDAP with StartTLS (389) | a directory added under **Administration › Sign-in** | TLS required and certificates always verified; timeouts; read-only bind account recommended |
 | Syslog / SIEM collector | UDP or TCP syslog, **no TLS** | `AUDIT_EXPORT=udp://…` or `tcp://…` | off by default; `stdout` and `file:` export open no connection |
 
+Bulk import adds no destination: an uploaded file is read from the database, and links, embedded
+objects and images in a workbook are never fetched or opened.
+
 - **Set `OIDC_ALLOWED_HOSTS`** to the OIDC provider hosts whenever you use OIDC. Unset, the server
   contacts whatever host a provider's issuer or discovery document names. Adding a provider and
   running its connection test needs the Administrator profile and a signed-in session (not an API

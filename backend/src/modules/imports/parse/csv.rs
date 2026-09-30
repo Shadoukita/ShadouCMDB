@@ -23,6 +23,7 @@ pub const DELIMITERS: [u8; 4] = *b",;\t|";
 
 /// A CSV file's text encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = ImportEncoding)]
 pub enum Encoding {
     #[serde(rename = "utf-8")]
     Utf8,

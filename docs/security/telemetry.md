@@ -21,6 +21,10 @@ That is the complete list. The controls for each are in the
 `--log-file`, and `AUDIT_EXPORT=stdout` or `file:` writes locally; where they go from there is up
 to you.
 
+Bulk import (CSV and Excel files) adds nothing to this list: the uploaded file is read from the
+database, and external links, embedded objects, images and hyperlinks in a workbook are never
+fetched or opened.
+
 ## What the browser connects to
 
 The web UI and Swagger UI (`/docs`, off unless `API_DOCS` enables it) load every script, style, font and image from the ShadouCMDB

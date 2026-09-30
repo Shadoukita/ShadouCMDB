@@ -15,6 +15,7 @@ use crate::api::schemas::QueryBool;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "text", rename_all = "snake_case")]
+#[schema(as = ImportStatus)]
 pub enum JobStatus {
     /// The file is still arriving (seen only when listing during an upload).
     Uploading,
@@ -82,6 +83,7 @@ impl JobStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "text", rename_all = "snake_case")]
+#[schema(as = ImportPhase)]
 pub enum Phase {
     Analyse,
     Validate,
@@ -118,6 +120,7 @@ pub struct ImportFile {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+#[schema(as = ImportProgress)]
 pub struct Progress {
     /// Rows done in the current phase
     pub done: i32,
@@ -131,6 +134,7 @@ pub struct Progress {
 /// Counts of a commit.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+#[schema(as = ImportCommitCounts)]
 pub struct CommitCounts {
     pub created: u32,
     pub updated: u32,
@@ -159,6 +163,7 @@ pub struct ImportSummary {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[schema(as = ImportRowOutcome)]
 pub enum RowOutcome {
     Create,
     Update,
@@ -168,6 +173,7 @@ pub enum RowOutcome {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+#[schema(as = ImportFieldChange)]
 pub struct FieldChange {
     /// `attributes.<key>`, `ident`, `validFrom`, `validUntil` or `relationships.<typeKey>`
     pub field: String,
@@ -178,6 +184,7 @@ pub struct FieldChange {
 /// A planned row in the dry run's sample (at most 50).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+#[schema(as = ImportPlannedRow)]
 pub struct PlannedRow {
     pub row: u32,
     pub outcome: RowOutcome,
@@ -190,6 +197,7 @@ pub struct PlannedRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[schema(as = ImportStaleReason)]
 pub enum StaleReason {
     /// The data model changed after the dry run
     ModelChanged,
@@ -199,6 +207,7 @@ pub enum StaleReason {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+#[schema(as = ImportDryRun)]
 pub struct DryRunInfo {
     pub finished_at: DateTime<Utc>,
     pub stale: bool,
@@ -208,6 +217,7 @@ pub struct DryRunInfo {
 /// Why a job stopped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+#[schema(as = ImportJobError)]
 pub struct JobError {
     pub code: String,
     pub message: String,
@@ -221,6 +231,7 @@ pub struct JobError {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+#[schema(as = ImportOwner)]
 pub struct JobOwner {
     /// Null once the user was deleted
     pub id: Option<Uuid>,
@@ -324,6 +335,7 @@ pub enum ImportMode {
 /// What an empty cell does to an existing CI (§2.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[schema(as = ImportEmptyCells)]
 pub enum EmptyCells {
     /// Leave the value unchanged (a new CI gets the attribute's default)
     Ignore,
@@ -332,6 +344,7 @@ pub enum EmptyCells {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = ImportDateFormat)]
 pub enum DateFormat {
     #[serde(rename = "YYYY-MM-DD")]
     Iso,
@@ -344,6 +357,7 @@ pub enum DateFormat {
 /// How the other CI of a reference or relationship is found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[schema(as = ImportMatchBy)]
 pub enum MatchBy {
     Ident,
     Label,
@@ -353,6 +367,7 @@ pub enum MatchBy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schema(as = ImportTargetMatch)]
 pub struct TargetMatch {
     pub by: MatchBy,
     /// Required with `by: attribute`
@@ -362,6 +377,7 @@ pub struct TargetMatch {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[schema(as = ImportRelationshipDirection)]
 pub enum RelationshipDirection {
     /// This row's CI is the source
     Outgoing,
@@ -372,6 +388,7 @@ pub enum RelationshipDirection {
 /// Where a column goes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[schema(as = ImportColumnTarget)]
 pub enum ColumnTarget {
     /// An attribute of the class or an ancestor, by key
     #[serde(rename_all = "camelCase")]
@@ -398,6 +415,7 @@ pub enum ColumnTarget {
 /// Per-column overrides of the job's options.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schema(as = ImportColumnOptions)]
 pub struct ColumnOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(pattern = "^[.,]$")]
@@ -412,6 +430,7 @@ pub struct ColumnOptions {
 /// The job's options (§3.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schema(as = ImportMappingOptions)]
 pub struct MappingOptions {
     /// Trim spaces around text values (default true)
     #[serde(default = "yes")]
@@ -460,6 +479,7 @@ fn semicolon() -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schema(as = ImportMatchKey)]
 pub struct MatchKey {
     /// `ident` or `attributes.<key>` (a text, integer, IP or CIDR attribute)
     pub field: String,
@@ -468,6 +488,7 @@ pub struct MatchKey {
 /// One mapped column of the file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schema(as = ImportColumnMapping)]
 pub struct ColumnMapping {
     /// 0-based column of the file
     pub index: u32,

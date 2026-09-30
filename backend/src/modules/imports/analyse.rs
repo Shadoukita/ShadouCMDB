@@ -22,6 +22,7 @@ pub const SAMPLE_CHARS: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+#[schema(as = ImportFileFormat)]
 pub enum FileFormat {
     Csv,
     Xlsx,
@@ -39,6 +40,7 @@ impl FileFormat {
 /// How to read the file; `None` is "detect" (§3.2 `updateImportFileOptions`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schema(as = ImportFileOptions)]
 pub struct FileOptions {
     /// XLSX: the worksheet to read (default: the first visible one)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,6 +74,7 @@ impl FileOptions {
 /// One column of the file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+#[schema(as = ImportColumn)]
 pub struct ColumnInfo {
     /// 0-based
     pub index: u32,
@@ -84,6 +87,7 @@ pub struct ColumnInfo {
 /// A data row as step 1 previews it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+#[schema(as = ImportPreviewRow)]
 pub struct PreviewRow {
     /// Row number in the file (the header is row 1)
     pub row: u32,
