@@ -2669,7 +2669,12 @@ mod tests {
         tx.rollback().await.unwrap();
         let warning = own.impact.0.iter().find(|i| i.message.contains("owner_hint")).unwrap();
         assert_eq!(warning.rows, None, "{warning:?}");
-        assert!(warning.message.contains("some assets have no value"), "{}", warning.message);
+        // Nor whether any asset lacks a value (GH#276).
+        assert!(
+            warning.message.contains("stays nullable") && !warning.message.contains("no value"),
+            "{}",
+            warning.message
+        );
         let mut tx = pool.begin().await.unwrap();
         sqlx::raw_sql(sqlx::AssertSqlSafe(drop_view)).execute(&mut *tx).await.unwrap();
         engine::reconcile(&mut tx, &ctx, "reconcile").await.unwrap().unwrap();

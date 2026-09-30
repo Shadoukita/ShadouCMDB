@@ -422,7 +422,10 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
   or moved type and every type below it; for `isAbstract`, the type), they answer `403 FORBIDDEN` (`details[].code`
   `view_required`) before any CI is read, whether or not there are CIs, in `PATCH` and in the preview alike; a
   refused preview is audited as `schema_change.refused`. Types created in the same transaction (a configuration
-  import creating a type and its required fields) hold no CIs yet and are not checked.
+  import creating a type and its required fields) hold no CIs yet and are not checked. A template install or a
+  reconcile never refuses a required field: for such a caller the column stays nullable without any value being
+  read, with a `warning` note that tells nothing about the CIs; a later reconcile by a user who may view them all
+  makes it `NOT NULL` if every CI has a value.
 - **Purge counts need view on the purged values.** A field purge counts the values it deletes, a type purge the CIs
   and relationships; both appear in the preview and in the recorded schema change. For a caller who may not view
   the type and every type below it, `impact[].rows` is `null`, the message says only that the values or rows are
