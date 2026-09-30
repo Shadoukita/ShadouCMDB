@@ -145,9 +145,9 @@ const crumbs = computed<Crumb[]>(() => {
     <Breadcrumbs :items="crumbs" />
     <div class="page-header">
       <div class="title">
-        <h1>{{ c.label }}</h1>
+        <h1 dir="auto">{{ c.label }}</h1>
         <span class="mono muted" title="Ident">{{ c.ident }}</span>
-        <RouterLink :to="`/cis?classId=${c.classId}`" class="badge">{{ c.class.name }}</RouterLink>
+        <RouterLink :to="`/cis?classId=${c.classId}`" class="badge" dir="auto">{{ c.class.name }}</RouterLink>
         <span v-if="c.deletedAt" class="badge danger">Deleted {{ formatDateTime(c.deletedAt) }}</span>
         <CiStateBadge v-else :ci="c" />
       </div>

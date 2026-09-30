@@ -16,6 +16,7 @@ import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
+import { changedFields } from "../../lib/changes";
 import { useDocumentTitle } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
 import { formatDateTime, plural } from "../../lib/format";
@@ -74,7 +75,10 @@ function seed(p: PermissionProfile | undefined) {
   const g: Record<string, Rights> = {};
   for (const c of p?.classPermissions ?? []) g[c.classId ?? WILDCARD] = { view: c.view, create: c.create, edit: c.edit, delete: c.delete };
   grants.value = g;
+  initial = p ? formBody() : {};
 }
+/** The form as loaded, to send only changed fields on save. */
+let initial: ProfileUpdateBody = {};
 watch(() => profile.data.value, seed, { immediate: true });
 watch(id, () => {
   if (!id.value) seed(undefined);
@@ -127,6 +131,16 @@ const holdsThis = computed(() => !!session.user?.profiles.some((p) => p.id === i
 /** Saving would lock the editor into two-factor set-up: say so before they click. */
 const locksSelf = computed(() => requireMfa.value && !profile.data.value?.requireMfa && holdsThis.value && !session.session?.mfa.totpEnabled);
 
+function formBody(): ProfileUpdateBody {
+  return {
+    name: name.value.trim(),
+    description: description.value.trim() || null,
+    globalPermissions: globals.value,
+    classPermissions: classPermissions(),
+    requireMfa: requireMfa.value,
+  };
+}
+
 async function submit() {
   if (!canManage.value) return;
   error.value = null;
@@ -146,13 +160,7 @@ async function submit() {
     document.getElementById("profile-name")?.focus();
     return;
   }
-  const body: ProfileUpdateBody = {
-    name: name.value.trim(),
-    description: description.value.trim() || null,
-    globalPermissions: globals.value,
-    classPermissions: classPermissions(),
-    requireMfa: requireMfa.value,
-  };
+  const body = formBody();
   try {
     if (isNew.value) {
       const created = await create.mutateAsync({ ...body, name: body.name! });
@@ -162,7 +170,12 @@ async function submit() {
       }
       return;
     }
-    const next = await update.mutateAsync({ id: id.value!, body });
+    const changed = changedFields(body, initial);
+    if (Object.keys(changed).length === 0) {
+      saved.value = "Nothing changed.";
+      return;
+    }
+    const next = await update.mutateAsync({ id: id.value!, body: changed });
     saved.value = `Saved ${next?.name ?? "the profile"}. Users holding it have the new permissions on their next request.`;
     if (holdsThis.value) await session.refresh();
   } catch (e) {

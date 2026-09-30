@@ -6,6 +6,7 @@ import ClassBadge from "../../../components/ClassBadge.vue";
 import FormDialog from "../../../components/FormDialog.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
 import TechnicalNameField from "../../../components/TechnicalNameField.vue";
+import { changedFields } from "../../../lib/changes";
 import { CLASS_ICONS, classIcon } from "../../../lib/classIcons";
 import { keyError } from "../../../lib/keys";
 import { useSchemaChangeFlow } from "../../../lib/schemaChange";
@@ -33,6 +34,8 @@ const icon = ref("");
 const color = ref("");
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
+/** The form as opened, to send only changed fields on edit. */
+let initial: AreaUpdateBody = {};
 
 watch(
   () => [props.open, props.area] as const,
@@ -46,9 +49,19 @@ watch(
     color.value = a?.color ?? "";
     error.value = null;
     local.value = {};
+    initial = formBody();
   },
   { immediate: true },
 );
+
+function formBody(): AreaUpdateBody {
+  return {
+    name: name.value.trim(),
+    description: description.value.trim() || null,
+    icon: icon.value || null,
+    color: color.value || null,
+  };
+}
 
 const unknownIcon = computed(() => !!icon.value && !classIcon(icon.value));
 const fieldErrors = computed(() => ({ ...(error.value instanceof ApiError ? error.value.fieldErrors() : {}), ...local.value }));
@@ -65,12 +78,7 @@ async function submit() {
   }
   local.value = errs;
   if (Object.keys(errs).length) return;
-  const common: AreaUpdateBody = {
-    name: name.value.trim(),
-    description: description.value.trim() || null,
-    icon: icon.value || null,
-    color: color.value || null,
-  };
+  const common = formBody();
   if (isNew.value) {
     const body: AreaCreateBody = { ...common, name: common.name!, key: key.value, sortOrder: props.nextSortOrder };
     const outcome = await flow.run({
@@ -88,10 +96,15 @@ async function submit() {
     return;
   }
   const a = props.area!;
+  const changed = changedFields(common, initial);
+  if (Object.keys(changed).length === 0) {
+    emit("close");
+    return;
+  }
   const outcome = await flow.run({
     title: `Save area “${common.name}”`,
-    preview: { operation: "updateArea", id: a.id, body: common },
-    apply: () => update.mutateAsync({ id: a.id, body: common }),
+    preview: { operation: "updateArea", id: a.id, body: changed },
+    apply: () => update.mutateAsync({ id: a.id, body: changed }),
     applyLabel: "Save area",
   });
   if (outcome.status === "applied") {

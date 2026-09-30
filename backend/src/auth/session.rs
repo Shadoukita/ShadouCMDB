@@ -132,9 +132,8 @@ pub fn request_is_https(headers: &HeaderMap) -> bool {
 ///
 /// Any client can put any address in these headers (directly, or through a
 /// proxy that appends to them), so the value is evidence for an investigator,
-/// never an input to an access decision: the audit trail also keeps the TCP
-/// peer when it differs (`ClientInfo::peer_ip`), and the sign-in throttle uses
-/// [`throttle_ip`] instead.
+/// never an input to an access decision. The audit trail records it only as
+/// `claimedIpAddress`, next to the [`throttle_ip`] address (GH#282).
 pub fn client_ip(headers: &HeaderMap, peer: Option<IpAddr>) -> Option<IpAddr> {
     let x_forwarded_for = || forwarded_for(headers)?.into_iter().next().flatten();
     let forwarded = || forwarded_nodes(headers)?.into_iter().next().flatten();
