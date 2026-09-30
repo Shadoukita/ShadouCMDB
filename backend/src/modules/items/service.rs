@@ -10,8 +10,8 @@ use uuid::Uuid;
 use ipnetwork::IpNetwork;
 
 use super::schemas::{
-    ActiveQuery, AttributeReference, ConfigurationItem, ConfigurationItemSummary, CreateItemBody, Graph,
-    GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, ListItemsQuery, SearchHit,
+    ActiveQuery, AttributeReference, ConfigurationItem, ConfigurationItemSummary, CreateItemBody, CriticalityRef,
+    Graph, GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, ListItemsQuery, SearchHit,
     SearchMatch, SearchQuery, SearchResults, UpdateItemBody,
 };
 use crate::api::context::RequestContext;
@@ -43,6 +43,25 @@ pub fn summary_dto(r: SummaryRow) -> ConfigurationItemSummary {
         created_at: r.created_at,
         updated_at: r.updated_at,
         deleted_at: r.deleted_at,
+        criticality: match (r.criticality_id, r.criticality_key, r.criticality_name, r.criticality_rank) {
+            (Some(id), Some(key), Some(name), Some(rank)) => Some(CriticalityRef { id, key, name, rank }),
+            _ => None,
+        },
+    }
+}
+
+/// A criticality value sent in a body: one of the criticality list's values,
+/// active unless the CI already holds it (`current`).
+async fn check_criticality(
+    conn: &mut PgConnection,
+    value: Option<Uuid>,
+    current: Option<Uuid>,
+) -> Result<(), AppError> {
+    let Some(id) = value.filter(|v| Some(*v) != current) else { return Ok(()) };
+    match data::criticality_value_state(conn, id).await? {
+        Some(true) => Ok(()),
+        Some(false) => Err(AppError::field("criticalityValueId", "This criticality value is retired", "invalid")),
+        None => Err(AppError::field("criticalityValueId", "Not a value of the criticality list", "not_found")),
     }
 }
 
@@ -582,6 +601,7 @@ async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuer
         },
         lookups,
         ip_within: q.ip_within().map(str::to_owned),
+        criticality_value_ids: q.criticality_value_id().map(|l| l.0.clone()),
         deleted: Some(q.deleted()),
         visible_class_ids: None,
         // Also where ipWithin looks.
@@ -816,12 +836,14 @@ pub async fn create(
     let visible = ctx.class_scope(ClassOp::View);
     let access = RefAccess { visible: visible.as_deref(), current: None };
     let prepared = prepare_new(&mut tx, &defs, input.attributes.as_ref(), &key, access).await?;
+    check_criticality(&mut tx, input.criticality_value_id, None).await?;
 
     let new = data::NewItem {
         class_id: input.class_id,
         ident: input.ident.as_deref(),
         valid_from: input.valid_from,
         valid_until: input.valid_until,
+        criticality_value_id: input.criticality_value_id,
     };
     let id = data::insert(&mut tx, &new).await.map_err(registry_write_error)?;
     let lineage: Vec<Uuid> = model.lineage(input.class_id).iter().map(|c| c.id).collect();
@@ -894,6 +916,8 @@ pub async fn update(
         prepare_attributes(&mut tx, &defs, input.attributes.as_ref(), &key, Some(id), class_changes, access).await?;
     check_reference_classes(&mut tx, &prepared).await?;
     check_parent_values(&mut tx, &defs, &prepared, Some(&before_dto.attributes)).await?;
+    let current_criticality = before_dto.summary.criticality.as_ref().map(|c| c.id);
+    check_criticality(&mut tx, input.criticality_value_id.flatten(), current_criticality).await?;
     let old_lineage: Vec<Uuid> = model.lineage(before.class_id).iter().map(|c| c.id).collect();
     let new_lineage: Vec<Uuid> = model.lineage(class_id).iter().map(|c| c.id).collect();
 
@@ -931,6 +955,7 @@ pub async fn update(
         ident: new_ident,
         valid_from: input.valid_from,
         valid_until: input.valid_until,
+        criticality_value_id: input.criticality_value_id,
     };
     data::update(&mut tx, id, &patch).await.map_err(registry_write_error)?;
     let entering: Vec<Uuid> = new_lineage.iter().filter(|c| !old_lineage.contains(c)).copied().collect();

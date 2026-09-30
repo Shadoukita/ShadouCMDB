@@ -36,28 +36,40 @@ pub struct SummaryRow {
     pub deleted_at: Option<DateTime<Utc>>,
     pub class_key: String,
     pub class_name: String,
+    pub criticality_id: Option<Uuid>,
+    pub criticality_key: Option<String>,
+    pub criticality_name: Option<String>,
+    pub criticality_rank: Option<i64>,
 }
 
 fn summary_columns() -> String {
     format!(
         "ci.id, ci.ident, ci.label, ci.class_id, ci.valid_from, ci.valid_until, {ACTIVE_SQL} AS active, ci.version,
-         ci.created_at, ci.updated_at, ci.deleted_at, cls.key AS class_key, cls.name AS class_name"
+         ci.created_at, ci.updated_at, ci.deleted_at, cls.key AS class_key, cls.name AS class_name,
+         crit.id AS criticality_id, crit.key AS criticality_key, crit.name AS criticality_name,
+         crit.rank AS criticality_rank"
     )
 }
 
-const SUMMARY_FROM: &str = "configuration_items ci JOIN ci_classes cls ON cls.id = ci.class_id";
+/// With the CI's criticality value and its rank: the value's position in the
+/// list (sort order, then key), 1 being the most critical.
+const SUMMARY_FROM: &str = "configuration_items ci JOIN ci_classes cls ON cls.id = ci.class_id LEFT JOIN LATERAL (
+       SELECT v.id, v.key, v.name, v.sort_order,
+              (SELECT count(*) FROM cmdb.lookup_list_values w
+               WHERE w.list_id = v.list_id AND (w.sort_order, w.key) < (v.sort_order, v.key)) + 1 AS rank
+       FROM cmdb.lookup_list_values v WHERE v.id = ci.criticality_value_id) crit ON true";
 
 /// Filters reference only `ci.*` and the type tables, so counting needs no joins.
 const COUNT_FROM: &str = "configuration_items ci";
 
-pub const SORT_FIELDS: &[&str] = &["label", "ident", "className", "validFrom", "validUntil", "createdAt", "updatedAt"];
+pub const SORT_FIELDS: &[&str] =
+    &["label", "ident", "className", "criticality", "validFrom", "validUntil", "createdAt", "updatedAt"];
 
 /// `sort=attributes.<key>` sorts on an attribute (see [`ListSort::Attribute`]).
 pub const ATTRIBUTE_SORT_PREFIX: &str = "attributes.";
 
 /// A sort parameter: a core field or an attribute, "-" for descending.
-pub const SORT_PATTERN: &str =
-    "^-?(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$";
+pub const SORT_PATTERN: &str = "^-?(label|ident|className|criticality|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$";
 
 fn sort_column(field: &str) -> &'static str {
     match field {
@@ -93,6 +105,12 @@ pub fn is_sortable(t: AttributeDataType) -> bool {
 /// back to the label.
 fn list_order(sort: &ListSort<'_>, dir: &str) -> (String, String) {
     let (field, table) = match sort {
+        ListSort::Core("criticality") => {
+            return (
+                String::new(),
+                format!("crit.sort_order {dir} NULLS LAST, crit.key {dir}, lower(ci.label) ASC, ci.id ASC"),
+            );
+        }
         ListSort::Core(field) => return (String::new(), format!("{} {dir} NULLS LAST, ci.id ASC", sort_column(field))),
         ListSort::Attribute(table, field) => (*field, table),
     };
@@ -133,6 +151,8 @@ pub struct ItemFilters {
     /// CI matches when it holds one of the values of every list.
     pub lookups: Vec<(Vec<Uuid>, LookupColumns)>,
     pub ip_within: Option<String>,
+    /// Only CIs holding one of these criticality values
+    pub criticality_value_ids: Option<Vec<Uuid>>,
     pub deleted: Option<Deleted>,
     /// Classes the caller may view; `None` means every class.
     pub visible_class_ids: Option<Vec<Uuid>>,
@@ -222,7 +242,11 @@ fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
     if let Some(q) = &f.q {
         push_search(w, q, &f.search_tables);
     }
-    for (column, ids) in [("ci.class_id", &f.class_ids), ("ci.class_id", &f.visible_class_ids)] {
+    for (column, ids) in [
+        ("ci.class_id", &f.class_ids),
+        ("ci.class_id", &f.visible_class_ids),
+        ("ci.criticality_value_id", &f.criticality_value_ids),
+    ] {
         if let Some(ids) = ids {
             w.and().push(column).push(" = ANY(").push_bind(ids.clone()).push(")");
         }
@@ -319,20 +343,22 @@ pub struct NewItem<'a> {
     /// None: now
     pub valid_from: Option<DateTime<Utc>>,
     pub valid_until: Option<DateTime<Utc>>,
+    pub criticality_value_id: Option<Uuid>,
 }
 
 pub async fn insert(conn: &mut PgConnection, ci: &NewItem<'_>) -> sqlx::Result<Uuid> {
     // The label is set from the ident here and replaced once the field values are written.
     sqlx::query_scalar(
         "WITH new AS (SELECT COALESCE($2, cmdb.new_ci_ident()) AS ident)
-         INSERT INTO cmdb.configuration_items (class_id, ident, label, valid_from, valid_until)
-         SELECT $1, new.ident, new.ident, COALESCE($3, now()), $4 FROM new
+         INSERT INTO cmdb.configuration_items (class_id, ident, label, valid_from, valid_until, criticality_value_id)
+         SELECT $1, new.ident, new.ident, COALESCE($3, now()), $4, $5 FROM new
          RETURNING id",
     )
     .bind(ci.class_id)
     .bind(ci.ident)
     .bind(ci.valid_from)
     .bind(ci.valid_until)
+    .bind(ci.criticality_value_id)
     .fetch_one(conn)
     .await
 }
@@ -344,6 +370,7 @@ pub struct ItemPatch<'a> {
     pub ident: Option<&'a str>,
     pub valid_from: Option<DateTime<Utc>>,
     pub valid_until: Option<Option<DateTime<Utc>>>,
+    pub criticality_value_id: Option<Option<Uuid>>,
 }
 
 /// Applies the patch and bumps the optimistic-locking version.
@@ -354,6 +381,7 @@ pub async fn update(conn: &mut PgConnection, id: Uuid, p: &ItemPatch<'_>) -> sql
            ident = COALESCE($3, ident),
            valid_from = COALESCE($4, valid_from),
            valid_until = CASE WHEN $5 THEN $6 ELSE valid_until END,
+           criticality_value_id = CASE WHEN $7 THEN $8 ELSE criticality_value_id END,
            version = version + 1
          WHERE id = $1",
     )
@@ -363,6 +391,8 @@ pub async fn update(conn: &mut PgConnection, id: Uuid, p: &ItemPatch<'_>) -> sql
     .bind(p.valid_from)
     .bind(p.valid_until.is_some())
     .bind(p.valid_until.flatten())
+    .bind(p.criticality_value_id.is_some())
+    .bind(p.criticality_value_id.flatten())
     .execute(conn)
     .await?;
     Ok(())
@@ -433,6 +463,17 @@ pub async fn lock(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<Lock
         .bind(id)
         .fetch_optional(conn)
         .await
+}
+
+/// The criticality list's value `id`: Some(is_active), None when it is not one.
+pub async fn criticality_value_state(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<bool>> {
+    sqlx::query_scalar(
+        "SELECT v.is_active FROM cmdb.lookup_list_values v JOIN cmdb.lookup_lists l ON l.id = v.list_id
+         WHERE v.id = $1 AND l.system_role = 'criticality'",
+    )
+    .bind(id)
+    .fetch_optional(conn)
+    .await
 }
 
 /// Lookup list of each of these values (unknown ids are left out).

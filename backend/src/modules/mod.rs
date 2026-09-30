@@ -8,6 +8,7 @@ pub mod classes;
 pub mod config_transfer;
 pub mod health;
 pub mod identity_providers;
+pub mod impact;
 pub mod items;
 pub mod lookups;
 pub mod mfa;

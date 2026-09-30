@@ -303,6 +303,10 @@ pub enum AuditAction {
     #[serde(rename = "schema_change.refused")]
     #[sqlx(rename = "schema_change.refused")]
     SchemaChangeRefused,
+    /// Data left the system as a file (entity: what was exported; the
+    /// parameters and row count in new_value, never the rows). Today: the
+    /// impact analysis CSV.
+    Export,
 }
 
 impl AuditAction {
@@ -325,6 +329,7 @@ impl AuditAction {
             AuditAction::MfaRecoveryCodeUsed => "mfa.recovery_code_used",
             AuditAction::MfaRecoveryCodes => "mfa.recovery_codes",
             AuditAction::SchemaChangeRefused => "schema_change.refused",
+            AuditAction::Export => "export",
         }
     }
 }

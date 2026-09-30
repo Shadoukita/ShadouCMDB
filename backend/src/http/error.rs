@@ -39,7 +39,8 @@ pub enum ErrorCode {
     SecretRequired,
     /// The change would leave no active user holding the Administrator profile
     LastAdministrator,
-    /// Too many failed password attempts; retry after the Retry-After header
+    /// Too many failed password attempts, or too many impact analyses of one user in progress; retry after the
+    /// Retry-After header
     RateLimited,
     /// The password was right; send the authenticator or recovery code to POST /api/v1/auth/login/mfa (401)
     MfaRequired,

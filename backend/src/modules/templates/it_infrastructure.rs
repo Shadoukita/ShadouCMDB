@@ -7,6 +7,7 @@
 //! fresh install looks like an upgraded one.
 
 use super::{AreaSpec, Attr, Class, Content, LookupList, RelationshipType, Rule, Template, attr};
+use crate::modules::impact::ImpactDirection;
 
 pub const TEMPLATE: Template = Template {
     key: "it_infrastructure",
@@ -252,13 +253,21 @@ fn classes() -> Vec<Class> {
 }
 
 const RELATIONSHIP_TYPES: &[RelationshipType] = &[
-    RelationshipType { key: "runs_on", name: "Runs on", forward: "runs on", reverse: "hosts", directional: true },
+    RelationshipType {
+        key: "runs_on",
+        name: "Runs on",
+        forward: "runs on",
+        reverse: "hosts",
+        directional: true,
+        impact: ImpactDirection::TargetToSource,
+    },
     RelationshipType {
         key: "depends_on",
         name: "Depends on",
         forward: "depends on",
         reverse: "is required by",
         directional: true,
+        impact: ImpactDirection::TargetToSource,
     },
     RelationshipType {
         key: "located_in",
@@ -266,6 +275,7 @@ const RELATIONSHIP_TYPES: &[RelationshipType] = &[
         forward: "is located in",
         reverse: "contains",
         directional: true,
+        impact: ImpactDirection::TargetToSource,
     },
     RelationshipType {
         key: "connected_to",
@@ -273,6 +283,7 @@ const RELATIONSHIP_TYPES: &[RelationshipType] = &[
         forward: "is connected to",
         reverse: "is connected to",
         directional: false,
+        impact: ImpactDirection::None,
     },
 ];
 

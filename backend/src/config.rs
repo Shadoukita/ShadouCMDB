@@ -187,6 +187,40 @@ pub struct EncryptionConfig {
     pub previous_key_file: Option<PathBuf>,
 }
 
+/// Bounds of one impact analysis (`IMPACT_*`); see [`crate::modules::impact`].
+/// Each has a compile-time ceiling, so a misconfigured variable cannot unbound
+/// the traversal. The concurrency caps count per process (per replica).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImpactConfig {
+    /// Largest `depth` a request may ask for.
+    pub max_depth: i32,
+    /// Largest `maxNodes` a request may ask for.
+    pub max_nodes: i32,
+    /// Wall-clock deadline of the traversal.
+    pub timeout: Duration,
+    /// Analyses running at once in this process; more are answered 503 SERVER_BUSY.
+    pub max_concurrent: usize,
+    /// Analyses one user (or their API tokens) runs at once; more are answered 429 RATE_LIMITED.
+    pub max_concurrent_per_user: usize,
+}
+
+impl Default for ImpactConfig {
+    fn default() -> Self {
+        ImpactConfig {
+            max_depth: 10,
+            max_nodes: 2000,
+            timeout: Duration::from_millis(5000),
+            max_concurrent: 8,
+            max_concurrent_per_user: 2,
+        }
+    }
+}
+
+/// Hard ceilings of the `IMPACT_*` settings.
+pub const IMPACT_MAX_DEPTH_CEILING: i32 = 20;
+pub const IMPACT_MAX_NODES_CEILING: i32 = 10_000;
+pub const IMPACT_TIMEOUT_MS_CEILING: u64 = 30_000;
+
 /// Well below `HTTP_REQUEST_TIMEOUT_SECS`, which also bounds the refused sign-in.
 const MAX_SIGN_IN_FAILURE_FLOOR_MS: u64 = 10_000;
 const DEFAULT_SESSION_IDLE_MINUTES: u64 = 12 * 60;
@@ -211,6 +245,7 @@ pub struct Config {
     pub auth: AuthConfig,
     pub audit: AuditConfig,
     pub encryption: EncryptionConfig,
+    pub impact: ImpactConfig,
 }
 
 /// The env file the variables were read from (`--env-file`, or the `.env` found).
@@ -275,6 +310,7 @@ impl std::fmt::Debug for Config {
             auth,
             audit,
             encryption,
+            impact,
         } = self;
         f.debug_struct("Config")
             .field("api_host", api_host)
@@ -289,6 +325,7 @@ impl std::fmt::Debug for Config {
             .field("auth", auth)
             .field("audit", audit)
             .field("encryption", encryption)
+            .field("impact", impact)
             .finish()
     }
 }
@@ -614,6 +651,31 @@ impl Config {
             ));
         }
 
+        let impact_defaults = ImpactConfig::default();
+        let impact_timeout_ms = r
+            .int::<u64>("IMPACT_TIMEOUT_MS", 1, IMPACT_TIMEOUT_MS_CEILING)
+            .unwrap_or(impact_defaults.timeout.as_millis() as u64);
+        if impact_timeout_ms >= request_timeout_secs.saturating_mul(1_000) {
+            r.errors.push(format!(
+                "IMPACT_TIMEOUT_MS: {impact_timeout_ms} ms is not below HTTP_REQUEST_TIMEOUT_SECS \
+                 ({request_timeout_secs} s), so a long impact analysis would time out instead of answering a \
+                 truncated result"
+            ));
+        }
+        let impact = ImpactConfig {
+            max_depth: r
+                .int::<i32>("IMPACT_MAX_DEPTH", 1, IMPACT_MAX_DEPTH_CEILING)
+                .unwrap_or(impact_defaults.max_depth),
+            max_nodes: r
+                .int::<i32>("IMPACT_MAX_NODES", 1, IMPACT_MAX_NODES_CEILING)
+                .unwrap_or(impact_defaults.max_nodes),
+            timeout: Duration::from_millis(impact_timeout_ms),
+            max_concurrent: r.int::<usize>("IMPACT_MAX_CONCURRENT", 1, 1_000).unwrap_or(impact_defaults.max_concurrent),
+            max_concurrent_per_user: r
+                .int::<usize>("IMPACT_MAX_CONCURRENT_PER_USER", 1, 1_000)
+                .unwrap_or(impact_defaults.max_concurrent_per_user),
+        };
+
         let encryption = EncryptionConfig {
             key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
             previous_key_file: r.raw("ENCRYPTION_KEY_PREVIOUS_FILE").map(PathBuf::from),
@@ -667,6 +729,7 @@ impl Config {
             },
             audit: AuditConfig { capture_client_ip, capture_user_agent, export },
             encryption,
+            impact,
         })
     }
 }

@@ -50,6 +50,8 @@ pub struct Api {
     pub headers: HeaderMap,
     /// The last readiness check (`/readyz`).
     pub readiness: Arc<crate::modules::health::ReadinessCache>,
+    /// Impact analysis limits and concurrency.
+    pub impact: Arc<crate::modules::impact::ImpactState>,
 }
 
 /// Who may call a route.
@@ -388,6 +390,20 @@ impl Output for Binary {
     }
 }
 
+/// A CSV file (`text/csv; charset=utf-8`), e.g. an export. Documented as `text/csv`.
+pub struct Csv(pub String);
+
+impl Output for Csv {
+    fn doc() -> Option<ResponseDoc> {
+        let schema =
+            utoipa::openapi::schema::ObjectBuilder::new().schema_type(utoipa::openapi::schema::Type::String).into();
+        Some(ResponseDoc { name: String::new(), schema: RefOr::T(schema), nested: Vec::new(), media_type: "text/csv" })
+    }
+    fn respond(self, status: StatusCode) -> Response {
+        (status, [(header::CONTENT_TYPE, HeaderValue::from_static("text/csv; charset=utf-8"))], self.0).into_response()
+    }
+}
+
 /// Another output plus response headers (ETag, Cache-Control, Content-Disposition).
 pub struct WithHeaders<R>(pub R, pub Vec<(header::HeaderName, HeaderValue)>);
 
@@ -715,7 +731,14 @@ impl RouteBuilder {
                         read_body(&headers, body, body_limit).await?
                     };
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
-                    let api = Api { pool: state.pool, ctx, auth: state.auth, headers, readiness: state.readiness };
+                    let api = Api {
+                        pool: state.pool,
+                        ctx,
+                        auth: state.auth,
+                        headers,
+                        readiness: state.readiness,
+                        impact: state.impact,
+                    };
                     let res = match f(api, input).await {
                         Ok(out) => out.respond(status),
                         // A refused sign-in answers no earlier than its floor (GH#216). The

@@ -5,6 +5,7 @@ pub mod auth;
 pub mod classes;
 pub mod crud;
 pub mod identity_providers;
+pub mod impact;
 pub mod items;
 pub mod mfa;
 pub mod relationships;
