@@ -601,12 +601,11 @@ pub fn read_sheet<R: Read + Seek>(
         let (row, col) = cell.pos;
         let value = cell_value(cell.value, cell.formula.is_some());
         let number = row.saturating_add(1);
-        if current.as_ref().is_some_and(|r| r.number != number) {
-            if let Some(done) = current.take()
-                && on_row(done).is_break()
-            {
-                return Ok(());
-            }
+        if current.as_ref().is_some_and(|r| r.number != number)
+            && let Some(done) = current.take()
+            && on_row(done).is_break()
+        {
+            return Ok(());
         }
         if value == CellValue::Empty {
             continue;

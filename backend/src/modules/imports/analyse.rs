@@ -151,9 +151,32 @@ fn header_cells(row: &Row) -> Result<Vec<String>, ParseError> {
         .collect()
 }
 
+/// The first columns of an error report (written by the report download).
+pub const REPORT_HEADERS: [&str; 5] = ["Row", "Severity", "Column", "Problem", "Code"];
+
+fn is_report_header(row: &Row) -> bool {
+    row.cells.len() >= REPORT_HEADERS.len()
+        && REPORT_HEADERS.iter().zip(&row.cells).all(|(h, c)| matches!(c, CellValue::Text(t) if t == h))
+}
+
+/// Takes off the `'` the report writer put in front of values a spreadsheet
+/// could read as formulas (only in rows of an error report, §5.1).
+fn unneutralise(row: &mut Row) {
+    for c in &mut row.cells {
+        if let CellValue::Text(t) = c {
+            let read = super::csv_safe::read_field(t);
+            if read.len() != t.len() {
+                *t = read.to_owned();
+            }
+        }
+    }
+}
+
 /// Takes the header row off, skips blank rows, counts data rows against the limit.
 struct RowFilter<'l> {
     with_header: bool,
+    /// The file is an error report of an earlier import (§5.1).
+    from_report: bool,
     header: Option<Vec<String>>,
     data_rows: u32,
     failure: Option<ParseError>,
@@ -161,17 +184,18 @@ struct RowFilter<'l> {
 }
 
 impl RowFilter<'_> {
-    fn reset(&mut self) {
-        self.header = None;
-        self.data_rows = 0;
-        self.failure = None;
-    }
-
-    fn handle(&mut self, row: Row, on_data: parse::OnRow<'_>) -> parse::Flow {
+    fn handle(&mut self, mut row: Row, on_data: parse::OnRow<'_>) -> parse::Flow {
         if row.is_blank() {
             return ControlFlow::Continue(());
         }
+        if self.from_report {
+            unneutralise(&mut row);
+        }
         if self.with_header && self.header.is_none() {
+            if is_report_header(&row) {
+                self.from_report = true;
+                unneutralise(&mut row);
+            }
             match header_cells(&row) {
                 Ok(h) => self.header = Some(h),
                 Err(e) => {
@@ -200,8 +224,14 @@ pub fn read_file<S: Source>(
     limits: &Limits,
     on_data: parse::OnRow<'_>,
 ) -> Result<Layout, ParseError> {
-    let mut filter =
-        RowFilter { with_header: options.has_header_row(), header: None, data_rows: 0, failure: None, limits };
+    let mut filter = RowFilter {
+        with_header: options.has_header_row(),
+        from_report: false,
+        header: None,
+        data_rows: 0,
+        failure: None,
+        limits,
+    };
     let mut layout = match format {
         FileFormat::Csv => {
             let encoding = match options.encoding {
@@ -309,7 +339,7 @@ pub fn analyse<S: Source>(
         if preview.len() < PREVIEW_ROWS {
             preview.push(PreviewRow { row: row.number, cells: row.cells.iter().map(|c| clip(&c.display())).collect() });
         }
-        if rows % 1000 == 0 && progress(rows).is_break() {
+        if rows.is_multiple_of(1000) && progress(rows).is_break() {
             stopped = true;
             return ControlFlow::Break(());
         }
@@ -345,9 +375,4 @@ pub fn analyse<S: Source>(
         columns,
         preview_rows: preview,
     })
-}
-
-/// A cell at `column` of a row, empty beyond its end.
-pub fn cell(row: &Row, column: u32) -> &CellValue {
-    row.cells.get(column as usize).unwrap_or(&CellValue::Empty)
 }

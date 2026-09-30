@@ -19,7 +19,7 @@ use super::{CellValue, Limits, OnRow, ParseError, Row, column_limit};
 pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
 const BLOCK: usize = 64 * 1024;
 /// Delimiters the detection chooses from, in order of preference on a tie.
-pub const DELIMITERS: [u8; 4] = [b',', b';', b'\t', b'|'];
+pub const DELIMITERS: [u8; 4] = *b",;\t|";
 
 /// A CSV file's text encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -181,6 +181,36 @@ impl Decoder {
     }
 }
 
+/// Puts a delimiter into every blank line outside quotes. csv-core skips blank
+/// lines, but a spreadsheet counts them as rows, and row numbers must match
+/// what the user sees. The blank record this makes is skipped by the caller.
+struct BlankLines {
+    delimiter: u8,
+    quoted: bool,
+    at_line_start: bool,
+    prev_cr: bool,
+}
+
+impl BlankLines {
+    fn new(delimiter: u8) -> Self {
+        BlankLines { delimiter, quoted: false, at_line_start: true, prev_cr: false }
+    }
+
+    fn transform(&mut self, input: &[u8], out: &mut Vec<u8>) {
+        for &b in input {
+            match b {
+                b'"' => self.quoted = !self.quoted,
+                b'\n' if !self.quoted && self.prev_cr => {}
+                b'\r' | b'\n' if !self.quoted && self.at_line_start => out.push(self.delimiter),
+                _ => {}
+            }
+            self.at_line_start = !self.quoted && (b == b'\r' || b == b'\n');
+            self.prev_cr = b == b'\r' && !self.quoted;
+            out.push(b);
+        }
+    }
+}
+
 fn memchr_nul(data: &[u8]) -> Option<usize> {
     data.iter().position(|&b| b == 0)
 }
@@ -222,7 +252,7 @@ pub fn read<R: Read>(
 ) -> Result<Detected, ParseError> {
     let mut decoder = Decoder::new(encoding);
     let mut block = vec![0u8; BLOCK];
-    let mut text: Vec<u8> = Vec::with_capacity(BLOCK);
+    let mut raw: Vec<u8> = Vec::with_capacity(BLOCK);
     let mut eof = false;
 
     let mut fill = |text: &mut Vec<u8>, decoder: &mut Decoder, eof: &mut bool| -> Result<(), ParseError> {
@@ -245,12 +275,16 @@ pub fn read<R: Read>(
     let delimiter = match delimiter {
         Some(d) => d,
         None => {
-            while !eof && !text.contains(&b'\n') && !text.contains(&b'\r') && text.len() < MAX_RECORD_BYTES {
-                fill(&mut text, &mut decoder, &mut eof)?;
+            while !eof && !raw.contains(&b'\n') && !raw.contains(&b'\r') && raw.len() < MAX_RECORD_BYTES {
+                fill(&mut raw, &mut decoder, &mut eof)?;
             }
-            detect_delimiter(&text)
+            detect_delimiter(&raw)
         }
     };
+    let mut blanks = BlankLines::new(delimiter);
+    let mut text: Vec<u8> = Vec::with_capacity(BLOCK + 64);
+    blanks.transform(&raw, &mut text);
+    raw.clear();
 
     let mut reader = ReaderBuilder::new().delimiter(delimiter).build();
     let mut out = vec![0u8; BLOCK];
@@ -264,7 +298,9 @@ pub fn read<R: Read>(
         if pos == text.len() && !eof {
             text.clear();
             pos = 0;
-            fill(&mut text, &mut decoder, &mut eof)?;
+            fill(&mut raw, &mut decoder, &mut eof)?;
+            blanks.transform(&raw, &mut text);
+            raw.clear();
             continue;
         }
         let (result, n_in, n_out, n_ends) =
@@ -457,6 +493,19 @@ mod tests {
         assert!(r[0][0].ends_with('ü'));
         // A file cut inside a character.
         assert_eq!(rows(b"a\n\xC3", Encoding::Utf8, None).unwrap_err().code, "invalid_encoding");
+    }
+
+    #[test]
+    fn row_numbers_count_blank_lines_like_a_spreadsheet() {
+        let mut numbers = Vec::new();
+        read(&b"h\r\na\r\n\r\n\"x\ny\"\n\nb\n\n"[..], Encoding::Utf8, None, &LIMITS, &mut |r: Row| {
+            if !r.is_blank() {
+                numbers.push((r.number, r.cells[0].display()));
+            }
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert_eq!(numbers, [(1, "h".into()), (2, "a".into()), (4, "x\ny".into()), (6, "b".into())]);
     }
 
     #[test]

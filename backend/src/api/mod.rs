@@ -49,6 +49,12 @@ pub fn routes() -> Vec<Route> {
     .collect()
 }
 
+/// Routes that bound their own duration instead of `HTTP_REQUEST_TIMEOUT_SECS`
+/// (method and exact path; none of them has a path parameter).
+pub fn own_timeout_routes() -> Vec<(axum::http::Method, String)> {
+    routes().into_iter().filter(|r| r.own_timeout).map(|r| (r.method, r.path)).collect()
+}
+
 /// The generated OpenAPI document as committed in backend/openapi.json.
 pub fn openapi_json() -> String {
     let doc = openapi::document(&routes());

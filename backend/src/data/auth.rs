@@ -454,7 +454,17 @@ pub async fn set_password(conn: &mut PgConnection, id: Uuid, hash: &str) -> sqlx
     Ok(())
 }
 
+/// Deletes the user. Their bulk import jobs that have not ended go too, with
+/// their uploaded files (which may hold personal data, SHAA-714 §5.5); ended
+/// jobs keep their record with `created_by_id` NULL and the name.
 pub async fn delete_user(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query(
+        "DELETE FROM cmdb.import_jobs WHERE created_by_id = $1
+           AND status NOT IN ('completed', 'completed_with_errors', 'failed', 'cancelled', 'expired')",
+    )
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
     sqlx::query("DELETE FROM users WHERE id = $1").bind(id).execute(conn).await?;
     Ok(())
 }

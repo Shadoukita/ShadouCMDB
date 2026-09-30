@@ -164,10 +164,19 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             "The stored secret must be entered again (code SECRET_REQUIRED): the patch changes the server address or \
              bind DN it would be sent to; details name the secret's field (code secret_required). Nothing was changed",
         ),
-        ErrorCode::RateLimited => {
-            (429, "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header")
+        ErrorCode::IdempotencyKeyReused => (
+            422,
+            "The Idempotency-Key was already used for another operation or target (code IDEMPOTENCY_KEY_REUSED, \
+             details[0].code idempotency_key_reused). Nothing was changed",
+        ),
+        ErrorCode::RateLimited => (
+            429,
+            "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; \
+             see the Retry-After header",
+        ),
+        ErrorCode::UnsupportedMediaType => {
+            (415, "Body is not of an accepted media type (application/json unless the operation lists others)")
         }
-        ErrorCode::UnsupportedMediaType => (415, "Body is not application/json"),
         ErrorCode::PayloadTooLarge => (413, "Body too large"),
         ErrorCode::RequestTimeout => (408, "Request not completed in time (code REQUEST_TIMEOUT)"),
         ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated | ErrorCode::ServerBusy => (
@@ -350,12 +359,11 @@ pub fn document(routes: &[Route]) -> OpenApi {
                     .fold(ResponsesBuilder::new(), |b, (status, resp)| b.response(status.to_string(), resp)),
             );
         if let Some(body) = &r.body {
-            op = op.request_body(Some(
-                RequestBodyBuilder::new()
-                    .required(Some(Required::True))
-                    .content("application/json", ContentBuilder::new().schema(Some(body.clone())).build())
-                    .build(),
-            ));
+            let media: &[&str] = if r.body_media.is_empty() { &["application/json"] } else { r.body_media };
+            let request = media.iter().fold(RequestBodyBuilder::new().required(Some(Required::True)), |b, m| {
+                b.content(*m, ContentBuilder::new().schema(Some(body.clone())).build())
+            });
+            op = op.request_body(Some(request.build()));
         }
         let op = op.build();
 

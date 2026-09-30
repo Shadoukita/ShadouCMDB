@@ -440,13 +440,25 @@ fn docs(state: &AppState, mode: ApiDocs) -> Router<AppState> {
     }
 }
 
+/// `HTTP_REQUEST_TIMEOUT_SECS`, and the routes that bound their own duration
+/// instead (the bulk import upload, `IMPORT_UPLOAD_TIMEOUT_SECS`).
+#[derive(Clone)]
+struct TimeoutRules {
+    limit: Duration,
+    own: Arc<Vec<(Method, String)>>,
+}
+
 /// Bounds the whole request (body upload included) until the response
 /// starts. Dropping the handler rolls back its open transaction.
 async fn request_timeout(
-    axum::extract::State(limit): axum::extract::State<Duration>,
+    axum::extract::State(rules): axum::extract::State<TimeoutRules>,
     req: Request,
     next: axum::middleware::Next,
 ) -> Response {
+    if rules.own.iter().any(|(m, p)| m == req.method() && p == req.uri().path()) {
+        return next.run(req).await;
+    }
+    let limit = rules.limit;
     match tokio::time::timeout(limit, next.run(req)).await {
         Ok(res) => res,
         Err(_) => {
@@ -469,7 +481,10 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
         // Matched routes only: an unknown path is a 404 whatever the database state.
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), schema_gate))
         .with_state(state)
-        .layer(axum::middleware::from_fn_with_state(cfg.http.request_timeout, request_timeout))
+        .layer(axum::middleware::from_fn_with_state(
+            TimeoutRules { limit: cfg.http.request_timeout, own: Arc::new(api::own_timeout_routes()) },
+            request_timeout,
+        ))
         .layer(CatchPanicLayer::custom(panic_response))
         .layer(DefaultBodyLimit::max(api::route::BODY_LIMIT));
 
@@ -528,6 +543,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     }
     let app = router(state.clone(), &cfg);
     let exporter = cfg.audit.export.clone().map(|export| crate::audit_export::spawn(pool.clone(), export));
+    let import_workers = crate::modules::imports::worker::spawn(pool.clone(), state.imports.clone());
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
         .await
@@ -557,6 +573,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     if let Some(exporter) = exporter {
         exporter.stop().await;
     }
+    import_workers.stop().await;
     tracing::info!("draining complete, closing database pool");
     // Do not let a wedged connection hold up process exit.
     let _ = tokio::time::timeout(Duration::from_secs(5), pool.close()).await;
@@ -996,7 +1013,10 @@ mod tests {
                 "late"
             }),
         );
-        let app = slow.layer(axum::middleware::from_fn_with_state(Duration::from_millis(50), request_timeout));
+        let app = slow.layer(axum::middleware::from_fn_with_state(
+            TimeoutRules { limit: Duration::from_millis(50), own: Arc::default() },
+            request_timeout,
+        ));
         let res = get(app, "/api/slow", &[]).await;
         assert_eq!(res.status(), 408);
         let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();

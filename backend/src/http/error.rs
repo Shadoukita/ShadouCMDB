@@ -37,6 +37,8 @@ pub enum ErrorCode {
     SchemaChangeRefused,
     /// A stored identity provider secret must be entered again: the patch changes where it would be sent (422)
     SecretRequired,
+    /// An `Idempotency-Key` sent again for another operation or another target (422)
+    IdempotencyKeyReused,
     /// The change would leave no active user holding the Administrator profile
     LastAdministrator,
     /// Too many failed password attempts; retry after the Retry-After header
@@ -76,9 +78,10 @@ impl ErrorCode {
             ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => {
                 StatusCode::CONFLICT
             }
-            ErrorCode::InvalidName | ErrorCode::SchemaChangeRefused | ErrorCode::SecretRequired => {
-                StatusCode::UNPROCESSABLE_ENTITY
-            }
+            ErrorCode::InvalidName
+            | ErrorCode::SchemaChangeRefused
+            | ErrorCode::SecretRequired
+            | ErrorCode::IdempotencyKeyReused => StatusCode::UNPROCESSABLE_ENTITY,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
