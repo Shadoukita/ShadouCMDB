@@ -14,6 +14,13 @@
 //! DOCTYPE, a UTF-16 part or a non-UTF-8 declaration is refused, so no DTD or
 //! entity is ever processed.
 //!
+//! The checks only hold if calamine reads the archive the preflight read, so
+//! nothing is left for two readers to disagree on: the end record must end
+//! the file (no comment), part names are printable ASCII, the file is opened
+//! with `zip` as well and must list the same entries at the same offsets, and
+//! the relationships must place the workbook at `xl/workbook.xml` and every
+//! sheet in a sheet folder.
+//!
 //! Only then is the file opened, with `calamine::Xlsx` (never
 //! `open_workbook_auto`, so the XLS, XLSB and ODS parsers are unreachable),
 //! and read cell by cell with `worksheet_cells_reader`. Nothing allocates from
@@ -21,6 +28,7 @@
 //! limits before its row is built. Formulas are never evaluated; their cached
 //! value is used (I6).
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -39,9 +47,12 @@ pub const MAX_SHARED_STRINGS_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_SMALL_PART_BYTES: u64 = 16 * 1024 * 1024;
 /// A compression ratio above this, for an entry over 1 MiB, is a zip bomb.
 pub const MAX_RATIO: u64 = 1000;
-/// The longest run of XML without `<` or `>`: no text node or tag of a real
-/// workbook comes near it (Excel caps a cell at 32,767 characters), and it
-/// bounds the XML readers' buffers.
+/// The largest XML event (a tag, a text node, a comment, a CDATA section):
+/// nothing in a real workbook comes near it (Excel caps a cell at 32,767
+/// characters), and it bounds the XML readers' buffers, which hold one event.
+/// Counted as the bytes read between two events (exact to one 64 KiB read),
+/// so a `>` inside an attribute value or a `<` inside CDATA does not end the
+/// count.
 pub const MAX_XML_TOKEN: u64 = 4 * 1024 * 1024;
 
 const SPREADSHEET_MAIN: [&str; 2] = [
@@ -153,41 +164,41 @@ struct Directory {
 
 fn find_directory<R: Read + Seek>(r: &mut R, len: u64) -> Result<Directory, ParseError> {
     const EOCD: u32 = 0x0605_4b50;
-    // The record is 22 bytes plus a comment of at most 65,535 bytes.
-    let tail_len = len.min(22 + 65_535);
-    if tail_len < 22 {
+    // The record ends the file, with no comment: spreadsheet programs write none,
+    // and a comment is where a second end record would hide from one reader.
+    if len < 22 {
         return Err(not_a_workbook("no end of central directory"));
     }
-    let mut tail = vec![0u8; tail_len as usize];
-    read_exact_at(r, len - tail_len, &mut tail)?;
-    let pos = (0..=tail.len() - 22)
-        .rev()
-        .find(|&i| u32_at(&tail, i) == EOCD)
-        .ok_or_else(|| not_a_workbook("no end of central directory"))?;
-    let eocd_offset = len - tail_len + pos as u64;
-    let rec = &tail[pos..pos + 22];
+    let eocd_offset = len - 22;
+    let mut rec = [0u8; 22];
+    read_exact_at(r, eocd_offset, &mut rec)?;
+    if u32_at(&rec, 0) != EOCD || u16_at(&rec, 20) != 0 {
+        return Err(not_a_workbook("no end of central directory at the end of the file"));
+    }
+    let rec = &rec[..];
     if u16_at(rec, 4) != 0 || u16_at(rec, 6) != 0 {
         return Err(not_a_workbook("a multi-part archive"));
     }
     let mut dir =
         Directory { entries: u16_at(rec, 10) as u64, size: u32_at(rec, 12) as u64, offset: u32_at(rec, 16) as u64 };
     if dir.entries == 0xFFFF || dir.size == 0xFFFF_FFFF || dir.offset == 0xFFFF_FFFF {
-        // ZIP64: the locator sits right before the end record.
-        if eocd_offset < 20 {
+        // ZIP64: the locator sits right before the end record, and the ZIP64
+        // record, without extensible data, right before the locator.
+        if eocd_offset < 20 + 56 {
             return Err(not_a_workbook("a broken ZIP64 directory"));
         }
         let mut loc = [0u8; 20];
         read_exact_at(r, eocd_offset - 20, &mut loc)?;
-        if u32_at(&loc, 0) != 0x0706_4b50 {
+        if u32_at(&loc, 0) != 0x0706_4b50 || u32_at(&loc, 4) != 0 || u32_at(&loc, 16) != 1 {
             return Err(not_a_workbook("a broken ZIP64 directory"));
         }
         let rec_offset = u64_at(&loc, 8);
-        let mut rec = [0u8; 56];
-        if rec_offset.checked_add(56).is_none_or(|end| end > len) {
+        if rec_offset != eocd_offset - 20 - 56 {
             return Err(not_a_workbook("a broken ZIP64 directory"));
         }
+        let mut rec = [0u8; 56];
         read_exact_at(r, rec_offset, &mut rec)?;
-        if u32_at(&rec, 0) != 0x0606_4b50 {
+        if u32_at(&rec, 0) != 0x0606_4b50 || u64_at(&rec, 4) != 44 {
             return Err(not_a_workbook("a broken ZIP64 directory"));
         }
         dir = Directory { entries: u64_at(&rec, 32), size: u64_at(&rec, 40), offset: u64_at(&rec, 48) };
@@ -207,15 +218,19 @@ fn find_directory<R: Read + Seek>(r: &mut R, len: u64) -> Result<Directory, Pars
     Ok(dir)
 }
 
+/// Part names are printable ASCII without `\`: then the name the preflight
+/// reads, the one `zip` decodes (UTF-8 or CP437) and the one calamine looks
+/// up (lower case, `\` as `/`) are the same string. Spreadsheet programs
+/// write nothing else.
 fn check_name(name: &str) -> Result<(), ParseError> {
     let bad_name = || bad("zip_entry_name", "The workbook contains a part with an unsafe name.");
-    if name.is_empty() || name.starts_with('/') || name.starts_with('\\') || name.contains('\0') {
+    if name.is_empty() || name.starts_with('/') || !name.bytes().all(|b| (0x20..=0x7e).contains(&b) && b != b'\\') {
         return Err(bad_name());
     }
     if name.len() >= 2 && name.as_bytes()[1] == b':' {
         return Err(bad_name());
     }
-    if name.split(['/', '\\']).any(|seg| seg == "..") {
+    if name.split('/').any(|seg| seg == "..") {
         return Err(bad_name());
     }
     Ok(())
@@ -257,6 +272,10 @@ fn read_directory<R: Read + Seek>(r: &mut R, dir: &Directory) -> Result<Vec<Entr
             let (id, len) = (u16_at(extra, j), u16_at(extra, j + 2) as usize);
             if j + 4 + len > extra.len() {
                 return Err(not_a_workbook("a broken extra field"));
+            }
+            // Info-ZIP Unicode path and comment: `zip` would read another name.
+            if id == 0x7075 || id == 0x6375 {
+                return Err(bad("zip_entry_name", "The workbook contains a part with an unsafe name."));
             }
             if id == 0x0001 {
                 let data = &extra[j + 4..j + 4 + len];
@@ -326,20 +345,21 @@ fn check_local_header<R: Read + Seek>(r: &mut R, e: &Entry, len: u64) -> Result<
 }
 
 /// Counts what a decompressor produces, refuses what is too large, too
-/// compressed, or too long between two XML delimiters, and keeps the CRC.
-struct Counted<R> {
+/// compressed, or too long for one XML event, and keeps the CRC.
+struct Counted<'a, R> {
     inner: R,
     name: String,
     produced: u64,
     compressed: u64,
     cap: u64,
     total_before: u64,
-    run: u64,
+    /// Bytes read since [`scan_xml`] last finished an event; `None` for a
+    /// part that is not XML.
+    run: Option<&'a Cell<u64>>,
     crc: flate2::Crc,
-    xml: bool,
 }
 
-impl<R: Read> Read for Counted<R> {
+impl<R: Read> Read for Counted<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.produced += n as u64;
@@ -354,15 +374,9 @@ impl<R: Read> Read for Counted<R> {
         if self.produced > 1024 * 1024 && self.produced > self.compressed.saturating_mul(MAX_RATIO) {
             return Err(as_io(bad("zip_bomb", "The workbook is compressed suspiciously well and is refused.")));
         }
-        if self.xml {
-            for &b in &buf[..n] {
-                if b == b'<' || b == b'>' {
-                    self.run = 0;
-                } else {
-                    self.run += 1;
-                }
-            }
-            if self.run > MAX_XML_TOKEN {
+        if let Some(run) = self.run {
+            run.set(run.get() + n as u64);
+            if run.get() > MAX_XML_TOKEN {
                 return Err(as_io(bad(
                     "xml_token_too_large",
                     format!("The workbook part {} holds an oversized XML token.", self.name),
@@ -424,11 +438,46 @@ pub fn is_cell_reference(value: &[u8]) -> bool {
         })
 }
 
-/// Reads an XML part as events: refuses a DOCTYPE and any encoding but UTF-8.
-/// Collects `ContentType` attributes when `content_types` is given. In a
-/// worksheet, every `r`, `ref` and `sqref` must be a cell reference.
-fn scan_xml<R: Read>(input: R, name: &str, mut content_types: Option<&mut Vec<String>>) -> Result<(), ParseError> {
-    let worksheet = name.to_lowercase().starts_with("xl/worksheets/");
+/// The folders calamine may read a sheet from (§5.2).
+const SHEET_FOLDERS: [&str; 3] = ["xl/worksheets/", "xl/chartsheets/", "xl/dialogsheets/"];
+
+fn is_sheet_part(lower: &str) -> bool {
+    SHEET_FOLDERS.iter().any(|f| lower.starts_with(f))
+}
+
+/// One `Relationship` element: every attribute named `Type` or `Target`, with
+/// or without a prefix (calamine reads the unprefixed one).
+#[derive(Debug, Default)]
+struct Relationship {
+    types: Vec<Vec<u8>>,
+    targets: Vec<Vec<u8>>,
+}
+
+/// What [`scan_xml`] collects from the package parts.
+#[derive(Default)]
+struct Found {
+    /// `ContentType` attributes of `[Content_Types].xml`.
+    content_types: Vec<String>,
+    /// `_rels/.rels`: calamine takes the workbook's folder from it.
+    package_rels: Vec<Relationship>,
+    /// `xl/_rels/workbook.xml.rels`: calamine takes the sheet paths from it.
+    workbook_rels: Vec<Relationship>,
+}
+
+/// Reads an XML part as events: refuses a DOCTYPE and any encoding but UTF-8,
+/// and an event longer than [`MAX_XML_TOKEN`] (`run` counts the bytes read
+/// since the last event). Collects content types and relationships into
+/// `found`. In a sheet, every `r`, `ref` and `sqref` must be a cell reference.
+fn scan_xml<R: Read>(input: R, name: &str, run: &Cell<u64>, found: &mut Found) -> Result<(), ParseError> {
+    let lower = name.to_ascii_lowercase();
+    let sheet = is_sheet_part(&lower);
+    let is_types = name == "[Content_Types].xml";
+    let mut rels = match lower.as_str() {
+        "_rels/.rels" => Some(&mut found.package_rels),
+        "xl/_rels/workbook.xml.rels" => Some(&mut found.workbook_rels),
+        _ => None,
+    };
+    let malformed = || not_a_workbook(&format!("the part {name} is not well-formed XML"));
     let mut input = std::io::BufReader::with_capacity(64 * 1024, input);
     let head = std::io::BufRead::fill_buf(&mut input).map_err(io_err)?;
     let encoding_error =
@@ -439,7 +488,9 @@ fn scan_xml<R: Read>(input: R, name: &str, mut content_types: Option<&mut Vec<St
     let mut reader = quick_xml::Reader::from_reader(input);
     let mut buf = Vec::new();
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_event_into(&mut buf);
+        run.set(0);
+        match event {
             Ok(Event::Eof) => return Ok(()),
             Ok(Event::DocType(_)) => {
                 return Err(bad(
@@ -457,9 +508,9 @@ fn scan_xml<R: Read>(input: R, name: &str, mut content_types: Option<&mut Vec<St
                 }
             }
             Ok(Event::Start(e) | Event::Empty(e)) => {
-                if worksheet {
+                if sheet {
                     for a in e.attributes() {
-                        let a = a.map_err(|_| not_a_workbook(&format!("the part {name} is not well-formed XML")))?;
+                        let a = a.map_err(|_| malformed())?;
                         if matches!(a.key.local_name().as_ref(), b"r" | b"ref" | b"sqref")
                             && !is_cell_reference(&a.value)
                         {
@@ -467,17 +518,31 @@ fn scan_xml<R: Read>(input: R, name: &str, mut content_types: Option<&mut Vec<St
                         }
                     }
                 }
-                if let Some(types) = content_types.as_deref_mut() {
+                if is_types {
                     for a in e.attributes().flatten() {
                         if a.key.local_name().as_ref() == b"ContentType" {
-                            types.push(String::from_utf8_lossy(&a.value).to_lowercase());
+                            found.content_types.push(String::from_utf8_lossy(&a.value).to_lowercase());
                         }
                     }
+                }
+                if let Some(rels) = rels.as_mut()
+                    && e.local_name().as_ref() == b"Relationship"
+                {
+                    let mut rel = Relationship::default();
+                    for a in e.attributes() {
+                        let a = a.map_err(|_| malformed())?;
+                        match a.key.local_name().as_ref() {
+                            b"Type" => rel.types.push(a.value.into_owned()),
+                            b"Target" => rel.targets.push(a.value.into_owned()),
+                            _ => {}
+                        }
+                    }
+                    rels.push(rel);
                 }
             }
             Ok(_) => {}
             Err(quick_xml::Error::Io(e)) => return Err(io_err_ref(&e)),
-            Err(_) => return Err(not_a_workbook(&format!("the part {name} is not well-formed XML"))),
+            Err(_) => return Err(malformed()),
         }
         buf.clear();
     }
@@ -511,16 +576,20 @@ pub fn preflight<R: Read + Seek>(r: &mut R) -> Result<(), ParseError> {
         }
     }
 
-    let mut content_types: Vec<String> = Vec::new();
+    let starts = entries.iter().map(|e| check_local_header(r, e, len)).collect::<Result<Vec<u64>, _>>()?;
+    cross_check(r, &dir, &entries, &starts)?;
+
+    let mut found = Found::default();
     let mut has_content_types = false;
     let mut total = 0u64;
-    for e in &entries {
-        let data = check_local_header(r, e, len)?;
+    let run = Cell::new(0u64);
+    for (e, &data) in entries.iter().zip(&starts) {
         r.seek(SeekFrom::Start(data)).map_err(io_err)?;
         let raw = (&mut *r).take(e.compressed);
         let decoded: Box<dyn Read + '_> =
             if e.method == 8 { Box::new(flate2::read::DeflateDecoder::new(raw)) } else { Box::new(raw) };
         let xml = is_xml(&e.name);
+        run.set(0);
         let mut counted = Counted {
             inner: decoded,
             name: e.name.clone(),
@@ -528,25 +597,22 @@ pub fn preflight<R: Read + Seek>(r: &mut R) -> Result<(), ParseError> {
             compressed: e.compressed,
             cap: part_cap(&e.name),
             total_before: total,
-            run: 0,
+            run: xml.then_some(&run),
             crc: flate2::Crc::new(),
-            xml,
         };
         if xml {
-            let is_types = e.name == "[Content_Types].xml";
-            has_content_types |= is_types;
-            scan_xml(&mut counted, &e.name, is_types.then_some(&mut content_types))?;
-            // Anything after the root element still counts.
-            std::io::copy(&mut counted, &mut std::io::sink()).map_err(io_err)?;
-        } else {
-            std::io::copy(&mut counted, &mut std::io::sink()).map_err(io_err)?;
+            has_content_types |= e.name == "[Content_Types].xml";
+            scan_xml(&mut counted, &e.name, &run, &mut found)?;
         }
+        // Anything after the root element still counts.
+        std::io::copy(&mut counted, &mut std::io::sink()).map_err(io_err)?;
         if counted.produced != e.size || counted.crc.sum() != e.crc {
             return Err(bad("zip_header_mismatch", "The workbook's ZIP headers contradict each other."));
         }
         total += counted.produced;
     }
 
+    let content_types = &found.content_types;
     if !has_content_types {
         return Err(not_a_workbook("it has no content types part"));
     }
@@ -559,7 +625,89 @@ pub fn preflight<R: Read + Seek>(r: &mut R) -> Result<(), ParseError> {
     if !content_types.iter().any(|t| SPREADSHEET_MAIN.contains(&t.as_str())) {
         return Err(not_a_workbook("it holds no spreadsheet"));
     }
+    check_relationships(&found)
+}
+
+/// Opens the file with `zip`, the reader calamine uses, and refuses any
+/// difference from what the preflight read: the same entries in the same
+/// order, with the same names, offsets, sizes, CRCs and methods. Everything
+/// the preflight checked is then what calamine reads.
+fn cross_check<R: Read + Seek>(
+    r: &mut R,
+    dir: &Directory,
+    entries: &[Entry],
+    starts: &[u64],
+) -> Result<(), ParseError> {
+    let mismatch = || bad("zip_header_mismatch", "The workbook's ZIP headers contradict each other.");
+    r.seek(SeekFrom::Start(0)).map_err(io_err)?;
+    let mut archive = zip::ZipArchive::new(&mut *r).map_err(|e| match e {
+        zip::result::ZipError::Io(e) => io_err(e),
+        _ => mismatch(),
+    })?;
+    if archive.len() != entries.len() || archive.offset() != 0 || archive.central_directory_start() != dir.offset {
+        return Err(mismatch());
+    }
+    for (i, (e, &data)) in entries.iter().zip(starts).enumerate() {
+        let f = archive.by_index_raw(i).map_err(|_| mismatch())?;
+        let method = match f.compression() {
+            zip::CompressionMethod::Stored => 0,
+            zip::CompressionMethod::Deflated => 8,
+            _ => return Err(mismatch()),
+        };
+        if f.name() != e.name
+            || f.name_raw() != e.name.as_bytes()
+            || method != e.method
+            || f.encrypted()
+            || f.header_start() != e.local_offset
+            || f.data_start() != Some(data)
+            || f.compressed_size() != e.compressed
+            || f.size() != e.size
+            || f.crc32() != e.crc
+        {
+            return Err(mismatch());
+        }
+    }
     Ok(())
+}
+
+/// calamine finds the workbook through `_rels/.rels` and its sheets through
+/// `xl/_rels/workbook.xml.rels`. The preflight's part caps and sheet checks
+/// assume the usual places, so anything else is refused: the main part must
+/// be `xl/workbook.xml`, and every sheet an `.xml` part in a sheet folder.
+fn check_relationships(found: &Found) -> Result<(), ParseError> {
+    let main: Vec<&Relationship> = found
+        .package_rels
+        .iter()
+        .filter(|r| r.types.iter().any(|t| t.ends_with(b"/relationships/officeDocument")))
+        .collect();
+    if main.is_empty()
+        || main.iter().any(|r| r.targets.iter().any(|t| t != b"xl/workbook.xml" && t != b"/xl/workbook.xml"))
+    {
+        return Err(not_a_workbook("its main part is not xl/workbook.xml"));
+    }
+    let is_sheet =
+        |t: &Vec<u8>| matches!(t.rsplit(|&b| b == b'/').next(), Some(b"worksheet" | b"chartsheet" | b"dialogsheet"));
+    for rel in found.workbook_rels.iter().filter(|r| r.types.iter().any(is_sheet)) {
+        if !rel.targets.iter().all(|t| is_sheet_target(t)) {
+            return Err(not_a_workbook("a sheet lies outside the worksheets folder"));
+        }
+    }
+    Ok(())
+}
+
+/// A sheet target as calamine resolves it (`/x` from the root, anything else
+/// under `xl/`): printable ASCII without `\`, `&` or spaces, in a sheet
+/// folder, ending in `.xml`, and with no `.`, `..` or empty segment.
+fn is_sheet_target(target: &[u8]) -> bool {
+    let path = match target.strip_prefix(b"/") {
+        Some(p) => p.to_vec(),
+        None => [b"xl/".as_slice(), target].concat(),
+    };
+    let Ok(lower) = String::from_utf8(path.to_ascii_lowercase()) else { return false };
+    lower.bytes().all(|b| (0x21..=0x7e).contains(&b) && b != b'\\' && b != b'&')
+        && is_sheet_part(&lower)
+        && lower.ends_with(".xml")
+        && !lower.split('/').any(|s| s.is_empty() || s == "." || s == "..")
 }
 
 fn macros() -> ParseError {
@@ -683,6 +831,7 @@ mod tests {
         preflight(&mut Cursor::new(bytes))
     }
 
+    #[track_caller]
     fn code(bytes: Vec<u8>) -> &'static str {
         check(bytes).expect_err("refused").code
     }
@@ -877,5 +1026,175 @@ mod tests {
         let long = format!("<x>{}</x>", "a".repeat((MAX_XML_TOKEN + 1) as usize));
         let c = code(parts_with(Part::new("xl/extra.xml", long)));
         assert!(c == "xml_token_too_large" || c == "zip_bomb", "{c}");
+    }
+
+    /// Stored, so the ratio check stays out of the way.
+    fn stored(name: &str, data: String) -> Part {
+        let mut p = Part::new(name, data);
+        p.method = 0;
+        p
+    }
+
+    #[test]
+    fn an_event_is_capped_whatever_it_contains() {
+        // One start tag: an attribute value over 4 MiB with a `>` every KiB. (The
+        // count is exact to one 64 KiB read, so 4 MiB + 1 KiB could still pass.)
+        let kib = (MAX_XML_TOKEN / 1024 + 128) as usize;
+        let chunk = format!("{}>", "a".repeat(1023));
+        let value = chunk.repeat(kib);
+        let tag = format!(r#"<worksheet><sheetData><row r="1" x="{value}"/></sheetData></worksheet>"#);
+        let mut parts = workbook_parts(&sheet_xml(&[]), None, false, false);
+        let i = parts.iter().position(|p| p.name == "xl/worksheets/sheet1.xml").unwrap();
+        parts[i] = stored("xl/worksheets/sheet1.xml", tag);
+        assert_eq!(code(zip(&parts)), "xml_token_too_large");
+        // CDATA and comments with a `<` every KiB.
+        let lt = format!("{}<", "a".repeat(1023)).repeat(kib);
+        for xml in [format!("<x><![CDATA[{lt}]]></x>"), format!("<x><!--{}--></x>", lt.replace('-', "_"))] {
+            assert_eq!(code(parts_with(stored("xl/extra.xml", xml))), "xml_token_too_large");
+        }
+        // Many events adding up to more than the cap are fine.
+        let many = format!("<x>{}</x>", "<y>aaaa</y>".repeat((MAX_XML_TOKEN / 8) as usize));
+        assert!(check(parts_with(stored("xl/extra.xml", many))).is_ok());
+    }
+
+    #[test]
+    fn the_end_record_must_end_the_file() {
+        let good = workbook(&[("A1", C::S("x"))]);
+        assert!(check(good.clone()).is_ok());
+        // A comment after the end record.
+        let mut commented = good.clone();
+        let n = commented.len();
+        commented[n - 2..].copy_from_slice(&4u16.to_le_bytes());
+        commented.extend_from_slice(b"note");
+        assert_eq!(code(commented), "not_a_workbook");
+        // A second end record in the comment of the first, whose own comment
+        // length does not fit (zip skips it and falls back to the first).
+        let mut hidden = good.clone();
+        let mut fake = hidden[n - 22..].to_vec();
+        fake[20..].copy_from_slice(&1u16.to_le_bytes());
+        hidden[n - 2..].copy_from_slice(&23u16.to_le_bytes());
+        hidden.extend_from_slice(&fake);
+        hidden.push(b'x');
+        assert_eq!(code(hidden), "not_a_workbook");
+        // Bytes after the end record.
+        let mut trailing = good;
+        trailing.extend_from_slice(&[0; 4]);
+        assert_eq!(code(trailing), "not_a_workbook");
+    }
+
+    /// `bytes` rewritten with a ZIP64 end: `gap` bytes between the ZIP64
+    /// record and its locator.
+    fn as_zip64(bytes: &[u8], gap: usize) -> Vec<u8> {
+        let n = bytes.len();
+        let eocd = &bytes[n - 22..];
+        let entries = u16_at(eocd, 10) as u64;
+        let (size, offset) = (u32_at(eocd, 12) as u64, u32_at(eocd, 16) as u64);
+        let mut out = bytes[..n - 22].to_vec();
+        let rec_offset = out.len() as u64;
+        out.extend_from_slice(&0x0606_4b50u32.to_le_bytes());
+        out.extend_from_slice(&44u64.to_le_bytes());
+        out.extend_from_slice(&[45, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        for v in [entries, entries, size, offset] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend(std::iter::repeat_n(0u8, gap));
+        out.extend_from_slice(&0x0706_4b50u32.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&rec_offset.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        let mut end = eocd.to_vec();
+        end[8..12].copy_from_slice(&[0xFF; 4]);
+        out.extend_from_slice(&end);
+        out
+    }
+
+    #[test]
+    fn a_zip64_record_must_sit_right_before_its_locator() {
+        let good = workbook(&[("A1", C::S("x"))]);
+        assert!(read(as_zip64(&good, 0), None).is_ok());
+        assert_eq!(code(as_zip64(&good, 4)), "not_a_workbook");
+    }
+
+    #[test]
+    fn part_names_are_printable_ascii() {
+        for name in ["xl\\worksheets\\sheet3.xml", "xl/caf\u{e9}.xml", "xl/a\tb.xml"] {
+            assert_eq!(code(parts_with(Part::new(name, "<x/>"))), "zip_entry_name", "{name:?}");
+        }
+        // The Info-ZIP Unicode path field would give `zip` another name.
+        for id in [0x7075u16, 0x6375] {
+            let mut p = Part::new("xl/extra.xml", "<x/>");
+            p.extra = [&id.to_le_bytes()[..], &5u16.to_le_bytes(), &[1, 0, 0, 0, 0]].concat();
+            assert_eq!(code(parts_with(p)), "zip_entry_name", "{id:#x}");
+        }
+        // A space is printable and allowed.
+        assert!(check(parts_with(Part::new("xl/media/image 1.png", vec![1u8; 10]))).is_ok());
+    }
+
+    #[test]
+    fn the_cross_check_refuses_any_difference_from_zip() {
+        let bytes = workbook(&[("A1", C::S("x"))]);
+        let mut r = Cursor::new(bytes);
+        let len = r.get_ref().len() as u64;
+        let dir = find_directory(&mut r, len).unwrap();
+        let entries = read_directory(&mut r, &dir).unwrap();
+        let starts: Vec<u64> = entries.iter().map(|e| check_local_header(&mut r, e, len).unwrap()).collect();
+        assert!(cross_check(&mut r, &dir, &entries, &starts).is_ok());
+        type Change = fn(&mut Vec<Entry>, &mut Vec<u64>);
+        let changes: [Change; 6] = [
+            |e, _| e[1].name = "_rels/other.rels".into(),
+            |e, _| e[1].local_offset += 1,
+            |_, s| s[1] += 1,
+            |e, _| e[1].size += 1,
+            |e, _| e[1].crc ^= 1,
+            |e, s| {
+                e.pop();
+                s.pop();
+            },
+        ];
+        for (i, change) in changes.iter().enumerate() {
+            let (mut e, mut s) = (entries.clone(), starts.clone());
+            change(&mut e, &mut s);
+            assert_eq!(cross_check(&mut r, &dir, &e, &s).unwrap_err().code, "zip_header_mismatch", "change {i}");
+        }
+    }
+
+    #[test]
+    fn the_workbook_and_its_sheets_must_be_where_the_preflight_looked() {
+        use super::super::fixtures::{RELS, WORKBOOK_RELS};
+        let with = |name: &str, data: String| {
+            let mut parts = workbook_parts(&sheet_xml(&[("A1", C::S("x"))]), None, false, false);
+            let i = parts.iter().position(|p| p.name == name).unwrap();
+            parts[i] = Part::new(name, data);
+            zip(&parts)
+        };
+        let package = |target: &str| with("_rels/.rels", RELS.replace("\"xl/workbook.xml\"", &format!("\"{target}\"")));
+        assert!(read(package("/xl/workbook.xml"), None).is_ok());
+        for target in ["xl2/workbook.xml", "XL/workbook.xml", "workbook.xml"] {
+            assert_eq!(code(package(target)), "not_a_workbook", "{target}");
+        }
+        // No officeDocument relationship at all.
+        let no_main = with("_rels/.rels", RELS.replace("officeDocument\"", "other\""));
+        assert_eq!(code(no_main), "not_a_workbook");
+
+        let sheet = |target: &str| {
+            with(
+                "xl/_rels/workbook.xml.rels",
+                WORKBOOK_RELS.replace("\"worksheets/sheet1.xml\"", &format!("\"{target}\"")),
+            )
+        };
+        assert!(read(sheet("/xl/worksheets/sheet1.xml"), None).is_ok());
+        for target in [
+            "sharedStrings.xml",
+            "worksheets/../sharedStrings.xml",
+            "worksheets/./sheet1.xml",
+            "worksheets//sheet1.xml",
+            "worksheets/sheet1.bin",
+            "worksheets\\sheet1.xml",
+            "worksheets/a&amp;b.xml",
+            "/xl/media/sheet1.xml",
+            "../xl/worksheets/sheet1.xml",
+        ] {
+            assert_eq!(code(sheet(target)), "not_a_workbook", "{target}");
+        }
     }
 }

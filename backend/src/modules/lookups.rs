@@ -400,7 +400,7 @@ pub struct Location {
 }
 
 pub(crate) fn address_schema() -> utoipa::openapi::schema::Schema {
-    schemas::nullable_string_schema(1000)
+    schemas::multiline_text_schema(1000)
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1700,6 +1700,20 @@ mod tests {
         let (status, v, _) = call(&app, "POST", "/api/v1/statuses", &s, Some(json!({ "bogus": 1 }))).await;
         assert_eq!((status, code(&v)), (410, "GONE"), "{v}");
 
+        // SHAA-784: no permission is needed to learn that the write is gone.
+        let readers = json!({ "name": "Readers", "globalPermissions": [], "classPermissions": [] });
+        let (status, profile, _) = call(&app, "POST", "/api/v1/admin/profiles", &s, Some(readers)).await;
+        assert_eq!(status, 201, "{profile}");
+        let expires = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+        let token = json!({ "name": "reader", "profileId": profile["id"], "expiresAt": expires });
+        let (status, created, _) = call(&app, "POST", "/api/v1/admin/api-tokens", &s, Some(token)).await;
+        assert_eq!(status, 201, "{created}");
+        let reader = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+        let (status, v, _) = call(&app, "DELETE", &one, &reader, None).await;
+        assert_eq!((status, code(&v)), (410, "GONE"), "{v}");
+        let (status, v, _) = call(&app, "GET", &format!("{one}/usage"), &reader, None).await;
+        assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "the usage counts still need datamodel.manage: {v}");
+
         // The checks before it are unchanged.
         let no_csrf = Creds { csrf: None, ..s.clone() };
         let (status, v, _) = call(&app, "DELETE", &one, &no_csrf, None).await;
@@ -1735,6 +1749,8 @@ mod tests {
             assert_eq!(op["deprecated"], true, "{path} {method}");
             assert!(op["requestBody"].is_null(), "{path} {method}");
             assert!(op["responses"]["410"].is_object(), "{path} {method}");
+            let text = op["description"].as_str().unwrap();
+            assert!(!text.contains("datamodel.manage"), "{path} {method}: {text}");
             let successes: Vec<&String> =
                 op["responses"].as_object().unwrap().keys().filter(|k| k.starts_with('2')).collect();
             assert!(successes.is_empty(), "{path} {method}: {successes:?}");

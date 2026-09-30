@@ -296,20 +296,22 @@ impl Resource for CiClasses {
     const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
     const UPDATE_DESCRIPTION: &'static str = "Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled.";
     const DELETE_DESCRIPTION: &'static str = "Archives the type (`isActive=false`): its table, CIs and values stay and stay readable, no new CIs can be created, and the UI hides it. `PATCH {\"isActive\": true}` restores it. To drop the table and delete its CIs, purge the type (`POST /api/v1/ci-classes/{id}/purge`).";
+    // DELETE archives, which nothing blocks; `blocking` marks what refuses the
+    // purge (the checks in `purge_class_in`). Everything else goes with the purge.
     const USAGE: &'static [Usage] = &[
         Usage {
             kind: "configurationItems",
             label: "configuration items",
             sql: "SELECT count(*) FROM configuration_items WHERE class_id = $1 AND deleted_at IS NULL",
             spans: Some(CLASS_SPANS),
-            blocking: true,
+            blocking: false,
         },
         Usage {
             kind: "deletedConfigurationItems",
             label: "deleted configuration items (kept for history)",
             sql: "SELECT count(*) FROM configuration_items WHERE class_id = $1 AND deleted_at IS NOT NULL",
             spans: Some(CLASS_SPANS),
-            blocking: true,
+            blocking: false,
         },
         Usage {
             kind: "subclasses",
@@ -323,7 +325,7 @@ impl Resource for CiClasses {
             label: "attribute definitions",
             sql: "SELECT count(*) FROM ci_attribute_definitions WHERE class_id = $1",
             spans: None,
-            blocking: true,
+            blocking: false,
         },
         Usage {
             kind: "referencingAttributes",
@@ -337,7 +339,7 @@ impl Resource for CiClasses {
             label: "relationship rules",
             sql: "SELECT count(*) FROM relationship_type_rules WHERE source_class_id = $1 OR target_class_id = $1",
             spans: None,
-            blocking: true,
+            blocking: false,
         },
         Usage {
             kind: "permissionGrants",
@@ -1014,7 +1016,7 @@ pub(crate) fn group_name_schema() -> Schema {
 }
 
 pub(crate) fn help_text_schema() -> Schema {
-    schemas::nullable_string_schema(2000)
+    schemas::multiline_text_schema(2000)
 }
 
 pub(crate) fn default_value_schema() -> Schema {
@@ -1027,6 +1029,8 @@ pub(crate) fn default_value_schema() -> Schema {
             "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). \
              Not allowed for \"reference\" attributes.",
         ))
+        // Line breaks are up to the attribute: its value rules check the default.
+        .extensions(Some(schemas::multiline_extension()))
         .into()
 }
 
@@ -1314,13 +1318,24 @@ impl Resource for AttributeDefinitions {
     const ARCHIVE_ON_DELETE: bool = true;
     const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
     const DELETE_DESCRIPTION: &'static str = "Archives the field (`isActive=false`): its column and stored values stay readable, no new values are accepted, and forms hide it. `PATCH {\"isActive\": true}` restores it. To drop the column and its values, purge the field (`POST /api/v1/attribute-definitions/{id}/purge`).";
-    const USAGE: &'static [Usage] = &[Usage {
-        kind: "attributeValues",
-        label: "values stored on configuration items",
-        sql: "SELECT cmdb.attribute_value_count($1)",
-        spans: Some(ATTRIBUTE_SPANS),
-        blocking: false,
-    }];
+    // DELETE archives, which nothing blocks; `blocking` marks what refuses the
+    // purge (the checks in `purge_attribute_in`). The values go with the purge.
+    const USAGE: &'static [Usage] = &[
+        Usage {
+            kind: "attributeValues",
+            label: "values stored on configuration items",
+            sql: "SELECT cmdb.attribute_value_count($1)",
+            spans: Some(ATTRIBUTE_SPANS),
+            blocking: false,
+        },
+        Usage {
+            kind: "dependentFields",
+            label: "fields using it as their parent field (unlink them first)",
+            sql: "SELECT count(*) FROM ci_attribute_definitions WHERE parent_attribute_id = $1",
+            spans: None,
+            blocking: true,
+        },
+    ];
 
     fn id(row: &AttributeDefinition) -> Uuid {
         row.id
@@ -2032,6 +2047,84 @@ mod tests {
         db.drop().await;
     }
 
+    /// GH#289: TAB, line breaks and bidi controls only in multiline text
+    /// attributes; control characters nowhere. Checked on write only: a stored
+    /// value does not block changing another attribute.
+    #[tokio::test]
+    async fn control_characters_follow_the_multiline_flag() {
+        use crate::api::route::{Body, BodyInput};
+        use crate::modules::items::schemas::UpdateItemBody;
+        let Some(db) = scratch::database("control_characters_follow_the_multiline_flag").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("characters-test", "characters-test");
+        let class: CiClass = simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Char Box"}))).await.unwrap();
+        let remarks: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "key": "remarks", "label": "Remarks", "dataType": "text",
+                         "validation": {"multiline": true}})),
+        )
+        .await
+        .unwrap();
+        simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "key": "tag", "label": "Tag", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        let codes = |err: AppError| -> Vec<(String, String)> {
+            err.details.into_iter().flatten().map(|d| (d.field, d.code)).collect()
+        };
+        let refused = |field: &str| vec![(format!("attributes.{field}"), "invalid_character".to_owned())];
+        let ctx_ref = &ctx;
+        let create = |attributes: Value| {
+            let body = Body::<CreateItemBody>::parse(Some(json!({"classId": class.id, "attributes": attributes})));
+            async move { items_service::create(pool, ctx_ref, &body?.0).await }
+        };
+
+        // Multiline: line breaks, tabs and bidi controls (RTL notes) are kept.
+        let notes = "Line 1\r\n\tLine 2\u{2028}\u{2067}עברית\u{2069}";
+        let id = create(json!({"remarks": notes, "tag": "rack-7"})).await.unwrap().summary.id;
+        let stored = items_service::get(pool, &ctx, id).await.unwrap();
+        assert_eq!(serde_json::to_value(&stored).unwrap()["attributes"]["remarks"], json!(notes));
+        // Single-line: refused, not stripped.
+        for tag in ["a\nb", "a\tb", "\u{202E}gpj.exe", "a\u{2029}b"] {
+            assert_eq!(codes(create(json!({"tag": tag})).await.unwrap_err()), refused("tag"), "{tag:?}");
+        }
+        // Control characters: refused in both, before the value rules.
+        for (field, value) in [("remarks", "\u{1B}[2J"), ("tag", "a\u{7F}"), ("remarks", "\u{9B}31m")] {
+            assert_eq!(codes(create(json!({field: value})).await.unwrap_err()), refused(field), "{value:?}");
+        }
+        // A default is checked against its own attribute.
+        let parsed = Body::<AttributeDefinitionCreate>::parse(Some(json!({"classId": class.id, "label": "Motd",
+            "dataType": "text", "defaultValue": "a\nb"})));
+        assert!(parsed.is_ok(), "{:?}", parsed.err());
+        let err = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "label": "Motd", "dataType": "text", "defaultValue": "a\nb"})),
+        )
+        .await
+        .unwrap_err();
+        let detail = &err.details.as_ref().unwrap()[0];
+        assert_eq!((detail.field.as_str(), detail.code.as_str()), ("defaultValue", "invalid"));
+        assert!(detail.message.ends_with("line break (U+000A) in a single-line field"), "{}", detail.message);
+
+        // Write only: after remarks become single-line, the stored value stays
+        // and another attribute can still change; resending it is refused.
+        simple::update::<AttributeDefinitions>(pool, &ctx, remarks.id, &body(json!({"validation": null})))
+            .await
+            .unwrap();
+        let update = Body::<UpdateItemBody>::parse(Some(json!({"attributes": {"tag": "rack-8"}}))).unwrap().0;
+        items_service::update(pool, &ctx, id, &update).await.unwrap();
+        let stored = items_service::get(pool, &ctx, id).await.unwrap();
+        assert_eq!(serde_json::to_value(&stored).unwrap()["attributes"]["remarks"], json!(notes));
+        let update = Body::<UpdateItemBody>::parse(Some(json!({"attributes": {"remarks": notes}}))).unwrap().0;
+        assert_eq!(codes(items_service::update(pool, &ctx, id, &update).await.unwrap_err()), refused("remarks"));
+        db.drop().await;
+    }
+
     /// GH#180: a refused field change quotes stored values only to a caller who
     /// may view every type whose assets store the field (the type and its subtypes).
     #[tokio::test]
@@ -2419,7 +2512,7 @@ mod tests {
 
         // The hidden class: its CI counts are withheld, the data-model counts are not.
         let report = simple::usage::<CiClasses>(pool, &restricted, secrets.id).await.unwrap();
-        assert!(report.in_use);
+        assert!(!report.in_use, "CIs, fields and rules do not block a type's purge");
         let c = counts(&report);
         assert!(c.contains(&("configurationItems".into(), None, true)), "{c:?}");
         assert!(c.contains(&("deletedConfigurationItems".into(), None, true)), "{c:?}");
@@ -2434,9 +2527,12 @@ mod tests {
         assert!(c.contains(&("configurationItems".into(), Some(1), false)), "{c:?}");
 
         let c = counts(&simple::usage::<AttributeDefinitions>(pool, &restricted, code.id).await.unwrap());
-        assert_eq!(c, [("attributeValues".to_string(), None, true)]);
+        assert_eq!(c, [("attributeValues".to_string(), None, true), ("dependentFields".to_string(), Some(0), false)]);
         let c = counts(&simple::usage::<AttributeDefinitions>(pool, &viewer, code.id).await.unwrap());
-        assert_eq!(c, [("attributeValues".to_string(), Some(2), false)]);
+        assert_eq!(
+            c,
+            [("attributeValues".to_string(), Some(2), false), ("dependentFields".to_string(), Some(0), false)]
+        );
 
         // A relationship type's edges may join any classes; a rule's join its classes.
         let report = simple::usage::<RelationshipTypes>(pool, &restricted, feeds.id).await.unwrap();
@@ -2850,6 +2946,115 @@ mod tests {
                 );
             }
         }
+        db.drop().await;
+    }
+    /// SHAA-812: DELETE on a type or field only archives it, so `/usage`
+    /// reports `removal: purge`, and `blocking`/`inUse` say exactly what the
+    /// purge refuses: CIs, fields and rules go with it; subtypes, reference
+    /// fields of other types and dependent fields stop it.
+    #[tokio::test]
+    async fn usage_blocking_matches_what_the_purge_refuses() {
+        use crate::modules::lookups::LookupLists;
+        use simple::Removal;
+        let Some(db) = scratch::database("usage_blocking_matches_purge").await else { return };
+        let pool = &db.pool;
+        let ctx = &RequestContext::system("shaa-812-test", "shaa-812-test");
+        let class = |v: Value| async move { simple::create::<CiClasses>(pool, ctx, &body(v)).await.unwrap() };
+        let field =
+            |v: Value| async move { simple::create::<AttributeDefinitions>(pool, ctx, &body(v)).await.unwrap() };
+        let archive = |id: Uuid| async move {
+            simple::update::<CiClasses>(pool, ctx, id, &body(json!({"isActive": false}))).await.unwrap();
+        };
+        let purge = |id: Uuid, key: String| async move {
+            let mut tx = pool.begin().await.unwrap();
+            let r = purge_class_in(&mut tx, ctx, id, &key).await.map(|_| ());
+            tx.commit().await.unwrap();
+            r
+        };
+        let blocked = |report: &simple::UsageReport| -> Vec<String> {
+            report.data.iter().filter(|u| u.blocking && u.count.exact() != Some(0)).map(|u| u.kind.clone()).collect()
+        };
+
+        // A type with CIs, a field and a relationship rule: nothing blocks.
+        let servers = class(json!({"name": "Servers"})).await;
+        field(json!({"classId": servers.id, "key": "code", "label": "Code", "dataType": "text"})).await;
+        let feeds: RelationshipType = simple::create::<RelationshipTypes>(
+            pool,
+            ctx,
+            &body(json!({"key": "feeds", "name": "Feeds", "forwardLabel": "feeds", "reverseLabel": "fed by"})),
+        )
+        .await
+        .unwrap();
+        simple::create::<RelationshipRules>(
+            pool,
+            ctx,
+            &body(json!({"relationshipTypeId": feeds.id, "sourceClassId": servers.id, "targetClassId": servers.id})),
+        )
+        .await
+        .unwrap();
+        items_service::create(pool, ctx, &body::<CreateItemBody>(json!({"classId": servers.id}))).await.unwrap();
+        let report = simple::usage::<CiClasses>(pool, ctx, servers.id).await.unwrap();
+        assert_eq!(report.removal, Removal::Purge);
+        assert!(!report.in_use);
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["removal"], json!("purge"), "{json}");
+        for kind in ["configurationItems", "attributeDefinitions", "relationshipRules"] {
+            let u = report.data.iter().find(|u| u.kind == kind).unwrap();
+            assert_eq!((u.count.exact(), u.blocking), (Some(1), false), "{kind}");
+        }
+
+        // A subtype and a reference field of another type block the purge.
+        let parent = class(json!({"name": "Hosts"})).await;
+        let child = class(json!({"name": "Blades", "parentId": parent.id})).await;
+        let other = class(json!({"name": "Racks"})).await;
+        field(json!({"classId": other.id, "key": "host", "label": "Host", "dataType": "reference", "referenceClassId": parent.id}))
+            .await;
+        let report = simple::usage::<CiClasses>(pool, ctx, parent.id).await.unwrap();
+        assert!(report.in_use);
+        assert_eq!(blocked(&report), ["subclasses", "referencingAttributes"]);
+        archive(parent.id).await;
+        let err = purge(parent.id, parent.key.clone()).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::InUse, "{err:?}");
+
+        // Once they are gone, the report and the purge agree again.
+        archive(child.id).await;
+        purge(child.id, child.key.clone()).await.unwrap();
+        archive(other.id).await;
+        purge(other.id, other.key.clone()).await.unwrap();
+        assert!(!simple::usage::<CiClasses>(pool, ctx, parent.id).await.unwrap().in_use);
+        purge(parent.id, parent.key.clone()).await.unwrap();
+        archive(servers.id).await;
+        purge(servers.id, servers.key.clone()).await.unwrap();
+
+        // A field that is another field's parent field blocks the field's purge.
+        let racks = class(json!({"name": "Cabinets"})).await;
+        let maker =
+            simple::create::<LookupLists>(pool, ctx, &body(json!({"key": "maker", "name": "Maker"}))).await.unwrap();
+        let model = simple::create::<LookupLists>(
+            pool,
+            ctx,
+            &body(json!({"key": "model", "name": "Model", "parentListId": maker.id})),
+        )
+        .await
+        .unwrap();
+        let vendor = field(json!({"classId": racks.id, "key": "vendor", "label": "Vendor", "dataType": "lookup", "lookupListId": maker.id}))
+            .await;
+        field(json!({"classId": racks.id, "key": "model", "label": "Model", "dataType": "lookup",
+            "lookupListId": model.id, "parentAttributeId": vendor.id}))
+        .await;
+        let report = simple::usage::<AttributeDefinitions>(pool, ctx, vendor.id).await.unwrap();
+        assert_eq!(report.removal, Removal::Purge);
+        assert!(report.in_use);
+        assert_eq!(blocked(&report), ["dependentFields"]);
+        simple::update::<AttributeDefinitions>(pool, ctx, vendor.id, &body(json!({"isActive": false}))).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let err = purge_attribute_in(&mut tx, ctx, vendor.id, "vendor").await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::InUse, "{err:?}");
+        drop(tx);
+
+        // A hard-deleted resource still reports `delete`.
+        let report = simple::usage::<RelationshipTypes>(pool, ctx, feeds.id).await.unwrap();
+        assert_eq!(report.removal, Removal::Delete);
         db.drop().await;
     }
 }

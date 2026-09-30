@@ -107,7 +107,7 @@ pub fn routes() -> Vec<Route> {
                  format is decided by the file's first bytes: a password-protected workbook or an `.xls` is `415` \
                  with `workbook_encrypted_or_xls`, a file that does not match the declared type `415` with \
                  `unsupported_format`. The file name goes in the `X-File-Name` header, percent-encoded UTF-8 \
-                 (1–255 characters, no control characters, no path), never in the URL. An optional \
+                 (1–255 characters, no control or invisible formatting characters, no path), never in the URL. An optional \
                  `Idempotency-Key` (1–128 visible ASCII characters, kept 24 h) returns the job it created before. \
                  Answers `202` with the job, `queued` for analysis, once the last byte is stored. Limits: \
                  `IMPORT_MAX_FILE_MB` (`413`), `IMPORT_UPLOAD_TIMEOUT_SECS` for the whole upload and 60 s without \

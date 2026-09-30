@@ -5,7 +5,7 @@ name: Release
 # binary against PostgreSQL, pushes the multi-arch image to GHCR and publishes a
 # GitHub Release with the archives and SHA256SUMS. See CONTRIBUTING.md.
 #
-# Supply chain (docs/supply-chain.md): a CycloneDX SBOM of the release, cosign
+# Supply chain: a CycloneDX SBOM of the release, cosign
 # keyless signatures (Sigstore bundles) for every file and for the image, and
 # SLSA build provenance as GitHub artifact attestations. The image also carries
 # BuildKit provenance and the SBOM as a signed cosign attestation.
@@ -14,7 +14,7 @@ name: Release
 # steps (image push and GitHub Release), so a broken pipeline is caught before
 # a tag is cut. Same-repository pull requests also sign and attest the dev
 # archives, so signing is tested too; those signatures name the PR ref, never
-# a v* tag, so they cannot pass for a release (docs/supply-chain.md).
+# a v* tag, so they cannot pass for a release.
 #
 # No build caches (rust-cache, npm, zig) anywhere in this workflow: the release
 # binaries are signed, so they are built from a clean slate and not from a
@@ -394,7 +394,7 @@ jobs:
       - name: Test each platform's image against PostgreSQL
         run: |
           E="-e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e DATABASE_SSL"
-          # docs/deployment.md: the key as a mounted file owned by the image's nonroot user (65532).
+          # The key as a mounted file owned by the image's nonroot user (65532).
           K_FILE="$RUNNER_TEMP/encryption.key"
           openssl rand -base64 32 > "$K_FILE" && chmod 600 "$K_FILE" && sudo chown 65532:65532 "$K_FILE"
           K="-v $K_FILE:/run/secrets/encryption_key:ro -e ENCRYPTION_KEY_FILE=/run/secrets/encryption_key"
@@ -529,7 +529,7 @@ jobs:
           BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/shadoucmdb-$VERSION.provenance.jsonl"
 
-      # The same checks docs/supply-chain.md gives users, run before anything is published.
+      # The same checks users run on a download, run before anything is published.
       - name: Verify every signature and the provenance
         working-directory: dist
         env:
@@ -585,9 +585,9 @@ jobs:
           | Docker (linux/amd64, linux/arm64) | \`docker pull $IMAGE:$VERSION\` |
           | SBOM (CycloneDX JSON) | \`shadoucmdb-$VERSION.cdx.json\` |
 
-          Check downloads with \`sha256sum --ignore-missing -c SHA256SUMS\`. Each archive has a README.txt with install steps; see also [docs/deployment.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/docs/deployment.md).
+          Check downloads with \`sha256sum --ignore-missing -c SHA256SUMS\`. Each archive has a README.txt with install steps.
 
-          Every file has a cosign keyless signature (\`<file>.sigstore.json\`) and SLSA build provenance (\`shadoucmdb-$VERSION.provenance.jsonl\`, also in the repository's attestations); the image is signed and carries provenance and the SBOM. How to verify: [docs/supply-chain.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/docs/supply-chain.md).
+          Every file has a cosign keyless signature (\`<file>.sigstore.json\`) and SLSA build provenance (\`shadoucmdb-$VERSION.provenance.jsonl\`, also in the repository's attestations); the image is signed and carries provenance and the SBOM. Verify them with cosign (\`cosign verify-blob\`, \`cosign verify\`) and \`gh attestation verify\`.
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --verify-tag \

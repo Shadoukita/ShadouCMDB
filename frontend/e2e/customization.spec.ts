@@ -481,17 +481,48 @@ test("export/import: download, dry run shows the diff, apply changes the app", a
   await expect(page.getByText("The file cannot be imported")).toBeVisible();
   await expect(page.getByRole("alert").locator("code").first()).toContainText("dataModel.attributes");
 
-  // A real change: another app name and a new status.
+  // A real change: another app name and a new lookup list.
   const changed = structuredClone(file);
   changed.uiSettings.settings.branding.appName = `${APP} imported`;
-  changed.lookups.statuses.push({ key: `e2e_${stamp}`, name: `E2E status ${stamp}`, isOperational: false, isActive: true, sortOrder: 999 });
+  changed.lookups.lists.push({ key: `e2e_${stamp}`, name: `E2E list ${stamp}`, isActive: true, sortOrder: 999, values: [] });
   await input.setInputFiles({ name: "changed.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(changed)) });
   await expect(page.getByRole("table", { name: "Import summary" })).toBeVisible();
-  await expect(page.locator(".import-changes").filter({ hasText: "Statuses" })).toContainText(`e2e_${stamp}`);
+  await expect(page.locator(".import-changes").filter({ hasText: "Lookup lists" })).toContainText(`e2e_${stamp}`);
   await expect(page.locator(".import-changes").filter({ hasText: "UI settings" })).toContainText(`${APP} imported`);
   await snap(page, "config-import-dry-run");
   await page.getByRole("button", { name: "Apply import" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Apply import" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Imported changed.json" })).toBeVisible();
   await expect(page.locator(".shell-brand")).toContainText(`${APP} imported`);
+});
+
+test("export/import: an older file's former lookup sections are listed as warnings, in the dry run and after applying", async ({ page }) => {
+  // What the API answers for a 0.1.0-rc.1 file: its statuses … owners become the lookup lists of the same name.
+  const warnings = ["statuses", "environments", "locations", "owners"].map((s) => ({
+    path: `lookups.${s}`,
+    message: `Imported as the lookup list “${s}” (the former table is not written).`,
+  }));
+  const result = (mode: string) => ({
+    mode,
+    applied: mode === "apply",
+    schemaChanges: [],
+    summary: [{ section: "lookupLists", created: 1, updated: 0, deleted: 0, unchanged: 0, notInFile: 0 }],
+    changes: [{ section: "lookupLists", key: "status", action: "create", fields: [] }],
+    warnings,
+    uiSettingsIssues: [],
+  });
+  await page.route("**/api/v1/admin/config/import?*", (route) =>
+    route.fulfill({ json: result(new URL(route.request().url()).searchParams.get("mode") ?? "dry_run") }),
+  );
+  await page.goto("/admin/config");
+  await expect(page.getByText("the lookup lists and their values (such as status, environment, location and owner)")).toBeVisible();
+  await page.locator("#config-file").setInputFiles({ name: "rc1.json", mimeType: "application/json", buffer: Buffer.from("{}") });
+  const dry = page.getByRole("status").filter({ hasText: "Worth a look before applying" });
+  for (const w of warnings) await expect(dry.locator("li").filter({ hasText: w.message })).toContainText(w.path);
+  await expect(page.locator(".import-changes").filter({ hasText: "Lookup lists" })).toContainText("status");
+  await page.getByRole("button", { name: "Apply import" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Apply import" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Imported rc1.json" })).toBeVisible();
+  const after = page.getByRole("status").filter({ hasText: "Imported with warnings" });
+  for (const w of warnings) await expect(after.locator("li").filter({ hasText: w.message })).toContainText(w.path);
 });

@@ -54,8 +54,39 @@ fn limit(code: &str, message: &str) -> AppError {
     e
 }
 
+/// Unicode format characters (General_Category Cf, Unicode 16): bidi
+/// overrides and isolates, zero-width characters, the BOM, tags. Invisible,
+/// and some make a name display differently from what it is
+/// (`report<U+202E>xslx.exe`).
+fn is_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{AD}'
+            | '\u{600}'..='\u{605}'
+            | '\u{61C}'
+            | '\u{6DD}'
+            | '\u{70F}'
+            | '\u{890}'..='\u{891}'
+            | '\u{8E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
+}
+
 /// The file name from `X-File-Name` (percent-encoded UTF-8, T16): NFC, 1–255
-/// characters, no control characters, no path.
+/// characters, no control or format characters, no path.
 pub fn file_name(headers: &HeaderMap) -> Result<String, AppError> {
     let invalid = |m: &str, code: &str| AppError::validation(vec![header_field("X-File-Name", m, code)]);
     let raw = headers
@@ -71,8 +102,8 @@ pub fn file_name(headers: &HeaderMap) -> Result<String, AppError> {
     if chars == 0 || chars > 255 {
         return Err(invalid("Must be 1 to 255 characters", "invalid_length"));
     }
-    if name.chars().any(|c| c.is_control()) {
-        return Err(invalid("Must not contain control characters", "invalid_character"));
+    if name.chars().any(|c| c.is_control() || is_format(c)) {
+        return Err(invalid("Must not contain control or invisible formatting characters", "invalid_character"));
     }
     if name.contains('/') || name.contains('\\') {
         return Err(invalid("Must be a file name without a path", "invalid_character"));
@@ -417,4 +448,23 @@ async fn store(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn name(raw: &str) -> Result<String, AppError> {
+        let mut headers = HeaderMap::new();
+        headers.insert(FILE_NAME_HEADER, raw.parse().unwrap());
+        file_name(&headers)
+    }
+
+    #[test]
+    fn file_names_refuse_invisible_and_bidi_characters() {
+        assert_eq!(name("Server%20list%20%C3%BC.xlsx").unwrap(), "Server list ü.xlsx");
+        for raw in ["report%E2%80%AEvsc.xlsx", "a%E2%80%8Bb.csv", "a%E2%81%A6b.csv", "%EF%BB%BFa.csv", "a%C2%ADb.csv"] {
+            assert!(name(raw).is_err(), "{raw}");
+        }
+    }
 }

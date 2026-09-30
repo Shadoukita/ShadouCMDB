@@ -73,7 +73,7 @@ export interface paths {
         put?: never;
         /**
          * Create the first administrator and sign them in (only while no users exist)
-         * @description The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. After 5 wrong tokens from one client network (the IPv4 /24 or IPv6 /64 of the client address), each further one locks setup for that network for 1 s, 2 s, 4 s, ... up to 15 min, and wrong tokens from several networks that add up to 15 lock it for every network; while locked the answer is 429 RATE_LIMITED with Retry-After and the token is not checked. The 409 answer is never throttled. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.
+         * @description The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. The first 4 wrong tokens from one client network (the IPv4 /24 or IPv6 /64 of the client address) cost nothing; from the 5th on, each one locks setup for that network for 1 s, 2 s, 4 s, ... up to 15 min, and wrong tokens from several networks that add up to 15 lock it for every network; while locked the answer is 429 RATE_LIMITED with Retry-After and the token is not checked. The 409 answer is never throttled. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.
          */
         post: operations["completeSetup"];
         delete?: never;
@@ -93,7 +93,7 @@ export interface paths {
         put?: never;
         /**
          * Sign in with username and password
-         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, 503, MFA_REQUIRED and successful answers are not delayed. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.
+         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min; `__Host-shadoucmdb_mfa` behind HTTPS): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, 503, MFA_REQUIRED and successful answers are not delayed. The first 4 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report) cost nothing; from the 5th on, each failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.
          */
         post: operations["login"];
         delete?: never;
@@ -113,7 +113,7 @@ export interface paths {
         put?: never;
         /**
          * Finish signing in with an authenticator code or a recovery code
-         * @description After POST /api/v1/auth/login answered MFA_REQUIRED: reads the `shadoucmdb_mfa` cookie it set and, for a right code, sets the session cookies like login. Each authenticator code works once; each recovery code works once and is then used up. 401 for a wrong code; after 5 wrong codes, or 5 minutes, the password is asked for again (401). Wrong codes count as failed sign-ins for the username: the same lock applies as for wrong passwords (429 RATE_LIMITED with Retry-After).
+         * @description After POST /api/v1/auth/login answered MFA_REQUIRED: reads the `shadoucmdb_mfa` cookie it set (`__Host-shadoucmdb_mfa` behind HTTPS) and, for a right code, sets the session cookies like login. Each authenticator code works once; each recovery code works once and is then used up. 401 for a wrong code; after 5 wrong codes, or 5 minutes, the password is asked for again (401). Wrong codes count as failed sign-ins for the username: the same lock applies as for wrong passwords (429 RATE_LIMITED with Retry-After).
          */
         post: operations["loginSecondFactor"];
         delete?: never;
@@ -172,7 +172,7 @@ export interface paths {
         get?: never;
         /**
          * Change your own password (ends your other sessions and revokes your API tokens)
-         * @description Every API token you own that still works is revoked; create new ones after the change. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Every API token you own that still works is revoked; create new ones after the change. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. The first 4 wrong current passwords cost nothing; from the 5th on, each one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["changeOwnPassword"];
         post?: never;
@@ -213,12 +213,12 @@ export interface paths {
         put?: never;
         /**
          * Start setting up an authenticator app: returns a new secret to confirm
-         * @description Nothing changes at sign-in until the secret is confirmed (POST /api/v1/auth/mfa/totp/confirm); calling this again replaces an unconfirmed secret. 409 when an authenticator is already set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Nothing changes at sign-in until the secret is confirmed (POST /api/v1/auth/mfa/totp/confirm); calling this again replaces an unconfirmed secret. 409 when an authenticator is already set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: the first 4 cost nothing; from the 5th on, each one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["startTotpEnrolment"];
         /**
          * Turn your two-factor authentication off (or cancel an unfinished set-up)
-         * @description Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too and ends your other sessions. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too and ends your other sessions. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: the first 4 cost nothing; from the 5th on, each one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["disableTotp"];
         options?: never;
@@ -257,7 +257,7 @@ export interface paths {
         put?: never;
         /**
          * Replace your recovery codes with 10 new ones (shown once)
-         * @description Needs the password and a current code. The old codes stop working. 409 when MFA is not set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Needs the password and a current code. The old codes stop working. 409 when MFA is not set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: the first 4 cost nothing; from the 5th on, each one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["regenerateRecoveryCodes"];
         delete?: never;
@@ -312,7 +312,7 @@ export interface paths {
         };
         /**
          * Start signing in with an OIDC provider (browser navigation; redirects to the provider)
-         * @description Redirects (302) to the provider's authorization endpoint with the authorization code flow, PKCE (S256), `state` and `nonce`, and sets the `shadoucmdb_oidc` cookie (HttpOnly, 10 min). On a problem it redirects to `/login?ssoError=<code>` instead: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`).
+         * @description Redirects (302) to the provider's authorization endpoint with the authorization code flow, PKCE (S256), `state` and `nonce`, and sets the `shadoucmdb_oidc` cookie (HttpOnly, 10 min; `__Host-shadoucmdb_oidc` behind HTTPS). On a problem it redirects to `/login?ssoError=<code>` instead: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`).
          */
         get: operations["startOidcSignIn"];
         put?: never;
@@ -332,7 +332,7 @@ export interface paths {
         };
         /**
          * The redirect URI to register at OIDC providers: finishes the sign-in
-         * @description `{PUBLIC_URL}/api/v1/auth/oidc/callback`. Needs the `shadoucmdb_oidc` cookie set by the start route in the same browser. Exchanges the code, checks the ID token, creates or updates the account and sets its profiles from the group mappings, then sets the session cookies (like POST /api/v1/auth/login) and redirects (302) to `returnTo`. On a problem it redirects to `/login?ssoError=<code>`: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`).
+         * @description `{PUBLIC_URL}/api/v1/auth/oidc/callback`. Needs the `shadoucmdb_oidc` cookie (`__Host-shadoucmdb_oidc` behind HTTPS) set by the start route in the same browser. Exchanges the code, checks the ID token, creates or updates the account and sets its profiles from the group mappings, then sets the session cookies (like POST /api/v1/auth/login) and redirects (302) to `returnTo`. On a problem it redirects to `/login?ssoError=<code>`: `expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`).
          */
         get: operations["completeOidcSignIn"];
         put?: never;
@@ -474,7 +474,7 @@ export interface paths {
         put?: never;
         /**
          * Upload a CSV or XLSX file for import
-         * @description Requires `cis.import`. The body is the file itself (not JSON, not multipart), with `Content-Type: text/csv` or `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`; any other type is `415`. The format is decided by the file's first bytes: a password-protected workbook or an `.xls` is `415` with `workbook_encrypted_or_xls`, a file that does not match the declared type `415` with `unsupported_format`. The file name goes in the `X-File-Name` header, percent-encoded UTF-8 (1–255 characters, no control characters, no path), never in the URL. An optional `Idempotency-Key` (1–128 visible ASCII characters, kept 24 h) returns the job it created before. Answers `202` with the job, `queued` for analysis, once the last byte is stored. Limits: `IMPORT_MAX_FILE_MB` (`413`), `IMPORT_UPLOAD_TIMEOUT_SECS` for the whole upload and 60 s without data (`408`, `upload_timeout`), and `429` with `import_busy` (an import of yours is running), `import_limit` (20 unfinished imports), `import_rate` (30 uploads an hour) or `import_storage_full` (the server's stored-upload cap). `403` with `import_disabled` while bulk import is off. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `cis.import`. The body is the file itself (not JSON, not multipart), with `Content-Type: text/csv` or `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`; any other type is `415`. The format is decided by the file's first bytes: a password-protected workbook or an `.xls` is `415` with `workbook_encrypted_or_xls`, a file that does not match the declared type `415` with `unsupported_format`. The file name goes in the `X-File-Name` header, percent-encoded UTF-8 (1–255 characters, no control or invisible formatting characters, no path), never in the URL. An optional `Idempotency-Key` (1–128 visible ASCII characters, kept 24 h) returns the job it created before. Answers `202` with the job, `queued` for analysis, once the last byte is stored. Limits: `IMPORT_MAX_FILE_MB` (`413`), `IMPORT_UPLOAD_TIMEOUT_SECS` for the whole upload and 60 s without data (`408`, `upload_timeout`), and `429` with `import_busy` (an import of yours is running), `import_limit` (20 unfinished imports), `import_rate` (30 uploads an hour) or `import_storage_full` (the server's stored-upload cap). `403` with `import_disabled` while bulk import is off. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createImport"];
         delete?: never;
@@ -547,126 +547,6 @@ export interface paths {
         patch: operations["updateImportFileOptions"];
         trace?: never;
     };
-    "/api/v1/imports/{id}/mapping-suggestion": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * A first mapping for the file, from its headers
-         * @description Requires `cis.import`. Headers are compared ignoring case, surrounding spaces and runs of spaces, `_`, `-` and `.`. Per column: the saved mapping's target for the header (with `mappingId`, or when exactly one saved mapping of the class has the same set of headers as the file), else an attribute key, `ident`, `valid from` or `valid until`, else the label of exactly one attribute or relationship type (its forward label for outgoing, reverse label for incoming). A target goes to the first column only. References and relationships match by label. `ident` is never suggested for new CIs to non-administrators. Nothing is stored: send the mapping with `PUT /imports/{id}/mapping`. A class the caller cannot import into is `400 unknown_class`, the same as an unknown key. Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        get: operations["suggestImportMapping"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/imports/{id}/mapping": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Set how the file's columns map to the class
-         * @description Requires `cis.import`. Checked against the file's columns and the data model; every problem is reported at once in `details`, with `field` such as `columns[3].target.key`. Any dry run is dropped and the job is `ready`. In `ready` or `validated`; `409` while a step runs. Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        put: operations["setImportMapping"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/imports/{id}/dry-run": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Check every row without writing anything
-         * @description Requires `cis.import`. Runs the rows through the same validation as the CI API and records what each would do, and every problem. `409` without a mapping (`mapping_required`) or while a step runs (`invalid_state`); `429 import_busy` while another import of the job's owner runs. Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        post: operations["startImportDryRun"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/imports/{id}/issues": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * The problems the dry run and the commit found, by row
-         * @description Requires `cis.import`. In row order. `value` is the cell, cut to 200 characters. At most 10,000 problems are stored per job; `summary.issuesTotal` counts them all. Empty once the file was deleted (24 h after the last activity). Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        get: operations["listImportIssues"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/imports/{id}/error-report": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * The problems as a CSV to fix and upload again
-         * @description Requires `cis.import`. Columns `Row`, `Severity`, `Column`, `Problem`, `Code`, then every original column of the row under its original header; one line per problem, in row order. UTF-8 with a byte order mark, CRLF, the file's delimiter (`,` for workbooks). Every field is quoted, and a field a spreadsheet could read as a formula (starting with `=` `+` `-` `@`, a tab or a line break) or starting with `'` gets a leading `'`; a file uploaded again is recognised as a report by its first five headers and the `'` is taken off. At most the 10,000 stored problems. `404` when the job has no problems or its file expired. A download by anyone other than the job's owner is audited as `import.report_read`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        get: operations["downloadImportErrorReport"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/imports/{id}/commit": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Write the rows the dry run checked
-         * @description Requires `cis.import`. Queues the commit (`202`, then `committing`). Rows are written in file order, 500 per transaction, and planned again against the current data, so changes since the dry run are caught; each row is applied completely or not at all. Rows the dry run found errors in are never written. `409` with `details[0].code`: `dry_run_required`, `dry_run_stale` (the data model changed, or the dry run is older than 24 hours), `has_error_rows` (send `skipErrorRows: true` to import the other rows) or `invalid_state`. `429 import_busy` while another import of the job's owner runs. An optional `Idempotency-Key` returns the job as it is now instead of starting a second commit. Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        post: operations["commitImport"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/imports/{id}/cancel": {
         parameters: {
             query?: never;
@@ -685,58 +565,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/api/v1/import-mappings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Saved mappings, by name
-         * @description Requires `cis.import`. Every saved mapping of a class the caller can view (at most 500 per instance, so not paged). Saved mappings are shared with everyone who has `cis.import`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        get: operations["listImportMappings"];
-        put?: never;
-        /**
-         * Save a mapping for files with the same layout
-         * @description Requires `cis.import`. Needs view on the class; a class the caller cannot view is `400 unknown_class`, the same as an unknown key. Names are unique per class (`409 duplicate_name`). At most 500 per instance (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). The definition's targets are checked when it is applied to a file. Audited as a `create` of `import_mappings`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        post: operations["createImportMapping"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/import-mappings/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * A saved mapping
-         * @description Requires `cis.import`. `404` when its class is hidden from the caller, the same as for a mapping that does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        get: operations["getImportMapping"];
-        put?: never;
-        post?: never;
-        /**
-         * Delete a saved mapping (creator or Administrator)
-         * @description Requires `cis.import`. `?version=` is the version you loaded (`409 VERSION_CONFLICT` otherwise). Jobs that used the mapping keep their own copy. Audited as a `delete` of `import_mappings`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        delete: operations["deleteImportMapping"];
-        options?: never;
-        head?: never;
-        /**
-         * Rename or change a saved mapping (creator or Administrator)
-         * @description Requires `cis.import`. Send the `version` you loaded; `409 VERSION_CONFLICT` if someone saved in between. The class cannot change. Only the user who saved it and administrators may change it (`403`). Audited as an `update` of `import_mappings` with the old and new definition. Needs a signed-in session: API tokens get 403 FORBIDDEN.
-         */
-        patch: operations["updateImportMapping"];
         trace?: never;
     };
     "/api/v1/relationships": {
@@ -918,7 +746,7 @@ export interface paths {
         };
         /**
          * What still refers to a ci class
-         * @description Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getCiClassUsage"];
         put?: never;
@@ -1027,7 +855,7 @@ export interface paths {
         };
         /**
          * What still refers to a attribute definition
-         * @description Requires `datamodel.manage`. Counts of attributeValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of attributeValues, dependentFields. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getAttributeDefinitionUsage"];
         put?: never;
@@ -1116,7 +944,7 @@ export interface paths {
         };
         /**
          * What still refers to a relationship type
-         * @description Requires `datamodel.manage`. Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getRelationshipTypeUsage"];
         put?: never;
@@ -1182,7 +1010,7 @@ export interface paths {
         };
         /**
          * What still refers to a relationship rule
-         * @description Requires `datamodel.manage`. Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getRelationshipRuleUsage"];
         put?: never;
@@ -1310,7 +1138,7 @@ export interface paths {
         /**
          * Create a status (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createStatus"];
         delete?: never;
@@ -1337,7 +1165,7 @@ export interface paths {
         /**
          * Delete a status (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteStatus"];
         options?: never;
@@ -1345,7 +1173,7 @@ export interface paths {
         /**
          * Update a status (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateStatus"];
         trace?: never;
@@ -1360,7 +1188,7 @@ export interface paths {
         /**
          * What still refers to a status
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getStatusUsage"];
         put?: never;
@@ -1388,7 +1216,7 @@ export interface paths {
         /**
          * Create a environment (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createEnvironment"];
         delete?: never;
@@ -1415,7 +1243,7 @@ export interface paths {
         /**
          * Delete a environment (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteEnvironment"];
         options?: never;
@@ -1423,7 +1251,7 @@ export interface paths {
         /**
          * Update a environment (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateEnvironment"];
         trace?: never;
@@ -1438,7 +1266,7 @@ export interface paths {
         /**
          * What still refers to a environment
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getEnvironmentUsage"];
         put?: never;
@@ -1466,7 +1294,7 @@ export interface paths {
         /**
          * Create a location (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createLocation"];
         delete?: never;
@@ -1493,7 +1321,7 @@ export interface paths {
         /**
          * Delete a location (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteLocation"];
         options?: never;
@@ -1501,7 +1329,7 @@ export interface paths {
         /**
          * Update a location (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateLocation"];
         trace?: never;
@@ -1516,7 +1344,7 @@ export interface paths {
         /**
          * What still refers to a location
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLocationUsage"];
         put?: never;
@@ -1544,7 +1372,7 @@ export interface paths {
         /**
          * Create a owner (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createOwner"];
         delete?: never;
@@ -1571,7 +1399,7 @@ export interface paths {
         /**
          * Delete a owner (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteOwner"];
         options?: never;
@@ -1579,7 +1407,7 @@ export interface paths {
         /**
          * Update a owner (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateOwner"];
         trace?: never;
@@ -1594,7 +1422,7 @@ export interface paths {
         /**
          * What still refers to a owner
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getOwnerUsage"];
         put?: never;
@@ -1663,7 +1491,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list
-         * @description Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLookupListUsage"];
         put?: never;
@@ -1732,7 +1560,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list value
-         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLookupListValueUsage"];
         put?: never;
@@ -1774,7 +1602,7 @@ export interface paths {
         put?: never;
         /**
          * Install a starter template (idempotent)
-         * @description Requires `datamodel.manage`. Adds the template's area (a PostgreSQL schema), every class (a table in it), attribute (a column), relationship type and rule, status, environment and location of the template whose key does not exist yet, in one transaction. Existing rows are left unchanged, so installing again is a no-op and renamed or archived rows stay as they are. Each created row is written to the audit log.
+         * @description Requires `datamodel.manage`. Adds the template's area (a PostgreSQL schema), every class (a table in it), attribute (a column), relationship type and rule, lookup list (such as status, environment and location) and lookup value of the template whose key does not exist yet, in one transaction. Existing rows are left unchanged, so installing again is a no-op and renamed or archived rows stay as they are. Each created row is written to the audit log.
          */
         post: operations["installTemplate"];
         delete?: never;
@@ -1792,7 +1620,7 @@ export interface paths {
         };
         /**
          * The UI settings every user sees
-         * @description Any signed-in user may read them; the web UI applies them for everyone. `settings` is the effective document: entries that refer to classes, attributes, statuses, environments or locations that do not exist are left out and listed in `issues` (they stay in the stored document, see the versions).
+         * @description Any signed-in user may read them; the web UI applies them for everyone. `settings` is the effective document: entries that refer to classes, attributes or lookup lists that do not exist are left out and listed in `issues` (they stay in the stored document, see the versions).
          */
         get: operations["getUiSettings"];
         /**
@@ -1896,7 +1724,7 @@ export interface paths {
         };
         /**
          * The logo or favicon image
-         * @description Public (the login page shows it). Answers with the image bytes, an ETag and `Cache-Control: no-cache`; send `If-None-Match` to get 304 Not Modified. Served with a sandboxing Content-Security-Policy.
+         * @description Public (the login page shows it). Answers with the image bytes, an ETag and `Cache-Control: no-store` (like every API response); send `If-None-Match` to get 304 Not Modified. Served with a sandboxing Content-Security-Policy.
          */
         get: operations["getUiAsset"];
         /**
@@ -2136,7 +1964,7 @@ export interface paths {
         };
         /**
          * List OIDC providers and LDAP/AD directories with their group mappings (secrets are never returned)
-         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise).
+         * @description Requires `users.manage`. Only for holders of the built-in Administrator profile (403 otherwise). Answers a plain array of every provider; the list is not paginated.
          */
         get: operations["listIdentityProviders"];
         put?: never;
@@ -2208,7 +2036,7 @@ export interface paths {
         };
         /**
          * Download the whole configuration as one JSON file
-         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookups (statuses, environments, locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings including the logo and favicon, and saved import mappings. Never contains users, passwords, sessions, CIs, relationships, import jobs or the import switch. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched. Likewise `importMappings` is only present when the caller holds `cis.import`, and holds only the mappings of classes the caller can view.
+         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookup lists and their values, permission profiles (not the built-in one) and UI settings including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched.
          */
         get: operations["exportConfig"];
         put?: never;
@@ -2230,7 +2058,7 @@ export interface paths {
         put?: never;
         /**
          * Import a configuration file (dry run or apply)
-         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and name (case-insensitive); an existing one gets the file's description and definition. Keys the target lacks are warnings, and mappings of classes the caller cannot view are skipped. Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Files of earlier versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, as migration 0016 converts those tables, or skipped when the file's lists already hold them; either way a warning names the section. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["importConfig"];
         delete?: never;
@@ -2489,7 +2317,7 @@ export interface components {
             edit: boolean;
             delete: boolean;
         };
-        /** @description A whole configuration: data model, lookups, permission profiles, UI settings and saved import mappings (no users, passwords or CIs) */
+        /** @description A whole configuration: data model, lookups, permission profiles and UI settings (no users, passwords or CIs) */
         ConfigFile: {
             /**
              * @description Always "shadoucmdb.config"
@@ -2498,7 +2326,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 4 and reads 1 to 4
+             * @description File format version; this server writes version 3 and reads 1 to 3
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -2518,13 +2346,6 @@ export interface components {
                 }[];
             }[];
             uiSettings?: components["schemas"]["UiSettingsSection"] | null;
-            importMappings?: {
-                name: string;
-                description?: string | null;
-                /** @description Stable machine key, lower_snake_case */
-                classKey: string;
-                definition: components["schemas"]["ImportMappingDefinition"];
-            }[];
         };
         ConfigurationItem: {
             /** Format: uuid */
@@ -2903,6 +2724,8 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
+        /** @description Every identity provider, as a bare JSON array (not paginated). */
+        IdentityProviderList: components["schemas"]["IdentityProvider"][];
         /** @description The identity provider an account signs in through */
         IdentityProviderRef: {
             /** Format: uuid */
@@ -2927,7 +2750,7 @@ export interface components {
         ImportChange: {
             /** @description e.g. classes, attributes, lookupListValues, permissionProfiles, uiSettings */
             section: string;
-            /** @description The row's key in the file (class.key for attributes, list.value for list values, kind:name for owners) */
+            /** @description The row's key in the file (class.key for attributes, list.value for list values) */
             key: string;
             /** @enum {string} */
             action: "create" | "update" | "delete";
@@ -2956,20 +2779,6 @@ export interface components {
             target: components["schemas"]["ImportColumnTarget"];
             emptyCells?: components["schemas"]["ImportEmptyCells"] | null;
             options?: components["schemas"]["ImportColumnOptions"] | null;
-        };
-        /** @description How one column of the file was matched. */
-        ImportColumnMatch: {
-            /**
-             * Format: int32
-             * @description 0-based column of the file
-             */
-            column: number;
-            via?: components["schemas"]["ImportMatchVia"] | null;
-            /**
-             * @description Why an unmapped column was left out: `ambiguous_label` (several targets have that label),
-             *     `duplicate_target` (an earlier column took the target) or `ident_admin_only`
-             */
-            hint?: string | null;
         };
         /** @description Per-column overrides of the job's options. */
         ImportColumnOptions: {
@@ -3026,14 +2835,6 @@ export interface components {
         };
         /** @enum {string} */
         ImportDateFormat: "YYYY-MM-DD" | "DD.MM.YYYY" | "MM/DD/YYYY";
-        /** @description A column of a saved mapping, found in a file by its header. */
-        ImportDefinitionColumn: {
-            /** @description The column's header; compared ignoring case, spaces, `_`, `-` and `.` */
-            header: string;
-            target: components["schemas"]["ImportColumnTarget"];
-            emptyCells?: components["schemas"]["ImportEmptyCells"] | null;
-            options?: components["schemas"]["ImportColumnOptions"] | null;
-        };
         ImportDryRun: {
             /** Format: date-time */
             finishedAt: string;
@@ -3089,34 +2890,6 @@ export interface components {
         };
         /** @enum {string} */
         ImportFileFormat: "csv" | "xlsx";
-        /** @description A problem the dry run or the commit found in one row (§3.2). */
-        ImportIssue: {
-            /**
-             * Format: int32
-             * @description Row number in the file (the header is row 1)
-             */
-            row: number;
-            /**
-             * Format: int32
-             * @description 0-based column, when the problem is in one cell
-             */
-            column?: number | null;
-            /** @description The column's header */
-            header?: string | null;
-            /** @description The field concerned, e.g. `attributes.os` */
-            field?: string | null;
-            /** @description The cell, at most 200 characters */
-            value?: string | null;
-            severity: components["schemas"]["ImportIssueSeverity"];
-            code: string;
-            message: string;
-        };
-        ImportIssueList: {
-            data: components["schemas"]["ImportIssue"][];
-            page: components["schemas"]["PageMeta"];
-        };
-        /** @enum {string} */
-        ImportIssueSeverity: "error" | "warning";
         /** @description A bulk import job (§3.1). */
         ImportJob: {
             /** Format: uuid */
@@ -3227,19 +3000,6 @@ export interface components {
             options?: components["schemas"]["ImportMappingOptions"];
             columns: components["schemas"]["ImportColumnMapping"][];
         };
-        /**
-         * @description A mapping without its class, with columns named by header, so it applies
-         *     to any file with those headers. Save `ignore` targets for the columns the
-         *     layout skips: a file whose header set equals the definition's headers gets
-         *     the mapping suggested without being asked (§3.3).
-         */
-        ImportMappingDefinition: {
-            mode: components["schemas"]["ImportMode"];
-            key?: components["schemas"]["ImportMatchKey"] | null;
-            emptyCells?: components["schemas"]["ImportEmptyCells"];
-            options?: components["schemas"]["ImportMappingOptions"];
-            columns: components["schemas"]["ImportDefinitionColumn"][];
-        };
         /** @description The job's options (§3.2). */
         ImportMappingOptions: {
             /** @description Trim spaces around text values (default true) */
@@ -3251,13 +3011,6 @@ export interface components {
             /** @description Separates several relationship targets in one cell (default `;`) */
             listSeparator?: string;
         };
-        ImportMappingSuggestion: {
-            /** @description Ready for `PUT /imports/{id}/mapping`; check it before sending */
-            mapping: components["schemas"]["ImportMapping"];
-            /** @description One entry per column of the file */
-            matchedBy: components["schemas"]["ImportColumnMatch"][];
-            savedMapping?: components["schemas"]["ImportSavedMappingRef"] | null;
-        };
         /**
          * @description How the other CI of a reference or relationship is found.
          * @enum {string}
@@ -3267,11 +3020,6 @@ export interface components {
             /** @description `ident` or `attributes.<key>` (a text, integer, IP or CIDR attribute) */
             field: string;
         };
-        /**
-         * @description Why a column got its target.
-         * @enum {string}
-         */
-        ImportMatchVia: "key" | "label" | "saved_mapping";
         /** @enum {string} */
         ImportMode: "create_only" | "update_only" | "create_or_update";
         ImportOwner: {
@@ -3347,14 +3095,6 @@ export interface components {
         };
         /** @enum {string} */
         ImportRowOutcome: "create" | "update" | "unchanged" | "error";
-        /** @description The saved mapping a suggestion started from. */
-        ImportSavedMappingRef: {
-            /** Format: uuid */
-            id: string;
-            name: string;
-            /** @description True when it was picked because its headers equal the file's, not asked for with `mappingId` */
-            byHeaders: boolean;
-        };
         /** @description Whether bulk import may be used on this instance, and its limits. */
         ImportSettings: {
             /** @description Import is switched on and not forbidden by the server configuration. */
@@ -3518,6 +3258,10 @@ export interface components {
             name: string;
         };
         LookupSection: {
+            /**
+             * @deprecated
+             * @description Deprecated, read on import only: rows of the former statuses table, written by exports of 0.1.0-rc.1 and earlier builds. Exports leave it out; the values are in `lists` (list "status"). On import the rows become values of the lookup list "status", as migration 0016 converts the table, unless the file's own lists already hold them; the former table is never written.
+             */
             statuses?: {
                 /** @description Stable machine key, lower_snake_case */
                 key: string;
@@ -3527,6 +3271,10 @@ export interface components {
                 sortOrder?: number;
                 isActive?: boolean;
             }[];
+            /**
+             * @deprecated
+             * @description Deprecated, read on import only: rows of the former environments table, written by exports of 0.1.0-rc.1 and earlier builds. Exports leave it out; the values are in `lists` (list "environment"). On import the rows become values of the lookup list "environment", as migration 0016 converts the table, unless the file's own lists already hold them; the former table is never written.
+             */
             environments?: {
                 /** @description Stable machine key, lower_snake_case */
                 key: string;
@@ -3535,6 +3283,10 @@ export interface components {
                 sortOrder?: number;
                 isActive?: boolean;
             }[];
+            /**
+             * @deprecated
+             * @description Deprecated, read on import only: rows of the former locations table, written by exports of 0.1.0-rc.1 and earlier builds. Exports leave it out; the values are in `lists` (list "location"). On import the rows become values of the lookup list "location", as migration 0016 converts the table, unless the file's own lists already hold them; the former table is never written.
+             */
             locations?: {
                 /** @description Stable machine key, lower_snake_case */
                 key: string;
@@ -3547,6 +3299,10 @@ export interface components {
                 sortOrder?: number;
                 isActive?: boolean;
             }[];
+            /**
+             * @deprecated
+             * @description Deprecated, read on import only: rows of the former owners table, written by exports of 0.1.0-rc.1 and earlier builds. Exports leave it out; the values are in `lists` (list "owner"). On import the rows become values of the lookup list "owner", as migration 0016 converts the table, unless the file's own lists already hold them; the former table is never written.
+             */
             owners?: {
                 /** @enum {string} */
                 kind: "person" | "team";
@@ -3877,31 +3633,11 @@ export interface components {
             data: components["schemas"]["RelationshipType"][];
             page: components["schemas"]["PageMeta"];
         };
-        /** @description A saved mapping (D9). */
-        SavedImportMapping: {
-            /** Format: uuid */
-            id: string;
-            name: string;
-            description?: string | null;
-            /** @description The class the mapping imports into, by key */
-            classKey: string;
-            definition: components["schemas"]["ImportMappingDefinition"];
-            /**
-             * Format: int32
-             * @description Send it back with changes and deletes (optimistic concurrency)
-             */
-            version: number;
-            /** Format: date-time */
-            createdAt: string;
-            createdBy: components["schemas"]["ImportOwner"];
-            /** Format: date-time */
-            updatedAt: string;
-            updatedBy: components["schemas"]["ImportOwner"];
-        };
-        SavedImportMappingList: {
-            /** @description Sorted by name */
-            data: components["schemas"]["SavedImportMapping"][];
-        };
+        /**
+         * @description The operation that removes a record, which `inUse` and `blocking` refer to
+         * @enum {string}
+         */
+        Removal: "delete" | "purge";
         /** @description One applied schema change: the exact DDL, in order, and its impact */
         SchemaChange: {
             /** Format: uuid */
@@ -4143,7 +3879,7 @@ export interface components {
             size: number;
             /** @description Hex SHA-256 of the file (also its ETag) */
             sha256: string;
-            /** @description Where to load it from; the `v` parameter changes with the content, so it can be cached */
+            /** @description Where to load it from; the `v` parameter changes with the content */
             url: string;
             /** Format: date-time */
             updatedAt: string;
@@ -4536,13 +4272,15 @@ export interface components {
             count: number | null;
             /** @description True when the count spans CIs of a class the caller may not view: `count` is then null */
             withheld: boolean;
-            /** @description A non-zero count prevents deleting the row; retire it with isActive=false instead */
+            /** @description A non-zero count prevents removing the row (the operation named by `removal`). A non-blocking count is removed together with the row. */
             blocking: boolean;
         };
         /** @description What still refers to a record, so the UI can warn before a destructive change */
         UsageReport: {
-            /** @description True when a blocking count is non-zero: DELETE would return 409 IN_USE (decided on every count, withheld ones included) */
+            /** @description True when a blocking count is non-zero: the removal (see `removal`) would return 409 IN_USE (decided on every count, withheld ones included) */
             inUse: boolean;
+            /** @description Which operation removes the record: `delete`, or `purge` for a type or field, which DELETE only archives */
+            removal: components["schemas"]["Removal"];
             data: components["schemas"]["UsageCount"][];
         };
         User: {
@@ -4573,34 +4311,6 @@ export interface components {
             data: components["schemas"]["User"][];
             page: components["schemas"]["PageMeta"];
         };
-        Vec: {
-            /** Format: uuid */
-            id: string;
-            kind: components["schemas"]["ProviderKind"];
-            /** @description Shown on the sign-in button and in the audit trail */
-            name: string;
-            /** @description Disabled: nobody signs in through it and its accounts' sessions ended */
-            isEnabled: boolean;
-            /**
-             * Format: int32
-             * @description Button order (OIDC); the order directories are asked in (LDAP)
-             */
-            sortOrder: number;
-            /** @description Extra CA certificates (PEM) trusted for this provider */
-            caCertificate: string | null;
-            oidc: components["schemas"]["OidcConfig"] | null;
-            ldap: components["schemas"]["LdapConfig"] | null;
-            groupMappings: components["schemas"]["GroupMapping"][];
-            /**
-             * Format: int64
-             * @description Accounts that sign in through this provider
-             */
-            userCount: number;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-        }[];
         VersionInfo: {
             /** @description Version of the running server (SemVer), e.g. 0.1.0; compare it with security advisories */
             version: string;
@@ -4636,6 +4346,15 @@ export interface operations {
                     "application/json": components["schemas"]["Liveness"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -4663,6 +4382,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VersionInfo"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
@@ -4703,6 +4431,15 @@ export interface operations {
                     "application/json": components["schemas"]["Readiness"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -4739,6 +4476,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupStatus"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
@@ -4811,8 +4557,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4901,6 +4665,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
@@ -4982,6 +4764,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
@@ -5054,6 +4854,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -5103,6 +4912,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5184,8 +5002,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5267,6 +5103,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -5338,8 +5183,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5436,8 +5299,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5535,8 +5416,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5626,8 +5525,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5727,6 +5644,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -5763,6 +5689,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SignInOptions"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
@@ -5808,6 +5743,15 @@ export interface operations {
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5864,6 +5808,15 @@ export interface operations {
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5949,6 +5902,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6044,8 +6006,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6138,6 +6118,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -6205,6 +6194,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6313,8 +6311,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6416,6 +6432,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -6499,6 +6524,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -6548,6 +6582,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6626,8 +6669,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6710,6 +6771,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6805,7 +6875,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body too large */
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
             413: {
                 headers: {
                     [name: string]: unknown;
@@ -6918,6 +6988,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -6994,6 +7073,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -7061,6 +7149,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7165,8 +7262,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7176,581 +7291,6 @@ export interface operations {
             };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    suggestImportMapping: {
-        parameters: {
-            query: {
-                /** @description The class to import into, by key */
-                classKey: string;
-                /** @description Start from this saved mapping (of the same class) */
-                mappingId?: string;
-            };
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ImportMappingSuggestion"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    setImportMapping: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description The target class, by key */
-                    classKey: string;
-                    mode: components["schemas"]["ImportMode"];
-                    key?: components["schemas"]["ImportMatchKey"] | null;
-                    emptyCells?: components["schemas"]["ImportEmptyCells"];
-                    options?: components["schemas"]["ImportMappingOptions"];
-                    columns: components["schemas"]["ImportColumnMapping"][];
-                };
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ImportJob"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
-            415: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    startImportDryRun: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Success */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ImportJob"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    listImportIssues: {
-        parameters: {
-            query?: {
-                /** @description Page size (1-200) */
-                limit?: number;
-                /** @description Rows to skip */
-                offset?: number;
-                severity?: "error" | "warning";
-                /** @description Only problems with this code */
-                code?: string;
-                /** @description Only problems in this 0-based column */
-                column?: number;
-            };
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ImportIssueList"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    downloadImportErrorReport: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/csv": string;
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    commitImport: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /**
-                     * @description Import the valid rows and leave out the rows the dry run found errors
-                     *     in. Without it, a dry run with error rows refuses the commit
-                     *     (`has_error_rows`).
-                     */
-                    skipErrorRows?: boolean;
-                };
-            };
-        };
-        responses: {
-            /** @description Success */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ImportJob"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
-            415: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description The Idempotency-Key was already used for another operation or target (code IDEMPOTENCY_KEY_REUSED, details[0].code idempotency_key_reused). Nothing was changed */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
-            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7834,150 +7374,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    listImportMappings: {
-        parameters: {
-            query?: {
-                /** @description Only the mappings of this class */
-                classKey?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SavedImportMappingList"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    createImportMapping: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    name: string;
-                    description?: string | null;
-                    classKey: string;
-                    definition: components["schemas"]["ImportMappingDefinition"];
-                };
-            };
-        };
-        responses: {
-            /** @description Success */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SavedImportMapping"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7987,285 +7385,6 @@ export interface operations {
             };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
-            415: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    getImportMapping: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SavedImportMapping"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    deleteImportMapping: {
-        parameters: {
-            query: {
-                /** @description The version you loaded */
-                version: number;
-            };
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Success, no content */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Unexpected server error (code INTERNAL_ERROR) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    updateImportMapping: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /**
-                     * Format: int32
-                     * @description The version you loaded; if someone saved in between, `409 VERSION_CONFLICT`
-                     */
-                    version: number;
-                    name?: string;
-                    /** @description Null removes the description */
-                    description?: string | null;
-                    definition?: components["schemas"]["ImportMappingDefinition"];
-                };
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SavedImportMapping"];
-                };
-            };
-            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Not found (code NOT_FOUND) */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
-            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8357,6 +7476,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -8437,8 +7565,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8531,6 +7677,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -8598,6 +7753,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8689,8 +7853,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8782,6 +7964,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -8860,8 +8051,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8963,6 +8172,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -9030,6 +8248,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9134,8 +8361,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9244,8 +8489,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9344,6 +8607,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -9432,8 +8704,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9535,6 +8825,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -9602,6 +8901,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9709,8 +9017,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9812,6 +9138,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -9884,6 +9219,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9974,8 +9318,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10066,6 +9428,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10182,8 +9553,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10285,6 +9674,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -10352,6 +9750,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10482,8 +9889,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10585,6 +10010,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -10668,8 +10102,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10765,6 +10217,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -10844,8 +10305,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10938,6 +10417,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -11005,6 +10493,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11108,8 +10605,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11202,6 +10717,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -11273,6 +10797,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11356,8 +10889,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11450,6 +11001,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -11517,6 +11077,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11620,8 +11189,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11714,6 +11301,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -11781,6 +11377,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11857,6 +11462,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11951,8 +11565,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12027,6 +11659,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12119,6 +11760,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -12195,6 +11845,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -12235,6 +11894,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12327,6 +11995,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -12378,6 +12055,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12445,6 +12131,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12537,6 +12232,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -12612,6 +12316,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -12652,6 +12365,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12744,6 +12466,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -12795,6 +12526,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12862,6 +12602,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12954,6 +12703,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -13032,6 +12790,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -13072,6 +12839,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13164,6 +12940,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -13215,6 +13000,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13282,6 +13076,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13374,6 +13177,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -13452,6 +13264,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -13492,6 +13313,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13584,6 +13414,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -13635,6 +13474,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13702,6 +13550,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13794,6 +13651,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -13864,6 +13730,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13948,8 +13823,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14042,6 +13935,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -14109,6 +14011,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14213,8 +14124,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14307,6 +14236,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -14379,6 +14317,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14466,8 +14413,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14560,6 +14525,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -14627,6 +14601,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14732,8 +14715,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14826,6 +14827,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -14875,6 +14885,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14958,6 +14977,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -15007,6 +15035,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15091,8 +15128,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15145,6 +15200,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicBranding"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
@@ -15210,6 +15274,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15286,6 +15359,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15380,8 +15462,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15456,6 +15556,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15542,6 +15651,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
@@ -15618,6 +15745,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15710,6 +15846,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -15780,6 +15925,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15869,8 +16023,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15963,6 +16135,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -16030,6 +16211,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16134,8 +16324,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16238,8 +16446,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16323,6 +16549,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16419,8 +16654,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16513,6 +16766,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -16580,6 +16842,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16699,8 +16970,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16799,8 +17088,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16901,6 +17208,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -16982,6 +17298,24 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17074,6 +17408,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -17148,6 +17491,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -17183,7 +17535,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Vec"];
+                    "application/json": components["schemas"]["IdentityProviderList"];
                 };
             };
             /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
@@ -17197,6 +17549,15 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17318,8 +17679,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17412,6 +17791,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -17479,6 +17867,15 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17617,8 +18014,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17726,6 +18141,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
                 headers: {
@@ -17791,6 +18224,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Unexpected server error (code INTERNAL_ERROR) */
             500: {
                 headers: {
@@ -17831,7 +18273,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 4 and reads 1 to 4
+                     * @description File format version; this server writes version 3 and reads 1 to 3
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
@@ -17851,13 +18293,6 @@ export interface operations {
                         }[];
                     }[];
                     uiSettings?: components["schemas"]["UiSettingsSection"] | null;
-                    importMappings?: {
-                        name: string;
-                        description?: string | null;
-                        /** @description Stable machine key, lower_snake_case */
-                        classKey: string;
-                        definition: components["schemas"]["ImportMappingDefinition"];
-                    }[];
                 };
             };
         };
@@ -17898,6 +18333,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
                 headers: {
@@ -17907,7 +18351,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Body too large */
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
             413: {
                 headers: {
                     [name: string]: unknown;

@@ -682,7 +682,8 @@ pub async fn verified_sign_in(
     let (_, cookies) =
         match super::auth::try_open_session(pool, auth, headers, ctx, user_id, &username, method, None).await? {
             Ok(opened) => opened,
-            Err(Changed::Account) => return Ok(Err(Refusal::AccountDisabled)),
+            // MfaEnrolled refuses password sign-ins only.
+            Err(Changed::Account | Changed::MfaEnrolled) => return Ok(Err(Refusal::AccountDisabled)),
             Err(Changed::Provider) => return Ok(Err(Refusal::ProviderDisabled)),
         };
     tracing::info!(user = %username, provider = %provider.name, ip = ?ctx.client.ip, purged_sessions = purged, provider_mfa = evidence.as_str(), "signed in through OIDC");
@@ -699,7 +700,7 @@ async fn oidc_callback(
     // Only a callback carrying the state of this browser's own sign-in goes
     // further: the sealed cookie must open, be under 10 minutes old and hold
     // the `state` the provider sent back.
-    let (Some(state), Some(cookie)) = (q.get("state"), session::cookie(headers, session::OIDC_COOKIE)) else {
+    let (Some(state), Some(cookie)) = (q.get("state"), session::oidc_state(&auth.config, headers)) else {
         return Ok(failed(auth, headers, "expired"));
     };
     let key = auth.oidc_state_key(pool).await?;
@@ -817,7 +818,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Start signing in with an OIDC provider (browser navigation; redirects to the provider)")
             .description(format!(
-                "Redirects (302) to the provider's authorization endpoint with the authorization code flow, PKCE (S256), `state` and `nonce`, and sets the `shadoucmdb_oidc` cookie (HttpOnly, 10 min). On a problem it redirects to `/login?ssoError=<code>` instead: {SSO_ERRORS}."
+                "Redirects (302) to the provider's authorization endpoint with the authorization code flow, PKCE (S256), `state` and `nonce`, and sets the `shadoucmdb_oidc` cookie (HttpOnly, 10 min; `__Host-shadoucmdb_oidc` behind HTTPS). On a problem it redirects to `/login?ssoError=<code>` instead: {SSO_ERRORS}."
             ))
             .public()
             .status(StatusCode::FOUND)
@@ -828,7 +829,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("The redirect URI to register at OIDC providers: finishes the sign-in")
             .description(format!(
-                "`{{PUBLIC_URL}}/api/v1/auth/oidc/callback`. Needs the `shadoucmdb_oidc` cookie set by the start route in the same browser. Exchanges the code, checks the ID token, creates or updates the account and sets its profiles from the group mappings, then sets the session cookies (like POST /api/v1/auth/login) and redirects (302) to `returnTo`. On a problem it redirects to `/login?ssoError=<code>`: {SSO_ERRORS}."
+                "`{{PUBLIC_URL}}/api/v1/auth/oidc/callback`. Needs the `shadoucmdb_oidc` cookie (`__Host-shadoucmdb_oidc` behind HTTPS) set by the start route in the same browser. Exchanges the code, checks the ID token, creates or updates the account and sets its profiles from the group mappings, then sets the session cookies (like POST /api/v1/auth/login) and redirects (302) to `returnTo`. On a problem it redirects to `/login?ssoError=<code>`: {SSO_ERRORS}."
             ))
             .public()
             .status(StatusCode::FOUND)

@@ -1,6 +1,6 @@
 name: Supply chain
 
-# Dependency and secret hygiene (docs/supply-chain.md): cargo-deny (RustSec
+# Dependency and secret hygiene: cargo-deny (RustSec
 # advisories, licences, sources), npm audit (high and critical), gitleaks over
 # the whole git history, a CycloneDX SBOM of every build, dependency review on
 # pull requests and a check that every action is pinned by commit SHA. CodeQL
@@ -138,7 +138,7 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           elif grep -qiE 'dependency (review|graph).*(not supported|not enabled|disabled)|ensure that dependency graph is enabled|\(HTTP 404\)|^gh: Forbidden \(HTTP 403\)$' <<<"$out"; then
             reason=$(tr -s '\n\r:' '   ' <<<"$out" | cut -c1-200)
-            echo "::warning title=Dependency review skipped::Dependency graph is off for this repository (API said: $reason). Enable it in Settings -> Code security (see docs/supply-chain.md)."
+            echo "::warning title=Dependency review skipped::Dependency graph is off for this repository (API said: $reason). Enable it in Settings -> Code security."
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           else
             echo "::notice title=Dependency graph probe::$(tr -s '\n\r:' '   ' <<<"$out" | cut -c1-200)"

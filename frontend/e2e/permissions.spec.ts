@@ -129,7 +129,7 @@ test("a restricted user cannot call any administration endpoint", async ({ reque
     ["create a CI class", () => restricted.send("POST", "/ci-classes", { key: `x_${stamp}`, name: `X ${stamp}` })],
     ["rename a CI class", () => restricted.send("PATCH", `/ci-classes/${applicationId}`, { name: "Renamed by a restricted user" })],
     ["add an attribute", () => restricted.send("POST", "/attribute-definitions", { classId: applicationId, key: `x_${stamp}`, name: "X", dataType: "string" })],
-    ["create a status", () => restricted.send("POST", "/statuses", { key: `x_${stamp}`, name: `X ${stamp}` })],
+    ["create a lookup list", () => restricted.send("POST", "/lookup-lists", { key: `x_${stamp}`, name: `X ${stamp}` })],
   ];
   for (const [what, call] of refused) {
     const res = await call();
@@ -446,12 +446,16 @@ test("repeated wrong passwords lock the username with 429 and Retry-After", asyn
   await anon.dispose();
 
   // The UI explains the lock instead of claiming the password is wrong.
+  // The first lock lasts 1 s and can lapse before the page is up; a lapsed
+  // attempt fails again and doubles the lock, so the next submit lands in it.
   await page.context().clearCookies();
   await page.goto("/login");
   await page.getByLabel("Username").fill(victim);
-  await page.getByLabel("Password").fill("wrong-again");
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("alert")).toContainText(/too many|try again/i);
+  await expect(async () => {
+    await page.getByLabel("Password").fill("wrong-again");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByRole("alert")).toContainText(/too many|try again/i, { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
 });
 
 test("concurrent wrong passwords cannot get past the per-username limit (GH#118)", async ({ playwright, baseURL }) => {

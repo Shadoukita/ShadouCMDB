@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHistory, type RouteLocationNormalized } from "vue-router";
 import CiCreatePage from "./pages/CiCreatePage.vue";
 import CiDetailPage from "./pages/CiDetailPage.vue";
 import CiEditPage from "./pages/CiEditPage.vue";
@@ -19,7 +19,6 @@ import ClassEditPage from "./pages/admin/datamodel/ClassEditPage.vue";
 import ClassesPage from "./pages/admin/datamodel/ClassesPage.vue";
 import DropdownsPage from "./pages/admin/datamodel/DropdownsPage.vue";
 import RelationshipTypesPage from "./pages/admin/datamodel/RelationshipTypesPage.vue";
-import LookupsPage from "./pages/admin/lookups/LookupsPage.vue";
 import ProfileEditPage from "./pages/admin/ProfileEditPage.vue";
 import ProfilesPage from "./pages/admin/ProfilesPage.vue";
 import UserEditPage from "./pages/admin/UserEditPage.vue";
@@ -97,10 +96,10 @@ export const router = createRouter({
         { path: "classes/:id", component: ClassEditPage, meta: { permissions: section("classes") } },
         { path: "relationships", component: RelationshipTypesPage, meta: { permissions: section("relationships") } },
         { path: "dropdowns", component: DropdownsPage, meta: { permissions: section("dropdowns") } },
-        { path: "lookups", redirect: "/admin/lookups/statuses" },
-        // Lookup lists moved to Dropdowns; bookmarks (?list=…) keep working.
-        { path: "lookups/lists", redirect: (to) => ({ path: "/admin/dropdowns", query: to.query }) },
-        { path: "lookups/:kind", component: LookupsPage, meta: { permissions: section("lookups") } },
+        // Lookup lists moved to Dropdowns, and the read-only tabs of the former status, environment, location and
+        // owner tables are gone (their values are the lookup lists of the same name): bookmarks land on Dropdowns.
+        // /admin/lookups/lists?list=… keeps its list.
+        { path: "lookups/:kind?", redirect: (to) => ({ path: "/admin/dropdowns", query: to.params.kind === "lists" ? to.query : {} }) },
         { path: "templates", component: TemplatesPage, meta: { permissions: section("templates") } },
         { path: "customization", redirect: "/admin/customization/branding" },
         { path: "customization/:section", component: CustomizationPage, meta: { permissions: section("customization") } },
@@ -120,6 +119,16 @@ export function safeRedirect(value: unknown): string {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") ? value : "/";
 }
 
+/**
+ * The sign-in query that brings the user back to `route`. The two-factor set-up is only a stop on the
+ * way (after sign-in the guard sends a user without the requirement to /account), so its own
+ * destination is kept instead.
+ */
+export function loginQuery(route: RouteLocationNormalized): { redirect?: string } {
+  const back = route.path === TWO_FACTOR_SETUP ? safeRedirect(route.query.redirect) : route.fullPath;
+  return back === "/" ? {} : { redirect: back };
+}
+
 // Setup → sign-in → app. The API enforces every permission; this only decides which screen to show.
 router.beforeEach(async (to) => {
   const session = useSessionStore();
@@ -129,7 +138,7 @@ router.beforeEach(async (to) => {
   if (session.status === "anonymous") {
     if (to.path === "/login") return true;
     if (to.path === "/setup" || to.meta.public) return "/login";
-    return { path: "/login", query: to.fullPath === "/" ? {} : { redirect: to.fullPath } };
+    return { path: "/login", query: loginQuery(to) };
   }
   if (to.meta.public) return safeRedirect(to.query.redirect);
   // Until the required two-factor set-up is done, the API refuses everything else (403 MFA_ENROLMENT_REQUIRED).

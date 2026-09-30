@@ -290,7 +290,7 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
         let err = anyhow::Error::new(e).context("migration failed");
         if denied {
             // The usual cause on a three-role install: migrating with the API's DATABASE_URL.
-            err.context("this database user may not change the schema; set MIGRATION_DATABASE_URL to the schema owner role (shadoucmdb_owner in sql/bootstrap/), see docs/deployment.md")
+            err.context("this database user may not change the schema; set MIGRATION_DATABASE_URL to the schema owner role (shadoucmdb_owner in sql/bootstrap/)")
         } else {
             err
         }

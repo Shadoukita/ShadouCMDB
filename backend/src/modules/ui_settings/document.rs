@@ -477,6 +477,7 @@ fn note_text_schema() -> Schema {
             "note: the text (required for that kind). Plain text or limited Markdown (emphasis, lists, links); \
              raw HTML is shown as text, never rendered",
         ))
+        .extensions(Some(crate::api::schemas::multiline_extension()))
         .into()
 }
 

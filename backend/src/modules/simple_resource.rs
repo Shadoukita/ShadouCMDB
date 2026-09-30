@@ -36,7 +36,9 @@ pub struct Usage {
     /// told only to a caller who may view them all (GH#265). `None`: the count
     /// is over data-model rows, which every signed-in user may read.
     pub spans: Option<&'static str>,
-    /// Blocks a hard delete. Non-blocking references are removed with the row (cascade).
+    /// A non-zero count refuses removing the row (409 IN_USE): DELETE, or the
+    /// purge for a resource DELETE only archives ([`Resource::ARCHIVE_ON_DELETE`]).
+    /// Non-blocking references are removed with the row (cascade).
     pub blocking: bool,
 }
 
@@ -75,16 +77,28 @@ pub struct UsageCount {
     pub count: Count,
     /// True when the count spans CIs of a class the caller may not view: `count` is then null
     pub withheld: bool,
-    /// A non-zero count prevents deleting the row; retire it with isActive=false instead
+    /// A non-zero count prevents removing the row (the operation named by `removal`). A non-blocking count is removed together with the row.
     pub blocking: bool,
+}
+
+/// The operation that removes a record, which `inUse` and `blocking` refer to
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum Removal {
+    /// DELETE removes the record
+    Delete,
+    /// DELETE only archives the record (isActive=false; nothing blocks that, and nothing is removed); POST …/purge removes it
+    Purge,
 }
 
 /// What still refers to a record, so the UI can warn before a destructive change
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageReport {
-    /// True when a blocking count is non-zero: DELETE would return 409 IN_USE (decided on every count, withheld ones included)
+    /// True when a blocking count is non-zero: the removal (see `removal`) would return 409 IN_USE (decided on every count, withheld ones included)
     pub in_use: bool,
+    /// Which operation removes the record: `delete`, or `purge` for a type or field, which DELETE only archives
+    pub removal: Removal,
     pub data: Vec<UsageCount>,
 }
 
@@ -329,7 +343,8 @@ pub async fn update<R: Resource>(
     Ok(row)
 }
 
-/// The usage counts and whether a blocking one is non-zero. `in_use` is decided
+/// The usage counts and whether a blocking one is non-zero, i.e. whether the
+/// removal (DELETE, or the purge of an archivable resource) is refused. `in_use` is decided
 /// on every count; only what the caller may view is told ([`Usage::spans`]).
 async fn usage_counts<R: Resource>(
     conn: &mut PgConnection,
@@ -357,7 +372,8 @@ async fn usage_counts<R: Resource>(
             blocking: u.blocking,
         });
     }
-    Ok(UsageReport { in_use, data })
+    let removal = if R::ARCHIVE_ON_DELETE { Removal::Purge } else { Removal::Delete };
+    Ok(UsageReport { in_use, removal, data })
 }
 
 pub async fn usage<R: Resource>(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<UsageReport, AppError> {
@@ -479,8 +495,13 @@ pub fn routes<R: Resource>() -> Vec<Route> {
                 .tag(R::TAG)
                 .summary(format!("What still refers to a {label}"))
                 .description(format!(
-                    "Counts of {}. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
-                    kinds.join(", ")
+                    "Counts of {}. Check it before deleting or restructuring: {} A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
+                    kinds.join(", "),
+                    if R::ARCHIVE_ON_DELETE {
+                        "DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge."
+                    } else {
+                        "a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it."
+                    }
                 ))
                 .requires(GlobalPermission::DatamodelManage)
                 .errors(&[ErrorCode::NotFound])
@@ -542,7 +563,9 @@ fn write_routes<R: Resource>(label: &str, by_id: &str) -> Vec<Route> {
 }
 
 /// Create, update and delete of a resource whose writes moved elsewhere ([`Resource::WRITES_GONE`]):
-/// same paths, operation ids and permission as before, so a client learns why instead of getting 404/405.
+/// same paths and operation ids as before, so a client learns why instead of getting 404/405. They
+/// need no permission: nothing can succeed, so every signed-in caller gets the 410 and its message
+/// rather than a 403 that suggests a permission would help.
 fn gone_routes<R: Resource>(label: &str, by_id: &str, message: &'static str) -> Vec<Route> {
     let gone = move || async move { Err::<NoContent, _>(AppError::new(ErrorCode::Gone, message)) };
     let removed = |method: Method, path: &str, op: String, summary: String| {
@@ -550,7 +573,6 @@ fn gone_routes<R: Resource>(label: &str, by_id: &str, message: &'static str) -> 
             .tag(R::TAG)
             .summary(summary)
             .description(message)
-            .requires(GlobalPermission::DatamodelManage)
             .status(StatusCode::GONE)
             .errors(&[ErrorCode::Gone])
     };
