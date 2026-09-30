@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHistory, type RouteLocationNormalized } from "vue-router";
 import CiCreatePage from "./pages/CiCreatePage.vue";
 import CiDetailPage from "./pages/CiDetailPage.vue";
 import CiEditPage from "./pages/CiEditPage.vue";
@@ -120,6 +120,16 @@ export function safeRedirect(value: unknown): string {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") ? value : "/";
 }
 
+/**
+ * The sign-in query that brings the user back to `route`. The two-factor set-up is only a stop on the
+ * way (after sign-in the guard sends a user without the requirement to /account), so its own
+ * destination is kept instead.
+ */
+export function loginQuery(route: RouteLocationNormalized): { redirect?: string } {
+  const back = route.path === TWO_FACTOR_SETUP ? safeRedirect(route.query.redirect) : route.fullPath;
+  return back === "/" ? {} : { redirect: back };
+}
+
 // Setup → sign-in → app. The API enforces every permission; this only decides which screen to show.
 router.beforeEach(async (to) => {
   const session = useSessionStore();
@@ -129,7 +139,7 @@ router.beforeEach(async (to) => {
   if (session.status === "anonymous") {
     if (to.path === "/login") return true;
     if (to.path === "/setup" || to.meta.public) return "/login";
-    return { path: "/login", query: to.fullPath === "/" ? {} : { redirect: to.fullPath } };
+    return { path: "/login", query: loginQuery(to) };
   }
   if (to.meta.public) return safeRedirect(to.query.redirect);
   // Until the required two-factor set-up is done, the API refuses everything else (403 MFA_ENROLMENT_REQUIRED).
