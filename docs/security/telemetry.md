@@ -12,14 +12,19 @@ apart from PostgreSQL, each is off until an administrator sets it up:
 | Destination | When | Enabled by | Protocol and TLS |
 | --- | --- | --- | --- |
 | Your PostgreSQL server | always | `DATABASE_URL` or `PG*` | PostgreSQL protocol; TLS per `DATABASE_SSL` (`verify-full` recommended, see [deployment](../deployment.md)) |
-| Your OIDC identity provider | when an OIDC provider is enabled: discovery and key set (cached for an hour), and the token request at each sign-in; also the administrator's connection test | an OIDC provider under **Administration › Identity providers** (API: [Enterprise sign-in](../api.md#enterprise-sign-in)) | HTTPS only (plain HTTP is accepted only for a loopback test issuer); certificates always verified; no redirects followed; honours `HTTPS_PROXY`/`NO_PROXY`; `OIDC_ALLOWED_HOSTS` restricts the hosts it may contact |
+| Your OIDC identity provider | when an OIDC provider is enabled: discovery document (cached for an hour), key set (cached for an hour, re-fetched at most once a minute when the provider rotates keys), and the token request at each sign-in; also the administrator's connection test | an OIDC provider under **Administration › Identity providers** (API: [Enterprise sign-in](../api.md#enterprise-sign-in)) | HTTPS only (plain HTTP is accepted only for a loopback test issuer); certificates always verified; no redirects followed; honours `HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`; `OIDC_ALLOWED_HOSTS` restricts the hosts it may contact |
 | Your LDAP / Active Directory server | at each directory sign-in, and the administrator's connection test | an LDAP provider under **Administration › Identity providers** | `ldaps://`, or `ldap://` with StartTLS only; certificates always verified |
 | Your SIEM or log collector | continuously, as audit rows are written | `AUDIT_EXPORT=udp://host:port` or `tcp://host:port` (see [deployment](../deployment.md#hardening-settings)) | syslog (RFC 5424) or JSON lines over UDP or TCP, **without TLS**: for a remote collector, send to a local relay that adds TLS |
 
 The OIDC and LDAP destinations are the `oidc.issuerUrl` and `ldap.url` stored on each provider (and, for
 OIDC, the `token_endpoint` and `jwks_uri` its discovery document names; the browser, not the
 server, goes to the authorization endpoint). The server resolves these host names through the
-operating system's DNS resolver. See [enterprise sign-in](hardening.md#enterprise-sign-in) for the
+operating system's DNS resolver.
+
+Only the OIDC requests use a proxy. When `HTTPS_PROXY` or `ALL_PROXY` is set, the TCP connection
+goes to the proxy, and `OIDC_ALLOWED_HOSTS` still restricts which host the proxy is asked to reach.
+PostgreSQL, LDAP and the audit export ignore these variables and always connect directly, so
+your firewall must allow them from the server itself. See [enterprise sign-in](hardening.md#enterprise-sign-in) for the
 egress firewall rules.
 
 That is the complete list. The server makes no connection to the ShadouCMDB project or any other
