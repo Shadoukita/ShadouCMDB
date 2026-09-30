@@ -453,9 +453,26 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   already have lasts until it idles out (`SESSION_IDLE_TIMEOUT_MINUTES`) or ends. To end it at
   once, disable the account in ShadouCMDB too, or disable the provider (ends all its sessions and
   refuses its accounts' API tokens while it stays disabled).
+
+  **API tokens outlive the provider account.** A token is never checked against the provider: it
+  keeps working until it expires (up to 366 days) or the account is disabled or deleted in
+  ShadouCMDB, even when the person is disabled or deleted in the provider. So for anyone who has
+  or had API tokens, or created tokens for service accounts, disabling the account in ShadouCMDB
+  (**Administration › Users**, or `PATCH /api/v1/admin/users/{id}` with `"isActive": false`) is a
+  required step, not an option. To find them, list the working tokens by owner and by creator
+  (**Administration › API tokens**, or `GET /api/v1/admin/api-tokens?userId=<id>` and
+  `?createdBy=<id>`).
   Disabling or deleting an account in ShadouCMDB also revokes its API tokens and every token it
   created for another owner, such as a service account. Before an administrator leaves, mint new
   tokens for the service accounts they looked after, so the integrations keep running.
+- **Group removal takes effect at the next sign-in.** The profiles of a provider account are set
+  from its groups only when it signs in. Removing someone from a mapped group, or changing a
+  mapping, does not change the profiles they already hold: their sessions and API tokens keep
+  those rights until they sign in again, which may be never for an account that only uses
+  tokens. When the change must apply at once, also remove the profile from the account in
+  ShadouCMDB (**Administration › Users**; the next sign-in sets the profiles from the groups
+  again) or revoke its tokens. A person moving to another job is a leaver for the rights they
+  lose.
 
 ## Backup and restore
 
