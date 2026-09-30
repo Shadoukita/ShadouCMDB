@@ -195,7 +195,7 @@ const actionTone = (action: string) =>
       <div v-if="get('actorId')" class="field">
         <span class="label">Actor</span>
         <span class="checkbox-row">
-          <span class="badge">{{ actorUser.data.value?.displayName ?? get("actorId") }}</span>
+          <span class="badge" dir="auto">{{ actorUser.data.value?.displayName ?? get("actorId") }}</span>
           <button type="button" class="btn btn-sm" @click="update({ actorId: undefined })">Any actor</button>
         </span>
       </div>
@@ -251,8 +251,8 @@ const actionTone = (action: string) =>
               <td><span :class="['badge', actionTone(e.action)]">{{ e.action }}</span></td>
               <td>{{ entityLabel(e.entityType) }}</td>
               <td :title="recordTitle(e)">
-                <RouterLink v-if="recordLink(e)" :to="recordLink(e)!">{{ recordName(e) }}</RouterLink>
-                <template v-else>{{ recordName(e) }}</template>
+                <RouterLink v-if="recordLink(e)" :to="recordLink(e)!" dir="auto">{{ recordName(e) }}</RouterLink>
+                <bdi v-else>{{ recordName(e) }}</bdi>
               </td>
               <td :title="changedFields(e).join(', ')">{{ changedFields(e).join(", ") }}</td>
               <td class="mono muted" :title="e.requestId ?? undefined">{{ e.requestId?.slice(0, 8) ?? "" }}</td>
