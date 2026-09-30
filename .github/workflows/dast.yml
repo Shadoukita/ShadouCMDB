@@ -201,9 +201,12 @@ jobs:
       # path-examples.mjs proves every path parameter has an example, not that ZAP
       # sent it: fail when a probe (a read, a delete, an action with a body) was
       # never requested with its example id and answered other than 400 (GH#318).
+      # An explicit `shell: bash` runs with pipefail; the default shell does not,
+      # and the step would take tee's exit status and always pass.
       - name: Path parameters reached their handlers
         id: reached
         continue-on-error: true
+        shell: bash
         run: node tools/dast/reached-handlers.mjs serve.log zap/path-examples.json | tee -a "$GITHUB_STEP_SUMMARY"
 
       # The active scan sends malformed input on purpose; a 5xx it provoked is

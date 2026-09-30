@@ -1,7 +1,11 @@
 // node --test tools/dast/*.test.mjs
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { completedRequests, reachedHandlers, summary } from "./reached-handlers.mjs";
 
@@ -58,4 +62,33 @@ test("reachedHandlers: a probe without an example fails", () => {
   const result = reachedHandlers(completedRequests(LOG), rest);
   assert.equal(result.ok, false);
   assert.equal(result.probes.find((p) => p.resource === "admin/users").ok, false);
+});
+
+// The step pipes into tee for the step summary. GitHub's default shell has no pipefail, so the
+// step took tee's exit status and could never fail. Run its command the way `shell: bash` does.
+test("workflow step: fails on an all-400 log", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/dast.yml", import.meta.url), "utf8");
+  const step = workflow.match(/- name: Path parameters reached their handlers\n((?:        .*\n)+)/)[1];
+  assert.match(step, /^        shell: bash$/m, "without pipefail the step takes tee's exit status");
+  const command = step.match(/^        run: (.*)$/m)[1];
+
+  const dir = mkdtempSync(join(tmpdir(), "reached-"));
+  try {
+    mkdirSync(join(dir, "zap"));
+    cpSync(fileURLToPath(new URL(".", import.meta.url)), join(dir, "tools/dast"), { recursive: true });
+    writeFileSync(join(dir, "zap/path-examples.json"), JSON.stringify(EXAMPLES));
+    const run = (log) => {
+      writeFileSync(join(dir, "serve.log"), log);
+      return spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", command], {
+        cwd: dir,
+        env: { ...process.env, GITHUB_STEP_SUMMARY: join(dir, "summary.md") },
+        encoding: "utf8",
+      });
+    };
+    assert.equal(run(ALL_400).status, 1);
+    assert.equal(run(LOG).status, 0);
+    assert.match(readFileSync(join(dir, "summary.md"), "utf8"), /answered 400/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
