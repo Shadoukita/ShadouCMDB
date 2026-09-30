@@ -547,6 +547,26 @@ export interface paths {
         patch: operations["updateImportFileOptions"];
         trace?: never;
     };
+    "/api/v1/imports/{id}/mapping-suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A first mapping for the file, from its headers
+         * @description Requires `cis.import`. Headers are compared ignoring case, surrounding spaces and runs of spaces, `_`, `-` and `.`. Per column: the saved mapping's target for the header (with `mappingId`, or when exactly one saved mapping of the class has the same set of headers as the file), else an attribute key, `ident`, `valid from` or `valid until`, else the label of exactly one attribute or relationship type (its forward label for outgoing, reverse label for incoming). A target goes to the first column only. References and relationships match by label. `ident` is never suggested for new CIs to non-administrators. Nothing is stored: send the mapping with `PUT /imports/{id}/mapping`. A class the caller cannot import into is `400 unknown_class`, the same as an unknown key. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["suggestImportMapping"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imports/{id}/mapping": {
         parameters: {
             query?: never;
@@ -665,6 +685,58 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import-mappings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saved mappings, by name
+         * @description Requires `cis.import`. Every saved mapping of a class the caller can view (at most 500 per instance, so not paged). Saved mappings are shared with everyone who has `cis.import`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["listImportMappings"];
+        put?: never;
+        /**
+         * Save a mapping for files with the same layout
+         * @description Requires `cis.import`. Needs view on the class; a class the caller cannot view is `400 unknown_class`, the same as an unknown key. Names are unique per class (`409 duplicate_name`). At most 500 per instance (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). The definition's targets are checked when it is applied to a file. Audited as a `create` of `import_mappings`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["createImportMapping"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import-mappings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A saved mapping
+         * @description Requires `cis.import`. `404` when its class is hidden from the caller, the same as for a mapping that does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["getImportMapping"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a saved mapping (creator or Administrator)
+         * @description Requires `cis.import`. `?version=` is the version you loaded (`409 VERSION_CONFLICT` otherwise). Jobs that used the mapping keep their own copy. Audited as a `delete` of `import_mappings`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        delete: operations["deleteImportMapping"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename or change a saved mapping (creator or Administrator)
+         * @description Requires `cis.import`. Send the `version` you loaded; `409 VERSION_CONFLICT` if someone saved in between. The class cannot change. Only the user who saved it and administrators may change it (`403`). Audited as an `update` of `import_mappings` with the old and new definition. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        patch: operations["updateImportMapping"];
         trace?: never;
     };
     "/api/v1/relationships": {
@@ -2878,6 +2950,20 @@ export interface components {
             emptyCells?: components["schemas"]["ImportEmptyCells"] | null;
             options?: components["schemas"]["ImportColumnOptions"] | null;
         };
+        /** @description How one column of the file was matched. */
+        ImportColumnMatch: {
+            /**
+             * Format: int32
+             * @description 0-based column of the file
+             */
+            column: number;
+            via?: components["schemas"]["ImportMatchVia"] | null;
+            /**
+             * @description Why an unmapped column was left out: `ambiguous_label` (several targets have that label),
+             *     `duplicate_target` (an earlier column took the target) or `ident_admin_only`
+             */
+            hint?: string | null;
+        };
         /** @description Per-column overrides of the job's options. */
         ImportColumnOptions: {
             decimalSeparator?: string | null;
@@ -2933,6 +3019,14 @@ export interface components {
         };
         /** @enum {string} */
         ImportDateFormat: "YYYY-MM-DD" | "DD.MM.YYYY" | "MM/DD/YYYY";
+        /** @description A column of a saved mapping, found in a file by its header. */
+        ImportDefinitionColumn: {
+            /** @description The column's header; compared ignoring case, spaces, `_`, `-` and `.` */
+            header: string;
+            target: components["schemas"]["ImportColumnTarget"];
+            emptyCells?: components["schemas"]["ImportEmptyCells"] | null;
+            options?: components["schemas"]["ImportColumnOptions"] | null;
+        };
         ImportDryRun: {
             /** Format: date-time */
             finishedAt: string;
@@ -3126,6 +3220,19 @@ export interface components {
             options?: components["schemas"]["ImportMappingOptions"];
             columns: components["schemas"]["ImportColumnMapping"][];
         };
+        /**
+         * @description A mapping without its class, with columns named by header, so it applies
+         *     to any file with those headers. Save `ignore` targets for the columns the
+         *     layout skips: a file whose header set equals the definition's headers gets
+         *     the mapping suggested without being asked (§3.3).
+         */
+        ImportMappingDefinition: {
+            mode: components["schemas"]["ImportMode"];
+            key?: components["schemas"]["ImportMatchKey"] | null;
+            emptyCells?: components["schemas"]["ImportEmptyCells"];
+            options?: components["schemas"]["ImportMappingOptions"];
+            columns: components["schemas"]["ImportDefinitionColumn"][];
+        };
         /** @description The job's options (§3.2). */
         ImportMappingOptions: {
             /** @description Trim spaces around text values (default true) */
@@ -3137,6 +3244,13 @@ export interface components {
             /** @description Separates several relationship targets in one cell (default `;`) */
             listSeparator?: string;
         };
+        ImportMappingSuggestion: {
+            /** @description Ready for `PUT /imports/{id}/mapping`; check it before sending */
+            mapping: components["schemas"]["ImportMapping"];
+            /** @description One entry per column of the file */
+            matchedBy: components["schemas"]["ImportColumnMatch"][];
+            savedMapping?: components["schemas"]["ImportSavedMappingRef"] | null;
+        };
         /**
          * @description How the other CI of a reference or relationship is found.
          * @enum {string}
@@ -3146,6 +3260,11 @@ export interface components {
             /** @description `ident` or `attributes.<key>` (a text, integer, IP or CIDR attribute) */
             field: string;
         };
+        /**
+         * @description Why a column got its target.
+         * @enum {string}
+         */
+        ImportMatchVia: "key" | "label" | "saved_mapping";
         /** @enum {string} */
         ImportMode: "create_only" | "update_only" | "create_or_update";
         ImportOwner: {
@@ -3221,6 +3340,14 @@ export interface components {
         };
         /** @enum {string} */
         ImportRowOutcome: "create" | "update" | "unchanged" | "error";
+        /** @description The saved mapping a suggestion started from. */
+        ImportSavedMappingRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description True when it was picked because its headers equal the file's, not asked for with `mappingId` */
+            byHeaders: boolean;
+        };
         /** @description Whether bulk import may be used on this instance, and its limits. */
         ImportSettings: {
             /** @description Import is switched on and not forbidden by the server configuration. */
@@ -3742,6 +3869,31 @@ export interface components {
         RelationshipTypeList: {
             data: components["schemas"]["RelationshipType"][];
             page: components["schemas"]["PageMeta"];
+        };
+        /** @description A saved mapping (D9). */
+        SavedImportMapping: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description?: string | null;
+            /** @description The class the mapping imports into, by key */
+            classKey: string;
+            definition: components["schemas"]["ImportMappingDefinition"];
+            /**
+             * Format: int32
+             * @description Send it back with changes and deletes (optimistic concurrency)
+             */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: components["schemas"]["ImportOwner"];
+            /** Format: date-time */
+            updatedAt: string;
+            updatedBy: components["schemas"]["ImportOwner"];
+        };
+        SavedImportMappingList: {
+            /** @description Sorted by name */
+            data: components["schemas"]["SavedImportMapping"][];
         };
         /** @description One applied schema change: the exact DDL, in order, and its impact */
         SchemaChange: {
@@ -7044,6 +7196,96 @@ export interface operations {
             };
         };
     };
+    suggestImportMapping: {
+        parameters: {
+            query: {
+                /** @description The class to import into, by key */
+                classKey: string;
+                /** @description Start from this saved mapping (of the same class) */
+                mappingId?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportMappingSuggestion"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     setImportMapping: {
         parameters: {
             query?: never;
@@ -7587,6 +7829,436 @@ export interface operations {
             };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listImportMappings: {
+        parameters: {
+            query?: {
+                /** @description Only the mappings of this class */
+                classKey?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedImportMappingList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createImportMapping: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    description?: string | null;
+                    classKey: string;
+                    definition: components["schemas"]["ImportMappingDefinition"];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedImportMapping"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getImportMapping: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedImportMapping"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteImportMapping: {
+        parameters: {
+            query: {
+                /** @description The version you loaded */
+                version: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateImportMapping: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The version you loaded; if someone saved in between, `409 VERSION_CONFLICT`
+                     */
+                    version: number;
+                    name?: string;
+                    /** @description Null removes the description */
+                    description?: string | null;
+                    definition?: components["schemas"]["ImportMappingDefinition"];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedImportMapping"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

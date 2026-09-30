@@ -3731,6 +3731,135 @@
         ]
       }
     },
+    "/api/v1/imports/{id}/mapping-suggestion": {
+      "get": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "A first mapping for the file, from its headers",
+        "description": "Requires `cis.import`. Headers are compared ignoring case, surrounding spaces and runs of spaces, `_`, `-` and `.`. Per column: the saved mapping's target for the header (with `mappingId`, or when exactly one saved mapping of the class has the same set of headers as the file), else an attribute key, `ident`, `valid from` or `valid until`, else the label of exactly one attribute or relationship type (its forward label for outgoing, reverse label for incoming). A target goes to the first column only. References and relationships match by label. `ident` is never suggested for new CIs to non-administrators. Nothing is stored: send the mapping with `PUT /imports/{id}/mapping`. A class the caller cannot import into is `400 unknown_class`, the same as an unknown key. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "suggestImportMapping",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "classKey",
+            "in": "query",
+            "description": "The class to import into, by key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 63,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "mappingId",
+            "in": "query",
+            "description": "Start from this saved mapping (of the same class)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportMappingSuggestion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/imports/{id}/mapping": {
       "put": {
         "tags": [
@@ -4504,6 +4633,596 @@
           },
           "409": {
             "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/import-mappings": {
+      "get": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Saved mappings, by name",
+        "description": "Requires `cis.import`. Every saved mapping of a class the caller can view (at most 500 per instance, so not paged). Saved mappings are shared with everyone who has `cis.import`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "listImportMappings",
+        "parameters": [
+          {
+            "name": "classKey",
+            "in": "query",
+            "description": "Only the mappings of this class",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 63,
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedImportMappingList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Save a mapping for files with the same layout",
+        "description": "Requires `cis.import`. Needs view on the class; a class the caller cannot view is `400 unknown_class`, the same as an unknown key. Names are unique per class (`409 duplicate_name`). At most 500 per instance (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). The definition's targets are checked when it is applied to a file. Audited as a `create` of `import_mappings`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "createImportMapping",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "classKey",
+                  "definition"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  },
+                  "classKey": {
+                    "type": "string",
+                    "maxLength": 63,
+                    "minLength": 1
+                  },
+                  "definition": {
+                    "$ref": "#/components/schemas/ImportMappingDefinition"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedImportMapping"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/import-mappings/{id}": {
+      "get": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "A saved mapping",
+        "description": "Requires `cis.import`. `404` when its class is hidden from the caller, the same as for a mapping that does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "getImportMapping",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedImportMapping"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Delete a saved mapping (creator or Administrator)",
+        "description": "Requires `cis.import`. `?version=` is the version you loaded (`409 VERSION_CONFLICT` otherwise). Jobs that used the mapping keep their own copy. Audited as a `delete` of `import_mappings`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "deleteImportMapping",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "The version you loaded",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Rename or change a saved mapping (creator or Administrator)",
+        "description": "Requires `cis.import`. Send the `version` you loaded; `409 VERSION_CONFLICT` if someone saved in between. The class cannot change. Only the user who saved it and administrators may change it (`403`). Audited as an `update` of `import_mappings` with the old and new definition. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "updateImportMapping",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Changes to a saved mapping; the class cannot change.",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The version you loaded; if someone saved in between, `409 VERSION_CONFLICT`",
+                    "minimum": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Null removes the description",
+                    "maxLength": 500
+                  },
+                  "definition": {
+                    "$ref": "#/components/schemas/ImportMappingDefinition"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedImportMapping"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
             "content": {
               "application/json": {
                 "schema": {
@@ -22320,6 +23039,39 @@
         },
         "additionalProperties": false
       },
+      "ImportColumnMatch": {
+        "type": "object",
+        "description": "How one column of the file was matched.",
+        "required": [
+          "column"
+        ],
+        "properties": {
+          "column": {
+            "type": "integer",
+            "format": "int32",
+            "description": "0-based column of the file",
+            "minimum": 0
+          },
+          "via": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportMatchVia",
+                "description": "Null when the column is left unmapped"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why an unmapped column was left out: `ambiguous_label` (several targets have that label),\n`duplicate_target` (an earlier column took the target) or `ident_admin_only`"
+          }
+        }
+      },
       "ImportColumnOptions": {
         "type": "object",
         "description": "Per-column overrides of the job's options.",
@@ -22522,6 +23274,46 @@
           "DD.MM.YYYY",
           "MM/DD/YYYY"
         ]
+      },
+      "ImportDefinitionColumn": {
+        "type": "object",
+        "description": "A column of a saved mapping, found in a file by its header.",
+        "required": [
+          "header",
+          "target"
+        ],
+        "properties": {
+          "header": {
+            "type": "string",
+            "description": "The column's header; compared ignoring case, spaces, `_`, `-` and `.`",
+            "maxLength": 1000,
+            "minLength": 1
+          },
+          "target": {
+            "$ref": "#/components/schemas/ImportColumnTarget"
+          },
+          "emptyCells": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportEmptyCells"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "options": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportColumnOptions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "ImportDryRun": {
         "type": "object",
@@ -23131,6 +23923,43 @@
         },
         "additionalProperties": false
       },
+      "ImportMappingDefinition": {
+        "type": "object",
+        "description": "A mapping without its class, with columns named by header, so it applies\nto any file with those headers. Save `ignore` targets for the columns the\nlayout skips: a file whose header set equals the definition's headers gets\nthe mapping suggested without being asked (§3.3).",
+        "required": [
+          "mode",
+          "columns"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/ImportMode"
+          },
+          "key": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportMatchKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "emptyCells": {
+            "$ref": "#/components/schemas/ImportEmptyCells"
+          },
+          "options": {
+            "$ref": "#/components/schemas/ImportMappingOptions"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportDefinitionColumn"
+            },
+            "maxItems": 200
+          }
+        },
+        "additionalProperties": false
+      },
       "ImportMappingOptions": {
         "type": "object",
         "description": "The job's options (§3.2).",
@@ -23159,6 +23988,36 @@
         },
         "additionalProperties": false
       },
+      "ImportMappingSuggestion": {
+        "type": "object",
+        "required": [
+          "mapping",
+          "matchedBy"
+        ],
+        "properties": {
+          "mapping": {
+            "$ref": "#/components/schemas/ImportMapping",
+            "description": "Ready for `PUT /imports/{id}/mapping`; check it before sending"
+          },
+          "matchedBy": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportColumnMatch"
+            },
+            "description": "One entry per column of the file"
+          },
+          "savedMapping": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportSavedMappingRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "ImportMatchBy": {
         "type": "string",
         "description": "How the other CI of a reference or relationship is found.",
@@ -23180,6 +24039,15 @@
           }
         },
         "additionalProperties": false
+      },
+      "ImportMatchVia": {
+        "type": "string",
+        "description": "Why a column got its target.",
+        "enum": [
+          "key",
+          "label",
+          "saved_mapping"
+        ]
       },
       "ImportMode": {
         "type": "string",
@@ -23392,6 +24260,28 @@
           "unchanged",
           "error"
         ]
+      },
+      "ImportSavedMappingRef": {
+        "type": "object",
+        "description": "The saved mapping a suggestion started from.",
+        "required": [
+          "id",
+          "name",
+          "byHeaders"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "byHeaders": {
+            "type": "boolean",
+            "description": "True when it was picked because its headers equal the file's, not asked for with `mappingId`"
+          }
+        }
       },
       "ImportSettings": {
         "type": "object",
@@ -25197,6 +26087,77 @@
           }
         },
         "additionalProperties": false
+      },
+      "SavedImportMapping": {
+        "type": "object",
+        "description": "A saved mapping (D9).",
+        "required": [
+          "id",
+          "name",
+          "classKey",
+          "definition",
+          "version",
+          "createdAt",
+          "createdBy",
+          "updatedAt",
+          "updatedBy"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "classKey": {
+            "type": "string",
+            "description": "The class the mapping imports into, by key"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ImportMappingDefinition"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Send it back with changes and deletes (optimistic concurrency)"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdBy": {
+            "$ref": "#/components/schemas/ImportOwner"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedBy": {
+            "$ref": "#/components/schemas/ImportOwner"
+          }
+        }
+      },
+      "SavedImportMappingList": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedImportMapping"
+            },
+            "description": "Sorted by name"
+          }
+        }
       },
       "SchemaChange": {
         "type": "object",

@@ -289,7 +289,7 @@ pub async fn list(
     Ok(Page { data: rows.iter().map(JobRow::summary_dto).collect(), page: q.page_meta(total) })
 }
 
-fn invalid_state(message: &str) -> AppError {
+pub(crate) fn invalid_state(message: &str) -> AppError {
     coded(ErrorCode::Conflict, message, "invalid_state")
 }
 

@@ -8,7 +8,6 @@
 
 use std::collections::HashSet;
 
-use serde_json::Value;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
@@ -141,8 +140,33 @@ fn fields_by_key(model: &Model, classes: &[Uuid], key: &str) -> Vec<Field> {
     out
 }
 
+/// The classes a relationship with these rules may connect `class_id` to in
+/// `direction`: every class a rule allows opposite it, and those below, that
+/// the caller may view.
+pub fn other_end(
+    ctx: &RequestContext,
+    model: &Model,
+    rules: &[(Uuid, Uuid)],
+    class_id: Uuid,
+    direction: RelationshipDirection,
+) -> Vec<Uuid> {
+    let mut other: Vec<Uuid> = Vec::new();
+    for (source, target) in rules {
+        let (mine, theirs) = match direction {
+            RelationshipDirection::Outgoing => (*source, *target),
+            RelationshipDirection::Incoming => (*target, *source),
+        };
+        if is_a(model, class_id, mine) {
+            other.extend(subtree(model, theirs));
+        }
+    }
+    other.sort();
+    other.dedup();
+    visible(ctx, other)
+}
+
 /// (source class, target class) of every rule of the type.
-async fn rules_of(conn: &mut PgConnection, type_key: &str) -> sqlx::Result<Vec<(Uuid, Uuid)>> {
+pub async fn rules_of(conn: &mut PgConnection, type_key: &str) -> sqlx::Result<Vec<(Uuid, Uuid)>> {
     sqlx::query_as(
         "SELECT r.source_class_id, r.target_class_id
          FROM cmdb.relationship_types t JOIN cmdb.relationship_type_rules r ON r.relationship_type_id = t.id
@@ -285,20 +309,7 @@ pub async fn resolve(
                     ));
                     continue;
                 };
-                // The other end: every class a rule allows opposite this class, and those below it.
-                let mut other: Vec<Uuid> = Vec::new();
-                for (source, target) in &rules {
-                    let (mine, theirs) = match direction {
-                        RelationshipDirection::Outgoing => (*source, *target),
-                        RelationshipDirection::Incoming => (*target, *source),
-                    };
-                    if is_a(&model, class_id, mine) {
-                        other.extend(subtree(&model, theirs));
-                    }
-                }
-                other.sort();
-                other.dedup();
-                let candidates = visible(ctx, other);
+                let candidates = other_end(ctx, &model, &rules, class_id, *direction);
                 if !active || candidates.is_empty() {
                     errors.push(error(
                         at("target.typeKey"),
@@ -424,47 +435,4 @@ fn lookup(
         _ => Vec::new(),
     };
     Ok(Lookup { by: m.by, fields, candidates, pending })
-}
-
-/// The definition a saved mapping stores: the mapping without the class and
-/// with columns named by header, so it applies to any file with those headers.
-// Used by saved mappings (the next step of SHAA-799 part 4).
-#[allow(dead_code)]
-pub fn to_definition(mapping: &ImportMapping, headers: &[String]) -> Value {
-    let mut v = serde_json::to_value(mapping).unwrap_or(Value::Null);
-    if let Some(obj) = v.as_object_mut() {
-        obj.remove("classKey");
-        if let Some(Value::Array(cols)) = obj.get_mut("columns") {
-            for c in cols.iter_mut() {
-                if let Some(o) = c.as_object_mut() {
-                    let index = o.remove("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                    o.insert("header".into(), Value::String(headers.get(index).cloned().unwrap_or_default()));
-                }
-            }
-        }
-    }
-    v
-}
-
-/// A saved definition applied to a file: columns found by header (first
-/// match); columns whose header the file lacks are left out.
-#[allow(dead_code)]
-pub fn from_definition(definition: &Value, class_key: &str, headers: &[String]) -> Option<ImportMapping> {
-    let mut v = definition.clone();
-    let obj = v.as_object_mut()?;
-    obj.insert("classKey".into(), Value::String(class_key.to_owned()));
-    if let Some(Value::Array(cols)) = obj.get_mut("columns") {
-        cols.retain_mut(|c| {
-            let Some(o) = c.as_object_mut() else { return false };
-            let header = o.remove("header").and_then(|h| h.as_str().map(str::to_owned)).unwrap_or_default();
-            match headers.iter().position(|h| *h == header) {
-                Some(i) => {
-                    o.insert("index".into(), Value::from(i as u64));
-                    true
-                }
-                None => false,
-            }
-        });
-    }
-    serde_json::from_value(v).ok()
 }

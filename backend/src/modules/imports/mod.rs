@@ -14,9 +14,11 @@ pub mod mapping;
 pub mod parse;
 pub mod planner;
 pub mod report;
+pub mod saved;
 pub mod schemas;
 pub mod settings;
 pub mod storage;
+pub mod suggest;
 pub mod template;
 #[cfg(test)]
 mod tests;
@@ -66,6 +68,8 @@ const UPLOAD_ROUTE_LIMIT: usize = 200 * 1024 * 1024;
 
 const JOBS: &str = "/api/v1/imports";
 const JOB: &str = "/api/v1/imports/{id}";
+const MAPPINGS: &str = "/api/v1/import-mappings";
+const MAPPING: &str = "/api/v1/import-mappings/{id}";
 
 pub fn routes() -> Vec<Route> {
     vec![
@@ -177,6 +181,25 @@ pub fn routes() -> Vec<Route> {
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<UpdateFileOptions>>| async move {
                 Ok(Json(jobs::update_file_options(&api.pool, &api.ctx, &api.imports, id, &b).await?))
             }),
+        route(Method::GET, "/api/v1/imports/{id}/mapping-suggestion", "suggestImportMapping")
+            .tag(TAG)
+            .summary("A first mapping for the file, from its headers")
+            .description(
+                "Headers are compared ignoring case, surrounding spaces and runs of spaces, `_`, `-` and `.`. Per \
+                 column: the saved mapping's target for the header (with `mappingId`, or when exactly one saved \
+                 mapping of the class has the same set of headers as the file), else an attribute key, `ident`, \
+                 `valid from` or `valid until`, else the label of exactly one attribute or relationship type (its \
+                 forward label for outgoing, reverse label for incoming). A target goes to the first column only. \
+                 References and relationships match by label. `ident` is never suggested for new CIs to \
+                 non-administrators. Nothing is stored: send the mapping with `PUT /imports/{id}/mapping`. A class \
+                 the caller cannot import into is `400 unknown_class`, the same as an unknown key.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(|api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<suggest::SuggestQuery>, NoBody>| async move {
+                Ok(Json(suggest::suggest(&api.pool, &api.ctx, &api.imports, id, &q).await?))
+            }),
         route(Method::PUT, "/api/v1/imports/{id}/mapping", "setImportMapping")
             .tag(TAG)
             .summary("Set how the file's columns map to the class")
@@ -287,5 +310,79 @@ pub fn routes() -> Vec<Route> {
                 jobs::delete(&api.pool, &api.ctx, id).await?;
                 Ok(NoContent)
             }),
+        route(Method::GET, MAPPINGS, "listImportMappings")
+            .tag(TAG)
+            .summary("Saved mappings, by name")
+            .description(
+                "Every saved mapping of a class the caller can view (at most 500 per instance, so not paged). \
+                 Saved mappings are shared with everyone who has `cis.import`.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<saved::ListSavedMappingsQuery>, NoBody>| async move {
+                    Ok(Json(saved::list(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
+        route(Method::POST, MAPPINGS, "createImportMapping")
+            .tag(TAG)
+            .summary("Save a mapping for files with the same layout")
+            .description(
+                "Needs view on the class; a class the caller cannot view is `400 unknown_class`, the same as an \
+                 unknown key. Names are unique per class (`409 duplicate_name`). At most 500 per instance \
+                 (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). The definition's targets are \
+                 checked when it is applied to a file. Audited as a `create` of `import_mappings`.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .status(StatusCode::CREATED)
+            .errors(&[ErrorCode::Conflict])
+            .handle(
+                |api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<saved::CreateSavedImportMapping>>| async move {
+                    Ok(Json(saved::create(&api.pool, &api.ctx, &api.imports, &b).await?))
+                },
+            ),
+        route(Method::GET, MAPPING, "getImportMapping")
+            .tag(TAG)
+            .summary("A saved mapping")
+            .description("`404` when its class is hidden from the caller, the same as for a mapping that does not exist.")
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(saved::get(&api.pool, &api.ctx, id).await?))
+            }),
+        route(Method::PATCH, MAPPING, "updateImportMapping")
+            .tag(TAG)
+            .summary("Rename or change a saved mapping (creator or Administrator)")
+            .description(
+                "Send the `version` you loaded; `409 VERSION_CONFLICT` if someone saved in between. The class cannot \
+                 change. Only the user who saved it and administrators may change it (`403`). Audited as an \
+                 `update` of `import_mappings` with the old and new definition.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Forbidden, ErrorCode::Conflict, ErrorCode::VersionConflict])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<saved::UpdateSavedImportMapping>>| async move {
+                    Ok(Json(saved::update(&api.pool, &api.ctx, &api.imports, id, &b).await?))
+                },
+            ),
+        route(Method::DELETE, MAPPING, "deleteImportMapping")
+            .tag(TAG)
+            .summary("Delete a saved mapping (creator or Administrator)")
+            .description(
+                "`?version=` is the version you loaded (`409 VERSION_CONFLICT` otherwise). Jobs that used the \
+                 mapping keep their own copy. Audited as a `delete` of `import_mappings`.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Forbidden, ErrorCode::VersionConflict])
+            .handle(
+                |api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<saved::DeleteSavedMappingQuery>, NoBody>| async move {
+                    saved::delete(&api.pool, &api.ctx, id, q.version).await?;
+                    Ok(NoContent)
+                },
+            ),
     ]
 }

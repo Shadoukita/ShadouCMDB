@@ -39,6 +39,11 @@ async fn env(pool: &PgPool, cfg: ImportConfig) -> Env {
 
 /// A user holding a profile with these global rights and full rights on every class.
 async fn user(e: &Env, name: &str, global: &[&str]) -> Creds {
+    user_in(e, name, global, None).await
+}
+
+/// A user with these global rights and full rights on `classes` only (every class for `None`).
+async fn user_in(e: &Env, name: &str, global: &[&str], classes: Option<&[&str]>) -> Creds {
     let profile: Uuid = sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ($1) RETURNING id")
         .bind(format!("{name} profile"))
         .fetch_one(&e.pool)
@@ -52,14 +57,21 @@ async fn user(e: &Env, name: &str, global: &[&str]) -> Creds {
             .await
             .unwrap();
     }
-    sqlx::query(
-        "INSERT INTO permission_profile_class_permissions (profile_id, class_id, can_view, can_create, can_edit, can_delete)
-         VALUES ($1, NULL, true, true, true, true)",
-    )
-    .bind(profile)
-    .execute(&e.pool)
-    .await
-    .unwrap();
+    let class_ids: Vec<Option<Uuid>> = match classes {
+        None => vec![None],
+        Some(ids) => ids.iter().map(|c| Some(c.parse().unwrap())).collect(),
+    };
+    for class_id in class_ids {
+        sqlx::query(
+            "INSERT INTO permission_profile_class_permissions (profile_id, class_id, can_view, can_create, can_edit, can_delete)
+             VALUES ($1, $2, true, true, true, true)",
+        )
+        .bind(profile)
+        .bind(class_id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    }
     let body = json!({ "username": name, "displayName": name, "password": "a long enough password",
         "profileIds": [profile] });
     let (status, v, _) = call(&e.app, "POST", "/api/v1/admin/users", &e.admin, Some(body)).await;
@@ -1271,4 +1283,287 @@ async fn the_error_report_lists_each_problem_with_its_row_and_audits_other_reade
     let (status, _, _) = download(&e, &alice, &format!("/api/v1/imports/{clean}/error-report")).await;
     assert_eq!(status, 404);
     db.drop().await;
+}
+
+// ---------------------------------------------------------------------------
+// Saved mappings and suggestions (SHAA-799 part 4, D9, §3.3)
+// ---------------------------------------------------------------------------
+
+/// A saved-mapping definition: `hostname` from "hostname", the other headers ignored.
+fn definition(headers: &[&str], extra: Value) -> Value {
+    let mut columns: Vec<Value> = headers
+        .iter()
+        .map(|h| {
+            let target = if *h == "hostname" {
+                json!({ "kind": "attribute", "key": "hostname" })
+            } else {
+                json!({ "kind": "ignore" })
+            };
+            json!({ "header": h, "target": target })
+        })
+        .collect();
+    if let Value::Array(more) = extra {
+        for m in more {
+            let h = m["header"].clone();
+            columns.retain(|c| c["header"] != h);
+            columns.push(m);
+        }
+    }
+    json!({ "mode": "create_or_update", "key": { "field": "attributes.hostname" }, "columns": columns })
+}
+
+async fn vm_class(e: &Env) -> String {
+    let (status, class, _) =
+        call(&e.app, "POST", "/api/v1/ci-classes", &e.admin, Some(json!({ "key": "vm", "name": "VM" }))).await;
+    assert_eq!(status, 201, "{class}");
+    class["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn saved_mappings_are_shared_per_class_and_only_their_creator_changes_them() {
+    let Some(db) = scratch::database("import_saved_mappings").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let srv = server_class(&e).await;
+    vm_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let bob = user_in(&e, "bob", &["cis.import"], Some(&[srv.as_str()])).await;
+    let carol = user(&e, "carol", &[]).await;
+    let def = definition(&["hostname", "Cores"], json!([]));
+    let body = |name: &str, class: &str| json!({ "name": name, "classKey": class, "definition": def });
+
+    let (status, v, _) = call(&e.app, "GET", "/api/v1/import-mappings", &carol, None).await;
+    assert_eq!(status, 403, "{v}");
+    let (status, m, _) =
+        call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body(" Vendor export ", "srv"))).await;
+    assert_eq!(status, 201, "{m}");
+    assert_eq!((m["name"].as_str(), m["version"].as_i64()), (Some("Vendor export"), Some(1)));
+    assert_eq!((m["createdBy"]["name"].as_str(), m["classKey"].as_str()), (Some("alice"), Some("srv")));
+    assert_eq!(
+        m["definition"]["columns"][0],
+        json!({ "header": "hostname", "target": { "kind": "attribute", "key": "hostname" } })
+    );
+    let srv_mapping = m["id"].as_str().unwrap().to_owned();
+
+    // Names are unique per class, ignoring case (T18); the same name on another class is fine.
+    let (status, v, _) =
+        call(&e.app, "POST", "/api/v1/import-mappings", &bob, Some(body("VENDOR EXPORT", "srv"))).await;
+    assert_eq!((status, detail(&v)), (409, "duplicate_name"), "{v}");
+    let (status, v, _) =
+        call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body("Vendor export", "vm"))).await;
+    assert_eq!(status, 201, "{v}");
+    let vm_mapping = v["id"].as_str().unwrap().to_owned();
+
+    // A class bob cannot view is refused like an unknown one, and its mappings are hidden.
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/import-mappings", &bob, Some(body("Mine", "vm"))).await;
+    assert_eq!((status, detail(&v)), (400, "unknown_class"), "{v}");
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/import-mappings", &bob, Some(body("Mine", "nope"))).await;
+    assert_eq!((status, detail(&v)), (400, "unknown_class"), "{v}");
+    let (_, v, _) = call(&e.app, "GET", "/api/v1/import-mappings", &bob, None).await;
+    let ids: Vec<&str> = v["data"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
+    assert_eq!(ids, [srv_mapping.as_str()], "{v}");
+    let (status, _, _) = call(&e.app, "GET", &format!("/api/v1/import-mappings/{vm_mapping}"), &bob, None).await;
+    assert_eq!(status, 404);
+    let (_, v, _) = call(&e.app, "GET", "/api/v1/import-mappings?classKey=vm", &alice, None).await;
+    assert_eq!(v["data"].as_array().unwrap().len(), 1, "{v}");
+
+    // Definitions are checked for duplicate headers and size.
+    let dup = definition(&["hostname", "Host Name", "host_name"], json!([]));
+    let (status, v, _) = call(
+        &e.app,
+        "POST",
+        "/api/v1/import-mappings",
+        &alice,
+        Some(json!({ "name": "Dup", "classKey": "srv", "definition": dup })),
+    )
+    .await;
+    assert_eq!((status, detail(&v)), (400, "duplicate_header"), "{v}");
+    let long: Vec<String> = (0..70).map(|i| format!("{i:03}{}", "x".repeat(997))).collect();
+    let long: Vec<&str> = long.iter().map(String::as_str).collect();
+    let (status, v, _) = call(
+        &e.app,
+        "POST",
+        "/api/v1/import-mappings",
+        &alice,
+        Some(json!({ "name": "Big", "classKey": "srv", "definition": definition(&long, json!([])) })),
+    )
+    .await;
+    assert_eq!((status, detail(&v)), (400, "too_large"), "{v}");
+
+    // Only the creator (or an administrator) changes it, with the version they loaded.
+    let one = format!("/api/v1/import-mappings/{srv_mapping}");
+    let (status, v, _) = call(&e.app, "PATCH", &one, &bob, Some(json!({ "version": 1, "name": "Taken" }))).await;
+    assert_eq!(status, 403, "{v}");
+    let patch = json!({ "version": 1, "name": "Vendor", "description": "From the vendor portal" });
+    let (status, v, _) = call(&e.app, "PATCH", &one, &alice, Some(patch.clone())).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!((v["version"].as_i64(), v["description"].as_str()), (Some(2), Some("From the vendor portal")));
+    let (status, v, _) = call(&e.app, "PATCH", &one, &alice, Some(patch)).await;
+    assert_eq!((status, v["error"]["code"].as_str()), (409, Some("VERSION_CONFLICT")), "{v}");
+    let (status, v, _) =
+        call(&e.app, "PATCH", &one, &e.admin, Some(json!({ "version": 2, "description": null }))).await;
+    assert_eq!(
+        (status, v["description"].is_null(), v["updatedBy"]["name"].as_str()),
+        (200, true, Some("admin")),
+        "{v}"
+    );
+
+    let (status, _, _) = call(&e.app, "DELETE", &format!("{one}?version=3"), &bob, None).await;
+    assert_eq!(status, 403);
+    let (status, v, _) = call(&e.app, "DELETE", &format!("{one}?version=1"), &alice, None).await;
+    assert_eq!(status, 409, "{v}");
+    let (status, _, _) = call(&e.app, "DELETE", &format!("{one}?version=3"), &alice, None).await;
+    assert_eq!(status, 204);
+    let (status, _, _) = call(&e.app, "GET", &one, &alice, None).await;
+    assert_eq!(status, 404);
+
+    // Every change is audited with its class key, for the audit visibility rule (T21).
+    let audit: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT action::text, coalesce(new_value ->> 'classKey', old_value ->> 'classKey')
+         FROM audit_log WHERE entity_type = 'import_mappings' ORDER BY id",
+    )
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    let srv_key = Some("srv".to_owned());
+    assert_eq!(
+        audit,
+        [
+            ("create".into(), srv_key.clone()),
+            ("create".into(), Some("vm".into())),
+            ("update".into(), srv_key.clone()),
+            ("update".into(), srv_key.clone()),
+            ("delete".into(), srv_key)
+        ]
+    );
+
+    // At most 500 per instance.
+    sqlx::query(
+        "INSERT INTO import_mappings (name, class_key, definition, created_by_name, updated_by_name)
+         SELECT 'm' || n, 'srv', '{}', 'x', 'x' FROM generate_series(1, 499) n",
+    )
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body("One more", "srv"))).await;
+    assert_eq!((status, detail(&v)), (409, "limit_reached"), "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_suggestion_matches_headers_by_saved_mapping_key_and_label() {
+    let Some(db) = scratch::database("import_mapping_suggestion").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let srv = server_class(&e).await;
+    for (key, label) in [("serial_no", "Serial number"), ("depends_note", "Depends on")] {
+        let body = json!({ "classId": srv, "key": key, "label": label, "dataType": "text" });
+        let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+    }
+    for (key, forward, reverse) in [("runs_on", "Runs on", "Hosts"), ("depends_on", "Depends on", "Required by")] {
+        let t: Uuid = sqlx::query_scalar(
+            "INSERT INTO relationship_types (key, name, forward_label, reverse_label) VALUES ($1, $1, $2, $3) RETURNING id",
+        )
+        .bind(key)
+        .bind(forward)
+        .bind(reverse)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id) VALUES ($1, $2, $2)",
+        )
+        .bind(t)
+        .bind(srv.parse::<Uuid>().unwrap())
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    }
+    vm_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+
+    let headers = ["hostname", "Serial-Number", "Runs on", "Hosts", "Depends on", "Ident", "Cores", "cores", "Notes"];
+    let file = format!("{}\nweb01;S1;app01;;;;4;4;x\n", headers.join(";"));
+    let (status, v, _) = upload(&e.app, &alice, CSV_TYPE, Some("srv.csv"), &[], file.into_bytes()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let suggest = format!("/api/v1/imports/{id}/mapping-suggestion?classKey=srv");
+    let vias = |v: &Value| -> Vec<(Value, Value)> {
+        v["matchedBy"].as_array().unwrap().iter().map(|m| (m["via"].clone(), m["hint"].clone())).collect()
+    };
+    let (key, label, saved, none) = (json!("key"), json!("label"), json!("saved_mapping"), Value::Null);
+
+    // alice is no administrator: the ident column is not suggested for new CIs.
+    let (status, v, _) = call(&e.app, "GET", &suggest, &alice, None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(
+        vias(&v),
+        [
+            (key.clone(), none.clone()),
+            (label.clone(), none.clone()),
+            (label.clone(), none.clone()),
+            (label.clone(), none.clone()),
+            (none.clone(), json!("ambiguous_label")),
+            (none.clone(), json!("ident_admin_only")),
+            (key.clone(), none.clone()),
+            (none.clone(), json!("duplicate_target")),
+            (none.clone(), none.clone()),
+        ],
+        "{v}"
+    );
+    let m = &v["mapping"];
+    assert_eq!(
+        (m["mode"].as_str(), m["key"]["field"].as_str()),
+        (Some("create_or_update"), Some("attributes.hostname"))
+    );
+    assert_eq!(
+        m["columns"][2]["target"],
+        json!({ "kind": "relationship", "typeKey": "runs_on", "direction": "outgoing", "match": { "by": "label" } })
+    );
+    assert_eq!(m["columns"][3]["target"]["direction"], "incoming");
+    assert!(v["savedMapping"].is_null());
+    // The suggestion is a mapping the job accepts.
+    let (status, j, _) = call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &alice, Some(m.clone())).await;
+    assert_eq!(status, 200, "{j}");
+
+    // An administrator gets the ident column, and it becomes the key.
+    let (status, v, _) = call(&e.app, "GET", &suggest, &e.admin, None).await;
+    assert_eq!((status, &v["matchedBy"][5]["via"]), (200, &key), "{v}");
+    assert_eq!(v["mapping"]["key"]["field"], "ident");
+
+    // A saved mapping with exactly the file's headers is picked by itself.
+    // "Cores" and "cores" are one header to a definition.
+    let distinct: Vec<&str> = headers.iter().copied().filter(|h| *h != "cores").collect();
+    let notes = json!([{ "header": "Notes", "target": { "kind": "attribute", "key": "cores" } }]);
+    let body = json!({ "name": "Vendor", "classKey": "srv", "definition": definition(&distinct, notes) });
+    let (status, first, _) = call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body)).await;
+    assert_eq!(status, 201, "{first}");
+    let (_, v, _) = call(&e.app, "GET", &suggest, &alice, None).await;
+    assert_eq!(v["savedMapping"], json!({ "id": first["id"], "name": "Vendor", "byHeaders": true }), "{v}");
+    assert!(vias(&v).iter().all(|(via, _)| *via == saved), "{v}");
+    let cols = v["mapping"]["columns"].as_array().unwrap();
+    let notes_col = cols.iter().find(|c| c["index"] == 8).unwrap();
+    assert_eq!(notes_col["target"], json!({ "kind": "attribute", "key": "cores" }));
+
+    // Two with the same headers: none is picked unless asked for by id.
+    let body = json!({ "name": "Other", "classKey": "srv", "definition": definition(&distinct, json!([])) });
+    let (status, second, _) = call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body)).await;
+    assert_eq!(status, 201, "{second}");
+    let (_, v, _) = call(&e.app, "GET", &suggest, &alice, None).await;
+    assert!(v["savedMapping"].is_null(), "{v}");
+    let second_id = second["id"].as_str().unwrap();
+    let (_, v, _) = call(&e.app, "GET", &format!("{suggest}&mappingId={second_id}"), &alice, None).await;
+    assert_eq!(
+        (v["savedMapping"]["name"].as_str(), v["savedMapping"]["byHeaders"].as_bool()),
+        (Some("Other"), Some(false))
+    );
+
+    // A mapping of another class, and a class alice cannot import into, are refused.
+    let body = json!({ "name": "VM", "classKey": "vm", "definition": definition(&["hostname"], json!([])) });
+    let (_, vm_map, _) = call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body)).await;
+    let (status, v, _) =
+        call(&e.app, "GET", &format!("{suggest}&mappingId={}", vm_map["id"].as_str().unwrap()), &alice, None).await;
+    assert_eq!((status, detail(&v)), (400, "mapping_class_mismatch"), "{v}");
+    let (status, v, _) =
+        call(&e.app, "GET", &format!("/api/v1/imports/{id}/mapping-suggestion?classKey=nope"), &alice, None).await;
+    assert_eq!((status, detail(&v)), (400, "unknown_class"), "{v}");
 }

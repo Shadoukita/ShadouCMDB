@@ -711,6 +711,25 @@ async function main() {
   check(validated.status === 'validated' && validated.summary?.create === 1 && validated.summary?.errorRows === 0, 'the dry run plans the row without writing it');
   check((await get(`/api/v1/imports/${second.id}/issues?severity=error`)).json.page.total === 0, 'the dry run found no problems');
   await get(`/api/v1/imports/${second.id}/error-report`, 404);
+  const suggestUrl = `/api/v1/imports/${second.id}/mapping-suggestion?classKey=server`;
+  const suggested = (await get(suggestUrl)).json;
+  check(suggested.matchedBy.map((m: Json) => m.via).join(',') === 'key,key' && suggested.mapping.columns[1]?.target?.key === 'status'
+    && suggested.savedMapping === null, 'the suggestion maps the columns by attribute key');
+  await get(`/api/v1/imports/${second.id}/mapping-suggestion?classKey=doesnotexist`, 400);
+  const savedDefinition = { mode: 'create_only', columns: [
+    { header: 'Name', target: { kind: 'attribute', key: 'name' } }, { header: 'Status', target: { kind: 'attribute', key: 'status' } }] };
+  const saved = (await post('/api/v1/import-mappings', { name: `Smoke ${RUN}`, classKey: 'server', definition: savedDefinition }, 201)).json;
+  check(saved.version === 1 && saved.createdBy?.name === ADMIN_USERNAME, 'a mapping is saved');
+  await post('/api/v1/import-mappings', { name: `smoke ${RUN}`, classKey: 'server', definition: savedDefinition }, 409);
+  await post('/api/v1/import-mappings', { name: 'x', classKey: 'doesnotexist', definition: savedDefinition }, 400);
+  check((await get('/api/v1/import-mappings?classKey=server')).json.data.some((m: Json) => m.id === saved.id), 'the saved mapping is listed');
+  await get(`/api/v1/import-mappings/${saved.id}`);
+  check((await patch(`/api/v1/import-mappings/${saved.id}`, { version: 1, description: 'Smoke layout' })).json.version === 2, 'the saved mapping is changed');
+  await patch(`/api/v1/import-mappings/${saved.id}`, { version: 1, name: 'stale' }, 409);
+  check((await get(suggestUrl)).json.savedMapping?.id === saved.id, 'a saved mapping with the same headers is suggested');
+  await del(`/api/v1/import-mappings/${saved.id}?version=1`, 409);
+  await del(`/api/v1/import-mappings/${saved.id}?version=2`);
+  await get(`/api/v1/import-mappings/${saved.id}`, 404);
   await call('POST', `/api/v1/imports/${second.id}/commit`, { skipErrorRows: 'yes' }, 400);
   const commitHeaders = { 'idempotency-key': `smoke-commit-${RUN}` };
   check((await call('POST', `/api/v1/imports/${second.id}/commit`, { skipErrorRows: false }, 202, commitHeaders)).json.phase === 'commit', 'the commit is queued');
