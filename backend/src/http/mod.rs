@@ -114,23 +114,38 @@ impl AppState {
     }
 }
 
-/// Bounds the API requests in progress; each route takes a permit in
-/// `api::route` after it authorises the caller and before it reads the body,
-/// so a rejected request never holds capacity, and a request that finds its
-/// pool empty is answered 503 SERVER_BUSY instead of
-/// queueing. Public routes (setup, sign-in, OIDC, branding) draw from their
-/// own, smaller pool and must deliver any body within
-/// `HTTP_HEADER_READ_TIMEOUT_SECS`: anonymous callers can then only saturate
-/// the public routes, never the capacity signed-in users and API tokens need.
-/// Only the health routes (liveness, readiness, version; `RouteBuilder::unlimited`)
-/// take no permit, so a busy server is not mistaken for a dead one.
+/// Bounds the API requests in progress; a request that finds its pool empty
+/// is answered 503 SERVER_BUSY instead of queueing, and a rejected request
+/// never holds capacity.
+///
+/// Authenticated routes take a permit from the global pool in `api::route`
+/// after they authorise the caller and before they read the body. Public
+/// routes (setup, sign-in, OIDC, branding) draw from their own, smaller pool,
+/// and only once their body is in (GH#283): anyone can send one slowly, so a
+/// body in transit holds no permit. It must arrive within
+/// `HTTP_HEADER_READ_TIMEOUT_SECS`, and what has arrived counts against a
+/// shared budget of `HTTP_MAX_CONCURRENT_REQUESTS` × 64 KiB (at least 16 MiB)
+/// of body bytes once the read has to wait for more, so slow senders cost a
+/// connection each but never the permits of real sign-ins, and the memory they
+/// hold stays bounded. A body that arrives without a wait is never held and
+/// never counts, so a spent budget cannot refuse it. Anonymous
+/// callers can then only saturate the public routes, never the capacity
+/// signed-in users and API tokens need. Only the health routes (liveness,
+/// readiness, version; `RouteBuilder::unlimited`) take no permit, so a busy
+/// server is not mistaken for a dead one.
 #[derive(Clone)]
 pub struct Capacity {
     global: Arc<tokio::sync::Semaphore>,
     public: Arc<tokio::sync::Semaphore>,
+    /// Bytes held by public request bodies waiting for the rest, one permit per byte.
+    public_body_bytes: Arc<tokio::sync::Semaphore>,
     /// Time a public route may take to receive its body.
     pub public_body_timeout: Duration,
 }
+
+/// Floor of the public body budget, so a small HTTP_MAX_CONCURRENT_REQUESTS
+/// does not leave room for only a handful of bodies.
+const MIN_PUBLIC_BODY_BUDGET: usize = 16 * 1024 * 1024;
 
 impl Capacity {
     /// `max` requests for authenticated routes, and `max / 8` (at least 16) for public ones.
@@ -139,9 +154,17 @@ impl Capacity {
     }
 
     pub fn with_sizes(global: usize, public: usize, public_body_timeout: Duration) -> Self {
+        let budget = global.saturating_mul(crate::api::route::PUBLIC_BODY_LIMIT).max(MIN_PUBLIC_BODY_BUDGET);
+        Capacity::with_body_budget(global, public, budget, public_body_timeout)
+    }
+
+    pub fn with_body_budget(global: usize, public: usize, body_bytes: usize, public_body_timeout: Duration) -> Self {
         Capacity {
             global: Arc::new(tokio::sync::Semaphore::new(global)),
             public: Arc::new(tokio::sync::Semaphore::new(public)),
+            public_body_bytes: Arc::new(tokio::sync::Semaphore::new(
+                body_bytes.min(tokio::sync::Semaphore::MAX_PERMITS),
+            )),
             public_body_timeout,
         }
     }
@@ -151,10 +174,26 @@ impl Capacity {
         let pool = if public { &self.public } else { &self.global };
         pool.clone().try_acquire_owned().map_err(|_| {
             tracing::warn!(public, "request refused: HTTP_MAX_CONCURRENT_REQUESTS reached");
-            let mut err =
-                AppError::new(ErrorCode::ServerBusy, "The server is handling too many requests; retry shortly");
-            err.retry_after = Some(1);
-            err
+            server_busy()
+        })
+    }
+
+    /// 503 SERVER_BUSY when the public pool has no permit left: a public route
+    /// checks before it reads its body, so a full pool refuses without reading it.
+    pub fn check_public(&self) -> Result<(), AppError> {
+        if self.public.available_permits() > 0 {
+            return Ok(());
+        }
+        tracing::warn!(public = true, "request refused: HTTP_MAX_CONCURRENT_REQUESTS reached");
+        Err(server_busy())
+    }
+
+    /// Room for `bytes` more of a public request body, or 503 SERVER_BUSY.
+    pub fn reserve_public_body(&self, bytes: usize) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+        let n = u32::try_from(bytes).map_err(|_| server_busy())?;
+        self.public_body_bytes.clone().try_acquire_many_owned(n).map_err(|_| {
+            tracing::warn!("request refused: public request body budget reached");
+            server_busy()
         })
     }
 
@@ -162,6 +201,17 @@ impl Capacity {
     pub fn available(&self, public: bool) -> usize {
         if public { self.public.available_permits() } else { self.global.available_permits() }
     }
+
+    #[cfg(test)]
+    pub fn available_body_bytes(&self) -> usize {
+        self.public_body_bytes.available_permits()
+    }
+}
+
+fn server_busy() -> AppError {
+    let mut err = AppError::new(ErrorCode::ServerBusy, "The server is handling too many requests; retry shortly");
+    err.retry_after = Some(1);
+    err
 }
 
 fn not_migrated(applied: usize, expected: usize) -> String {
