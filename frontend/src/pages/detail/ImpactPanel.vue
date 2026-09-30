@@ -75,23 +75,24 @@ watch(
 
 /** Relationship types that propagate impact (the choices), plus any the URL names that do not. */
 const typeChoices = computed(() =>
-  (relTypes.data.value?.data ?? []).filter((t) => t.impactDirection !== "none" || state.value.types.includes(t.id)),
+  (relTypes.data.value?.data ?? []).filter((t) => t.impactDirection !== "none" || !!state.value.types?.includes(t.id)),
 );
-const allTypes = computed(() => state.value.types.length === 0);
-const typeChecked = (id: string) => allTypes.value || state.value.types.includes(id);
+const allTypes = computed(() => state.value.types === null);
+const typeChecked = (id: string) => allTypes.value || !!state.value.types?.includes(id);
 function toggleType(id: string, on: boolean) {
-  const current = allTypes.value ? typeChoices.value.map((t) => t.id) : state.value.types;
+  const current = state.value.types ?? typeChoices.value.map((t) => t.id);
   const next = on ? [...new Set([...current, id])] : current.filter((t) => t !== id);
   // Every propagating type chosen is the default: keep the URL short.
   const all = typeChoices.value.every((t) => next.includes(t.id)) && next.every((id) => typeChoices.value.some((t) => t.id === id));
-  void setState({ types: all ? [] : next });
+  // Unchecking the last one leaves none chosen, which is not the same as all.
+  void setState({ types: all && next.length > 0 ? null : next });
 }
 const typesSummary = computed(() => {
   if (allTypes.value) return "All propagating types";
-  const names = typeChoices.value.filter((t) => state.value.types.includes(t.id)).map((t) => t.name);
+  const names = typeChoices.value.filter((t) => !!state.value.types?.includes(t.id)).map((t) => t.name);
   return names.length === 0 ? "None" : names.length <= 2 ? names.join(", ") : `${names.length} types`;
 });
-const noTypeChosen = computed(() => !allTypes.value && state.value.types.length === 0);
+const noTypeChosen = computed(() => state.value.types?.length === 0);
 
 const depthOptions = computed(() => Array.from({ length: maxDepth.value ?? Math.max(10, state.value.depth) }, (_, i) => i + 1));
 
@@ -102,7 +103,7 @@ const debouncedParams = useDebounced(params, 300);
 const impact = useImpact(
   () => props.ci.id,
   debouncedParams,
-  () => settings.isFetched.value && !notConfigured.value,
+  () => settings.isFetched.value && !notConfigured.value && !noTypeChosen.value,
 );
 const data = computed(() => impact.data.value);
 /** Whether the result on screen answers the controls as they are now. */
@@ -243,7 +244,7 @@ async function onViewKey(e: KeyboardEvent) {
             <span v-if="!t.isActive" class="muted">(retired)</span>
             <span v-if="t.impactDirection === 'none'" class="muted">(does not propagate impact)</span>
           </label>
-          <button v-if="!allTypes" type="button" class="btn btn-sm" @click="setState({ types: [] })">All propagating types</button>
+          <button v-if="!allTypes" type="button" class="btn btn-sm" @click="setState({ types: null })">All propagating types</button>
         </fieldset>
       </details>
       <div class="field">
@@ -298,7 +299,7 @@ async function onViewKey(e: KeyboardEvent) {
     </div>
     <EmptyState v-else-if="noTypeChosen" title="No relationship type chosen">
       Choose at least one relationship type to follow.
-      <template #actions><button type="button" class="btn" @click="setState({ types: [] })">Follow all propagating types</button></template>
+      <template #actions><button type="button" class="btn" @click="setState({ types: null })">Follow all propagating types</button></template>
     </EmptyState>
 
     <template v-else>

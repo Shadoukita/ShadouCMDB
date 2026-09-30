@@ -30,13 +30,15 @@ const SORT_FIELDS: ImpactSortField[] = ["name", "class", "criticality", "hops", 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** The API's limit on relationshipTypeId. */
 export const MAX_TYPES = 50;
+/** `types` in the URL when the operator unchecked every relationship type (absent means all of them). */
+const NO_TYPES = "none";
 
 /** The Impact tab's state, as the URL holds it (§1.2 of the impact analysis spec). */
 export interface ImpactState {
   direction: ImpactDirection;
   depth: number;
-  /** Relationship types to follow; empty: every type that propagates impact (the API's default). */
-  types: string[];
+  /** Relationship types to follow; null: every type that propagates impact (the API's default); empty: none chosen. */
+  types: string[] | null;
   includeInactive: boolean;
   view: ImpactView;
   group: ImpactGroup;
@@ -47,7 +49,7 @@ export interface ImpactState {
 export const DEFAULT_STATE: ImpactState = {
   direction: "downstream",
   depth: DEFAULT_DEPTH,
-  types: [],
+  types: null,
   includeInactive: true,
   view: "list",
   group: "class",
@@ -60,12 +62,12 @@ const one = (q: LocationQuery | LocationQueryRaw, k: string): string => {
 };
 
 /**
- * The state the URL asks for, and the parameters it names that cannot be used (they fall back to
+ * The state the URL asks for, and the state keys of the parameters it names that cannot be used (they fall back to
  * their default, and the tab says so). `maxDepth` is the server's limit; unknown until the settings load.
  */
 export function parseImpactQuery(query: LocationQuery | LocationQueryRaw, maxDepth?: number): { state: ImpactState; invalid: string[] } {
   const invalid: string[] = [];
-  const s: ImpactState = { ...DEFAULT_STATE, types: [] };
+  const s: ImpactState = { ...DEFAULT_STATE };
   const direction = one(query, "direction");
   if (direction) {
     if (direction === "downstream" || direction === "upstream" || direction === "both") s.direction = direction;
@@ -79,7 +81,8 @@ export function parseImpactQuery(query: LocationQuery | LocationQueryRaw, maxDep
   }
   if (maxDepth !== undefined && s.depth > maxDepth) s.depth = maxDepth;
   const types = one(query, "types");
-  if (types) {
+  if (types === NO_TYPES) s.types = [];
+  else if (types) {
     const ids = [...new Set(types.split(",").filter(Boolean))];
     if (ids.length > 0 && ids.length <= MAX_TYPES && ids.every((id) => UUID.test(id))) s.types = ids;
     else invalid.push("types");
@@ -87,7 +90,7 @@ export function parseImpactQuery(query: LocationQuery | LocationQueryRaw, maxDep
   const inactive = one(query, "inactive");
   if (inactive) {
     if (inactive === "1" || inactive === "0") s.includeInactive = inactive === "1";
-    else invalid.push("inactive");
+    else invalid.push("includeInactive");
   }
   const view = one(query, "view");
   if (view) {
@@ -112,7 +115,7 @@ export function impactQuery(s: ImpactState): Record<string, string> {
   const q: Record<string, string> = {};
   if (s.direction !== DEFAULT_STATE.direction) q.direction = s.direction;
   if (s.depth !== DEFAULT_STATE.depth) q.depth = String(s.depth);
-  if (s.types.length > 0) q.types = s.types.join(",");
+  if (s.types) q.types = s.types.length > 0 ? s.types.join(",") : NO_TYPES;
   if (s.includeInactive !== DEFAULT_STATE.includeInactive) q.inactive = s.includeInactive ? "1" : "0";
   if (s.view !== DEFAULT_STATE.view) q.view = s.view;
   if (s.group !== DEFAULT_STATE.group) q.group = s.group;
@@ -143,7 +146,7 @@ export function impactParams(s: ImpactState) {
   return {
     direction: s.direction,
     depth: s.depth,
-    ...(s.types.length > 0 ? { relationshipTypeId: s.types.join(",") } : {}),
+    ...(s.types && s.types.length > 0 ? { relationshipTypeId: s.types.join(",") } : {}),
     includeInactive: s.includeInactive ? ("true" as const) : ("false" as const),
   };
 }

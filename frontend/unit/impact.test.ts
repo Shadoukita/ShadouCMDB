@@ -5,10 +5,12 @@ import { visibleRows } from "../src/lib/graphTree";
 import {
   DEFAULT_STATE,
   groupItems,
+  impactParams,
   impactQuery,
   impactTree,
   parseImpactQuery,
   pathTo,
+  STATE_LABELS,
   viaFor,
   type ImpactAnalysis,
   type ImpactItem,
@@ -63,7 +65,17 @@ describe("URL state", () => {
   test("unusable parameters fall back to their defaults and are named", () => {
     const { state, invalid } = parseImpactQuery({ direction: "sideways", depth: "0", types: "not-a-uuid", inactive: "yes", view: "graph", group: "owner", sort: "id" }, 10);
     assert.deepEqual(state, DEFAULT_STATE);
-    assert.deepEqual(invalid, ["direction", "depth", "types", "inactive", "view", "group", "sort"]);
+    assert.deepEqual(invalid, ["direction", "depth", "types", "includeInactive", "view", "group", "sort"]);
+    // Every name is a state key, so the reset notice can label it.
+    for (const k of invalid) assert.ok(STATE_LABELS[k as keyof typeof STATE_LABELS], k);
+  });
+
+  test("no relationship type chosen is distinct from all of them", () => {
+    const none = { ...DEFAULT_STATE, types: [] };
+    assert.deepEqual(impactQuery(none), { types: "none" });
+    assert.deepEqual(parseImpactQuery(impactQuery(none)), { state: none, invalid: [] });
+    assert.equal(DEFAULT_STATE.types, null);
+    assert.equal("relationshipTypeId" in impactParams(DEFAULT_STATE), false);
   });
 
   test("a depth beyond the server's limit is refused, never lowered silently", () => {

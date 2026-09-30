@@ -173,6 +173,22 @@ test("3. the URL holds the state: reload keeps it, Back restores the previous on
   await page.goto(`/cis/${ids.db}/impact?direction=sideways&depth=99`);
   await expect(page.getByRole("status").filter({ hasText: "could not be used" })).toContainText("direction, depth");
   await expect(page).toHaveURL(at(`/cis/${ids.db}/impact`));
+  await page.goto(`/cis/${ids.db}/impact?inactive=maybe`);
+  await expect(page.getByRole("status").filter({ hasText: "could not be used" })).toContainText("The link's inactive CIs could not be used");
+
+  // Unchecking the last chosen type leaves none chosen, not all of them.
+  await page.goto(`/cis/${ids.db}/impact?types=${typeId}`);
+  await page.locator(".impact-types summary").click();
+  await page.getByRole("checkbox", { name: TYPE }).uncheck();
+  await expect(page).toHaveURL(at(`/cis/${ids.db}/impact`, "?types=none"));
+  await expect(page.locator(".impact-types summary")).toContainText("None");
+  await expect(page.getByText("Choose at least one relationship type to follow.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export CSV" })).toBeDisabled();
+  await page.reload();
+  await expect(page.getByText("Choose at least one relationship type to follow.")).toBeVisible();
+  await page.getByRole("button", { name: "Follow all propagating types" }).click();
+  await expect(page).toHaveURL(at(`/cis/${ids.db}/impact`));
+  await expect(page.locator(".impact-types summary")).toContainText("All propagating types");
 });
 
 test("4. the tree view shows the same CIs and walks by keyboard (§6.3.4)", async ({ page }, testInfo) => {
