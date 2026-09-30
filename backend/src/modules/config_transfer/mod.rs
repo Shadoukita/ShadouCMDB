@@ -2135,6 +2135,8 @@ mod tests {
             .unwrap()
             .lists
             .iter()
+            // The criticality system list (migration 0030) is on every install.
+            .filter(|l| l.system_role.is_none())
             .flat_map(|l| l.values.iter().map(|v| (l.key.clone(), v.key.clone(), v.description.clone())))
             .collect();
         assert_eq!(
