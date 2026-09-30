@@ -83,13 +83,13 @@ const inventoryLink = computed(() => {
           </thead>
           <tbody>
             <tr v-for="{ item, matches } in rows" :key="item.id">
-              <td><RouterLink :to="`/cis/${item.id}`">{{ item.label }}</RouterLink> <CiStateBadge :ci="item" /></td>
+              <td><RouterLink :to="`/cis/${item.id}`" dir="auto">{{ item.label }}</RouterLink> <CiStateBadge :ci="item" /></td>
               <td class="mono">{{ item.ident }}</td>
               <td>{{ item.class.name }}</td>
               <td :title="matches.map((m) => `${m.label}: ${m.value}`).join('\n')">
                 <span v-for="(m, i) in matches.slice(0, 2)" :key="i">
                   <template v-if="i > 0">, </template>
-                  <span class="muted">{{ m.label }}:</span> <span class="mono">{{ m.value }}</span>
+                  <span class="muted"><bdi>{{ m.label }}</bdi>:</span> <span class="mono" dir="auto">{{ m.value }}</span>
                 </span>
               </td>
             </tr>

@@ -186,6 +186,13 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
         "23502" => Some(AppError::field(field, "Required", "required")),
         // bad inet/uuid/date literal, datetime overflow, numeric out of range, string too long
         "22P02" | "22007" | "22008" | "22003" | "22001" => Some(AppError::field(field, pg.message(), "invalid_format")),
+        // A character PostgreSQL cannot store (U+0000 in jsonb or text). The API
+        // refuses it first; this is the backstop for any path it misses (GH#289).
+        "22P05" | "22021" => Some(AppError::field(
+            field,
+            "Contains a character the database cannot store (such as U+0000)",
+            "invalid_format",
+        )),
         _ => None,
     }
 }
@@ -207,5 +214,20 @@ mod tests {
         assert_eq!(snake_to_camel("status_id"), "statusId");
         assert_eq!(humanise("ci_relationships: runs_on is not allowed"), "runs_on is not allowed");
         assert_eq!(humanise("Key (key)=(x) already exists."), "Key (key)=(x) already exists.");
+    }
+
+    /// GH#289: characters PostgreSQL cannot store are a 400, not a 500.
+    #[tokio::test]
+    async fn unstorable_characters_are_bad_input() {
+        let Some(db) = crate::db::scratch::empty("unstorable_characters_are_bad_input").await else { return };
+        for (sql, value, code) in [("SELECT $1::jsonb", r#""a\u0000b""#, "22P05"), ("SELECT $1::text", "a\0b", "22021")]
+        {
+            let err = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(value).execute(&db.pool).await.unwrap_err();
+            assert_eq!(pg_error(&err).map(|pg| pg.code().to_owned()).as_deref(), Some(code));
+            let mapped: AppError = err.into();
+            assert_eq!(mapped.code, ErrorCode::ValidationError, "{code}: {mapped}");
+            assert_eq!(mapped.details.unwrap()[0].code, "invalid_format");
+        }
+        db.drop().await;
     }
 }

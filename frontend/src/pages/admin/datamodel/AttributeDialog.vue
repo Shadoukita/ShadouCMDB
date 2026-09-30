@@ -17,6 +17,7 @@ import FormDialog from "../../../components/FormDialog.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
 import TechnicalNameField from "../../../components/TechnicalNameField.vue";
 import { toApiValue, toFormValue, type AttributeShape } from "../../../lib/attributeValues";
+import { changedFields } from "../../../lib/changes";
 import { DATA_TYPES, validationKind } from "../../../lib/dataTypes";
 import { keyError } from "../../../lib/keys";
 import { useSchemaChangeFlow } from "../../../lib/schemaChange";
@@ -74,6 +75,8 @@ const vMultiline = ref(false);
 const vUnit = ref("");
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
+/** The edit body as the dialog opened, to send only changed fields. */
+let initial: AttributeUpdateBody = {};
 
 interface Validation {
   min?: number;
@@ -109,12 +112,8 @@ function seed() {
   local.value = {};
   create.reset();
   update.reset();
+  initial = d ? updateBody() : {};
 }
-watch(
-  () => [props.open, props.def] as const,
-  ([open]) => open && seed(),
-  { immediate: true },
-);
 // A default belongs to one type; changing the type clears it.
 watch(dataType, (t) => {
   const d = props.def;
@@ -220,11 +219,8 @@ function checkLocal(): Record<string, string> {
   return errs;
 }
 
-async function submit() {
-  error.value = null;
-  local.value = checkLocal();
-  if (Object.keys(local.value).length > 0) return;
-  const common = {
+function commonBody() {
+  return {
     label: label.value.trim(),
     isRequired: isRequired.value,
     groupName: groupName.value.trim() || null,
@@ -233,7 +229,34 @@ async function submit() {
     validation: validation(),
     ...(dataType.value === "enum" ? { enumValues: enumValues.value } : {}),
   };
-  const dv = dataType.value === "reference" ? null : (toApiValue(draft.value, defaultValue.value) as string | number | boolean | null);
+}
+function defaultBody() {
+  return dataType.value === "reference" ? null : (toApiValue(draft.value, defaultValue.value) as string | number | boolean | null);
+}
+/** An edit's body with every field that may change; submit() sends the ones that differ from `initial`. */
+function updateBody(): AttributeUpdateBody {
+  const d = props.def!;
+  return {
+    ...commonBody(),
+    ...(typeChanged.value ? { dataType: dataType.value } : {}),
+    ...(dataType.value === "reference" ? {} : { defaultValue: defaultBody() }),
+    ...(dataType.value === "lookup" && (parentAttributeId.value || null) !== d.parentAttributeId ? { parentAttributeId: parentAttributeId.value || null } : {}),
+  };
+}
+
+// Below the computeds that seed() reads through updateBody(): it runs during setup.
+watch(
+  () => [props.open, props.def] as const,
+  ([open]) => open && seed(),
+  { immediate: true },
+);
+
+async function submit() {
+  error.value = null;
+  local.value = checkLocal();
+  if (Object.keys(local.value).length > 0) return;
+  const common = commonBody();
+  const dv = defaultBody();
   if (isNew.value) {
       const body: AttributeCreateBody = {
         ...common,
@@ -261,14 +284,18 @@ async function submit() {
     return;
   }
   const d = props.def!;
-  const body: AttributeUpdateBody = {
-    ...common,
-    ...(typeChanged.value ? { dataType: dataType.value } : {}),
-    ...(dataType.value === "reference" ? {} : { defaultValue: dv }),
-    ...(dataType.value === "lookup" && (parentAttributeId.value || null) !== d.parentAttributeId ? { parentAttributeId: parentAttributeId.value || null } : {}),
-  };
+  const full = updateBody();
+  // Only what changed; a type change takes the settings that belong to the type with it.
+  const body: AttributeUpdateBody = changedFields(full, initial);
+  if (typeChanged.value) {
+    for (const k of ["defaultValue", "validation", "enumValues"] as const) if (k in full) (body as Record<string, unknown>)[k] = full[k];
+  }
+  if (Object.keys(body).length === 0) {
+    emit("close");
+    return;
+  }
   const outcome = await flow.run({
-    title: `Save attribute “${body.label}”`,
+    title: `Save attribute “${full.label}”`,
     intro: typeChanged.value
       ? `Converts the column “${d.key}” from ${d.dataType} to ${dataType.value}. Every stored value was converted in a dry run; the change is refused if any would not convert.`
       : undefined,

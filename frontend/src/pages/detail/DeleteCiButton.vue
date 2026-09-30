@@ -39,7 +39,7 @@ function confirm() {
   >
     <ErrorAlert v-if="del.isError.value" :error="del.error.value" title="Delete failed" />
     <p>
-      <strong>{{ ci.label }}</strong> ({{ ci.class.name }}, {{ ci.ident }}) will be removed from the
+      <strong dir="auto">{{ ci.label }}</strong> (<bdi>{{ ci.class.name }}</bdi>, <bdi>{{ ci.ident }}</bdi>) will be removed from the
       inventory. The record and its history stay available as a deleted CI.
     </p>
     <LoadingState v-if="rels.isLoading.value" label="Checking relationships…" />
@@ -52,7 +52,7 @@ function confirm() {
       </p>
       <ul>
         <li v-for="{ r, d } in edges" :key="r.id">
-          {{ ci.label }} <em>{{ d.label }}</em> <strong>{{ d.other.name }}</strong> <span class="muted">({{ d.other.className }})</span>
+          <bdi>{{ ci.label }}</bdi> <em dir="auto">{{ d.label }}</em> <strong dir="auto">{{ d.other.name }}</strong> <span class="muted">(<bdi>{{ d.other.className }}</bdi>)</span>
         </li>
       </ul>
       <p v-if="total > edges.length" class="muted">…and {{ total - edges.length }} more.</p>
