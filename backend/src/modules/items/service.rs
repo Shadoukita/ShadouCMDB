@@ -3,12 +3,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use ipnetwork::IpNetwork;
 
+use super::plan::{self, DbResolver, Needs, is_visible};
 use super::schemas::{
     ActiveQuery, AttributeReference, ConfigurationItem, ConfigurationItemSummary, CreateItemBody, Graph,
     GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, ListItemsQuery, SearchHit,
@@ -17,13 +18,12 @@ use super::schemas::{
 use crate::api::context::RequestContext;
 use crate::api::route::InvalidBody;
 use crate::api::schemas::{LookupRef, Page, Paged};
-use crate::api::{pg_error, validate};
+use crate::api::validate;
 use crate::auth::permissions::ClassOp;
-use crate::data::classes::{self as class_data, EffectiveAttributeRow};
+use crate::data::classes as class_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::items::{
-    self as data, ATTRIBUTE_SORT_PREFIX, ActiveFilter, Direction, ItemFilters, ListSort, SORT_FIELDS, StoredValue,
-    SummaryRow,
+    self as data, ATTRIBUTE_SORT_PREFIX, ActiveFilter, Direction, ItemFilters, ListSort, SORT_FIELDS, SummaryRow,
 };
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
@@ -44,319 +44,6 @@ pub fn summary_dto(r: SummaryRow) -> ConfigurationItemSummary {
         updated_at: r.updated_at,
         deleted_at: r.deleted_at,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Attribute validation
-// ---------------------------------------------------------------------------
-
-/// The JSON Schema a value of an attribute must satisfy (same rules the
-/// SHAA-3 API enforced), including the definition's extra validation. Also
-/// checks attribute defaults.
-pub fn value_schema(
-    data_type: AttributeDataType,
-    enum_values: Option<&[String]>,
-    validation: Option<&Map<String, Value>>,
-) -> Value {
-    let rules = validation.cloned().unwrap_or_default();
-    let mut range = Map::new();
-    for (rule, keyword) in [("min", "minimum"), ("max", "maximum")] {
-        if let Some(n) = rules.get(rule).filter(|n| n.is_number()) {
-            range.insert(keyword.into(), n.clone());
-        }
-    }
-    let with_range = |ty: &str| {
-        let mut s = range.clone();
-        s.insert("type".into(), ty.into());
-        Value::Object(s)
-    };
-    match data_type {
-        AttributeDataType::Text => {
-            let mut s = json!({ "type": "string", "maxLength": rules.get("maxLength").and_then(Value::as_u64).unwrap_or(10_000) });
-            if let Some(p) = rules.get("pattern").and_then(Value::as_str) {
-                s["pattern"] = p.into();
-            }
-            s
-        }
-        AttributeDataType::Enum => {
-            json!({ "enum": enum_values.unwrap_or_default() })
-        }
-        AttributeDataType::Number => with_range("number"),
-        AttributeDataType::Integer => with_range("integer"),
-        AttributeDataType::Boolean => json!({ "type": "boolean" }),
-        AttributeDataType::Date => json!({ "type": "string", "format": "date" }),
-        AttributeDataType::Datetime => json!({ "type": "string", "format": "date-time" }),
-        AttributeDataType::Ip => json!({ "anyOf": [
-            { "type": "string", "format": "ipv4" }, { "type": "string", "format": "ipv6" } ] }),
-        AttributeDataType::Cidr => json!({ "anyOf": [
-            { "type": "string", "format": "cidrv4" }, { "type": "string", "format": "cidrv6" } ] }),
-        AttributeDataType::Reference | AttributeDataType::Lookup => json!({ "type": "string", "format": "uuid" }),
-    }
-}
-
-fn to_stored(def: &EffectiveAttributeRow, v: &Value) -> Option<StoredValue> {
-    use AttributeDataType as T;
-    Some(match def.data_type {
-        T::Text | T::Enum => StoredValue::Text(v.as_str()?.to_owned()),
-        T::Number | T::Integer => StoredValue::Number(v.as_f64()?),
-        T::Boolean => StoredValue::Boolean(v.as_bool()?),
-        T::Date => StoredValue::Date(v.as_str()?.to_owned()),
-        T::Datetime => StoredValue::Datetime(v.as_str()?.to_owned()),
-        T::Ip => StoredValue::Ip(v.as_str()?.to_owned()),
-        T::Cidr => StoredValue::Cidr(v.as_str()?.to_owned()),
-        T::Reference => StoredValue::Reference(Uuid::parse_str(v.as_str()?).ok()?),
-        T::Lookup => StoredValue::Lookup(Uuid::parse_str(v.as_str()?).ok()?),
-    })
-}
-
-/// Which CIs a reference attribute may point at: live ones in `visible`
-/// classes (the caller's view scope; `None` is every class). The value an
-/// attribute definition already has in `current` (definition id -> target) is
-/// no change: it is accepted as is, without the live and class checks, so
-/// resending it tells nothing about a target the caller may not view (GH#269).
-struct RefAccess<'a> {
-    visible: Option<&'a [Uuid]>,
-    current: Option<&'a HashMap<Uuid, Uuid>>,
-}
-
-/// The CI's reference values by attribute definition id, from its `attributes`.
-fn current_refs(model: &Model, class_id: Uuid, attributes: &Map<String, Value>) -> HashMap<Uuid, Uuid> {
-    model
-        .lineage(class_id)
-        .into_iter()
-        .flat_map(|c| model.own_fields(c.id))
-        .filter(|f| f.data_type == AttributeDataType::Reference)
-        .filter_map(|f| Some((f.id, attributes.get(&f.key)?.as_str().and_then(|v| Uuid::parse_str(v).ok())?)))
-        .collect()
-}
-
-struct Prepared<'d> {
-    set: Vec<(&'d EffectiveAttributeRow, StoredValue)>,
-    clear: Vec<Uuid>,
-}
-
-fn body_error(field: String, message: impl Into<String>, code: &str) -> FieldError {
-    FieldError { location: FieldLocation::Body, field, message: message.into(), code: code.into() }
-}
-
-/// Validates attribute input against the class's effective definitions.
-/// `lenient_clear` accepts `null` for keys the class does not define (they are
-/// being cleared as part of a class change). A reference the caller may not
-/// make (see [`RefAccess`]) fails exactly like one to a missing CI, so writes
-/// are no existence oracle. A reference the attribute already has is left out
-/// of the result: resending it changes nothing (see [`RefAccess`]).
-async fn prepare_attributes<'d>(
-    conn: &mut PgConnection,
-    defs: &'d [EffectiveAttributeRow],
-    input: Option<&Map<String, Value>>,
-    class_key: &str,
-    self_id: Option<Uuid>,
-    lenient_clear: bool,
-    access: RefAccess<'_>,
-) -> Result<Prepared<'d>, AppError> {
-    let by_key: HashMap<&str, &EffectiveAttributeRow> = defs.iter().map(|d| (d.key.as_str(), d)).collect();
-    let mut errors = Vec::new();
-    let mut prepared = Prepared { set: Vec::new(), clear: Vec::new() };
-    let mut refs: Vec<(&EffectiveAttributeRow, Uuid)> = Vec::new();
-    let mut lookups: Vec<(&EffectiveAttributeRow, Uuid)> = Vec::new();
-
-    for (key, value) in input.into_iter().flatten() {
-        let field = format!("attributes.{key}");
-        let Some(def) = by_key.get(key.as_str()).copied() else {
-            if !(lenient_clear && value.is_null()) {
-                errors.push(body_error(
-                    field,
-                    format!("Class \"{class_key}\" has no attribute \"{key}\""),
-                    "unknown_attribute",
-                ));
-            }
-            continue;
-        };
-        if value.is_null() {
-            prepared.clear.push(def.id);
-            continue;
-        }
-        if !def.is_active {
-            errors.push(body_error(
-                field,
-                "This attribute is retired and cannot receive new values",
-                "attribute_inactive",
-            ));
-            continue;
-        }
-        let schema = value_schema(
-            def.data_type,
-            def.enum_values.as_ref().map(|v| v.0.as_slice()),
-            def.validation.as_ref().map(|v| &v.0),
-        );
-        let problems = validate::check(&schema, value, FieldLocation::Body, None);
-        if !problems.is_empty() {
-            let pattern = def.validation.as_ref().and_then(|v| v.0.get("pattern")).and_then(Value::as_str);
-            for mut p in problems {
-                p.field = field.clone();
-                if let (Some(pattern), "invalid_format") = (pattern, p.code.as_str()) {
-                    p.message = validate::pattern_message(pattern)
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!("Must match {pattern}"));
-                }
-                errors.push(p);
-            }
-            continue;
-        }
-        let Some(stored) = to_stored(def, value) else {
-            errors.push(body_error(field, "Invalid input", "invalid_type"));
-            continue;
-        };
-        match stored {
-            StoredValue::Reference(id) if access.current.and_then(|c| c.get(&def.id)) == Some(&id) => continue,
-            StoredValue::Reference(id) => refs.push((def, id)),
-            StoredValue::Lookup(id) => lookups.push((def, id)),
-            _ => {}
-        }
-        prepared.set.push((def, stored));
-    }
-
-    for (def, id) in lookups {
-        let field = format!("attributes.{}", def.key);
-        let list_id = def.lookup_list_id.unwrap_or_default();
-        match class_data::lookup_value_state(conn, list_id, id).await? {
-            Some(true) => {}
-            Some(false) => errors.push(body_error(field, "This list value is retired", "lookup_value_inactive")),
-            None => errors.push(body_error(field, "Not a value of this attribute's list", "not_found")),
-        }
-    }
-
-    if !refs.is_empty() {
-        let ids: Vec<Uuid> = refs.iter().map(|(_, id)| *id).collect();
-        let live: HashMap<Uuid, Uuid> = data::live_items(conn, &ids).await?.into_iter().collect();
-        for (def, id) in refs {
-            let field = format!("attributes.{}", def.key);
-            let allowed = live.get(&id).is_some_and(|class_id| is_visible(access.visible, *class_id));
-            if Some(id) == self_id {
-                errors.push(body_error(field, "A CI cannot reference itself", "reference_self"));
-            } else if !allowed {
-                errors.push(body_error(field, "Referenced CI does not exist or is deleted", "not_found"));
-            }
-        }
-    }
-
-    if errors.is_empty() { Ok(prepared) } else { Err(AppError::validation(errors)) }
-}
-
-fn is_visible(visible: Option<&[Uuid]>, class_id: Uuid) -> bool {
-    visible.is_none_or(|classes| classes.contains(&class_id))
-}
-
-/// A reference must point at a CI of the field's class (or a subclass); the
-/// foreign key only guarantees that the CI exists.
-async fn check_reference_classes(conn: &mut PgConnection, prepared: &Prepared<'_>) -> Result<(), AppError> {
-    let mut errors = Vec::new();
-    for (def, value) in &prepared.set {
-        let (StoredValue::Reference(target), Some(class)) = (value, def.reference_class_id) else { continue };
-        let fits: Option<bool> =
-            sqlx::query_scalar("SELECT cmdb.ci_class_is_a(class_id, $2) FROM cmdb.configuration_items WHERE id = $1")
-                .bind(target)
-                .bind(class)
-                .fetch_optional(&mut *conn)
-                .await?;
-        if fits == Some(false) {
-            errors.push(body_error(
-                format!("attributes.{}", def.key),
-                "Referenced CI is not of the class this field points at",
-                "reference_class",
-            ));
-        }
-    }
-    if errors.is_empty() { Ok(()) } else { Err(AppError::validation(errors)) }
-}
-
-/// Dependent dropdowns: a value of a field with a parent field must belong to
-/// the CI's value of that field (`current` holds the CI's values before this
-/// write). Checked for the fields this write sets or clears and for those
-/// whose parent field it sets or clears, so an unrelated edit of a CI whose
-/// values predate the rule is not refused.
-async fn check_parent_values(
-    conn: &mut PgConnection,
-    defs: &[EffectiveAttributeRow],
-    prepared: &Prepared<'_>,
-    current: Option<&Map<String, Value>>,
-) -> Result<(), AppError> {
-    let dependent: Vec<(&EffectiveAttributeRow, &EffectiveAttributeRow)> =
-        defs.iter().filter_map(|d| Some((d, defs.iter().find(|p| Some(p.id) == d.parent_attribute_id)?))).collect();
-    if dependent.is_empty() {
-        return Ok(());
-    }
-    let mut value: HashMap<Uuid, Option<Uuid>> = HashMap::new();
-    let mut touched: HashSet<Uuid> = prepared.clear.iter().copied().collect();
-    for (def, stored) in &prepared.set {
-        touched.insert(def.id);
-        value.insert(def.id, if let StoredValue::Lookup(id) = stored { Some(*id) } else { None });
-    }
-    for id in &prepared.clear {
-        value.insert(*id, None);
-    }
-    let value_of = |def: &EffectiveAttributeRow| -> Option<Uuid> {
-        match value.get(&def.id) {
-            Some(v) => *v,
-            None => current?.get(&def.key)?.as_str().and_then(|s| Uuid::parse_str(s).ok()),
-        }
-    };
-    let checks: Vec<(&EffectiveAttributeRow, &EffectiveAttributeRow, Uuid)> = dependent
-        .into_iter()
-        .filter(|(d, p)| touched.contains(&d.id) || touched.contains(&p.id))
-        .filter_map(|(d, p)| Some((d, p, value_of(d)?)))
-        .collect();
-    if checks.is_empty() {
-        return Ok(());
-    }
-    let ids: Vec<Uuid> = checks.iter().map(|(_, _, v)| *v).collect();
-    let parents: HashMap<Uuid, Option<Uuid>> =
-        sqlx::query_as("SELECT id, parent_value_id FROM lookup_list_values WHERE id = ANY($1)")
-            .bind(&ids)
-            .fetch_all(&mut *conn)
-            .await?
-            .into_iter()
-            .collect();
-    let mut errors = Vec::new();
-    for (def, parent_def, child) in checks {
-        let field = format!("attributes.{}", def.key);
-        match value_of(parent_def) {
-            None => errors.push(body_error(
-                field,
-                format!("Choose {} first; this value depends on it", parent_def.label),
-                "lookup_parent_missing",
-            )),
-            Some(parent) if parents.get(&child).copied().flatten() != Some(parent) => errors.push(body_error(
-                field,
-                format!("Not a value of the chosen {}", parent_def.label),
-                "lookup_parent_mismatch",
-            )),
-            Some(_) => {}
-        }
-    }
-    if errors.is_empty() { Ok(()) } else { Err(AppError::validation(errors)) }
-}
-
-/// Attribute checks for a new CI: the values (defaults filled in), the classes
-/// they reference, and that every required attribute has one.
-async fn prepare_new<'d>(
-    conn: &mut PgConnection,
-    defs: &'d [EffectiveAttributeRow],
-    input: Option<&Map<String, Value>>,
-    class_key: &str,
-    access: RefAccess<'_>,
-) -> Result<Prepared<'d>, AppError> {
-    let attributes = with_defaults(defs, input);
-    let prepared = prepare_attributes(conn, defs, Some(&attributes), class_key, None, false, access).await?;
-    check_reference_classes(conn, &prepared).await?;
-    check_parent_values(conn, defs, &prepared, None).await?;
-    let given: HashSet<Uuid> = prepared.set.iter().map(|(d, _)| d.id).collect();
-    let missing: Vec<FieldError> = defs
-        .iter()
-        .filter(|d| d.is_required && d.is_active && !given.contains(&d.id))
-        .map(|d| body_error(format!("attributes.{}", d.key), format!("{} is required", d.label), "required"))
-        .collect();
-    if missing.is_empty() { Ok(prepared) } else { Err(AppError::validation(missing)) }
 }
 
 // ---------------------------------------------------------------------------
@@ -406,11 +93,12 @@ async fn check_new_attributes(
     input: Option<&Map<String, Value>>,
 ) -> Result<(), AppError> {
     let mut conn = pool.acquire().await?;
-    let key = class_key(&mut conn, class_id).await?;
+    let model = Model::load(&mut conn).await?;
+    let key = plan::class_key(&model, class_id)?;
     let defs = class_data::effective_attributes(&mut conn, class_id).await?;
     let visible = ctx.class_scope(ClassOp::View);
-    let access = RefAccess { visible: visible.as_deref(), current: None };
-    prepare_new(&mut conn, &defs, input, &key, access).await.map(drop)
+    let resolver = DbResolver::load(&mut conn, visible.as_deref(), &Needs::for_create(&defs, input)).await?;
+    plan::prepare_new(&model, &defs, input, key, &resolver).map(drop)
 }
 
 /// The 400 for an update body that failed validation.
@@ -431,114 +119,22 @@ async fn check_changed_attributes(
 ) -> Result<(), AppError> {
     let mut conn = pool.acquire().await?;
     // Outside a transaction the row lock ends with the statement.
-    let Some(before) = data::lock(&mut conn, id).await? else { return Ok(()) };
-    if before.deleted_at.is_some() || ctx.require_class(before.class_id, ClassOp::Edit).is_err() {
+    let Some(locked) = data::lock(&mut conn, id).await? else { return Ok(()) };
+    if locked.deleted_at.is_some() || ctx.require_class(locked.class_id, ClassOp::Edit).is_err() {
         return Ok(());
     }
-    let class_id = new_class.unwrap_or(before.class_id);
-    let class_changes = class_id != before.class_id;
-    if class_changes && ctx.require_class(class_id, ClassOp::Create).is_err() {
+    let class_id = new_class.unwrap_or(locked.class_id);
+    if class_id != locked.class_id && ctx.require_class(class_id, ClassOp::Create).is_err() {
         return Ok(());
     }
-    let key = class_key(&mut conn, class_id).await?;
+    let model = Model::load(&mut conn).await?;
     let defs = class_data::effective_attributes(&mut conn, class_id).await?;
     // Same reference access as update(), so this 400 is no existence oracle either.
-    let model = Model::load(&mut conn).await?;
-    let current = must_detail(&mut conn, &model, id, None).await?.attributes;
-    let refs = current_refs(&model, before.class_id, &current);
+    let before = must_detail(&mut conn, &model, id, None).await?;
     let visible = ctx.class_scope(ClassOp::View);
-    let access = RefAccess { visible: visible.as_deref(), current: Some(&refs) };
-    let prepared = prepare_attributes(&mut conn, &defs, Some(input), &key, Some(id), class_changes, access).await?;
-    check_reference_classes(&mut conn, &prepared).await?;
-    check_parent_values(&mut conn, &defs, &prepared, Some(&current)).await
-}
-
-/// The input plus the default of every active attribute it leaves out.
-fn with_defaults(defs: &[EffectiveAttributeRow], input: Option<&Map<String, Value>>) -> Map<String, Value> {
-    let mut out = input.cloned().unwrap_or_default();
-    for d in defs.iter().filter(|d| d.is_active) {
-        if let Some(default) = &d.default_value
-            && !out.contains_key(&d.key)
-        {
-            out.insert(d.key.clone(), default.0.clone());
-        }
-    }
-    out
-}
-
-/// A database error while writing type rows, attributed to the field it concerns.
-fn field_write_error(err: sqlx::Error, model: &Model) -> AppError {
-    let Some(db) = err.as_database_error() else { return err.into() };
-    let pg = db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>();
-    let column = pg.and_then(|p| p.column()).map(str::to_owned);
-    let constraint = db.constraint().map(str::to_owned);
-    // ck_<field id hex>_<hash>, fk_<field id hex>
-    let by_constraint = constraint.as_deref().and_then(|c| {
-        let hex = c.strip_prefix("ck_").or_else(|| c.strip_prefix("fk_"))?.get(..32)?;
-        model.fields.iter().find(|f| f.hex() == hex).map(|f| f.key.clone())
-    });
-    match by_constraint.or(column) {
-        Some(key) => pg_error::map(&err, Some(&format!("attributes.{key}"))).unwrap_or_else(|| err.into()),
-        None => pg_error::map(&err, None).unwrap_or_else(|| err.into()),
-    }
-}
-
-/// A database error while writing the registry row (ident taken, validity order).
-fn registry_write_error(err: sqlx::Error) -> AppError {
-    pg_error::map(&err, None).unwrap_or_else(|| err.into())
-}
-
-/// Writes the CI's rows in its type tables: `insert` for tables it has no row
-/// in yet, `update` (only the columns that change) for the others.
-async fn write_type_rows(
-    conn: &mut PgConnection,
-    model: &Model,
-    ci_id: Uuid,
-    class_id: Uuid,
-    set: &[(&EffectiveAttributeRow, StoredValue)],
-    clear: &[Uuid],
-    new_tables: &[Uuid],
-) -> Result<(), AppError> {
-    for class in model.lineage(class_id) {
-        let Some(table) = model.table(class.id) else { continue };
-        let mut values: Vec<(&Field, Option<String>)> = Vec::new();
-        for f in model.own_fields(class.id) {
-            if let Some((_, v)) = set.iter().find(|(d, _)| d.id == f.id) {
-                values.push((f, Some(v.as_text())));
-            } else if clear.contains(&f.id) {
-                values.push((f, None));
-            }
-        }
-        let result = if new_tables.contains(&class.id) {
-            data::insert_type_row(conn, &table, ci_id, &values).await
-        } else {
-            data::update_type_row(conn, &table, ci_id, &values).await
-        };
-        result.map_err(|e| field_write_error(e, model))?;
-    }
-    Ok(())
-}
-
-async fn check_required(
-    conn: &mut PgConnection,
-    model: &Model,
-    ci_id: Uuid,
-    defs: &[EffectiveAttributeRow],
-) -> Result<(), AppError> {
-    let present: HashSet<String> = data::values(conn, model, &[ci_id]).await?.into_iter().map(|v| v.key).collect();
-    let missing: Vec<FieldError> = defs
-        .iter()
-        .filter(|d| d.is_required && d.is_active && !present.contains(&d.key))
-        .map(|d| body_error(format!("attributes.{}", d.key), format!("{} is required", d.label), "required"))
-        .collect();
-    if missing.is_empty() { Ok(()) } else { Err(AppError::validation(missing)) }
-}
-
-async fn class_key(conn: &mut PgConnection, class_id: Uuid) -> Result<String, AppError> {
-    match class_data::class_info(conn, class_id).await? {
-        Some(c) => Ok(c.key),
-        None => Err(AppError::field("classId", "CI class does not exist", "not_found")),
-    }
+    let needs = Needs::for_update(&defs, Some(input), &before.attributes);
+    let resolver = DbResolver::load(&mut conn, visible.as_deref(), &needs).await?;
+    plan::prepare_changed(&model, &defs, &before, class_id, Some(input), &resolver).map(drop)
 }
 
 // ---------------------------------------------------------------------------
@@ -806,23 +402,13 @@ pub async fn create(
         ctx.require_administrator("set a CI's ident")?;
     }
     let mut tx = pool.begin().await?;
-    let key = class_key(&mut tx, input.class_id).await?;
     let model = Model::load(&mut tx).await?;
     let defs = class_data::effective_attributes(&mut tx, input.class_id).await?;
     let visible = ctx.class_scope(ClassOp::View);
-    let access = RefAccess { visible: visible.as_deref(), current: None };
-    let prepared = prepare_new(&mut tx, &defs, input.attributes.as_ref(), &key, access).await?;
-
-    let new = data::NewItem {
-        class_id: input.class_id,
-        ident: input.ident.as_deref(),
-        valid_from: input.valid_from,
-        valid_until: input.valid_until,
-    };
-    let id = data::insert(&mut tx, &new).await.map_err(registry_write_error)?;
-    let lineage: Vec<Uuid> = model.lineage(input.class_id).iter().map(|c| c.id).collect();
-    write_type_rows(&mut tx, &model, id, input.class_id, &prepared.set, &[], &lineage).await?;
-    data::refresh_labels(&mut tx, &model, &[input.class_id], Some(&[id])).await?;
+    let needs = Needs::for_create(&defs, input.attributes.as_ref());
+    let resolver = DbResolver::load(&mut tx, visible.as_deref(), &needs).await?;
+    let plan = plan::plan_create(ctx, &model, &defs, input, &resolver)?;
+    let id = plan::apply(&mut tx, &model, &plan).await?;
 
     let dto = must_detail(&mut tx, &model, id, None).await?;
     let entry = AuditEntry {
@@ -845,101 +431,25 @@ pub async fn update(
     input: &UpdateItemBody,
 ) -> Result<ConfigurationItem, AppError> {
     let mut tx = pool.begin().await?;
-    let before = data::lock(&mut tx, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))?;
-    ctx.require_class_visible(before.class_id, "Configuration item", id)?;
-    ctx.require_class(before.class_id, ClassOp::Edit)?;
-    // Moving a CI to another class also needs create rights there.
-    if let Some(new_class) = input.class_id.filter(|c| *c != before.class_id) {
-        ctx.require_class(new_class, ClassOp::Create)?;
-    }
-    if before.deleted_at.is_some() {
-        return Err(AppError::conflict("This configuration item is deleted and cannot be modified"));
-    }
-    // Resending the current ident (a form saving every field) is no change.
-    let new_ident = input.ident.as_deref().filter(|i| *i != before.ident);
-    if new_ident.is_some() {
-        ctx.require_administrator("change a CI's ident")?;
-    }
-    if let Some(sent) = input.version
-        && sent != before.version
-    {
-        return Err(AppError::new(
-            ErrorCode::VersionConflict,
-            format!(
-                "The item was changed by someone else (you sent version {sent}, current is {}). Reload and retry.",
-                before.version
-            ),
-        )
-        .with_details(vec![body_error(
-            "version".into(),
-            format!("Current version is {}", before.version),
-            "stale",
-        )]));
-    }
+    let locked = data::lock(&mut tx, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))?;
+    // A CI the caller may not view is missing, before anything else is looked at.
+    ctx.require_class_visible(locked.class_id, "Configuration item", id)?;
     let model = Model::load(&mut tx).await?;
-    let before_dto = must_detail(&mut tx, &model, id, None).await?;
-
-    let class_id = input.class_id.unwrap_or(before.class_id);
-    let class_changes = class_id != before.class_id;
-    let key = class_key(&mut tx, class_id).await?;
+    let before = must_detail(&mut tx, &model, id, None).await?;
+    let class_id = input.class_id.unwrap_or(locked.class_id);
     let defs = class_data::effective_attributes(&mut tx, class_id).await?;
-    let refs = current_refs(&model, before.class_id, &before_dto.attributes);
     let visible = ctx.class_scope(ClassOp::View);
-    let access = RefAccess { visible: visible.as_deref(), current: Some(&refs) };
-    let prepared =
-        prepare_attributes(&mut tx, &defs, input.attributes.as_ref(), &key, Some(id), class_changes, access).await?;
-    check_reference_classes(&mut tx, &prepared).await?;
-    check_parent_values(&mut tx, &defs, &prepared, Some(&before_dto.attributes)).await?;
-    let old_lineage: Vec<Uuid> = model.lineage(before.class_id).iter().map(|c| c.id).collect();
-    let new_lineage: Vec<Uuid> = model.lineage(class_id).iter().map(|c| c.id).collect();
-
-    if class_changes {
-        // Values the new class does not define must be cleared in the same request.
-        let keep: HashSet<&str> = defs.iter().map(|d| d.key.as_str()).collect();
-        let cleared: HashSet<&str> =
-            input.attributes.iter().flatten().filter(|(_, v)| v.is_null()).map(|(k, _)| k.as_str()).collect();
-        let orphaned: Vec<&str> = before_dto
-            .attributes
-            .keys()
-            .map(String::as_str)
-            .filter(|k| !keep.contains(k) && !cleared.contains(k))
-            .collect();
-        if let Some(first) = orphaned.first() {
-            return Err(AppError::field(
-                "classId",
-                format!(
-                    "The new class does not define: {}. Clear them in the same request (\"attributes\": {{\"{first}\": null}}).",
-                    orphaned.join(", ")
-                ),
-                "attributes_outside_class",
-            ));
-        }
-        // Rows in the tables of classes the CI leaves go (their values were cleared above).
-        for gone in old_lineage.iter().filter(|c| !new_lineage.contains(c)) {
-            if let Some(table) = model.table(*gone) {
-                data::delete_type_rows(&mut tx, &table, &[id]).await?;
-            }
-        }
-    }
-
-    let patch = data::ItemPatch {
-        class_id: input.class_id,
-        ident: new_ident,
-        valid_from: input.valid_from,
-        valid_until: input.valid_until,
-    };
-    data::update(&mut tx, id, &patch).await.map_err(registry_write_error)?;
-    let entering: Vec<Uuid> = new_lineage.iter().filter(|c| !old_lineage.contains(c)).copied().collect();
-    write_type_rows(&mut tx, &model, id, class_id, &prepared.set, &prepared.clear, &entering).await?;
-    check_required(&mut tx, &model, id, &defs).await?;
-    data::refresh_labels(&mut tx, &model, &[class_id], Some(&[id])).await?;
+    let needs = Needs::for_update(&defs, input.attributes.as_ref(), &before.attributes);
+    let resolver = DbResolver::load(&mut tx, visible.as_deref(), &needs).await?;
+    let plan = plan::plan_update(ctx, &model, &defs, before, input, &resolver)?;
+    plan::apply(&mut tx, &model, &plan).await?;
 
     let dto = must_detail(&mut tx, &model, id, None).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
         entity_type: "configuration_items",
         entity_id: id,
-        old_value: Some(crud::json(&before_dto)),
+        old_value: plan.before.as_ref().map(crud::json),
         new_value: Some(crud::json(&dto)),
     };
     crud::write_audit(&mut tx, ctx, vec![entry]).await?;
@@ -1120,6 +630,7 @@ mod tests {
     use super::*;
     use crate::api::route::{BodyInput, CheckedBody};
     use crate::db::scratch;
+    use serde_json::json;
 
     async fn id_of(pool: &PgPool, table: &str, key: &str) -> Uuid {
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table} WHERE key = $1")))
@@ -1361,6 +872,57 @@ mod tests {
         let hits = search(pool, &editor, &q).await.unwrap();
         assert_eq!(hits.data.len(), 1);
         assert!(hits.data[0].matches.iter().any(|m| m.field == "ident"));
+        db.drop().await;
+    }
+
+    /// T1 (SHAA-799): the required-field result of a PATCH comes from the CI's
+    /// values plus the change, before anything is written. Clearing a required
+    /// value is refused with `required`, and nothing changes.
+    #[tokio::test]
+    async fn patch_refuses_clearing_a_required_value_before_writing() {
+        let Some(db) = scratch::database("patch_refuses_clearing_a_required_value_before_writing").await else {
+            return;
+        };
+        let pool = &db.pool;
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        let (server, in_service) = (id_of(pool, "ci_classes", "server").await, status(pool, "in_service").await);
+        let editor = user_ctx(false);
+        let body = parse::<CreateItemBody>(json!({ "classId": server,
+            "attributes": { "name": "web-01", "status": in_service, "hostname": "web-01.example.com" } }));
+        let Ok(body) = body else { panic!("invalid create body") };
+        let ci = create(pool, &editor, &body).await.unwrap().summary;
+        let update_body = |v: Value| parse::<UpdateItemBody>(v).unwrap_or_else(|_| panic!("invalid update body"));
+        let audit_rows = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log WHERE entity_id = $1")
+                .bind(ci.id)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        };
+        let audited = audit_rows().await;
+
+        for patch in [
+            json!({ "attributes": { "name": null } }),
+            json!({ "attributes": { "status": null, "hostname": "web-02.example.com" } }),
+            json!({ "attributes": { "name": null, "status": null } }),
+        ] {
+            let err = update(pool, &editor, ci.id, &update_body(patch.clone())).await.unwrap_err();
+            assert_eq!(err.code, ErrorCode::ValidationError, "{patch}");
+            let codes: Vec<&str> = err.details.iter().flatten().map(|d| d.code.as_str()).collect();
+            assert!(!codes.is_empty() && codes.iter().all(|c| *c == "required"), "{patch}: {codes:?}");
+        }
+        let after = get(pool, &editor, ci.id).await.unwrap();
+        assert_eq!(after.summary.version, ci.version, "nothing was written");
+        assert_eq!(after.attributes.get("name"), Some(&json!("web-01")));
+        assert_eq!(audit_rows().await, audited);
+
+        // Clearing an optional value and replacing a required one pass.
+        let ok =
+            update(pool, &editor, ci.id, &update_body(json!({ "attributes": { "hostname": null, "name": "web-1" } })))
+                .await
+                .unwrap();
+        assert_eq!(ok.summary.label, "web-1");
+        assert!(!ok.attributes.contains_key("hostname"));
         db.drop().await;
     }
 

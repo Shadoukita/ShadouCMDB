@@ -1,9 +1,10 @@
 //! Configuration items: inventory list, detail, CRUD, relationship graph and global search.
 
+pub mod plan;
 pub mod schemas;
 pub mod service;
 
-pub use service::value_schema;
+pub use plan::value_schema;
 
 use axum::http::{Method, StatusCode};
 
