@@ -9,7 +9,7 @@
 | `sql/` | Database artifacts: migrations, bootstrap scripts, ER diagram. |
 | `docs/` | Architecture, API, deployment and data-model documentation. |
 | `changelog.d/` | Pending changelog entries, one file per change, collected into `CHANGELOG.md` at release ([Changelog](#changelog)). |
-| `tools/` | Smoke test (`smoke/smoke.ts`, runs against any API URL), the in-place upgrade check (`upgrade/upgrade-check.ts`), the OpenAPI diff script, the pinned CycloneDX generator for the SBOM (`sbom/`, own lockfile), and the changelog collector (`changelog/collect.mjs`). |
+| `tools/` | Smoke test (`smoke/smoke.ts`, runs against any API URL), the in-place upgrade check (`upgrade/upgrade-check.ts`), the LDAPS integration test against a real directory (`ldap-it/`, [README](tools/ldap-it/README.md)), the OpenAPI diff script, the pinned CycloneDX generator for the SBOM (`sbom/`, own lockfile), and the changelog collector (`changelog/collect.mjs`). |
 | `.github/` | CI, upgrade, supply-chain, CodeQL and release workflows, Dependabot config, pull request template. |
 | `deploy/` | systemd unit, release Dockerfile, READMEs shipped inside the release archives. |
 
@@ -23,7 +23,7 @@
    ([Changelog](#changelog)). Never edit `CHANGELOG.md` in a feature or fix PR.
 4. Push the branch and open a pull request against `main` using the template.
 5. CI must be green before merging: **CI** (frontend typecheck, API types, build, changelog fragments), **Rust** (fmt, clippy,
-   tests, `openapi --check`, PostgreSQL integration and smoke suite, Windows, Docker), **Upgrade**
+   tests, `openapi --check`, PostgreSQL integration and smoke suite, LDAPS directory sign-in, Windows, Docker), **Upgrade**
    (in-place upgrade from each published release, no data lost or changed), **Supply chain**
    (cargo-deny, npm audit, gitleaks, SBOM, dependency review, actions pinned by SHA), **CodeQL** and, for
    PRs that touch the pipeline, **Release** as a dry run. Squash-merge, then delete the branch.

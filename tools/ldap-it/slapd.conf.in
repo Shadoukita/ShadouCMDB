@@ -1,0 +1,45 @@
+# The test directory for tools/ldap-it (see README.md). ldap.sh fills in the
+# @...@ paths: the same file serves the container and a local slapd.
+
+include         @SCHEMA@/core.schema
+include         @SCHEMA@/cosine.schema
+include         @SCHEMA@/inetorgperson.schema
+
+modulepath      @MODULES@
+moduleload      back_mdb
+moduleload      memberof
+
+pidfile         @RUN@/slapd.pid
+argsfile        @RUN@/slapd.args
+
+# LDAPS only: ldap.sh starts slapd with ldaps:// listeners and nothing else.
+TLSCACertificateFile    @CERTS@/ca.pem
+TLSCertificateFile      @CERTS@/server.pem
+TLSCertificateKeyFile   @CERTS@/server-key.pem
+
+database        mdb
+maxsize         67108864
+suffix          "dc=shadoucmdb,dc=test"
+rootdn          "cn=admin,dc=shadoucmdb,dc=test"
+rootpw          ldap-it-admin-ci-only-password
+directory       @DATA@
+index           objectClass eq
+index           uid eq
+
+# memberOf on the user entries, as Active Directory has it (ShadouCMDB's
+# default groupAttribute).
+overlay                 memberof
+memberof-group-oc       groupOfNames
+memberof-member-ad      member
+memberof-memberof-ad    memberOf
+memberof-refint         TRUE
+
+# Passwords are only ever used to bind. The service account reads the tree
+# (including entryUUID and memberOf); users read their own entry.
+access to attrs=userPassword
+        by anonymous auth
+        by * none
+access to *
+        by dn.exact="cn=cmdb-reader,ou=services,dc=shadoucmdb,dc=test" read
+        by self read
+        by * none

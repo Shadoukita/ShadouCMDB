@@ -1,0 +1,60 @@
+# The directory tools/ldap-it/ldap-it.ts signs in against. Throwaway
+# CI-only passwords; the test script uses the same values.
+#
+# alice: in cmdb-operators (mapped to a profile) and cmdb-guests (not mapped).
+# bob:   in cmdb-guests only, so no group of his maps to a profile.
+
+dn: dc=shadoucmdb,dc=test
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: ShadouCMDB LDAP integration test
+dc: shadoucmdb
+
+dn: ou=people,dc=shadoucmdb,dc=test
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=shadoucmdb,dc=test
+objectClass: organizationalUnit
+ou: groups
+
+dn: ou=services,dc=shadoucmdb,dc=test
+objectClass: organizationalUnit
+ou: services
+
+dn: cn=cmdb-reader,ou=services,dc=shadoucmdb,dc=test
+objectClass: organizationalRole
+objectClass: simpleSecurityObject
+cn: cmdb-reader
+description: ShadouCMDB service account (search only)
+userPassword: reader-ci-only-password
+
+dn: uid=alice,ou=people,dc=shadoucmdb,dc=test
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice Directory
+sn: Directory
+displayName: Alice Directory
+mail: alice@shadoucmdb.test
+userPassword: alice-ci-only-password
+
+dn: uid=bob,ou=people,dc=shadoucmdb,dc=test
+objectClass: inetOrgPerson
+uid: bob
+cn: Bob Directory
+sn: Directory
+displayName: Bob Directory
+mail: bob@shadoucmdb.test
+userPassword: bob-ci-only-password
+
+dn: cn=cmdb-operators,ou=groups,dc=shadoucmdb,dc=test
+objectClass: groupOfNames
+cn: cmdb-operators
+member: uid=alice,ou=people,dc=shadoucmdb,dc=test
+
+dn: cn=cmdb-guests,ou=groups,dc=shadoucmdb,dc=test
+objectClass: groupOfNames
+cn: cmdb-guests
+member: uid=alice,ou=people,dc=shadoucmdb,dc=test
+member: uid=bob,ou=people,dc=shadoucmdb,dc=test
