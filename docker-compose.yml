@@ -52,7 +52,7 @@ services:
 
   # Also the service for the other schema-owner commands (`restore`,
   # `factory-reset`, `decommission`) and for `prune-audit`, which needs
-# MAINTENANCE_DATABASE_URL: `docker compose run --rm migrate <command>`.
+  # MAINTENANCE_DATABASE_URL: `docker compose run --rm migrate <command>`.
   # Instead of .env.migrate you can pass the owner URL per run with
   # `docker compose run --rm -e MIGRATION_DATABASE_URL=... migrate`.
   migrate:
