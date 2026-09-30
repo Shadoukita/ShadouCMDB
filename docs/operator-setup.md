@@ -2,8 +2,8 @@
 
 This guide takes you from an empty directory and an empty PostgreSQL server to a working
 ShadouCMDB: API, web UI, a first administrator and a first configuration item. Follow the
-steps in order. Every command below was run as written (with the placeholders filled in);
-see [How this guide was verified](#how-this-guide-was-verified).
+steps in order. Every command below was run as written (with the placeholders filled in),
+except where [How this guide was verified](#how-this-guide-was-verified) says otherwise.
 
 For reference material behind each step see [deployment.md](deployment.md) (commands,
 services, Docker, Windows), [`.env.example`](../.env.example) (every variable) and
@@ -51,9 +51,10 @@ tar xzf shadoucmdb-$VER-linux-x64.tar.gz
 ./shadoucmdb-$VER-linux-x64/shadoucmdb --version
 ```
 
-The archive contains `shadoucmdb`, `shadoucmdb.service`, `shadoucmdb.env.example` and
-`README.txt`. It does **not** contain the database bootstrap script
-([#47](https://github.com/Shadoukita/ShadouCMDB/issues/47)); fetch it from the same tag:
+The archive contains `shadoucmdb`, `shadoucmdb.service`, `shadoucmdb.env.example`,
+`README.txt` and the database bootstrap scripts in `sql/bootstrap/`; step 3 uses
+`00_create_role_and_database.sql` from there. If you run the container image instead, which does
+not contain the scripts, fetch the script from the same tag:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/Shadoukita/ShadouCMDB/v$VER/sql/bootstrap/00_create_role_and_database.sql
@@ -66,9 +67,9 @@ superuser:
 
 | Role | Used by | Configured as |
 | --- | --- | --- |
-| `shadoucmdb_owner` | `shadoucmdb migrate` only | `MIGRATION_DATABASE_URL` (passed on the command line, never stored in the server's env file) |
-| `shadoucmdb_app` | the running server, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` |
-| `shadoucmdb_maintenance` | `shadoucmdb prune-audit` only | `MAINTENANCE_DATABASE_URL` |
+| `shadoucmdb_owner` | `migrate`, `restore`, `factory-reset`, `decommission` | `MIGRATION_DATABASE_URL` (passed on the command line, never stored in the server's env file) |
+| `shadoucmdb_app` | the running server (`serve`) and every other command: `seed`, `verify`, `audit-verify`, `create-admin`, `backup`, `mfa`, `identity-providers` | `DATABASE_URL` or `PG*` |
+| `shadoucmdb_maintenance` | `prune-audit` only | `MAINTENANCE_DATABASE_URL` |
 
 > **Your own names.** These are the defaults. To follow your naming scheme, add
 > `-v owner_role=… -v app_role=… -v maintenance_role=… -v db_name=…` to the `psql` command
@@ -91,7 +92,7 @@ psql "host=<db-host> port=<db-port> dbname=postgres user=<pg-admin> sslmode=veri
      -v owner_password="$(cat .pw-owner)" \
      -v app_password="$(cat .pw-app)" \
      -v maintenance_password="$(cat .pw-maintenance)" \
-     -f 00_create_role_and_database.sql
+     -f shadoucmdb-$VER-linux-x64/sql/bootstrap/00_create_role_and_database.sql
 ```
 
 Use `sslmode=require` instead of `verify-full sslrootcert=…` if you do not have the server's
@@ -121,12 +122,13 @@ default:
 | --- | --- | --- |
 | `DATABASE_URL` | `postgres://shadoucmdb_app:<app password>@<db-host>:<db-port>/shadoucmdb` | The server's connection. Takes precedence over `PG*`. |
 | `PGHOST`, `PGPASSWORD` | *(empty)* when you use `DATABASE_URL` | Alternatively leave `DATABASE_URL` empty and set `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`. |
-| `MAINTENANCE_DATABASE_URL` | `postgres://shadoucmdb_maintenance:<maintenance password>@<db-host>:<db-port>/shadoucmdb` | Only `prune-audit` uses it. |
-| `MIGRATION_DATABASE_URL` | *(leave empty)* | Pass it on the command line in step 5, so the owner's password is not in the server's environment. |
+| `MAINTENANCE_DATABASE_URL` | `postgres://shadoucmdb_maintenance:<maintenance password>@<db-host>:<db-port>/shadoucmdb` | `prune-audit` connects with it. `migrate` also reads it, to learn which role to grant to, so set it before step 6. |
+| `MIGRATION_DATABASE_URL` | *(leave empty)* | Pass it on the command line in step 6, so the owner's password is not in the server's environment. `restore`, `factory-reset` and `decommission` need it too. |
+| `ENCRYPTION_KEY_FILE` | absolute path of the key file you create in step 5 | Required by `serve`: the key that encrypts the users' authenticator secrets and the identity providers' secrets. |
 | `DATABASE_SSL` | `verify-full` (recommended), `require` or `disable` | `verify-full` checks the server certificate and host name. Any `sslmode` inside `DATABASE_URL` is ignored. |
 | `DATABASE_SSL_CA_FILE` | absolute path to the CA bundle (PEM) | Needed with `verify-full` when the server certificate is from a private or managed CA. |
 | `API_HOST`, `API_PORT` | e.g. `0.0.0.0` and `3000` (defaults) | Where the API and UI listen. |
-| `CORS_ORIGINS` | *(empty)* | Only needed when the UI is served from another origin (section 9). |
+| `CORS_ORIGINS` | *(empty)* | Only needed when the UI is served from another origin (section 10). |
 | `COOKIE_SECURE` | `auto` (default); `always` behind a TLS proxy that does not send `X-Forwarded-Proto` | Session cookie `Secure` flag. |
 
 The remaining variables (`DATABASE_POOL_MAX`, `DATABASE_STATEMENT_TIMEOUT_MS`,
@@ -146,24 +148,47 @@ Invalid configuration:
 
 There is no fallback to `localhost`.
 
-## 5. Apply the migrations (as the owner)
+## 5. Create the encryption key
+
+`serve` does not start without a key that encrypts the users' authenticator (TOTP) secrets and
+the identity providers' secrets (OIDC client secrets, LDAP bind passwords). The key is a file
+outside the database and is never part of a backup. Create it once; the command needs no
+database:
 
 ```sh
 B=./shadoucmdb-$VER-linux-x64/shadoucmdb
+$B generate-encryption-key --out encryption.key
+```
+
+The file is created with mode `0600`, and the command refuses to overwrite an existing file. It
+prints the absolute path: set `ENCRYPTION_KEY_FILE` to that path in `shadoucmdb.env`.
+
+Keep a copy of the key apart from your database backups, for example in a password vault. Without
+it, a restored backup has no usable two-factor enrolments or identity provider secrets; what to do
+then is in [backup-and-reset.md](backup-and-reset.md#restoring) (the paragraph on the encryption
+key). Background: [security/hardening.md](security/hardening.md#encryption-key).
+
+## 6. Apply the migrations (as the owner)
+
+```sh
 MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$(cat .pw-owner)@<db-host>:<db-port>/shadoucmdb" \
   $B --env-file shadoucmdb.env migrate
 ```
 
-Expected on an empty database (the count grows with new releases):
+Expected on an empty database, abridged. `<N>` is the number of migrations in your release (it
+grows with new releases):
 
 ```
 Connected to database "shadoucmdb" (PostgreSQL 18.4), ssl=verify-full
-Migrations: 10 in binary, 0 applied, 10 pending
+Migrations: <N> in binary, 0 applied, <N> pending
   applied 0000_extensions
   …
-  applied 0009_type_tables
-Database is at migration 10/10
+  applied <last migration>
+Database is at migration <N>/<N>
 ```
+
+The output ends with a report on the encryption key. `migrate` does not need the key, but it
+warns if `ENCRYPTION_KEY_FILE` is missing or unreadable, which would stop `serve` (step 5).
 
 Re-running reports `nothing to do`. If you forget `MIGRATION_DATABASE_URL`, `migrate` refuses
 with `this database user may not change the schema; set MIGRATION_DATABASE_URL …`. That is
@@ -171,7 +196,7 @@ expected: the server's own role cannot change the schema.
 
 `serve` never migrates on its own. Run this step again after every upgrade.
 
-## 6. Seed, check and create the first administrator
+## 7. Seed, check and create the first administrator
 
 ```sh
 $B --env-file shadoucmdb.env seed --template it_infrastructure   # or plain `seed` for an empty data model
@@ -189,9 +214,15 @@ $B --env-file shadoucmdb.env create-admin --username admin --display-name "Ops A
 - `create-admin` needs a password of at least 12 characters. For scripts:
   `$B --env-file shadoucmdb.env create-admin --username admin --password-stdin < .pw-admin`.
   You can skip `create-admin` entirely: while no user exists, the web UI opens a
-  first-run setup page instead of the sign-in page.
+  first-run setup page instead of the sign-in page. That page asks for a one-time **setup
+  token**, which `serve` generates when it starts on a database without users. Read it from
+  the server log (the `WARN` line `no user exists yet`, field `setup_token`) or from the token
+  file: `SETUP_TOKEN_FILE` when set, otherwise `setup-token` next to the env file; the sample
+  systemd unit sets `/var/lib/shadoucmdb/setup-token`. To choose the token yourself, set
+  `SETUP_TOKEN` (at least 32 characters). `create-admin` needs no token. Details, lockout and
+  unattended installs: [deployment.md](deployment.md#the-setup-token).
 
-## 7. Start the server
+## 8. Start the server
 
 ### Try it in the foreground
 
@@ -211,7 +242,9 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin shadoucmdb
 sudo install -d -m 0750 -o root -g shadoucmdb /etc/shadoucmdb
 sudo install -m 0640 -o root -g shadoucmdb shadoucmdb.env /etc/shadoucmdb/shadoucmdb.env
 sudo install -m 0640 -o root -g shadoucmdb db-ca.pem /etc/shadoucmdb/db-ca.pem     # if you use verify-full
+sudo install -m 0640 -o root -g shadoucmdb encryption.key /etc/shadoucmdb/encryption.key
 sudoedit /etc/shadoucmdb/shadoucmdb.env        # DATABASE_SSL_CA_FILE=/etc/shadoucmdb/db-ca.pem
+                                               # ENCRYPTION_KEY_FILE=/etc/shadoucmdb/encryption.key
 sudo install -m 0644 shadoucmdb-$VER-linux-x64/shadoucmdb.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
 journalctl -u shadoucmdb -f
@@ -219,7 +252,7 @@ journalctl -u shadoucmdb -f
 
 The unit starts `shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env serve` as the
 unprivileged `shadoucmdb` user with a hardened sandbox, restarts it on failure, and stops it
-with `SIGTERM` (graceful). It does not migrate; after upgrades run step 5, then
+with `SIGTERM` (graceful). It does not migrate; after upgrades run step 6, then
 `sudo systemctl restart shadoucmdb`.
 
 ### Windows Server and Docker
@@ -230,24 +263,34 @@ for the multi-arch image (amd64 and arm64). The configuration, migrations and ch
 guide are the same. Inside a container `localhost` is the container: point `DATABASE_URL` at
 the database's real host name.
 
-## 8. Verify the installation
+## 9. Verify the installation
 
 Run these from the server (replace host and port if you changed `API_HOST`/`API_PORT`):
 
 ```sh
-curl -s http://127.0.0.1:3000/healthz     # {"status":"ok"}  (process is alive)
-curl -s http://127.0.0.1:3000/readyz      # {"status":"ready","database":"ok","migrations":{"applied":10,"expected":10,"upToDate":true}}
+curl -s http://127.0.0.1:3000/healthz     # {"status":"ok","version":"<x.y.z>"}  (process is alive)
+curl -s http://127.0.0.1:3000/readyz      # {"status":"ready","database":"ok","migrations":{"applied":<N>,"expected":<N>,"upToDate":true}}
 ```
 
-`/readyz` answers `503` with `"status":"not_ready"` when the database is unreachable
-(`"database":"unreachable"`, after `DATABASE_CONNECT_TIMEOUT_MS`, 5 s by default) or when
-migrations are pending (`"upToDate":false`). It turns green again by itself once the cause is
-fixed; no restart needed. Use it as the load balancer / orchestrator readiness probe, with a
-probe timeout longer than `DATABASE_CONNECT_TIMEOUT_MS`.
+`/readyz` answers `200` only when the database answers and all migrations are applied. Otherwise
+it answers `503` with `"status":"not_ready"`, and `database` says why:
+
+| `database` | Meaning and what to check |
+| --- | --- |
+| `ok` | The database answered. With `"upToDate":false`, migrations are pending: run step 6. |
+| `unreachable` | No connection (network, TLS or timeout, after `DATABASE_CONNECT_TIMEOUT_MS`, 5 s by default): host, port, firewall, `pg_hba.conf`, `DATABASE_SSL` and `DATABASE_SSL_CA_FILE`. |
+| `authentication_failed` | PostgreSQL refused the credentials: the user and password in `DATABASE_URL` or `PGUSER`/`PGPASSWORD`. |
+| `permission_denied` | Connected, but the role may not read the schema: `DATABASE_URL` should name the `shadoucmdb_app` role (or your name for it), and `migrate` must have run with the same role names (steps 3 and 6). |
+| `error` | Connected, but a query failed for another reason: the server log has the error. |
+
+Unless `database` is `ok`, `migrations` omits `applied` and `upToDate`; `expected` is always
+present. The result is reused for 1 s, and concurrent probes share one database check. It turns
+green again by itself once the cause is fixed; no restart needed. Use it as the load balancer /
+orchestrator readiness probe, with a probe timeout longer than `DATABASE_CONNECT_TIMEOUT_MS`.
 
 Then, in a browser, open `http://<server>:3000/`:
 
-1. Sign in as the administrator from step 6 (or complete first-run setup).
+1. Sign in as the administrator from step 7 (or complete first-run setup with the setup token described there).
 2. Click **+ New CI**, choose class **Server**, enter a name, pick a status, and click
    **Create Server**. The detail page opens with "Created …".
 3. Read the same CI back through the API to prove it was stored:
@@ -260,7 +303,9 @@ Then, in a browser, open `http://<server>:3000/`:
 
    The response lists the CI with the class, status and version `1` you saw in the UI.
 
-The API contract is served at `/openapi.json`, with a browsable version at `/docs`.
+With `API_DOCS=authenticated` (signed-in users) or `API_DOCS=public`, the API contract is served at
+`/openapi.json`, with a browsable version at `/docs`. The default is `off`: both answer `404`. The
+same contract is committed as `backend/openapi.json`.
 
 Optional deep check: the repository's smoke suite exercises every API operation and checks
 every response against the OpenAPI document. It needs Node.js 22.18+ and a checkout of the
@@ -272,7 +317,7 @@ API_URL=http://127.0.0.1:3000 SMOKE_USERNAME=admin SMOKE_PASSWORD='<admin passwo
 # … ALL CHECKS PASSED
 ```
 
-## 9. Serving the web UI separately (optional)
+## 10. Serving the web UI separately (optional)
 
 The binary serves the UI on the same origin as the API, which is the simplest setup. To host
 the UI elsewhere (a CDN, a separate web server), build or copy `frontend/dist` and set the API
@@ -287,7 +332,7 @@ no path) and restart it. Alternatively, put a reverse proxy in front of both tha
 `/api` to the server; then no CORS setting is needed. Either way the UI host needs no
 database settings. See [frontend/README.md](../frontend/README.md).
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Cause and fix |
 | --- | --- |
@@ -296,13 +341,14 @@ database settings. See [frontend/README.md](../frontend/README.md).
 | `invalid peer certificate: … CaUsedAsEndEntity` | The server uses a self-signed certificate that is its own CA; `verify-full` rejects that. Issue the server certificate from a CA, or use `DATABASE_SSL=require`. |
 | `no pg_hba.conf entry for host …, no encryption` | The server requires TLS but `DATABASE_SSL=disable`. |
 | `password authentication failed for user …` | Wrong password in `DATABASE_URL` / `PGPASSWORD`. Special characters in a URL password must be percent-encoded. |
-| `migrate failed: this database user may not change the schema; set MIGRATION_DATABASE_URL …` | Run `migrate` with `MIGRATION_DATABASE_URL` as `shadoucmdb_owner` (step 5). |
+| `migrate failed: this database user may not change the schema; set MIGRATION_DATABASE_URL …` | Run `migrate` with `MIGRATION_DATABASE_URL` as `shadoucmdb_owner` (step 6). |
 | `role … must be a member of shadoucmdb_app …` during `migrate` | The roles were created with other names; see the note in step 3 ([#42](https://github.com/Shadoukita/ShadouCMDB/issues/42)). |
-| UI shows "Request failed (500) An unexpected error occurred" right after install, and `/readyz` says `"upToDate":false` | Migrations were not applied: run step 5 ([#43](https://github.com/Shadoukita/ShadouCMDB/issues/43) tracks a clearer message). |
-| `/readyz` returns `503 "database":"unreachable"` | The server cannot reach or log in to PostgreSQL: check host, port, firewall, `pg_hba.conf` and credentials; the server log has the underlying error. |
+| UI shows "Request failed (500) An unexpected error occurred" right after install, and `/readyz` says `"upToDate":false` | Migrations were not applied: run step 6 ([#43](https://github.com/Shadoukita/ShadouCMDB/issues/43) tracks a clearer message). |
+| `/readyz` returns `503` and `database` is not `ok` | See the table of `database` values in step 9; the server log has the underlying error. |
+| `serve` exits with `ENCRYPTION_KEY_FILE is not set …`, or with a message that the key file has mode … so other users can read or change it | Create the key (step 5), set `ENCRYPTION_KEY_FILE` to its absolute path, and restrict the file to the service account (`chmod 600`, or `0640 root:shadoucmdb` for the systemd unit). |
 | The UI on another origin cannot sign in | Add its origin to `CORS_ORIGINS` and restart; `*` is not allowed. |
 
-## 11. Upgrading
+## 12. Upgrading
 
 ```sh
 sudo install -m 0755 shadoucmdb /usr/local/bin/shadoucmdb
@@ -317,8 +363,10 @@ keeps working. A migration that succeeded cannot be undone: to go back to the pr
 restore the backup taken before the upgrade. When the release notes say a migration renames or
 removes something the running version uses (migration 0024, for example), run
 `sudo systemctl stop shadoucmdb` before `migrate` and `sudo systemctl start shadoucmdb` instead of
-the restart. Installs created with the older single-role bootstrap are split into the three
-roles with `sql/bootstrap/10_split_roles.sql` (see
+the restart. When you upgrade from a release that has no `ENCRYPTION_KEY_FILE` yet, create the
+key first (step 5); the server encrypts the existing secrets at its next start. Installs created
+with the older single-role bootstrap are split into the three roles with
+`sql/bootstrap/10_split_roles.sql` (see
 [deployment.md](deployment.md#upgrading-a-single-role-install)). For backups before an upgrade
 see [backup-and-reset.md](backup-and-reset.md).
 
@@ -371,3 +419,6 @@ Followed end to end on 2026-09-27 (SHAA-5), from an empty directory and an empty
 - **Not verified by running:** Windows Service, Linux ARM64, and `docker run` of the published
   image (the image's amd64 binary is byte-identical to the archive's, and its manifest lists
   amd64 and arm64).
+- **Added after this run:** step 5 (encryption key), the setup token and the `/readyz` `database`
+  values were not part of it. The step numbers and section references above (steps 3–8, section 11)
+  are those of the guide at the time, before step 5 was inserted.

@@ -41,9 +41,11 @@ hex passwords need none.
 
 This creates the database shadoucmdb and three roles, none of them superuser:
 
-  shadoucmdb_owner        Runs `shadoucmdb migrate` (MIGRATION_DATABASE_URL).
-                          Keep it out of the running server's environment.
-  shadoucmdb_app          The server and every other command (DATABASE_URL or
+  shadoucmdb_owner        `shadoucmdb migrate`, `restore`, `factory-reset` and
+                          `decommission` (MIGRATION_DATABASE_URL). Keep it out of
+                          the running server's environment.
+  shadoucmdb_app          The server and every other command, including `seed`,
+                          `verify`, `create-admin` and `backup` (DATABASE_URL or
                           PGHOST/PGUSER/PGPASSWORD/...).
   shadoucmdb_maintenance  `shadoucmdb prune-audit` only (MAINTENANCE_DATABASE_URL).
 
@@ -115,8 +117,10 @@ a backup taken before the upgrade.
 Audit log retention
 -------------------
 
-Nothing is deleted automatically. Report, then delete, audit entries older than
-180 days as shadoucmdb_maintenance:
+Nothing is deleted automatically. Report, then delete, authentication events
+(sign-ins, sessions, two-factor and API token use; the default scope "auth")
+older than 180 days as shadoucmdb_maintenance. Change history is kept unless you
+add `--scope changes`:
 
   read -rsp 'shadoucmdb_maintenance password: ' PW; echo
   export MAINTENANCE_DATABASE_URL="postgres://shadoucmdb_maintenance:$PW@db.example.internal:5432/shadoucmdb"

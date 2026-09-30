@@ -16,7 +16,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 
 | Path | What |
 | --- | --- |
-| `backend/` | The backend: the Rust server `shadoucmdb` (Axum + Tokio + sqlx). One binary serves `/api/v1`, `/healthz`, `/readyz`, `/openapi.json`, `/docs` and the embedded web UI, and runs `migrate`, `seed`, `verify` and `openapi`. |
+| `backend/` | The backend: the Rust server `shadoucmdb` (Axum + Tokio + sqlx). One binary serves `/api/v1`, `/healthz`, `/readyz` and the embedded web UI (`/openapi.json` and `/docs` only with `API_DOCS`, off by default), and runs the admin commands (`migrate`, `seed`, `verify`, `backup`, `restore`, `create-admin` and more; all in [docs/deployment.md](docs/deployment.md#commands)). |
 | `sql/` | Database artifacts: versioned migrations, bootstrap scripts, ER diagram. See [`sql/README.md`](sql/README.md). |
 | `frontend/` | Vue 3 + Vite + TanStack Query web UI. See [`frontend/README.md`](frontend/README.md). |
 | `docs/data-model.md` | Data model, integrity rules and soft-delete decisions. |
@@ -24,7 +24,7 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
 | `SECURITY.md`, `docs/security/` | Vulnerability reporting and disclosure policy, hardening guide, support period, telemetry statement, secure development lifecycle, CRA incident process, risk assessment. See [docs/security](docs/security/README.md). |
 | `docs/api.md` | API conventions, error envelope, endpoint overview, extension seams. |
 | `backend/openapi.json` | OpenAPI contract generated from the code (`shadoucmdb openapi --out backend/openapi.json`; CI fails if it is stale). |
-| `tools/` | `smoke/smoke.ts`: end-to-end check of every API operation against any API URL. `ldap-it/`: LDAPS sign-in against a real OpenLDAP directory. `openapi-diff.mjs`: semantic diff of two specs. |
+| `tools/` | `smoke/smoke.ts`: end-to-end check of every API operation against any API URL. `upgrade/`: in-place upgrade check against a real database. `ldap-it/`: LDAPS sign-in against a real OpenLDAP directory. `openapi-diff.mjs`: semantic diff of two specs. `dast/`, `sbom/`, `changelog/`: CI helpers (session-only spec for the second ZAP scan, pinned SBOM generator, changelog fragment check and collection). |
 | `Dockerfile`, `deploy/` | Multi-arch container image of `shadoucmdb`; systemd unit; release Dockerfile and the READMEs shipped in the release archives. See [docs/deployment.md](docs/deployment.md). |
 
 ## Requirements
@@ -88,23 +88,21 @@ from an empty directory to a verified install. The steps below are the same flow
    shadoucmdb migrate
    ```
 
-   Expected output on an empty database:
+   Expected output on an empty database, abridged (`<N>` is the number of migrations in your
+   build, one per file in `sql/migrations/`):
 
    ```
    Connected to database "shadoucmdb" (PostgreSQL 18.1), ssl=verify-full
-   Migrations: 10 in binary, 0 applied, 10 pending
+   Migrations: <N> in binary, 0 applied, <N> pending
      applied 0000_extensions
      applied 0001_core_schema
-     applied 0002_integrity_triggers
-     applied 0003_users_and_permission_profiles
-     applied 0004_data_model_admin
-     applied 0005_ui_settings
-     applied 0006_auth_audit
-     applied 0007_audit_retention
-     applied 0008_cmdb_schema_and_areas
-     applied 0009_type_tables
-   Database is at migration 10/10
+     …
+     applied <last migration>
+   Database is at migration <N>/<N>
    ```
+
+   The output ends with a report on the encryption key (step 6); until you have created it, the
+   report warns that `serve` will not start.
 
    Re-running is safe; it reports `nothing to do`. Applied migrations are tracked in `_sqlx_migrations`.
    A dev database that was migrated by the retired Node/Drizzle runner needs a one-time

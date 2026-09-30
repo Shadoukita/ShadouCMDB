@@ -12,7 +12,8 @@ The connection to PostgreSQL verifies the server certificate and host name by de
 (`DATABASE_SSL=verify-full`). If the certificate comes from a private CA or a managed service
 (Amazon RDS, Azure Database for PostgreSQL), set `DATABASE_SSL_CA_FILE` to that CA bundle. The host
 in `PGHOST` or `DATABASE_URL` must match a name in the certificate. `DATABASE_SSL=require` skips
-the certificate check and logs a warning at startup; use it only while you fix the certificate.
+the certificate check and logs a warning at startup, unless the database is on a Unix socket or
+a loopback address; use it only while you fix the certificate.
 
 ## Commands
 
@@ -29,8 +30,9 @@ shadoucmdb [--env-file PATH] [--log-file PATH] <COMMAND>
                             Check the audit_log hash chain and print its head; exits 1 if it is broken
   create-admin --username U [--display-name N] [--email E] [--password-stdin]
                             Create a user holding the built-in Administrator profile
-  prune-audit --older-than 180d [--scope auth|changes] [--execute]
+  prune-audit --older-than 180d [--scope auth|changes] [--execute | --dry-run]
                             Delete audit_log rows past the retention window; a dry run without --execute
+                            (--dry-run says so explicitly and cannot be combined with --execute)
   backup [--out F]          Write a consistent backup of all data and settings, then check it
   restore FILE [--replace] [--dry-run] [--yes]
                             Check a backup and restore it in one transaction
@@ -253,7 +255,7 @@ must be percent-encoded (`@` becomes `%40`), and hex needs none.
 | Role | Used by | Variable | May |
 | --- | --- | --- | --- |
 | `shadoucmdb_owner` | `shadoucmdb migrate`, `restore`, `factory-reset`, `decommission` | `MIGRATION_DATABASE_URL` | Own the database and the `cmdb` system schema; run migrations. Member of `shadoucmdb_app`. |
-| `shadoucmdb_app` | `serve`, `seed`, `verify`, `create-admin` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log`, `schema_changes` and `server_keys`; no `EXECUTE` on the purge. Owns the area schemas (`CREATE` on the database). |
+| `shadoucmdb_app` | `serve`, `seed`, `verify`, `audit-verify`, `create-admin`, `backup`, `mfa`, `identity-providers` | `DATABASE_URL` or `PG*` | Read and write data. Only `SELECT` and `INSERT` on `audit_log`, `schema_changes` and `server_keys`; no `EXECUTE` on the purge. Owns the area schemas (`CREATE` on the database). |
 | `shadoucmdb_maintenance` | `shadoucmdb prune-audit` | `MAINTENANCE_DATABASE_URL` | Execute `cmdb.prune_audit_log()`, nothing else. |
 
 These are the default names; any others work, as does a database not named `shadoucmdb`.
@@ -361,8 +363,8 @@ Recorded as an audit.purge entry in audit_log.
 - `--scope auth` (default): `login.success`, `login.failure`, `login.locked`, `logout` and
   `session.revoke` rows, API token `token.use` rows, two-factor `mfa.*` rows, plus `sessions`
   rows that expired more than 30 days ago (and expired sign-in challenges in `mfa_challenges`).
-  `--scope changes`: `create`, `update`, `delete` and `restore` rows, only if you decide to
-  cut change history too.
+  `--scope changes`: `create`, `update`, `delete` and `restore` rows and `schema_change.refused`
+  rows, only if you decide to cut change history too.
 - The command needs `MAINTENANCE_DATABASE_URL` and refuses to run without it. Each executed
   run adds an `audit.purge` row (visible in the audit log with `action=audit.purge`) naming
   the database user, client address, OS user, window and the number of rows deleted.
@@ -449,6 +451,7 @@ All optional; every variable is in [`.env.example`](../.env.example).
   warns at startup); prefer `tcp://`. A row too large for one UDP datagram (65,507 bytes) is sent as a
   stub with `oldValue` and `newValue` null, `oversize` true and `originalBytes`, keeping `chainSeq` and
   `rowHash`; the full row stays in the database.
+  The exporter looks for new rows every `AUDIT_EXPORT_POLL_MS` (default 2000, 100 to 3600000).
   Export starts at the newest row when the server starts, so rows written while it was stopped (for
   example by `create-admin`) are not sent; the `chainSeq` gap shows it. Run export on one instance only.
 - **Audit integrity:** run `shadoucmdb audit-verify` on a schedule and compare the printed chain head
@@ -462,9 +465,9 @@ Each [GitHub Release](https://github.com/Shadoukita/ShadouCMDB/releases) has:
 
 | Asset | Contents |
 | --- | --- |
-| `shadoucmdb-<version>-linux-x64.tar.gz` | `x86_64-unknown-linux-musl`: statically linked, runs on any x64 distribution (glibc or musl, old or new). Plus the systemd unit, `shadoucmdb.env.example`, `README.txt`. |
+| `shadoucmdb-<version>-linux-x64.tar.gz` | `x86_64-unknown-linux-musl`: statically linked, runs on any x64 distribution (glibc or musl, old or new). Plus the systemd unit, `shadoucmdb.env.example`, `README.txt` and `sql/bootstrap/` (the database bootstrap scripts). |
 | `shadoucmdb-<version>-linux-arm64.tar.gz` | The same for `aarch64-unknown-linux-musl` (Graviton, Ampere, Raspberry Pi 4/5 with a 64-bit OS). |
-| `shadoucmdb-<version>-windows-x64.zip` | `shadoucmdb.exe` (`x86_64-pc-windows-msvc`, static C runtime, so no Visual C++ Redistributable), `shadoucmdb.env.example`, and a `README.txt` with the Windows Service install steps. |
+| `shadoucmdb-<version>-windows-x64.zip` | `shadoucmdb.exe` (`x86_64-pc-windows-msvc`, static C runtime, so no Visual C++ Redistributable), `shadoucmdb.env.example`, `sql\bootstrap\` (the database bootstrap scripts), and a `README.txt` with the Windows Service install steps. |
 | `SHA256SUMS` | `sha256sum --ignore-missing -c SHA256SUMS` |
 | `shadoucmdb-<version>.cdx.json` | CycloneDX SBOM: every Rust crate and web UI package in the binaries. |
 | `*.sigstore.json`, `shadoucmdb-<version>.provenance.jsonl` | cosign keyless signature per file and SLSA build provenance. How to check them: [supply-chain.md](supply-chain.md#verifying-a-download). |

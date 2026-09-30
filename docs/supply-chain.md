@@ -17,8 +17,9 @@ image before you run it.
 
 `supply-chain.yml` also runs every morning and CodeQL every Monday, so an advisory published after
 a merge fails the next run without a code change. Dependabot ([`.github/dependabot.yml`](../.github/dependabot.yml))
-opens update PRs weekly for cargo, npm, GitHub Actions (SHA and version comment) and the Docker
-base images (pinned by digest).
+opens update PRs weekly for cargo, the main npm workspace, GitHub Actions (SHA and version
+comment) and the Docker base images (pinned by digest), and monthly for the npm dependencies of
+the SBOM tooling (`tools/sbom`).
 
 Every workflow keeps `permissions: contents: read` at the top. A job that needs more asks for it
 itself: code scanning upload (`security-events: write`), signing (`id-token: write`,
@@ -100,8 +101,8 @@ sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 `Verified OK` from cosign and `Verification succeeded!` from gh mean the file is genuine. Anything
-else: do not run it, and report it ([SECURITY.md](../SECURITY.md) once it exists, otherwise a
-GitHub issue).
+else: do not run it, and report it as described in
+[SECURITY.md](../SECURITY.md#reporting-a-vulnerability).
 
 On Windows, `Get-FileHash shadoucmdb-<version>-windows-x64.zip -Algorithm SHA256` gives the value
 to compare with `SHA256SUMS`, and cosign and gh work the same in PowerShell.

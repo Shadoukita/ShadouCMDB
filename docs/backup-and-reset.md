@@ -39,6 +39,11 @@ the database credentials can.
   when an administrator edits a type.
 - **Not the sessions.** Restoring them would sign people back in with tokens from
   the past. After a restore, everyone signs in again.
+- **Not pending second-factor sign-ins** (`mfa_challenges`). A challenge is a sign-in in
+  progress and is not restorable; after a restore the user signs in again.
+- **Not `oidc_login_states`**, a table that releases before migration 0021 used for pending
+  OIDC sign-ins. It is kept on the exclusion list so that a backup from one of those releases
+  restores, and nothing is lost: a sign-in in progress is not restorable either.
 - **Not the server's own keys** (`server_keys`). The restored server generates a
   new key for OIDC sign-ins; a sign-in in progress during the restore ends with
   "expired", and the user starts it again.
