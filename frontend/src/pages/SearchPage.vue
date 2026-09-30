@@ -79,6 +79,7 @@ const inventoryLink = computed(() => {
               <th scope="col">Ident</th>
               <th scope="col">Class</th>
               <th scope="col">Matched on</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -91,6 +92,9 @@ const inventoryLink = computed(() => {
                   <template v-if="i > 0">, </template>
                   <span class="muted"><bdi>{{ m.label }}</bdi>:</span> <span class="mono" dir="auto">{{ m.value }}</span>
                 </span>
+              </td>
+              <td class="row-actions">
+                <RouterLink v-if="!item.deletedAt" class="btn btn-sm" :to="`/cis/${item.id}/impact`" :title="`Impact analysis of ${item.label}`">Impact</RouterLink>
               </td>
             </tr>
           </tbody>

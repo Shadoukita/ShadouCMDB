@@ -62,6 +62,11 @@ export interface BuiltinField {
   sort?: UiListSort["field"];
   /** The CI form's field for it; absent for fields the form does not edit (label, class, timestamps). */
   form?: string;
+  /**
+   * False for a field the inventory shows (a column in its URL) but a stored list view or layout
+   * cannot name yet: the UI settings API's field names do not include it (criticality).
+   */
+  storable?: false;
 }
 
 /**
@@ -72,6 +77,7 @@ export const BUILTIN_FIELDS: BuiltinField[] = [
   { key: "label", label: "Label", sort: "label" },
   { key: "ident", label: "Ident", sort: "ident", form: "ident" },
   { key: "class", label: "Class", sort: "className" },
+  { key: "criticality", label: "Criticality", sort: "criticality", storable: false },
   { key: "validFrom", label: "Valid from", sort: "validFrom", form: "validFrom" },
   { key: "validUntil", label: "Valid until", sort: "validUntil", form: "validUntil" },
   { key: "active", label: "Active" },
@@ -81,7 +87,7 @@ export const BUILTIN_FIELDS: BuiltinField[] = [
 export const BUILTIN = new Map(BUILTIN_FIELDS.map((f) => [f.key, f]));
 
 /** Built-in sort fields the list API accepts, with labels (attributes.<key> needs a class). */
-export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUILTIN_FIELDS.filter((f) => f.sort).map((f) => ({
+export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUILTIN_FIELDS.filter((f) => f.sort && f.storable !== false).map((f) => ({
   field: f.sort!,
   label: f.label,
 }));
@@ -632,4 +638,4 @@ export const CORE_FIELDS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key
 /** Core fields the detail page's General panel shows: the edited ones and whether the CI is active. */
 export const DETAIL_CORE = [...CORE_FIELDS, "active"];
 /** Bookkeeping fields the detail page shows last, in a "Record" panel (the label is the page title). */
-export const DETAIL_RECORD = BUILTIN_FIELDS.filter((f) => f.key !== "label" && !DETAIL_CORE.includes(f.key)).map((f) => f.key);
+export const DETAIL_RECORD = BUILTIN_FIELDS.filter((f) => f.key !== "label" && f.storable !== false && !DETAIL_CORE.includes(f.key)).map((f) => f.key);

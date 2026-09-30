@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useAllLookupListValues, useAreas } from "../api/datamodel";
-import { useCiClasses } from "../api/queries";
+import { useCiClasses, useCriticalityValues } from "../api/queries";
 import { groupByArea } from "../lib/areas";
 import { viewableClasses } from "../lib/permissions";
 import { flattenTree } from "../lib/tree";
@@ -35,6 +35,11 @@ const lookupFilterNames = computed(() =>
     .map((id) => lookupValues.data.value?.find((v) => v.id === id)?.name ?? (lookupValues.isLoading.value ? "…" : "Unknown value")),
 );
 const value = (e: Event) => (e.target as HTMLSelectElement).value || undefined;
+
+// Criticality (a core field of every CI): one value, or a set from a link (criticalityValueId=a,b).
+const criticality = useCriticalityValues();
+const criticalityValue = computed(() => s.value.get("criticalityValueId"));
+const criticalityMany = computed(() => criticalityValue.value.includes(","));
 </script>
 
 <template>
@@ -63,6 +68,14 @@ const value = (e: Event) => (e.target as HTMLSelectElement).value || undefined;
       <span class="mono">{{ s.get("ipWithin") }}</span>
       <button type="button" class="btn btn-sm" aria-label="Remove the IP network filter" @click="s.update({ ipWithin: undefined })">×</button>
     </span>
+  </div>
+  <div v-if="criticality.data.value?.length || criticalityValue" class="field">
+    <label :for="`${idPrefix}-criticality`">Criticality</label>
+    <select :id="`${idPrefix}-criticality`" :value="criticalityValue" @change="s.update({ criticalityValueId: value($event) })">
+      <option value="">Any</option>
+      <option v-for="v in criticality.data.value ?? []" :key="v.id" :value="v.id">{{ v.name }}{{ v.isActive ? "" : " (retired)" }}</option>
+      <option v-if="criticalityMany" :value="criticalityValue">Several values</option>
+    </select>
   </div>
   <div class="field">
     <label :for="`${idPrefix}-active`">Validity</label>

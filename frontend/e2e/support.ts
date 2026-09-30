@@ -1,4 +1,5 @@
-import { test as base, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import { test as base, expect, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -157,4 +158,38 @@ export async function resetUiSettings(request: APIRequestContext) {
   for (const kind of ["logo", "favicon"] as const) {
     if (s.assets[kind]) expect((await request.delete(`/api/v1/ui-settings/assets/${kind}`, { headers })).ok()).toBeTruthy();
   }
+}
+
+// ---------- Accessibility ----------
+
+const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
+const FAILING = new Set(["critical", "serious"]);
+
+/**
+ * Runs axe on the page as it is now; fails on critical and serious violations, or on any violation with
+ * `strict` (for a screen held to zero, usually narrowed to its region with `include`).
+ */
+export async function checkA11y(
+  page: Page,
+  testInfo: TestInfo,
+  name: string,
+  options: { include?: string; disableRules?: string[]; strict?: boolean } = {},
+) {
+  let builder = new AxeBuilder({ page }).withTags(WCAG_TAGS);
+  if (options.include) builder = builder.include(options.include);
+  if (options.disableRules?.length) builder = builder.disableRules(options.disableRules);
+  const results = await builder.analyze();
+  // "incomplete" are the checks axe could not decide (e.g. contrast over overlapping elements): for a manual look.
+  const report = { url: page.url(), violations: results.violations, incomplete: results.incomplete };
+  await testInfo.attach(`axe-${name}.json`, { body: JSON.stringify(report, null, 2), contentType: "application/json" });
+
+  const describe = (v: (typeof results.violations)[number]) =>
+    `[${v.impact}] ${v.id}: ${v.help} (${v.helpUrl})\n` + v.nodes.map((n) => `    ${n.target.join(" ")}: ${n.failureSummary?.replace(/\s+/g, " ")}`).join("\n");
+  const reported = results.violations.filter((v) => !FAILING.has(v.impact ?? ""));
+  if (reported.length) {
+    testInfo.annotations.push({ type: "a11y (moderate/minor)", description: `${name}: ${reported.map((v) => v.id).join(", ")}` });
+    console.log(`axe ${name}: ${reported.length} moderate/minor issue(s), not failing:\n${reported.map(describe).join("\n")}`);
+  }
+  const failing = results.violations.filter((v) => options.strict || FAILING.has(v.impact ?? ""));
+  expect(failing.map(describe), `critical/serious WCAG 2.1 AA violations on ${name}`).toEqual([]);
 }

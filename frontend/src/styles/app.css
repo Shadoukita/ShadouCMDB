@@ -1809,3 +1809,203 @@ table.data td.fill {
   width: 100%;
   max-width: 0;
 }
+
+/* ---------- Relationship map and impact tree (GraphTree) ---------- */
+.graph-tree-root {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.graph-tree ul[role="tree"] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.graph-tree li[role="treeitem"] {
+  padding: 3px 4px;
+  border-radius: var(--radius);
+}
+/* Links sit inside running text here (label → CI): underlined, so they do not rely on colour alone. */
+.graph-tree li[role="treeitem"] a,
+ol.impact-path a {
+  text-decoration: underline;
+}
+.graph-tree li[role="treeitem"]:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.graph-tree li[role="treeitem"][aria-selected="true"] {
+  background: var(--c-surface-alt);
+}
+.tree-toggle {
+  display: inline-block;
+  width: 18px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--c-text-muted);
+  cursor: pointer;
+  font: inherit;
+  text-align: center;
+}
+.tree-action {
+  margin-left: var(--sp-3);
+  font-size: var(--fs-sm);
+}
+
+/* ---------- Impact analysis ---------- */
+fieldset.impact-direction {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+fieldset.impact-direction legend {
+  padding: 0;
+}
+.segmented {
+  display: flex;
+}
+.segmented label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 var(--sp-3);
+  min-height: var(--row-h);
+  border: 1px solid var(--c-border-strong);
+  background: var(--c-surface);
+  cursor: pointer;
+  color: var(--c-text);
+  font-weight: normal;
+  white-space: nowrap;
+}
+.segmented label + label {
+  border-left: 0;
+}
+.segmented label:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+.segmented label:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.segmented label:has(input:checked) {
+  background: var(--c-surface-alt);
+  box-shadow: inset 0 -2px 0 var(--c-accent);
+  font-weight: 600;
+}
+.segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+/* The toolbar's text-input width is not for radios and checkboxes. */
+.impact-controls input[type="radio"],
+.impact-controls input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+.impact-types {
+  position: relative;
+}
+.impact-types summary {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  list-style: none;
+}
+.impact-types summary::-webkit-details-marker {
+  display: none;
+}
+.impact-types .select-like {
+  display: inline-block;
+  min-width: 180px;
+  min-height: var(--row-h);
+  padding: 3px 26px 3px var(--sp-3);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  color: var(--c-text);
+  position: relative;
+}
+.impact-types .select-like::after {
+  content: "▾";
+  position: absolute;
+  right: 8px;
+  color: var(--c-text-muted);
+}
+.impact-types summary:focus-visible .select-like {
+  outline: 2px solid var(--c-focus);
+}
+.impact-types fieldset.popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+}
+.impact-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.impact-header {
+  padding-bottom: 0;
+}
+.impact-summary {
+  margin: 0 0 var(--sp-2);
+}
+.impact-visibility,
+.impact-beyond {
+  margin: 0 0 var(--sp-2);
+}
+.impact-views {
+  padding: 0 var(--sp-4);
+}
+#impact-view-panel.loading {
+  opacity: 0.55;
+}
+.impact-ident {
+  margin-left: var(--sp-2);
+  font-size: var(--fs-xs);
+}
+table.data tr.group-row th {
+  background: var(--c-surface-alt);
+  text-align: left;
+}
+.group-toggle {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--c-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+table.data tr.path-row td {
+  background: var(--c-surface-alt);
+}
+ol.impact-path {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+ol.impact-path li + li::before {
+  content: "›";
+  margin-right: var(--sp-3);
+  color: var(--c-text-muted);
+}
+.impact-trees h3 {
+  margin: var(--sp-3) 0 var(--sp-2);
+  font-size: var(--fs-md);
+}
+.skeleton-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.skeleton-row {
+  height: 18px;
+  border-radius: var(--radius);
+  background: var(--c-surface-alt);
+}

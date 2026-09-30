@@ -63,6 +63,8 @@ export const router = createRouter({
     { path: "/cis/new", component: CiCreatePage },
     { path: "/cis/:id", component: CiDetailPage },
     { path: "/cis/:id/edit", component: CiEditPage },
+    // The CI's Impact tab: its own URL, so an analysis (with its options in the query) can be bookmarked.
+    { path: "/cis/:id/impact", component: CiDetailPage },
     // The layout editor, opened in its own window from the pages above (lib/layoutEditor).
     { path: `/cis/new${EDITOR_SUFFIX}`, component: CiCreatePage, meta: { layoutEditor: true } },
     { path: `/cis/:id${EDITOR_SUFFIX}`, component: CiDetailPage, meta: { layoutEditor: true } },

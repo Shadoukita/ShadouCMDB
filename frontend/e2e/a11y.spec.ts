@@ -1,35 +1,11 @@
-import AxeBuilder from "@axe-core/playwright";
-import type { Browser, Page, TestInfo } from "@playwright/test";
-import { apiGet, apiSend, at, classIdByName, expect, test } from "./support";
+import type { Browser, Page } from "@playwright/test";
+import { apiGet, apiSend, at, checkA11y, classIdByName, expect, test } from "./support";
 
 // Accessibility (WCAG 2.1 A and AA) of the main screens, checked with axe-core. A critical or serious
 // violation fails the test; moderate and minor ones are listed in the output and attached to the report.
 // No rule is turned off; one may only be turned off for a single screen, with a comment saying why.
 
 const stamp = Date.now().toString(36);
-const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
-const FAILING = new Set(["critical", "serious"]);
-
-/** Runs axe on the page as it is now; fails on critical and serious violations. */
-async function checkA11y(page: Page, testInfo: TestInfo, name: string, options: { include?: string; disableRules?: string[] } = {}) {
-  let builder = new AxeBuilder({ page }).withTags(WCAG_TAGS);
-  if (options.include) builder = builder.include(options.include);
-  if (options.disableRules?.length) builder = builder.disableRules(options.disableRules);
-  const results = await builder.analyze();
-  // "incomplete" are the checks axe could not decide (e.g. contrast over overlapping elements): for a manual look.
-  const report = { url: page.url(), violations: results.violations, incomplete: results.incomplete };
-  await testInfo.attach(`axe-${name}.json`, { body: JSON.stringify(report, null, 2), contentType: "application/json" });
-
-  const describe = (v: (typeof results.violations)[number]) =>
-    `[${v.impact}] ${v.id}: ${v.help} (${v.helpUrl})\n` + v.nodes.map((n) => `    ${n.target.join(" ")}: ${n.failureSummary?.replace(/\s+/g, " ")}`).join("\n");
-  const reported = results.violations.filter((v) => !FAILING.has(v.impact ?? ""));
-  if (reported.length) {
-    testInfo.annotations.push({ type: "a11y (moderate/minor)", description: `${name}: ${reported.map((v) => v.id).join(", ")}` });
-    console.log(`axe ${name}: ${reported.length} moderate/minor issue(s), not failing:\n${reported.map(describe).join("\n")}`);
-  }
-  const failing = results.violations.filter((v) => FAILING.has(v.impact ?? ""));
-  expect(failing.map(describe), `critical/serious WCAG 2.1 AA violations on ${name}`).toEqual([]);
-}
 
 async function signedOutPage(browser: Browser): Promise<Page> {
   const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });

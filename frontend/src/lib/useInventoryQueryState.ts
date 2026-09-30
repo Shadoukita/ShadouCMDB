@@ -129,6 +129,7 @@ export function useInventoryQueryState(options: QueryStateOptions) {
     q: get("q") || undefined,
     classId: classId.value || undefined,
     lookupValueId: get("lookupValueId") || undefined,
+    criticalityValueId: get("criticalityValueId") || undefined,
     ipWithin: get("ipWithin") || undefined,
     active: active.value,
     deleted: deleted.value,
