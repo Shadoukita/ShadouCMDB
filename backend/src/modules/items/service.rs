@@ -109,12 +109,25 @@ fn to_stored(def: &EffectiveAttributeRow, v: &Value) -> Option<StoredValue> {
     })
 }
 
-/// Which CIs a reference attribute may point at: those in `visible` classes
-/// (the caller's view scope; `None` is every class), plus the value the
-/// attribute already has in `current` (resending it discloses nothing).
+/// Which CIs a reference attribute may point at: live ones in `visible`
+/// classes (the caller's view scope; `None` is every class). The value an
+/// attribute definition already has in `current` (definition id -> target) is
+/// no change: it is accepted as is, without the live and class checks, so
+/// resending it tells nothing about a target the caller may not view (GH#269).
 struct RefAccess<'a> {
     visible: Option<&'a [Uuid]>,
-    current: Option<&'a Map<String, Value>>,
+    current: Option<&'a HashMap<Uuid, Uuid>>,
+}
+
+/// The CI's reference values by attribute definition id, from its `attributes`.
+fn current_refs(model: &Model, class_id: Uuid, attributes: &Map<String, Value>) -> HashMap<Uuid, Uuid> {
+    model
+        .lineage(class_id)
+        .into_iter()
+        .flat_map(|c| model.own_fields(c.id))
+        .filter(|f| f.data_type == AttributeDataType::Reference)
+        .filter_map(|f| Some((f.id, attributes.get(&f.key)?.as_str().and_then(|v| Uuid::parse_str(v).ok())?)))
+        .collect()
 }
 
 struct Prepared<'d> {
@@ -130,7 +143,8 @@ fn body_error(field: String, message: impl Into<String>, code: &str) -> FieldErr
 /// `lenient_clear` accepts `null` for keys the class does not define (they are
 /// being cleared as part of a class change). A reference the caller may not
 /// make (see [`RefAccess`]) fails exactly like one to a missing CI, so writes
-/// are no existence oracle.
+/// are no existence oracle. A reference the attribute already has is left out
+/// of the result: resending it changes nothing (see [`RefAccess`]).
 async fn prepare_attributes<'d>(
     conn: &mut PgConnection,
     defs: &'d [EffectiveAttributeRow],
@@ -194,6 +208,7 @@ async fn prepare_attributes<'d>(
             continue;
         };
         match stored {
+            StoredValue::Reference(id) if access.current.and_then(|c| c.get(&def.id)) == Some(&id) => continue,
             StoredValue::Reference(id) => refs.push((def, id)),
             StoredValue::Lookup(id) => lookups.push((def, id)),
             _ => {}
@@ -216,9 +231,7 @@ async fn prepare_attributes<'d>(
         let live: HashMap<Uuid, Uuid> = data::live_items(conn, &ids).await?.into_iter().collect();
         for (def, id) in refs {
             let field = format!("attributes.{}", def.key);
-            let current = access.current.and_then(|c| c.get(&def.key)).and_then(Value::as_str);
-            let unchanged = current.and_then(|c| Uuid::parse_str(c).ok()) == Some(id);
-            let allowed = live.get(&id).is_some_and(|class_id| unchanged || is_visible(access.visible, *class_id));
+            let allowed = live.get(&id).is_some_and(|class_id| is_visible(access.visible, *class_id));
             if Some(id) == self_id {
                 errors.push(body_error(field, "A CI cannot reference itself", "reference_self"));
             } else if !allowed {
@@ -432,8 +445,9 @@ async fn check_changed_attributes(
     // Same reference access as update(), so this 400 is no existence oracle either.
     let model = Model::load(&mut conn).await?;
     let current = must_detail(&mut conn, &model, id, None).await?.attributes;
+    let refs = current_refs(&model, before.class_id, &current);
     let visible = ctx.class_scope(ClassOp::View);
-    let access = RefAccess { visible: visible.as_deref(), current: Some(&current) };
+    let access = RefAccess { visible: visible.as_deref(), current: Some(&refs) };
     let prepared = prepare_attributes(&mut conn, &defs, Some(input), &key, Some(id), class_changes, access).await?;
     check_reference_classes(&mut conn, &prepared).await?;
     check_parent_values(&mut conn, &defs, &prepared, Some(&current)).await
@@ -869,8 +883,9 @@ pub async fn update(
     let class_changes = class_id != before.class_id;
     let key = class_key(&mut tx, class_id).await?;
     let defs = class_data::effective_attributes(&mut tx, class_id).await?;
+    let refs = current_refs(&model, before.class_id, &before_dto.attributes);
     let visible = ctx.class_scope(ClassOp::View);
-    let access = RefAccess { visible: visible.as_deref(), current: Some(&before_dto.attributes) };
+    let access = RefAccess { visible: visible.as_deref(), current: Some(&refs) };
     let prepared =
         prepare_attributes(&mut tx, &defs, input.attributes.as_ref(), &key, Some(id), class_changes, access).await?;
     check_reference_classes(&mut tx, &prepared).await?;
@@ -1308,6 +1323,113 @@ mod tests {
         let hits = search(pool, &editor, &q).await.unwrap();
         assert_eq!(hits.data.len(), 1);
         assert!(hits.data[0].matches.iter().any(|m| m.field == "ident"));
+        db.drop().await;
+    }
+
+    /// GH#269: resending a reference into a class the caller may not view
+    /// answers the same whether the target is live or deleted, and whatever
+    /// its class; a reference that changes attribute definition is new.
+    #[tokio::test]
+    async fn hidden_references_are_no_oracle() {
+        use crate::auth::permissions::{ClassRights, Permissions};
+        use crate::modules::classes::{AttributeDefinition, AttributeDefinitions, CiClass, CiClasses};
+        use crate::modules::simple_resource as simple;
+        let Some(db) = scratch::database("hidden_references_are_no_oracle").await else { return };
+        let pool = &db.pool;
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        let (application, database) =
+            (id_of(pool, "ci_classes", "application").await, id_of(pool, "ci_classes", "database").await);
+        let in_service = status(pool, "in_service").await;
+        let system = RequestContext::system("test", "test");
+        let create_body = |v: Value| parse::<CreateItemBody>(v).unwrap_or_else(|_| panic!("invalid create body"));
+        let db_item = |name: &str| {
+            create_body(
+                json!({ "classId": database, "attributes": { "name": name, "status": in_service, "engine": "postgresql" } }),
+            )
+        };
+        let (live, gone) = (
+            create(pool, &system, &db_item("db-live")).await.unwrap().summary.id,
+            create(pool, &system, &db_item("db-gone")).await.unwrap().summary.id,
+        );
+        let app = |name: &str, target: Uuid| {
+            create_body(json!({ "classId": application,
+                "attributes": { "name": name, "status": in_service, "primary_database": target } }))
+        };
+        let (x_live, x_gone) = (
+            create(pool, &system, &app("app-live", live)).await.unwrap().summary.id,
+            create(pool, &system, &app("app-gone", gone)).await.unwrap().summary.id,
+        );
+        remove(pool, &system, gone).await.unwrap();
+
+        // Two classes defining their own primary_database: one the target fits, one it does not.
+        let server = id_of(pool, "ci_classes", "server").await;
+        let mut classes = Vec::new();
+        for (name, points_at) in [("Service A", database), ("Service B", server)] {
+            let class: CiClass =
+                simple::create::<CiClasses>(pool, &system, &serde_json::from_value(json!({ "name": name })).unwrap())
+                    .await
+                    .unwrap();
+            let _: AttributeDefinition = simple::create::<AttributeDefinitions>(
+                pool,
+                &system,
+                &serde_json::from_value(json!({ "classId": class.id, "key": "primary_database",
+                    "label": "Primary database", "dataType": "reference", "referenceClassId": points_at }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+            classes.push(class.id);
+        }
+        let (fits, misfits) = (classes[0], classes[1]);
+
+        // The caller may edit applications (and create the new classes), but not view databases.
+        let rights = |classes: &[Uuid]| classes.iter().map(|c| (*c, ClassRights::ALL)).collect();
+        let permissions = Permissions { classes: rights(&[application, fits, misfits]), ..Default::default() };
+        let principal = crate::auth::Principal {
+            user_id: Uuid::new_v4(),
+            username: "restricted".into(),
+            credential: crate::auth::Credential::Token,
+            permissions,
+        };
+        let ctx = RequestContext::user(std::sync::Arc::new(principal), "test".into());
+        let codes = |err: &AppError| -> Vec<(String, String)> {
+            let mut c: Vec<_> = err.details.iter().flatten().map(|d| (d.field.clone(), d.code.clone())).collect();
+            c.sort();
+            c
+        };
+        let probe = |x: Uuid, target: Uuid, class: Option<Uuid>| {
+            let mut body = json!({ "validFrom": "bogus", "attributes": { "primary_database": target } });
+            if let Some(class) = class {
+                body["classId"] = json!(class);
+            }
+            let Err(invalid) = parse::<UpdateItemBody>(body) else { panic!("body passed") };
+            update_errors(pool, &ctx, x, invalid)
+        };
+
+        // Unchanged: only the body's own error, live or deleted.
+        for (x, target) in [(x_live, live), (x_gone, gone)] {
+            assert_eq!(codes(&probe(x, target, None).await), [("validFrom".into(), "invalid_format".into())]);
+        }
+        // Resending it in a valid body is no change, live or deleted.
+        let update_body = |v: Value| parse::<UpdateItemBody>(v).unwrap_or_else(|_| panic!("invalid update body"));
+        for (x, target) in [(x_live, live), (x_gone, gone)] {
+            let body = update_body(json!({ "attributes": { "name": "renamed", "primary_database": target } }));
+            let item = update(pool, &ctx, x, &body).await.unwrap();
+            assert_eq!(item.summary.label, "renamed");
+            assert_eq!(item.attributes["primary_database"], json!(target));
+            assert_eq!(item.attribute_references["primary_database"]["hidden"], json!(true));
+            assert_eq!(item.attribute_references["primary_database"]["deleted"], json!(false));
+        }
+        // Another class's primary_database is a new reference: not_found whatever the target's class or state.
+        let expected: Vec<(String, String)> = vec![
+            ("attributes.primary_database".into(), "not_found".into()),
+            ("validFrom".into(), "invalid_format".into()),
+        ];
+        for class in [fits, misfits] {
+            for (x, target) in [(x_live, live), (x_gone, gone)] {
+                assert_eq!(codes(&probe(x, target, Some(class)).await), expected, "class {class}, target {target}");
+            }
+        }
         db.drop().await;
     }
 
