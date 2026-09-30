@@ -675,8 +675,8 @@ schema owner out of the running server (see [Database roles](#database-roles)):
 - every service reads `.env`, which holds the `shadoucmdb_app` connection;
 - `migrate` also reads `.env.migrate` if it exists. Put `MIGRATION_DATABASE_URL`
   and `MAINTENANCE_DATABASE_URL` there (mode `600`), not in `.env`;
-- `api` sets both of those variables to empty, which counts as unset, so they
-  never reach `serve` even if they are still in `.env`.
+- `api` and `seed` set both of those variables to empty, which counts as unset,
+  so they never reach `serve` or `seed` even if they are still in `.env`.
 
 Instead of `.env.migrate`, pass the owner connection for one run. With only the
 variable name after `-e`, Compose takes the value from your shell, so the password
@@ -690,7 +690,11 @@ unset PW MIGRATION_DATABASE_URL
 ```
 
 `restore`, `factory-reset` and `decommission` also need the owner: run them through
-the same service, e.g. `docker compose run --rm migrate decommission`. The
+the same service, e.g. `docker compose run --rm migrate decommission`.
+[`prune-audit`](#audit-log-retention) needs `MAINTENANCE_DATABASE_URL`, so it runs
+through `migrate` as well, e.g.
+`docker compose run --rm migrate prune-audit --older-than 180d`; do not put the
+maintenance URL back into `.env` for it. The
 `env_file` entry that makes `.env.migrate` optional needs Docker Compose 2.24 or later.
 
 ## Moving a dev database off the Node/Drizzle migration runner

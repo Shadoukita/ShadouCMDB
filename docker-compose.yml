@@ -7,8 +7,8 @@
 #   .env          every service; the API role (shadoucmdb_app) connection.
 #   .env.migrate  `migrate` only, optional: MIGRATION_DATABASE_URL (schema
 #                 owner) and MAINTENANCE_DATABASE_URL. Never read by `api`.
-# `api` blanks both owner-side URLs, so they stay out of the running server
-# even if they are still in .env. Needs Docker Compose 2.24 or later.
+# `api` and `seed` blank both owner-side URLs, so they stay out of the
+# running server even if they are still in .env. Needs Docker Compose 2.24 or later.
 #
 #   cp .env.example .env                        # then edit the connection settings
 #   openssl rand -base64 32 > encryption.key && chmod 600 encryption.key && sudo chown 65532:65532 encryption.key
@@ -51,7 +51,8 @@ services:
       MAINTENANCE_DATABASE_URL: ""
 
   # Also the service for the other schema-owner commands (`restore`,
-  # `factory-reset`, `decommission`): `docker compose run --rm migrate <command>`.
+  # `factory-reset`, `decommission`) and for `prune-audit`, which needs
+# MAINTENANCE_DATABASE_URL: `docker compose run --rm migrate <command>`.
   # Instead of .env.migrate you can pass the owner URL per run with
   # `docker compose run --rm -e MIGRATION_DATABASE_URL=... migrate`.
   migrate:
@@ -63,9 +64,13 @@ services:
     command: ["migrate"]
     profiles: ["tools"]
 
+  # `seed` runs as the API role, so it gets neither owner-side URL either.
   seed:
     <<: *shadoucmdb
     command: ["seed"]
+    environment:
+      MIGRATION_DATABASE_URL: ""
+      MAINTENANCE_DATABASE_URL: ""
     profiles: ["tools"]
 
 secrets:
