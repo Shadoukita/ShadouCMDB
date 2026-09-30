@@ -662,6 +662,19 @@ impl Config {
                  truncated result"
             ));
         }
+        // Each running analysis holds a pool connection: at most half the pool,
+        // so the rest of the API (sign-in, /readyz, edits) keeps connections.
+        let impact_concurrent_limit = (pool_max as usize / 2).max(1);
+        let impact_max_concurrent = r
+            .int::<usize>("IMPACT_MAX_CONCURRENT", 1, 1_000)
+            .unwrap_or(impact_defaults.max_concurrent.min(impact_concurrent_limit));
+        if impact_max_concurrent > impact_concurrent_limit {
+            r.errors.push(format!(
+                "IMPACT_MAX_CONCURRENT: {impact_max_concurrent} is above half of DATABASE_POOL_MAX ({pool_max}), \
+                 so impact analyses could hold the connections the rest of the API needs; set it to at most \
+                 {impact_concurrent_limit} or raise DATABASE_POOL_MAX"
+            ));
+        }
         let impact = ImpactConfig {
             max_depth: r
                 .int::<i32>("IMPACT_MAX_DEPTH", 1, IMPACT_MAX_DEPTH_CEILING)
@@ -670,7 +683,7 @@ impl Config {
                 .int::<i32>("IMPACT_MAX_NODES", 1, IMPACT_MAX_NODES_CEILING)
                 .unwrap_or(impact_defaults.max_nodes),
             timeout: Duration::from_millis(impact_timeout_ms),
-            max_concurrent: r.int::<usize>("IMPACT_MAX_CONCURRENT", 1, 1_000).unwrap_or(impact_defaults.max_concurrent),
+            max_concurrent: impact_max_concurrent,
             max_concurrent_per_user: r
                 .int::<usize>("IMPACT_MAX_CONCURRENT_PER_USER", 1, 1_000)
                 .unwrap_or(impact_defaults.max_concurrent_per_user),
@@ -861,6 +874,29 @@ mod tests {
         }
         let err = load_with(&[("SIGN_IN_FAILURE_FLOOR_MS", "2000"), ("HTTP_REQUEST_TIMEOUT_SECS", "2")]).unwrap_err();
         assert!(err.to_string().contains("SIGN_IN_FAILURE_FLOOR_MS"), "{err}");
+    }
+
+    #[test]
+    fn impact_limits_stay_within_the_pool_and_the_request_timeout() {
+        let cfg = load_with(&[]).unwrap();
+        assert_eq!(cfg.impact.max_concurrent, 5, "default: min(8, DATABASE_POOL_MAX 10 / 2)");
+        assert_eq!(load_with(&[("DATABASE_POOL_MAX", "40")]).unwrap().impact.max_concurrent, 8);
+        assert_eq!(load_with(&[("DATABASE_POOL_MAX", "1")]).unwrap().impact.max_concurrent, 1);
+        let ok = load_with(&[("DATABASE_POOL_MAX", "30"), ("IMPACT_MAX_CONCURRENT", "15")]).unwrap();
+        assert_eq!(ok.impact.max_concurrent, 15);
+        for vars in [
+            &[("DATABASE_POOL_MAX", "10"), ("IMPACT_MAX_CONCURRENT", "10")][..],
+            &[("DATABASE_POOL_MAX", "10"), ("IMPACT_MAX_CONCURRENT", "6")][..],
+        ] {
+            let err = load_with(vars).unwrap_err().to_string();
+            assert!(err.contains("IMPACT_MAX_CONCURRENT") && err.contains("DATABASE_POOL_MAX"), "{err}");
+        }
+        for (key, bad) in [("IMPACT_MAX_DEPTH", "21"), ("IMPACT_MAX_NODES", "0"), ("IMPACT_TIMEOUT_MS", "30001")] {
+            let err = load_with(&[(key, bad)]).unwrap_err().to_string();
+            assert!(err.contains(key), "{err}");
+        }
+        let err = load_with(&[("IMPACT_TIMEOUT_MS", "3000"), ("HTTP_REQUEST_TIMEOUT_SECS", "3")]).unwrap_err();
+        assert!(err.to_string().contains("IMPACT_TIMEOUT_MS"), "{err}");
     }
 
     #[test]

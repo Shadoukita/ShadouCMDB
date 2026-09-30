@@ -88,19 +88,20 @@ impl Default for ImpactState {
     }
 }
 
-/// A running analysis; gives its places back when dropped.
-pub struct RunPermit<'a> {
+/// A running analysis; gives its places back when dropped. Owned, so it can
+/// move into the task that does the work.
+pub struct RunPermit {
     _global: OwnedSemaphorePermit,
-    _user: Option<UserSlot<'a>>,
+    _user: Option<UserSlot>,
 }
 
 /// One of a user's places; given back when dropped.
-struct UserSlot<'a> {
-    state: &'a ImpactState,
+struct UserSlot {
+    state: Arc<ImpactState>,
     user: Uuid,
 }
 
-impl Drop for UserSlot<'_> {
+impl Drop for UserSlot {
     fn drop(&mut self) {
         if let Ok(mut m) = self.state.per_user.lock()
             && let Some(n) = m.get_mut(&self.user)
@@ -125,7 +126,7 @@ impl ImpactState {
     /// A place for one analysis: 429 RATE_LIMITED when the caller (a user and
     /// their API tokens) already runs `max_concurrent_per_user`, 503
     /// SERVER_BUSY when the process runs `max_concurrent`. Never waits.
-    pub fn acquire(&self, ctx: &RequestContext) -> Result<RunPermit<'_>, AppError> {
+    pub fn acquire(self: &Arc<Self>, ctx: &RequestContext) -> Result<RunPermit, AppError> {
         let user = match &ctx.caller {
             Caller::User(p) => Some(p.user_id),
             _ => None,
@@ -146,7 +147,7 @@ impl ImpactState {
                 return Err(err);
             }
             *n += 1;
-            slot = Some(UserSlot { state: self, user });
+            slot = Some(UserSlot { state: self.clone(), user });
         }
         // Refused here, the user's place goes back with `slot`.
         let global = self.global.clone().try_acquire_owned().map_err(|_| busy())?;

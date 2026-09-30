@@ -407,13 +407,15 @@ All optional; every variable is in [`.env.example`](../.env.example).
   `400`, never lowered. Each analysis reads at most 5 × `maxNodes` relationships and stops after
   `IMPACT_TIMEOUT_MS` (default 5000, at most 30000; must be below `HTTP_REQUEST_TIMEOUT_SECS`), each
   query with the time left as its `statement_timeout`; an analysis stopped by a bound answers `200`
-  with the partial result marked `truncated`. `IMPACT_MAX_CONCURRENT` (default 8) caps the analyses
-  running at once (`503 SERVER_BUSY` beyond it) and `IMPACT_MAX_CONCURRENT_PER_USER` (default 2) those
+  with the partial result marked `truncated`. `IMPACT_MAX_CONCURRENT` (default 8, or half of
+  `DATABASE_POOL_MAX` if that is less; never more than half of it) caps the analyses running at once (`503 SERVER_BUSY` beyond it) and `IMPACT_MAX_CONCURRENT_PER_USER` (default 2) those
   of one user and their API tokens (`429 RATE_LIMITED`). **Both caps count per backend process:** with
   several replicas behind a load balancer, each replica allows that many, so the database sees up to
   replicas × `IMPACT_MAX_CONCURRENT` analyses and one user up to replicas ×
-  `IMPACT_MAX_CONCURRENT_PER_USER`. Keep `IMPACT_MAX_CONCURRENT` well below `DATABASE_POOL_MAX`: each
-  running analysis holds one connection. The ceilings are compiled in, so a mistyped variable stops
+  `IMPACT_MAX_CONCURRENT_PER_USER`. Each running analysis holds one database connection until its
+  queries have finished, even when the client disconnects first, so the server refuses to start with
+  `IMPACT_MAX_CONCURRENT` above half of `DATABASE_POOL_MAX`; the other half stays free for sign-in,
+  `/readyz` and edits. The ceilings are compiled in, so a mistyped variable stops
   the server at startup instead of unbounding the traversal.
 - **Reverse proxy request buffering:** let the proxy receive the whole request body before it
   forwards the request (nginx `proxy_request_buffering on`, the default; HAProxy

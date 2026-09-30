@@ -49,6 +49,10 @@ fn check(q: &ImpactQuery, state: &ImpactState) -> Result<Checked, AppError> {
     let limits = state.config;
     let mut errors = Vec::new();
     let depth = q.depth.unwrap_or(DEFAULT_DEPTH.min(limits.max_depth));
+    // The schema refuses these already; checked again so the engine never sees them.
+    if depth < 1 {
+        errors.push(query_error("depth", "Too small: expected number to be >=1".into(), "too_small"));
+    }
     if depth > limits.max_depth {
         errors.push(query_error(
             "depth",
@@ -57,6 +61,9 @@ fn check(q: &ImpactQuery, state: &ImpactState) -> Result<Checked, AppError> {
         ));
     }
     let max_nodes = q.max_nodes.unwrap_or(DEFAULT_MAX_NODES.min(limits.max_nodes));
+    if max_nodes < 1 {
+        errors.push(query_error("maxNodes", "Too small: expected number to be >=1".into(), "too_small"));
+    }
     if max_nodes > limits.max_nodes {
         errors.push(query_error(
             "maxNodes",
@@ -206,8 +213,32 @@ pub async fn analyse(
     let started = Instant::now();
     let p = check(q, state)?;
     let visible = ctx.class_scope(ClassOp::View);
-    let _run = state.acquire(ctx)?;
+    let permit = state.acquire(ctx)?;
+    // The work runs in its own task, which holds the place. If the request is
+    // dropped (the client disconnects, the request times out), the task still
+    // runs to its deadline, so the place is not freed while its queries hold a
+    // pool connection (GitHub #337).
+    let (pool, ctx, state) = (pool.clone(), ctx.clone(), state.clone());
+    tokio::spawn(async move {
+        let _permit = permit;
+        run(&pool, &ctx, &state, root_id, p, visible, started).await
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "impact analysis task failed");
+        AppError::internal()
+    })?
+}
 
+async fn run(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    state: &ImpactState,
+    root_id: Uuid,
+    p: Checked,
+    visible: Option<Vec<Uuid>>,
+    started: Instant,
+) -> Result<Analysis, AppError> {
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY").execute(&mut *tx).await?;
     // A missing, deleted or hidden root answers alike.

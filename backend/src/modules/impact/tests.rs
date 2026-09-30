@@ -789,8 +789,11 @@ async fn routes_answer_with_the_standard_envelope() {
 /// the process IMPACT_MAX_CONCURRENT (503); places come back when done.
 #[test]
 fn concurrent_analyses_are_capped_per_user_and_per_process() {
-    let state =
-        ImpactState::new(ImpactConfig { max_concurrent: 3, max_concurrent_per_user: 2, ..ImpactConfig::default() });
+    let state = Arc::new(ImpactState::new(ImpactConfig {
+        max_concurrent: 3,
+        max_concurrent_per_user: 2,
+        ..ImpactConfig::default()
+    }));
     let (alice, bob) = (viewer(&[]), viewer(&[]));
     let one = state.acquire(&alice).unwrap();
     let two = state.acquire(&alice).unwrap();
@@ -821,6 +824,54 @@ async fn a_third_concurrent_analysis_of_one_user_is_refused() {
     assert_eq!(err.code, ErrorCode::RateLimited);
     // Another user is not affected.
     assert!(service::analyse(&f.pool, &viewer(&[f.classes["app"]]), &state, root, &down(1)).await.is_ok());
+    db.drop().await;
+}
+
+/// The service refuses a depth or maxNodes below 1 itself, before it touches
+/// the database, not only through the route's query schema.
+#[tokio::test]
+async fn the_service_refuses_bounds_below_one() {
+    let pool = sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://unused@127.0.0.1:1/unused").unwrap();
+    let state = Arc::new(ImpactState::default());
+    let mut query = down(0);
+    query.max_nodes = Some(0);
+    let err = service::analyse(&pool, &viewer(&[]), &state, Uuid::new_v4(), &query).await.err().unwrap();
+    assert_eq!(err.code, ErrorCode::ValidationError);
+    let fields: Vec<&str> = err.details.iter().flatten().map(|d| d.field.as_str()).collect();
+    assert_eq!(fields, ["depth", "maxNodes"]);
+}
+
+/// A dropped request (client gone, request timeout) keeps its place until its
+/// queries have finished, so the caps bound the pool connections analyses
+/// hold (GitHub #337).
+#[tokio::test]
+async fn a_dropped_analysis_keeps_its_place_until_its_queries_finish() {
+    let Some(db) = scratch::database("a_dropped_analysis_keeps_its_place_until_its_queries_finish").await else {
+        return;
+    };
+    let f = fixture(&db).await;
+    let root = f.ci("app").await;
+    let state = Arc::new(ImpactState::new(ImpactConfig { max_concurrent_per_user: 1, ..ImpactConfig::default() }));
+    let user = viewer(&[f.classes["app"]]);
+
+    // Holds the analysis's first read of configuration_items.
+    let mut lock = f.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE configuration_items IN ACCESS EXCLUSIVE MODE").execute(&mut *lock).await.unwrap();
+    let dropped =
+        tokio::time::timeout(Duration::from_millis(300), service::analyse(&f.pool, &user, &state, root, &down(1)))
+            .await;
+    assert!(dropped.is_err(), "the analysis should still be waiting on the lock");
+    assert_eq!(state.acquire(&user).err().unwrap().code, ErrorCode::RateLimited, "the place went back too early");
+
+    lock.rollback().await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if state.acquire(&user).is_ok() {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "the place never came back");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     db.drop().await;
 }
 
