@@ -31,10 +31,6 @@ export const LISTED = [
   "attribute-definitions",
   "relationship-types",
   "relationship-rules",
-  "statuses",
-  "environments",
-  "locations",
-  "owners",
   "lookup-lists",
   "lookup-list-values",
 ];
@@ -45,8 +41,13 @@ export const LISTED = [
  */
 export const CREATED = ["admin/profiles", "admin/users", "admin/identity-providers", "admin/api-tokens"];
 
-/** Resources that may have no row yet; any well-formed value still reaches the handler (404). */
-export const OPTIONAL = ["schema-changes", "ui-settings/versions", "admin/templates"];
+/**
+ * Resources that may have no row yet; any well-formed value still reaches the handler (404). The
+ * legacy lookup tables are read-only since migration 0016 (create answers 410) and empty on a fresh
+ * install, so they cannot be given a row.
+ */
+export const LEGACY = ["statuses", "environments", "locations", "owners"];
+export const OPTIONAL = ["schema-changes", ...LEGACY, "ui-settings/versions", "admin/templates"];
 
 /** Paths whose parameter names an object of another resource. */
 export const ALIASES = { "auth/oidc": "admin/identity-providers" };
@@ -121,8 +122,9 @@ async function collect(request) {
     const id = (await request("GET", `${resource}?limit=1`)).data[0]?.id;
     if (id) examples[resource] = id;
   }
-  const change = (await request("GET", "schema-changes?limit=1")).data[0]?.id;
-  examples["schema-changes"] = change ?? randomUUID();
+  for (const resource of ["schema-changes", ...LEGACY]) {
+    examples[resource] = (await request("GET", `${resource}?limit=1`)).data[0]?.id ?? randomUUID();
+  }
   const version = (await request("GET", "ui-settings/versions?limit=1")).data[0]?.version;
   examples["ui-settings/versions"] = version ?? 1;
   examples["admin/templates"] = (await request("GET", "admin/templates")).data[0]?.key ?? "it_infrastructure";
