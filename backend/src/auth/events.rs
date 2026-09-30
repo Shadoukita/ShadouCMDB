@@ -53,6 +53,13 @@ pub enum RevokeReason {
     /// An OIDC session no longer met `requireMfa`: a profile now requires MFA,
     /// or the provider now verifies MFA and the sign-in did not prove it.
     MfaNotEnforced,
+    /// The user turned their own MFA off; their other sessions end (GH#280).
+    MfaDisabled,
+    /// An administrator reset the user's MFA; their sessions end (GH#280).
+    MfaReset,
+    /// The user confirmed an authenticator; their other sessions that did not
+    /// prove it end (GH#292).
+    MfaEnrolled,
 }
 
 impl RevokeReason {
@@ -65,6 +72,9 @@ impl RevokeReason {
             RevokeReason::Replaced => "replaced",
             RevokeReason::ProviderDisabled => "provider_disabled",
             RevokeReason::MfaNotEnforced => "mfa_not_enforced",
+            RevokeReason::MfaDisabled => "mfa_disabled",
+            RevokeReason::MfaReset => "mfa_reset",
+            RevokeReason::MfaEnrolled => "mfa_enrolled",
         }
     }
 }
@@ -119,14 +129,18 @@ fn bounded_path(path: &str) -> String {
     }
 }
 
-/// `{...details, ipAddress, userAgent}` of the request being handled, plus
-/// `peerIpAddress` when the TCP peer differs from `ipAddress` (a proxy, or a
-/// client that sent forwarded headers itself): the one address in the row the
-/// client could not have made up.
+/// `{...details, ipAddress, userAgent}` of the request being handled.
+/// `ipAddress` is the TCP peer, or behind a trusted proxy the client it
+/// reports (GH#282), so the client cannot choose it. `peerIpAddress` (the TCP
+/// peer: the proxy) and `claimedIpAddress` (the leftmost forwarded hop, which
+/// the client may have made up) are added when they differ from it.
 fn details(ctx: &RequestContext, mut fields: serde_json::Map<String, Value>) -> Value {
     fields.insert("ipAddress".into(), json!(ctx.client.ip));
     if let Some(peer) = ctx.client.peer_ip.filter(|p| Some(*p) != ctx.client.ip) {
         fields.insert("peerIpAddress".into(), json!(peer));
+    }
+    if let Some(claimed) = ctx.client.claimed_ip.filter(|c| Some(*c) != ctx.client.ip) {
+        fields.insert("claimedIpAddress".into(), json!(claimed));
     }
     fields.insert("userAgent".into(), json!(ctx.client.user_agent));
     Value::Object(fields)

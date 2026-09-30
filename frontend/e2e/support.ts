@@ -1,4 +1,4 @@
-import { test as base, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test as base, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -31,6 +31,26 @@ export async function snap(page: Page, name: string) {
   if (!dir) return;
   mkdirSync(dir, { recursive: true });
   await page.screenshot({ path: join(dir, `${name}.png`), fullPage: true });
+}
+
+/**
+ * A modal dialog is centred in the viewport, reads left to right and wraps its text inside the box:
+ * no line is cut off. A dialog opened from a table row used to inherit the cell's nowrap/ellipsis
+ * and sit at the left edge (GH#279).
+ */
+export async function expectDialogLaidOut(dialog: Locator) {
+  await expect(dialog).toBeVisible();
+  const box = (await dialog.boundingBox())!;
+  const viewport = dialog.page().viewportSize()!;
+  expect(Math.abs(box.x + box.width / 2 - viewport.width / 2), "dialog horizontally centred").toBeLessThanOrEqual(2);
+  const layout = await dialog.evaluate((d) => {
+    const s = getComputedStyle(d);
+    const clipped = Array.from(d.querySelectorAll<HTMLElement>(".body p, .body li"))
+      .filter((el) => el.scrollWidth > el.clientWidth)
+      .map((el) => el.textContent);
+    return { textAlign: s.textAlign, whiteSpace: s.whiteSpace, clipped };
+  });
+  expect(layout).toEqual({ textAlign: expect.stringMatching(/^(start|left)$/), whiteSpace: "normal", clipped: [] });
 }
 
 /**

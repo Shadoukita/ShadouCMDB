@@ -9,8 +9,9 @@ covers installation; this page covers what to change and why.
 
 - [ ] HTTPS only, terminated by a reverse proxy with TLS 1.2 or 1.3 ([TLS](#tls-reverse-proxy))
 - [ ] `shadoucmdb` reachable only from the proxy; the database only from `shadoucmdb` ([network](#network-segmentation))
-- [ ] `DATABASE_SSL=verify-full` ([database TLS](#database-tls))
-- [ ] A dedicated, non-superuser database role; no other application shares it ([roles](#database-roles))
+- [ ] `DATABASE_SSL=verify-full`, the default ([database TLS](#database-tls))
+- [ ] Outbound traffic limited to the destinations you configured ([outbound connections](#outbound-connections))
+- [ ] The three dedicated, non-superuser database roles; the owner's password not in the server's environment ([roles](#database-roles))
 - [ ] The env file readable only by the service account ([secrets](#secrets-and-configuration))
 - [ ] The encryption key readable only by the service account, with a copy held apart from the database backups ([encryption key](#encryption-key))
 - [ ] First administrator created by you, before the server is reachable by others ([first run](#first-run))
@@ -103,6 +104,9 @@ Three zones, each reachable only from the one in front of it:
 
 ```
 users ──HTTPS──▶ reverse proxy ──HTTP──▶ shadoucmdb ──TLS 5432──▶ PostgreSQL
+                                             │
+                                             └──▶ only what you configure: OIDC providers,
+                                                  LDAP/AD directories, syslog/SIEM collector
 ```
 
 - **Bind `shadoucmdb` to the proxy's network only.** On the same host: `API_HOST=127.0.0.1`. On
@@ -111,16 +115,41 @@ users ──HTTPS──▶ reverse proxy ──HTTP──▶ shadoucmdb ──TL
 - **The database accepts connections only from the `shadoucmdb` hosts** (host firewall or
   security group, plus `pg_hba.conf` below). Don't expose PostgreSQL to user networks or the
   internet.
-- **Don't publish `/docs` and `/openapi.json` to untrusted networks.** They are public today and
-  can't be switched off yet (planned: SHAA-77 workstream 3); they reveal the API surface, not data.
-  If users reach the server from the internet, block both paths at the proxy.
-- **No outbound internet is needed.** The server only connects to PostgreSQL ([telemetry](telemetry.md)),
-  so deny its outbound traffic apart from the database and your log collector. With enterprise sign-in
-  it also connects to your OIDC providers and LDAP/AD directories: allow those, and set
-  `OIDC_ALLOWED_HOSTS` to the OIDC provider hosts so the server contacts no others, even if a
-  provider's discovery document names them.
+- **Keep `/docs` and `/openapi.json` off** (`API_DOCS=off`, the default: both answer 404). If
+  people need the API reference, use `API_DOCS=authenticated`, which serves it to signed-in users
+  only; `public` is for development. They reveal the API surface, not data; the contract is also
+  in the repository as `backend/openapi.json`.
+- **Deny outbound traffic by default.** The server needs no internet access and sends nothing to
+  us ([telemetry](telemetry.md)). Allow only the destinations listed under
+  [outbound connections](#outbound-connections).
 - **Administration from a management network.** Run `migrate`, `create-admin` and database
   maintenance from a jump host in the management zone, not from user workstations.
+
+### Outbound connections
+
+Besides PostgreSQL, the server opens a connection only to what an administrator or operator has
+configured. Nothing below is on in a fresh install.
+
+| Destination | Protocol | Enabled by | Controls |
+| --- | --- | --- | --- |
+| PostgreSQL | TLS (5432) | `DATABASE_URL` / `PG*`, always | `DATABASE_SSL=verify-full` by default ([database TLS](#database-tls)) |
+| OIDC providers: discovery document, key set (JWKS), token endpoint | HTTPS (443) | an OIDC provider added under **Administration › Sign-in** | https only, certificates always verified (the provider's `caCertificate` or the built-in roots), redirects never followed, 10 s timeout, responses size-limited; `OIDC_ALLOWED_HOSTS` limits the hosts; honours `HTTPS_PROXY`/`NO_PROXY` |
+| LDAP/AD directories | LDAPS (636) or LDAP with StartTLS (389) | a directory added under **Administration › Sign-in** | TLS required and certificates always verified; timeouts; read-only bind account recommended |
+| Syslog / SIEM collector | UDP or TCP syslog, **no TLS** | `AUDIT_EXPORT=udp://…` or `tcp://…` | off by default; `stdout` and `file:` export open no connection |
+
+- **Set `OIDC_ALLOWED_HOSTS`** to the OIDC provider hosts whenever you use OIDC. Unset, the server
+  contacts whatever host a provider's issuer or discovery document names. Adding a provider and
+  running its connection test needs the Administrator profile and a signed-in session (not an API
+  token), but an administrator could still point it at an internal address; the allowlist and an
+  egress firewall stop that.
+- **Allow exactly those hosts and ports** in the egress firewall, per destination. LDAP has no
+  host allowlist setting; the firewall is the control.
+- **Audit export over the network is plain text.** The rows carry user names, client IPs and the
+  old and new values of every change. Send them to a relay on the same host or a trusted segment
+  (rsyslog, Vector, Fluent Bit) that forwards over TLS, and prefer `tcp://`: UDP drops datagrams
+  without notice ([deployment.md](../deployment.md#hardening-settings)).
+- The browser side is separate: the web UI loads nothing from third parties, and only the
+  optional `CSP_REPORT_URI` makes browsers send reports elsewhere ([telemetry](telemetry.md)).
 
 ## Database TLS
 
@@ -145,54 +174,68 @@ DATABASE_SSL_CA_FILE=/etc/shadoucmdb/db-ca.pem   # only for a private or managed
 
 ## Database roles
 
-`shadoucmdb` needs one PostgreSQL role that owns its database. That role must not be able to do
-anything beyond it.
+`shadoucmdb` uses three PostgreSQL roles, none of them a superuser.
+[`sql/bootstrap/00_create_role_and_database.sql`](../../sql/bootstrap/00_create_role_and_database.sql)
+creates them; [deployment.md](../deployment.md#database-roles) has the full table, and
+[`10_split_roles.sql`](../../sql/bootstrap/10_split_roles.sql) splits an install created with the
+older single-role script ([upgrading](../deployment.md#upgrading-a-single-role-install)).
 
-- **Not a superuser**, and no `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS`.
-  [`sql/bootstrap/00_create_role_and_database.sql`](../../sql/bootstrap/00_create_role_and_database.sql)
-  creates it that way.
-- **One database, one role.** Don't share the role or the database with other applications.
-- **Keep other roles out of the database:**
+| Role | Used by | Owns / may |
+| --- | --- | --- |
+| `shadoucmdb_owner` | `migrate`, `restore`, `factory-reset`, `decommission` (`MIGRATION_DATABASE_URL`) | Owns the database, the `cmdb` system schema and every system table, including `audit_log`. The only role that may create objects in `public`. Member of `shadoucmdb_app`. |
+| `shadoucmdb_app` | `serve` and the other commands (`DATABASE_URL`) | Reads and writes the system tables in `cmdb`, but only `SELECT` and `INSERT` on `audit_log`, `schema_changes` and `server_keys`, and no access to the audit hash-chain head. Owns the area schemas, their type tables and reporting views, which it changes at run time, so it holds `CREATE` on the database. |
+| `shadoucmdb_maintenance` | `prune-audit` (`MAINTENANCE_DATABASE_URL`) | Executes `cmdb.prune_audit_log()`, nothing else. |
+
+The running server therefore cannot change the system schema, disable the audit log's
+append-only trigger, or update, delete or truncate audit rows (migrations 0007 and 0018 also
+reject `UPDATE`, `DELETE` and `TRUNCATE` on `audit_log` with triggers). Keep it that way:
+
+- **No superuser**, and no `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS` for any of the
+  three. The bootstrap script creates them that way.
+- **Keep the owner's password out of the server's environment.** Pass `MIGRATION_DATABASE_URL`
+  only to the command that needs it ([example](../deployment.md#database-roles)). The owner can
+  change anything, including the audit log's trigger; with its password in the env file, the
+  separation above is lost.
+- **One database, these roles.** Don't share the roles or the database with other applications.
+  The bootstrap script revokes all rights on the database from `PUBLIC` and `CREATE` on schema
+  `public` from everyone but the owner (PostgreSQL 15 and later withhold it already). `migrate`
+  warns if it finds `CREATE` on `public` still open.
+- **Limit connections** of the API role to what the pool needs:
 
   ```sql
-  REVOKE ALL ON DATABASE shadoucmdb FROM PUBLIC;
-  \connect shadoucmdb
-  ALTER SCHEMA public OWNER TO shadoucmdb_app;     -- PostgreSQL 14 only; 15+ gives it to the database owner already
-  REVOKE ALL ON SCHEMA public FROM PUBLIC;
-  ALTER ROLE shadoucmdb_app CONNECTION LIMIT 40;   -- above DATABASE_POOL_MAX x instances, plus room for migrate
+  ALTER ROLE shadoucmdb_app CONNECTION LIMIT 40;   -- above DATABASE_POOL_MAX x instances
   ```
 
-- **Restrict where it can log in from** in `pg_hba.conf`: TLS only, SCRAM, from the application
-  hosts only.
+- **Restrict where each role can log in from** in `pg_hba.conf`: TLS only, SCRAM, the API and
+  maintenance roles from the application hosts, the owner from where you run `migrate`.
 
   ```
-  # TYPE     DATABASE    USER            ADDRESS          METHOD
-  hostssl    shadoucmdb  shadoucmdb_app  10.0.20.0/28     scram-sha-256
-  hostnossl  all         all             0.0.0.0/0        reject
+  # TYPE     DATABASE    USER                    ADDRESS          METHOD
+  hostssl    shadoucmdb  shadoucmdb_app          10.0.20.0/28     scram-sha-256
+  hostssl    shadoucmdb  shadoucmdb_maintenance  10.0.20.0/28     scram-sha-256
+  hostssl    shadoucmdb  shadoucmdb_owner        10.0.30.10/32    scram-sha-256   # management host
+  hostnossl  all         all                     0.0.0.0/0        reject
   ```
 
 - **Separate roles for people.** DBAs use their own named roles for maintenance, never the
-  application's password. A long, random password for the application role, stored only in the
-  env file or your secret manager; rotate it when someone with access leaves.
-- **Reporting and BI** get a read-only role that can't see credentials:
+  application's passwords. Long, random passwords for the three roles, stored only in the env
+  file (API and maintenance role) or your secret manager (owner); rotate them when someone with
+  access leaves.
+- **Reporting and BI** use the built-in reporting role. If a role named `cmdb_reporting` exists,
+  the server grants it `USAGE` on every area schema and `SELECT` on every reporting view
+  (`<area>.v_<type>`), and nothing else: no access to the `cmdb` system tables (users, sessions,
+  API tokens, audit log) or to the raw type tables. It keeps the grants up to date as areas and
+  types are added ([data model](../data-model.md)).
 
   ```sql
-  CREATE ROLE shadoucmdb_report LOGIN PASSWORD '…';
-  GRANT CONNECT ON DATABASE shadoucmdb TO shadoucmdb_report;
-  GRANT USAGE ON SCHEMA public TO shadoucmdb_report;
-  GRANT SELECT ON ALL TABLES IN SCHEMA public TO shadoucmdb_report;
-  REVOKE SELECT ON sessions, users FROM shadoucmdb_report;       -- session tokens, password hashes
-  GRANT SELECT (id, username, display_name, email, is_active, created_at, updated_at)
-    ON users TO shadoucmdb_report;                                 -- adjust to the columns you need
+  CREATE ROLE cmdb_reporting NOLOGIN;
+  CREATE ROLE report_reader LOGIN PASSWORD '…' IN ROLE cmdb_reporting;
+  -- then run `shadoucmdb migrate` or POST /api/v1/schema-changes/reconcile once
   ```
 
   Such a role bypasses the permission profiles of the application: it sees every class. Grant it
-  only to people who may see the whole CMDB.
-
-Planned: a separate migration role so that the running server cannot change the schema of the
-fixed tables, and database-level protection of `audit_log` against `TRUNCATE` (SHAA-77
-workstream 3). Until then, the application role owns every table, including the audit log, so
-protect its password accordingly.
+  only to people who may see the whole CMDB. Don't grant reporting accounts rights on schema
+  `cmdb` or `public`.
 
 ## Secrets and configuration
 
@@ -442,8 +485,9 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   verified. For a private CA paste its certificate into the directory's `caCertificate`, or
   install it in the operating system's trust store (read once per server process, at the first provider connection).
 - **Outbound traffic.** The server calls the OIDC provider (discovery, keys, token endpoint) and
-  the directory (636, or 389 with StartTLS). Allow exactly those in the egress firewall; OIDC calls
-  honour `HTTPS_PROXY`/`NO_PROXY`.
+  the directory (636, or 389 with StartTLS). Allow exactly those in the egress firewall and set
+  `OIDC_ALLOWED_HOSTS` ([outbound connections](#outbound-connections)); OIDC calls honour
+  `HTTPS_PROXY`/`NO_PROXY`.
 - **Secrets at rest.** The OIDC client secret and the directory bind password are stored in the
   database encrypted with the [encryption key](#encryption-key) (the server has to present them);
   they are never returned by the API or written to the audit log. See
@@ -453,9 +497,26 @@ OIDC providers and LDAP/AD directories are configured in the web UI (API:
   already have lasts until it idles out (`SESSION_IDLE_TIMEOUT_MINUTES`) or ends. To end it at
   once, disable the account in ShadouCMDB too, or disable the provider (ends all its sessions and
   refuses its accounts' API tokens while it stays disabled).
+
+  **API tokens outlive the provider account.** A token is never checked against the provider: it
+  keeps working until it expires (up to 366 days) or the account is disabled or deleted in
+  ShadouCMDB, even when the person is disabled or deleted in the provider. So for anyone who has
+  or had API tokens, or created tokens for service accounts, disabling the account in ShadouCMDB
+  (**Administration › Users**, or `PATCH /api/v1/admin/users/{id}` with `"isActive": false`) is a
+  required step, not an option. To find them, list the working tokens by owner and by creator
+  (**Administration › API tokens**, or `GET /api/v1/admin/api-tokens?userId=<id>` and
+  `?createdBy=<id>`).
   Disabling or deleting an account in ShadouCMDB also revokes its API tokens and every token it
   created for another owner, such as a service account. Before an administrator leaves, mint new
   tokens for the service accounts they looked after, so the integrations keep running.
+- **Group removal takes effect at the next sign-in.** The profiles of a provider account are set
+  from its groups only when it signs in. Removing someone from a mapped group, or changing a
+  mapping, does not change the profiles they already hold: their sessions and API tokens keep
+  those rights until they sign in again, which may be never for an account that only uses
+  tokens. When the change must apply at once, also remove the profile from the account in
+  ShadouCMDB (**Administration › Users**; the next sign-in sets the profiles from the groups
+  again) or revoke its tokens. A person moving to another job is a leaver for the rights they
+  lose.
 
 ## Backup and restore
 
@@ -463,7 +524,8 @@ The database is the whole state of ShadouCMDB: data, users, settings and audit l
 holds no state of its own besides its env file.
 
 - **Back up with PostgreSQL's tools.** Logical: `pg_dump --format=custom --file=shadoucmdb-$(date +%F).dump`
-  with a role that can read every table (the application role works). For a point-in-time
+  as `shadoucmdb_owner`, which can read every table (the API role cannot read the audit hash-chain
+  head, so `pg_dump` fails with it), or use `shadoucmdb backup`. For a point-in-time
   recovery, use physical backups with WAL archiving (pgBackRest, Barman or your provider's
   snapshots).
 - **Encrypt backups** at rest and in transit (e.g. `age` or `gpg` before the file leaves the host,
@@ -485,8 +547,10 @@ holds no state of its own besides its env file.
   application role, with at least one copy offline or immutable (object lock), so ransomware on
   the server cannot delete them.
 - **Back up the env file** (or the secret-store entry) separately and just as carefully.
-- **Test a restore** at least every quarter into a separate database: `pg_restore --no-owner --role=shadoucmdb_app -d shadoucmdb_restore shadoucmdb-….dump`,
-  then run `shadoucmdb migrate` and `shadoucmdb verify` against it, and sign in.
+- **Test a restore** at least every quarter into a separate database with the same three roles:
+  `shadoucmdb restore` (it connects as the owner, `MIGRATION_DATABASE_URL`; see
+  [backup-and-reset.md](../backup-and-reset.md)), or `pg_restore` as `shadoucmdb_owner` for a
+  `pg_dump` file. Then run `shadoucmdb migrate` and `shadoucmdb verify` against it, and sign in.
 - **Retention:** keep backups only as long as you need them; they are copies of personal data
   (user accounts, audit log IPs) too.
 
@@ -499,6 +563,10 @@ in [backup-and-reset.md](../backup-and-reset.md).
 - The audit log (`GET /api/v1/audit-log`, permission `audit.view`) records every change and every
   sign-in success, failure and lockout with the client IP. Review it, and alert on bursts of
   `login.failure` or `login.locked`.
+- Copy it to a system the ShadouCMDB administrators don't control with `AUDIT_EXPORT`, and run
+  `shadoucmdb audit-verify` on a schedule: the rows form a hash chain, and comparing the printed
+  chain head with the exported row of the same `chainSeq` shows rows altered or removed in the
+  database ([deployment.md](../deployment.md#hardening-settings)).
 - Watch `/readyz` from your monitoring; it returns 503 if the database is unreachable or
   migrations are pending.
 

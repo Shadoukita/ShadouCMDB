@@ -485,7 +485,11 @@ the importing user as the actor; a dry run writes none.
 
 Authentication events are audit rows too, with `entity_type = 'sessions'`, `old_value` NULL
 and the details in `new_value` (every one also has `ipAddress` and `userAgent` of the request,
-and `peerIpAddress`, the TCP peer, when that differs from `ipAddress`):
+and `peerIpAddress` and `claimedIpAddress` when they differ from `ipAddress`). `ipAddress` is the
+TCP peer or, when the peer is listed in `TRUSTED_PROXIES`, the client address that proxy reports:
+the address the client cannot choose, also stored in `sessions.ip_address` and
+`api_tokens.last_used_ip`. `peerIpAddress` is the TCP peer (the proxy); `claimedIpAddress` is the
+leftmost `X-Forwarded-For` hop (else `Forwarded: for=`), which any client can make up:
 
 | `action` | Actor | `entity_id` | `new_value` |
 | --- | --- | --- | --- |
@@ -493,7 +497,7 @@ and `peerIpAddress`, the TCP peer, when that differs from `ipAddress`):
 | `login.failure` | anonymous (`api_client`, no id) | a fresh id for the attempt | `attemptedUsername` (first 64 characters, as typed); `reason` when a provider vouched for the user and the sign-in was still refused (the `ssoError` code, e.g. `not_authorised`, `mfa_not_enforced`; for a failed OIDC exchange `failed` or `cancelled`; `account_changed` when the account was disabled, deleted or given a new password while the sign-in was checked; `provider_disabled` when the account's identity provider was disabled or deleted while the sign-in was checked) |
 | `login.locked` | anonymous | the failed attempt that set the lock | `attemptedUsername`, `lockedForSeconds` |
 | `logout` | the user | the session | `userId`, `username`, `session` (`createdAt`, `ipAddress`, `userAgent`) |
-| `session.revoke` | whoever caused it (an administrator, the user, `system`) | the ended session | as for `logout`, plus `reason`: `user_disabled`, `user_deleted`, `password_reset`, `password_changed`, `replaced` (a new sign-in in the same browser), `provider_disabled` (its identity provider was disabled) or `mfa_not_enforced` (an OIDC session a `requireMfa` profile no longer exempts; actor `system`, "requireMfa policy") |
+| `session.revoke` | whoever caused it (an administrator, the user, `system`) | the ended session | as for `logout`, plus `reason`: `user_disabled`, `user_deleted`, `password_reset`, `password_changed`, `replaced` (a new sign-in in the same browser), `provider_disabled` (its identity provider was disabled), `mfa_not_enforced` (an OIDC session a `requireMfa` profile no longer exempts; actor `system`, "requireMfa policy"), `mfa_reset` (an administrator reset the user's MFA), `mfa_disabled` (the user turned their MFA off) or `mfa_enrolled` (the user set up an authenticator in another session; this one had not proven a second factor) |
 
 A failed sign-in never says whether the username exists (a wrong password, an unknown name
 and a disabled account look the same, and all three count towards the same login lock), so reading the audit log does not reveal account
@@ -577,9 +581,9 @@ These fields hold it:
 
 | Where | Fields |
 | --- | --- |
-| `audit_log`, `entity_type = 'sessions'` (`login.*`, `logout`, `session.revoke`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.userAgent`, `new_value.session.ipAddress`, `new_value.session.userAgent`, and the user named in `actor_*`, `new_value.username` / `attemptedUsername` |
-| `audit_log`, `mfa.*` rows (`entity_type = 'users'`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.userAgent`, `new_value.username` |
-| `audit_log`, `entity_type = 'api_tokens'` (`token.use`) | `new_value.ipAddress`, `new_value.userAgent`, `new_value.username`, and the owner in `actor_*` |
+| `audit_log`, `entity_type = 'sessions'` (`login.*`, `logout`, `session.revoke`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.claimedIpAddress`, `new_value.userAgent`, `new_value.session.ipAddress`, `new_value.session.userAgent`, and the user named in `actor_*`, `new_value.username` / `attemptedUsername` |
+| `audit_log`, `mfa.*` rows (`entity_type = 'users'`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.claimedIpAddress`, `new_value.userAgent`, `new_value.username` |
+| `audit_log`, `entity_type = 'api_tokens'` (`token.use`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.claimedIpAddress`, `new_value.userAgent`, `new_value.username`, and the owner in `actor_*` |
 | `sessions` | `ip_address`, `user_agent` |
 | `api_tokens` | `last_used_ip` |
 | `users` | `username`, `display_name`, `email` |

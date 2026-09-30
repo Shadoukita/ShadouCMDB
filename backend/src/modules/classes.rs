@@ -670,6 +670,8 @@ pub async fn purge_class_in(
             break;
         }
     }
+    // The table is dropped empty, so the impact tells how many rows it held (GH#281).
+    let rows = items_data::count_type_rows(conn, &table).await?;
     // Type rows first, so that references between these CIs are gone before
     // their registry rows are deleted (the foreign keys check at statement end).
     for c in model.lineage(id) {
@@ -702,7 +704,7 @@ pub async fn purge_class_in(
         .await?;
     sqlx::query("DELETE FROM cmdb.ci_attribute_definitions WHERE class_id = $1").bind(id).execute(&mut *conn).await?;
     crud::delete_row(conn, CiClasses::TABLE, id).await?;
-    let purge = Purge { tables: vec![table], classes, ..Purge::default() };
+    let purge = Purge { rows: [(table.clone(), rows)].into(), tables: vec![table], classes, ..Purge::default() };
     let without = format!("Purge type {} (its CIs and their relationships deleted)", row.table_name);
     let summary = if purge.reveals(ctx.class_scope(ClassOp::View).as_deref()) {
         let counted =
@@ -2196,7 +2198,8 @@ mod tests {
         simple::update::<CiClasses>(pool, &ctx, vault.id, &body(json!({"isActive": false}))).await.unwrap();
 
         // (operation, id, confirm, impact kind, rows for a viewer, summary for a viewer, who may view it all).
-        // A type purge deletes its CIs before the table is dropped: its summary carries the count.
+        // A type purge deletes its CIs before the table is dropped: its summary carries the
+        // count, and the table's rows are counted before they are deleted (GH#281).
         let purges = [
             ("purgeField", field.id, "code", "drop_column", 3, "Purge field", vec![secrets.id, vault.id]),
             (
@@ -2204,7 +2207,7 @@ mod tests {
                 vault.id,
                 vault.key.as_str(),
                 "drop_table",
-                0,
+                1,
                 "(1 CIs, 0 relationships deleted)",
                 vec![vault.id],
             ),

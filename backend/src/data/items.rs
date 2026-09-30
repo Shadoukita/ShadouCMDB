@@ -721,6 +721,14 @@ pub async fn insert_type_rows(conn: &mut PgConnection, table: &TableName, ids: &
     Ok(())
 }
 
+/// How many rows a type's table holds.
+pub async fn count_type_rows(conn: &mut PgConnection, table: &TableName) -> sqlx::Result<i64> {
+    sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) FROM {}", table.sql())))
+        .persistent(false)
+        .fetch_one(conn)
+        .await
+}
+
 pub async fn delete_type_rows(conn: &mut PgConnection, table: &TableName, ids: &[Uuid]) -> sqlx::Result<()> {
     sqlx::query(AssertSqlSafe(format!("DELETE FROM {} WHERE id = ANY($1)", table.sql())))
         .persistent(false)

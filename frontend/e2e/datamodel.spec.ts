@@ -1,4 +1,4 @@
-import { apiGet, applySchemaChange, classIdByName, snap, expect, test } from "./support";
+import { apiGet, applySchemaChange, classIdByName, snap, expect, expectDialogLaidOut, test } from "./support";
 
 // Administration › Data model, Lookups and Templates, in order: a lookup list, a class
 // built in the editor, a CI of that class, archiving, relationship rules and lookups.
@@ -260,6 +260,8 @@ test("lookups are read only and point to Dropdowns; values in use cannot be dele
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("cannot be deleted while it is in use");
   await expect(dialog.getByRole("button", { name: "Archive instead" })).toBeVisible();
+  // Opened from a table row, the dialog is still centred and its long lines wrap (GH#279).
+  await expectDialogLaidOut(dialog);
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
   // Owners and locations stay searchable, with the search in the URL.

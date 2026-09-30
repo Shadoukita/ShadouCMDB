@@ -111,7 +111,11 @@ async function begin() {
   } catch (e) {
     error.value = e;
     password.value = "";
-    if (e instanceof ApiError && e.status === 409) void status.refetch();
+    if (e instanceof ApiError && e.status === 409) {
+      void status.refetch();
+      // Set up in another browser meanwhile: the session's copy tells the set-up screen to ask for a sign-in with a code.
+      if (props.forced) void session.refresh().catch(() => undefined);
+    }
   }
 }
 
