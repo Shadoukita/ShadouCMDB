@@ -13,7 +13,7 @@ own and each type a table in it. `area_schema__type_table` stands for one of the
 `bestand.netzwerk`); its columns other than `id` are the type's fields, created by the DDL engine.
 `statuses`, `environments`, `owners` and `locations` are deprecated since 0016: no CI refers to them.
 Update this diagram in the same pull request as any migration that adds, removes or re-links a table.
-Column-level rules and triggers are described in [`docs/data-model.md`](../../docs/data-model.md).
+Column-level rules and triggers are defined in the migrations under [`../migrations/`](../migrations/).
 
 ```mermaid
 erDiagram

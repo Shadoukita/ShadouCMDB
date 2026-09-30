@@ -1,6 +1,6 @@
 ### Added: visual form designer; layouts get tabs, sections and a field grid
 
-**Administration › Customization › Detail and form layout** is now a visual designer ([layout format]). It
+**Administration › Customization › Detail and form layout** is now a visual designer. It
 shows the class's form as it will look and lets administrators drag fields between sections and tabs,
 resize them on the section's field grid (up to 12 columns, see "sections side by side and a finer grid"), add, rename, reorder and remove tabs and sections, hide fields and
 make them read-only, and resize the preview (or pick laptop, tablet or phone width) to check smaller
@@ -19,5 +19,3 @@ of `panels[]`, and the API validates them (unique tab and section keys, a field 
 within the section's columns, core fields not hidden; `400` with the path otherwise). `panels[]` is
 deprecated: still accepted from older exports and API clients and converted to one General tab, but
 never returned. New issue code `core_field_hidden`.
-
-[layout format]: docs/data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2

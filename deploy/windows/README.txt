@@ -14,7 +14,6 @@ This archive contains:
 
 PostgreSQL is external: ShadouCMDB never installs or bundles a database. You need
 a reachable PostgreSQL 14 or newer.
-Full documentation: https://github.com/Shadoukita/ShadouCMDB/blob/main/docs/deployment.md
 
 
 Create the database (once, as a PostgreSQL admin)

@@ -14,9 +14,10 @@ each, grouped by class, criticality and distance, and exportable as CSV. New API
   may not view: a CI reachable only through one is left out. A user whose profile limits the
   classes they may view sees `visibility: restricted` on every result.
 - Analyses are bounded (default 10 hops, 2 000 CIs, 5 relationships per CI read, 5 seconds) and
-  capped at 8 running at once per server process and 2 per user; see the `IMPACT_*` settings in
-  the [deployment guide](docs/deployment.md#hardening-settings). A bounded result is returned
-  marked `truncated`.
+  capped per server process at 8 running at once (at most half of `DATABASE_POOL_MAX`, so 5 with
+  the default pool of 10) and 2 per user; see the `IMPACT_*` settings in `.env.example`. A bounded
+  result is returned marked `truncated`. The server refuses to start if `IMPACT_MAX_CONCURRENT` is
+  above half of `DATABASE_POOL_MAX`.
 - CSV exports are recorded in the audit log (new action `export`, with the parameters and the row
   count, never the rows) and neutralise spreadsheet formulas. `prune-audit --scope changes` covers
   them; the default `auth` scope does not.

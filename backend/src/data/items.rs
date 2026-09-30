@@ -453,13 +453,11 @@ fn label_text(column: &str, t: AttributeDataType) -> String {
 #[derive(sqlx::FromRow)]
 pub struct Locked {
     pub class_id: Uuid,
-    pub ident: String,
-    pub version: i32,
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
 pub async fn lock(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<Locked>> {
-    sqlx::query_as("SELECT class_id, ident, version, deleted_at FROM cmdb.configuration_items WHERE id = $1 FOR UPDATE")
+    sqlx::query_as("SELECT class_id, deleted_at FROM cmdb.configuration_items WHERE id = $1 FOR UPDATE")
         .bind(id)
         .fetch_optional(conn)
         .await

@@ -8,7 +8,10 @@
 // its list endpoint (demo data from `seed --demo`), creates the objects the scan may damage (a user,
 // a profile, an identity provider, an API token), and writes the spec with those ids as examples.
 //
-//   DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json>
+//   DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json> [<examples.json>]
+//
+// With <examples.json>, also writes the chosen value of every resource there, for
+// tools/dast/reached-handlers.mjs to check after the scans that ZAP sent them (GH#318).
 //
 // DAST_BASE_URL defaults to http://127.0.0.1:3000. Fails when a path parameter is left without an
 // example, so a new `/{id}` route cannot quietly fall back to the literal name.
@@ -156,10 +159,10 @@ async function collect(request) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [input, output] = process.argv.slice(2);
+  const [input, output, chosen] = process.argv.slice(2);
   const { DAST_USERNAME: username, DAST_PASSWORD: password } = process.env;
   if (!input || !output || !username || !password) {
-    console.error("usage: DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json>");
+    console.error("usage: DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json> [<examples.json>]");
     process.exit(2);
   }
   const base = (process.env.DAST_BASE_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "");
@@ -170,5 +173,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exit(1);
   }
   writeFileSync(output, JSON.stringify(spec, null, 2));
+  if (chosen) writeFileSync(chosen, JSON.stringify(examples, null, 2));
   console.log(`path-parameter examples:\n${Object.entries(examples).map(([k, v]) => `  ${k}: ${v}`).join("\n")}`);
 }

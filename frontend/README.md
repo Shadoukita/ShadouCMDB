@@ -100,7 +100,7 @@ administrator (`datamodel.manage`) to Templates or the class editor; everyone el
 
 ### Customization
 
-One settings document (`GET /ui-settings`, see `docs/api.md`) applies to every user. The screens read the
+One settings document (`GET /ui-settings`) applies to every user. The screens read the
 *effective* settings; anything a section leaves out keeps the built-in behaviour, so `{}` is the stock UI.
 
 - **Branding** (`src/stores/branding.ts`): app name, logo and favicon come from the public
@@ -216,8 +216,8 @@ Any page error or Vue warning fails the test.
 
 `a11y.spec.ts` runs axe-core (WCAG 2.1 A and AA rules) on sign-in, the inventory, a CI detail page with its delete
 dialog and edit form, the class and attribute editor, users and profiles, My account and the two-factor enrolment
-step. Critical and serious violations fail it; the rest is reported. What it covers and what it does not is in
-[docs/accessibility.md](../docs/accessibility.md).
+step. Critical and serious violations fail it; the rest is reported. No rule is turned off; one may only be turned off
+for a single screen, with a comment in the spec saying why.
 
 `first-run.spec.ts` walks the real first-run setup, nothing mocked, and only runs when `E2E_FRESH_BASE_URL` points
 at a second API whose database is migrated but has no user. It creates the first administrator there, so give it
