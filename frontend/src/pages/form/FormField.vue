@@ -30,6 +30,6 @@ onUpdated(markRequired);
     </label>
     <slot :id="id" :invalid="!!error" :described-by="describedBy" />
     <span v-if="error" :id="`${id}-err`" class="error">{{ error }}</span>
-    <span v-if="hint" :id="`${id}-hint`" class="hint">{{ hint }}</span>
+    <span v-if="hint" :id="`${id}-hint`" class="hint" dir="auto">{{ hint }}</span>
   </div>
 </template>

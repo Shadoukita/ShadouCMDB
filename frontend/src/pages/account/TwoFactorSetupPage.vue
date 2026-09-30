@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import BrandMark from "../../components/BrandMark.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
@@ -13,18 +13,27 @@ import TwoFactorSettings from "./TwoFactorSettings.vue";
  * authentication and they have not set it up. Until they do, the API answers
  * every other route with 403 MFA_ENROLMENT_REQUIRED, so this screen stands alone
  * (no navigation, no search) and offers only set-up and sign-out.
+ *
+ * A session opened with the password alone stays limited even when the account
+ * already has an authenticator (set up in another browser): it has to sign in
+ * again with a code, so then this screen says that instead of offering a set-up
+ * the API would refuse (409).
  */
 useDocumentTitle("Set up two-factor authentication");
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
 const signOutError = ref<unknown>(null);
+/** Both from the same /auth/me answer: right after a set-up here the session is no longer limited, so the recovery codes stay on screen. */
+const alreadySetUp = computed(() => session.enrolmentRequired && !!session.session?.mfa.totpEnabled);
 
+/** Back to the sign-in screen, which returns to where the user was going. */
 async function signOut() {
   signOutError.value = null;
   try {
     await session.logout();
-    await router.replace("/login");
+    const redirect = safeRedirect(route.query.redirect);
+    await router.replace({ path: "/login", query: redirect === "/" ? {} : { redirect } });
   } catch (e) {
     signOutError.value = e;
   }
@@ -41,15 +50,35 @@ function enrolled() {
       <div class="bare-brand"><BrandMark /></div>
       <div class="page-header">
         <div class="title">
-          <h1>Set up two-factor authentication</h1>
+          <h1>{{ alreadySetUp ? "Sign in again with a code" : "Set up two-factor authentication" }}</h1>
           <span v-if="session.user" class="muted">{{ session.user.displayName }} ({{ session.user.username }})</span>
         </div>
-        <div class="actions">
+        <div v-if="!alreadySetUp" class="actions">
           <button type="button" class="btn" @click="signOut">Sign out</button>
         </div>
       </div>
       <ErrorAlert v-if="signOutError" :error="signOutError" title="Sign-out failed" />
-      <TwoFactorSettings forced @enrolled="enrolled" />
+      <section v-if="alreadySetUp" class="panel" aria-labelledby="mfa-again-title">
+        <div class="panel-header">
+          <h2 id="mfa-again-title">Two-factor authentication</h2>
+          <span class="badges"><span class="badge ok">On</span><span class="badge warn">Required</span></span>
+        </div>
+        <div class="panel-body stack">
+          <div class="alert alert-warn" role="note">
+            Your authenticator app is already set up, but this session was opened with your password alone. A permission
+            profile you hold requires two-factor authentication: sign out, then sign in again with your password and a
+            code from the app.
+          </div>
+          <p class="muted flush">
+            If you no longer have the authenticator app, sign in with one of your recovery codes instead, or ask an
+            administrator to reset your two-factor authentication.
+          </p>
+          <div class="actions">
+            <button type="button" class="btn btn-primary" @click="signOut">Sign out and sign in with a code</button>
+          </div>
+        </div>
+      </section>
+      <TwoFactorSettings v-else forced @enrolled="enrolled" />
     </div>
   </main>
 </template>

@@ -237,7 +237,7 @@ export interface paths {
         put?: never;
         /**
          * Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)
-         * @description From now on sign-in asks for a code after the password. This session counts as having proven the second factor; other sessions opened with the password alone stay limited to the set-up routes until they sign in again with a code. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description From now on sign-in asks for a code after the password. This session counts as having proven the second factor; your other sessions that did not prove one end (audited as `session.revoke`, reason mfa_enrolled) and sign in again with a code. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["confirmTotpEnrolment"];
         delete?: never;
