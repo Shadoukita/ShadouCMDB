@@ -17,6 +17,7 @@ import { useDebounced, useDocumentTitle } from "../lib/composables";
 import { viewableClasses } from "../lib/permissions";
 import { ATTRIBUTE_PREFIX, BUILTIN_FIELDS, fieldLabel, isSortableAttribute, listViewFor, lookupValueIds } from "../lib/uiSettings";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
+import { useImportAccess } from "../lib/useImportAccess";
 import { useSessionStore } from "../stores/session";
 
 /**
@@ -87,6 +88,11 @@ const newTo = computed(() => (classId.value && !currentClass.value?.isAbstract ?
 const canCreate = computed(() =>
   classId.value && currentClass.value && !currentClass.value.isAbstract ? session.canOnClass(classId.value, "create") : session.canOnAnyClass("create"),
 );
+const importAccess = useImportAccess();
+// With one concrete class shown, the import wizard preselects it in step 2.
+const importTo = computed(() =>
+  currentClass.value && !currentClass.value.isAbstract ? `/imports/new?classKey=${encodeURIComponent(currentClass.value.key)}` : "/imports/new",
+);
 const newLabel = computed(() => (currentClass.value && !currentClass.value.isAbstract ? currentClass.value.name : "CI"));
 const crumbs = computed(() =>
   currentClass.value
@@ -108,8 +114,9 @@ function clearFilters() {
       <span v-if="list.data.value" class="muted">{{ total.toLocaleString() }} total</span>
       <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" aria-label="Refreshing" />
     </div>
-    <div v-if="canCreate" class="actions">
-      <RouterLink class="btn btn-primary" :to="newTo">+ New {{ newLabel }}</RouterLink>
+    <div v-if="canCreate || importAccess.available.value" class="actions">
+      <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo">Import</RouterLink>
+      <RouterLink v-if="canCreate" class="btn btn-primary" :to="newTo">+ New {{ newLabel }}</RouterLink>
     </div>
   </div>
 
@@ -147,8 +154,9 @@ function clearFilters() {
     <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length === 0" title="The inventory is empty">
       Configuration items are the servers, VMs, applications, databases, network devices and locations you track. Create
       one, then relate it to others from its detail page.
-      <template v-if="canCreate" #actions>
-        <RouterLink class="btn btn-primary" to="/cis/new">+ Create your first configuration item</RouterLink>
+      <template v-if="canCreate || importAccess.available.value" #actions>
+        <RouterLink v-if="canCreate" class="btn btn-primary" to="/cis/new">+ Create your first configuration item</RouterLink>
+        <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo">Import them from a spreadsheet</RouterLink>
       </template>
     </EmptyState>
     <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length > 0" title="No configuration items match these filters">

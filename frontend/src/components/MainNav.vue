@@ -7,6 +7,7 @@ import { ciCountQuery, useCiClasses } from "../api/queries";
 import type { UiPage } from "../api/uiSettings";
 import { useAppSettings, useNavPreviewStore } from "../lib/appSettings";
 import { viewableClasses } from "../lib/permissions";
+import { useImportAccess } from "../lib/useImportAccess";
 import { buildNav, type NavLinkItem } from "../lib/uiSettings";
 import { visibleSections } from "../pages/admin/sections";
 import { useSessionStore } from "../stores/session";
@@ -29,6 +30,7 @@ const areas = useAreas();
 const { doc } = useAppSettings();
 const preview = useNavPreviewStore();
 
+const importAccess = useImportAccess();
 const hasAdmin = computed(() => visibleSections(session.adminAccess).length > 0);
 function showPage(p: UiPage): boolean {
   if (p === "audit_log") return session.can("audit.view");
@@ -106,11 +108,17 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
         <span v-if="item.cls" class="muted">{{ countFor(item) ?? "" }}</span>
       </NavLink>
     </div>
-    <NavLink v-for="item in g.area ? [] : g.items" :key="item.id" :to="item.to" :active="active(item)">
-      <ClassBadge v-if="item.cls" :icon="item.cls.icon" :color="item.cls.color" :name="item.label" />
-      <template v-else>{{ item.label }}</template>
-      <span v-if="item.cls" class="muted">{{ countFor(item) ?? "" }}</span>
-    </NavLink>
+    <template v-for="item in g.area ? [] : g.items" :key="item.id">
+      <NavLink :to="item.to" :active="active(item)">
+        <ClassBadge v-if="item.cls" :icon="item.cls.icon" :color="item.cls.color" :name="item.label" />
+        <template v-else>{{ item.label }}</template>
+        <span v-if="item.cls" class="muted">{{ countFor(item) ?? "" }}</span>
+      </NavLink>
+      <!-- Bulk import sits under Inventory, only while it is switched on and the user holds cis.import. -->
+      <NavLink v-if="item.page === 'inventory' && importAccess.available.value" to="/imports" :active="(r) => r.path.startsWith('/imports')">
+        Bulk import
+      </NavLink>
+    </template>
   </template>
   <p v-if="classes.isError.value" class="nav-note">Classes unavailable</p>
   <p v-else-if="classes.data.value && classes.data.value.length === 0" class="nav-note">

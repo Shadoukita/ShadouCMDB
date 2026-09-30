@@ -39,6 +39,8 @@ export const ADMIN_SECTIONS: AdminSection[] = [
   { key: "dropdowns", label: "Dropdowns", group: "Data model", to: "/admin/dropdowns", permissions: ["datamodel.manage"] },
   { key: "templates", label: "Templates", group: "Data model", to: "/admin/templates", permissions: ["datamodel.manage"] },
   { key: "customization", label: "Customization", group: "System", to: "/admin/customization", permissions: ["customization.manage"] },
+  // Switches bulk import on for the instance: the API allows only the Administrator profile.
+  { key: "import", label: "Import", group: "System", to: "/admin/import", permissions: [], administratorOnly: true },
   { key: "config", label: "Export / import", group: "System", to: "/admin/config", permissions: ["config.export_import"] },
   { key: "audit", label: "Audit log", group: "System", to: "/admin/audit", permissions: ["audit.view"] },
 ];

@@ -1809,3 +1809,115 @@ table.data td.fill {
   width: 100%;
   max-width: 0;
 }
+
+/* ---------- Bulk import ---------- */
+.import-stepper ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-5);
+  list-style: none;
+  margin: 0 0 var(--sp-4);
+  padding: 0;
+  font-size: var(--fs-sm);
+}
+.import-stepper li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--c-text-muted);
+}
+.import-stepper li.current {
+  color: var(--c-text);
+  font-weight: 700;
+}
+.import-stepper .num {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--c-border-strong);
+  font-size: var(--fs-xs);
+}
+.import-stepper li.current .num {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: var(--c-primary-text);
+}
+.import-drop {
+  border: 2px dashed transparent;
+  border-radius: var(--radius);
+  padding: var(--sp-2);
+  margin: calc(-1 * var(--sp-2));
+}
+.import-drop.dragging {
+  border-color: var(--c-focus);
+  background: var(--c-surface-alt);
+}
+.import-progress {
+  margin: var(--sp-3) 0;
+  max-width: 640px;
+}
+.import-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+  margin-bottom: var(--sp-1);
+}
+.import-progress-track {
+  height: 8px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--c-surface-alt);
+}
+.import-progress-fill {
+  height: 100%;
+  background: var(--c-primary);
+  transition: width 0.3s ease;
+}
+.import-progress-fill.indeterminate {
+  width: 30%;
+  animation: import-indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes import-indeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .import-progress-fill.indeterminate {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+.import-how {
+  margin: 0 0 var(--sp-4);
+  padding-left: var(--sp-5);
+}
+.import-how li + li {
+  margin-top: var(--sp-1);
+}
+.import-intro {
+  margin-bottom: var(--sp-4);
+}
+.import-file-facts {
+  max-width: 640px;
+  margin-bottom: var(--sp-4);
+}
+.import-file-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3) var(--sp-4);
+}
+.import-preview caption {
+  text-align: left;
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+}
+.import-preview td.cell-clip {
+  max-width: 220px;
+}

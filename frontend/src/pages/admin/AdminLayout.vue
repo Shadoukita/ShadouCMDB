@@ -36,9 +36,11 @@ const allowed = computed(() => sectionAllowed({ permissions: required.value, adm
     <div class="admin-body">
       <RouterView v-if="allowed" />
       <EmptyState v-else-if="administratorOnly" title="Permission denied">
-        This screen is only for holders of the built-in <strong>Administrator</strong> permission profile. The
-        <code>users.manage</code> permission alone is not enough: identity providers decide who may sign in and with
-        which profiles.
+        This screen is only for holders of the built-in <strong>Administrator</strong> permission profile.
+        <template v-if="route.path.startsWith('/admin/identity-providers')">
+          The <code>users.manage</code> permission alone is not enough: identity providers decide who may sign in and
+          with which profiles.
+        </template>
       </EmptyState>
       <EmptyState v-else title="Permission denied">
         This screen needs the
