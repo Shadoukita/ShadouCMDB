@@ -393,9 +393,42 @@ fn is_xml(name: &str) -> bool {
     lower.ends_with(".xml") || lower.ends_with(".rels")
 }
 
+/// A cell reference, range or list of them as a worksheet writes it (`B2`,
+/// `$A$1:XFD1048576`, `A:A`, `A1 C3`): at most 3 letters and 7 digits per
+/// cell, and a range's first cell before its last. calamine's reference
+/// parser overflows on longer runs and on backward ranges, so anything else
+/// is refused before it gets there.
+pub fn is_cell_reference(value: &[u8]) -> bool {
+    /// (column, row) of one cell; either may be missing.
+    fn cell(text: &[u8]) -> Option<(Option<u32>, Option<u32>)> {
+        let text: Vec<u8> = text.iter().copied().filter(|&b| b != b'$').collect();
+        let letters = text.iter().take_while(|b| b.is_ascii_alphabetic()).count();
+        let digits = text[letters..].iter().take_while(|b| b.is_ascii_digit()).count();
+        if letters > 3 || digits > 7 || letters + digits != text.len() {
+            return None;
+        }
+        let col = text[..letters].iter().fold(0u32, |c, b| c * 26 + u32::from(b.to_ascii_uppercase() - b'A') + 1);
+        let row = text[letters..].iter().fold(0u32, |r, b| r * 10 + u32::from(b - b'0'));
+        Some(((letters > 0).then_some(col), (digits > 0).then_some(row)))
+    }
+    value.len() <= 1024
+        && value.split(|&b| b == b' ').all(|range| {
+            let cells: Option<Vec<_>> = range.split(|&b| b == b':').map(cell).collect();
+            match cells.as_deref() {
+                Some([_]) => true,
+                Some([(c1, r1), (c2, r2)]) => {
+                    c1.zip(*c2).is_none_or(|(a, b)| a <= b) && r1.zip(*r2).is_none_or(|(a, b)| a <= b)
+                }
+                _ => false,
+            }
+        })
+}
+
 /// Reads an XML part as events: refuses a DOCTYPE and any encoding but UTF-8.
-/// Collects `ContentType` attributes when `content_types` is given.
+/// Collects `ContentType` attributes when `content_types` is given. In a
+/// worksheet, every `r`, `ref` and `sqref` must be a cell reference.
 fn scan_xml<R: Read>(input: R, name: &str, mut content_types: Option<&mut Vec<String>>) -> Result<(), ParseError> {
+    let worksheet = name.to_lowercase().starts_with("xl/worksheets/");
     let mut input = std::io::BufReader::with_capacity(64 * 1024, input);
     let head = std::io::BufRead::fill_buf(&mut input).map_err(io_err)?;
     let encoding_error =
@@ -424,6 +457,16 @@ fn scan_xml<R: Read>(input: R, name: &str, mut content_types: Option<&mut Vec<St
                 }
             }
             Ok(Event::Start(e) | Event::Empty(e)) => {
+                if worksheet {
+                    for a in e.attributes() {
+                        let a = a.map_err(|_| not_a_workbook(&format!("the part {name} is not well-formed XML")))?;
+                        if matches!(a.key.local_name().as_ref(), b"r" | b"ref" | b"sqref")
+                            && !is_cell_reference(&a.value)
+                        {
+                            return Err(not_a_workbook(&format!("the part {name} has an invalid cell reference")));
+                        }
+                    }
+                }
                 if let Some(types) = content_types.as_deref_mut() {
                     for a in e.attributes().flatten() {
                         if a.key.local_name().as_ref() == b"ContentType" {
@@ -717,6 +760,21 @@ mod tests {
         // GR is the 200th column, the last allowed; GS the first refused.
         assert!(read(workbook(&[("GR1", C::S("x"))]), None).is_ok());
         assert_eq!(read(workbook(&[("GS1", C::S("x"))]), None).unwrap_err().code, "column_limit");
+    }
+
+    #[test]
+    fn cell_references_are_checked_before_calamine_parses_them() {
+        for ok in ["A1", "XFD1048576", "$A$1:$C$9", "A:A", "1:1", "A1 B2:C3", ""] {
+            assert!(is_cell_reference(ok.as_bytes()), "{ok}");
+        }
+        for bad in ["AAAA1", "A12345678", "A1B", "Adimension", "A-1", "A1;B2", "Q1:C2", "A9:A1", "A1:B2:C3"] {
+            assert!(!is_cell_reference(bad.as_bytes()), "{bad}");
+        }
+        let sheet = r#"<worksheet><dimension ref="Adimension"/><sheetData/></worksheet>"#;
+        let mut parts = workbook_parts(sheet, None, false, false);
+        parts.truncate(parts.len() - 1);
+        parts.push(Part::new("xl/worksheets/sheet2.xml", sheet_xml(&[])));
+        assert_eq!(code(zip(&parts)), "not_a_workbook");
     }
 
     #[test]

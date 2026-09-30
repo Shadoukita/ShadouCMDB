@@ -1,0 +1,51 @@
+name: Fuzz (nightly)
+
+# The bulk import parsers read untrusted files (SHAA-714 §5.2). Each target
+# runs for 10 minutes every night on nightly Rust with AddressSanitizer; a
+# crash, a leak or an out-of-memory fails the job and uploads the input.
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [import_csv, import_xlsx_preflight, import_xlsx]
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: backend/fuzz
+      - run: cargo install cargo-fuzz --locked --version 0.13.2
+      - name: Fuzz for 10 minutes
+        run: |
+          mkdir -p fuzz/corpus/${{ matrix.target }}
+          cargo +nightly fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- \
+            -max_total_time=600 -rss_limit_mb=2048 -max_len=262144 -timeout=30
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: backend/fuzz/artifacts/${{ matrix.target }}
+          retention-days: 14
