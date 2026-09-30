@@ -1076,7 +1076,7 @@ mod tests {
         const SLOW: usize = PUBLIC * 4;
         const SENT: &[u8] = b"{\"username\":";
         const BUDGET: usize = SLOW * SENT.len() + 64;
-        let capacity = Capacity::with_body_budget(1, PUBLIC, BUDGET, Duration::from_millis(500));
+        let capacity = Capacity::with_body_budget(1, PUBLIC, BUDGET, Duration::from_secs(3));
         let app = app_with_capacity(db.pool.clone(), capacity.clone());
         let session = set_up_owner(&app).await;
         let (login, me) = ("/api/v1/auth/login", "/api/v1/auth/me");
@@ -1101,12 +1101,13 @@ mod tests {
         assert_eq!(capacity.available(true), PUBLIC, "a body in transit holds a public permit");
         let good = json!({ "username": "owner", "password": "correct horse battery" }).to_string();
         assert!(good.len() <= 64);
-        assert_eq!(send(&app, "POST", login, &Creds::default(), Body::from(good), None).await.0, 200);
         // What they hold is bounded by the body budget: a body past it is refused.
         let (status, code, headers) =
             send_full(&app, "POST", login, &Creds::default(), Body::from(vec![b' '; 65]), None).await;
         assert_eq!((status, code.as_str()), (503, "SERVER_BUSY"));
         assert_eq!(headers.get(header::RETRY_AFTER).and_then(|v| v.to_str().ok()), Some("1"));
+        assert_eq!(send(&app, "POST", login, &Creds::default(), Body::from(good), None).await.0, 200);
+        assert!(slow.iter().all(|t| !t.is_finished()), "the slow sign-ins ended before the real one");
 
         // A full public pool refuses at once, without reading the body.
         let held: Vec<_> = (0..PUBLIC).map(|_| capacity.acquire(true).unwrap()).collect();
@@ -1136,7 +1137,7 @@ mod tests {
         for task in slow {
             assert_eq!(task.await.unwrap(), (408, "REQUEST_TIMEOUT".into()));
         }
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(started.elapsed() < Duration::from_secs(20));
         assert_eq!(capacity.available(true), PUBLIC, "public permits were not released");
         assert_eq!(capacity.available_body_bytes(), BUDGET, "the body budget was not given back");
 
