@@ -485,7 +485,11 @@ the importing user as the actor; a dry run writes none.
 
 Authentication events are audit rows too, with `entity_type = 'sessions'`, `old_value` NULL
 and the details in `new_value` (every one also has `ipAddress` and `userAgent` of the request,
-and `peerIpAddress`, the TCP peer, when that differs from `ipAddress`):
+and `peerIpAddress` and `claimedIpAddress` when they differ from `ipAddress`). `ipAddress` is the
+TCP peer or, when the peer is listed in `TRUSTED_PROXIES`, the client address that proxy reports:
+the address the client cannot choose, also stored in `sessions.ip_address` and
+`api_tokens.last_used_ip`. `peerIpAddress` is the TCP peer (the proxy); `claimedIpAddress` is the
+leftmost `X-Forwarded-For` hop (else `Forwarded: for=`), which any client can make up:
 
 | `action` | Actor | `entity_id` | `new_value` |
 | --- | --- | --- | --- |
@@ -577,9 +581,9 @@ These fields hold it:
 
 | Where | Fields |
 | --- | --- |
-| `audit_log`, `entity_type = 'sessions'` (`login.*`, `logout`, `session.revoke`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.userAgent`, `new_value.session.ipAddress`, `new_value.session.userAgent`, and the user named in `actor_*`, `new_value.username` / `attemptedUsername` |
-| `audit_log`, `mfa.*` rows (`entity_type = 'users'`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.userAgent`, `new_value.username` |
-| `audit_log`, `entity_type = 'api_tokens'` (`token.use`) | `new_value.ipAddress`, `new_value.userAgent`, `new_value.username`, and the owner in `actor_*` |
+| `audit_log`, `entity_type = 'sessions'` (`login.*`, `logout`, `session.revoke`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.claimedIpAddress`, `new_value.userAgent`, `new_value.session.ipAddress`, `new_value.session.userAgent`, and the user named in `actor_*`, `new_value.username` / `attemptedUsername` |
+| `audit_log`, `mfa.*` rows (`entity_type = 'users'`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.claimedIpAddress`, `new_value.userAgent`, `new_value.username` |
+| `audit_log`, `entity_type = 'api_tokens'` (`token.use`) | `new_value.ipAddress`, `new_value.peerIpAddress`, `new_value.claimedIpAddress`, `new_value.userAgent`, `new_value.username`, and the owner in `actor_*` |
 | `sessions` | `ip_address`, `user_agent` |
 | `api_tokens` | `last_used_ip` |
 | `users` | `username`, `display_name`, `email` |
