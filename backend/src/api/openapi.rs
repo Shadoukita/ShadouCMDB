@@ -82,7 +82,7 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
 // `{public}` is replaced with the operations that need no session.
 const DESCRIPTION: &str = "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.
 
-- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes` and `listTemplates` (`{ data }` with every item) and the `.../usage` operations (`{ inUse, data }`).
+- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes`, `listTemplates` and `listImportMappings` (`{ data }` with every item) and the `.../usage` operations (`{ inUse, data }`).
 - `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.
 - Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.
 - Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Without a live session every operation answers 401 `UNAUTHENTICATED`, except these public ones: {public}.
