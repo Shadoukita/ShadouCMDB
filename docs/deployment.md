@@ -692,7 +692,33 @@ orchestrator. For a database on the Docker host, use
 on Linux), not `localhost`.
 
 `docker-compose.yml` builds this image and wraps `migrate`, `seed` and `serve`
-for local use; see the [README](../README.md#with-docker).
+for local use; see the [README](../README.md#with-docker). It keeps the
+schema owner out of the running server (see [Database roles](#database-roles)):
+
+- every service reads `.env`, which holds the `shadoucmdb_app` connection;
+- `migrate` also reads `.env.migrate` if it exists. Put `MIGRATION_DATABASE_URL`
+  and `MAINTENANCE_DATABASE_URL` there (mode `600`), not in `.env`;
+- `api` and `seed` set both of those variables to empty, which counts as unset,
+  so they never reach `serve` or `seed` even if they are still in `.env`.
+
+Instead of `.env.migrate`, pass the owner connection for one run. With only the
+variable name after `-e`, Compose takes the value from your shell, so the password
+is not on the command line:
+
+```sh
+read -rsp 'shadoucmdb_owner password: ' PW; echo
+export MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$PW@db.example.internal:5432/shadoucmdb"
+docker compose run --rm -e MIGRATION_DATABASE_URL migrate
+unset PW MIGRATION_DATABASE_URL
+```
+
+`restore`, `factory-reset` and `decommission` also need the owner: run them through
+the same service, e.g. `docker compose run --rm migrate decommission`.
+[`prune-audit`](#audit-log-retention) needs `MAINTENANCE_DATABASE_URL`, so it runs
+through `migrate` as well, e.g.
+`docker compose run --rm migrate prune-audit --older-than 180d`; do not put the
+maintenance URL back into `.env` for it. The
+`env_file` entry that makes `.env.migrate` optional needs Docker Compose 2.24 or later.
 
 ## Moving a dev database off the Node/Drizzle migration runner
 

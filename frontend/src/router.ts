@@ -19,7 +19,6 @@ import ClassEditPage from "./pages/admin/datamodel/ClassEditPage.vue";
 import ClassesPage from "./pages/admin/datamodel/ClassesPage.vue";
 import DropdownsPage from "./pages/admin/datamodel/DropdownsPage.vue";
 import RelationshipTypesPage from "./pages/admin/datamodel/RelationshipTypesPage.vue";
-import LookupsPage from "./pages/admin/lookups/LookupsPage.vue";
 import ProfileEditPage from "./pages/admin/ProfileEditPage.vue";
 import ProfilesPage from "./pages/admin/ProfilesPage.vue";
 import UserEditPage from "./pages/admin/UserEditPage.vue";
@@ -97,10 +96,10 @@ export const router = createRouter({
         { path: "classes/:id", component: ClassEditPage, meta: { permissions: section("classes") } },
         { path: "relationships", component: RelationshipTypesPage, meta: { permissions: section("relationships") } },
         { path: "dropdowns", component: DropdownsPage, meta: { permissions: section("dropdowns") } },
-        { path: "lookups", redirect: "/admin/lookups/statuses" },
-        // Lookup lists moved to Dropdowns; bookmarks (?list=…) keep working.
-        { path: "lookups/lists", redirect: (to) => ({ path: "/admin/dropdowns", query: to.query }) },
-        { path: "lookups/:kind", component: LookupsPage, meta: { permissions: section("lookups") } },
+        // Lookup lists moved to Dropdowns, and the read-only tabs of the former status, environment, location and
+        // owner tables are gone (their values are the lookup lists of the same name): bookmarks land on Dropdowns.
+        // /admin/lookups/lists?list=… keeps its list.
+        { path: "lookups/:kind?", redirect: (to) => ({ path: "/admin/dropdowns", query: to.params.kind === "lists" ? to.query : {} }) },
         { path: "templates", component: TemplatesPage, meta: { permissions: section("templates") } },
         { path: "customization", redirect: "/admin/customization/branding" },
         { path: "customization/:section", component: CustomizationPage, meta: { permissions: section("customization") } },

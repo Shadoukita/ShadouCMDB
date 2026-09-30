@@ -13,7 +13,7 @@ import { useSessionStore } from "../../../stores/session";
 
 /**
  * Administration › Export / import: the whole configuration (data model,
- * lookups, permission profiles, UI settings) as one JSON file. Importing is
+ * lookup lists, permission profiles, UI settings) as one JSON file. Importing is
  * always a dry run first: the API runs every change and rolls back, and this
  * page shows exactly what applying would do before the operator applies it.
  */
@@ -122,10 +122,6 @@ const SECTION_NAMES: Record<string, string> = {
   attributes: "Attributes",
   relationshipTypes: "Relationship types",
   relationshipRules: "Relationship rules",
-  statuses: "Statuses",
-  environments: "Environments",
-  locations: "Locations",
-  owners: "Owners",
   lookupLists: "Lookup lists",
   lookupListValues: "Lookup list values",
   permissionProfiles: "Permission profiles",
@@ -146,7 +142,8 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
     <div class="panel-body">
       <p>
         One JSON file with the configuration of this installation: the data model (classes, attributes, relationship
-        types and rules), lookups (statuses, environments, locations, owners, lookup lists), permission profiles and the
+        types and rules), the lookup lists and their values (such as status, environment, location and owner), permission
+        profiles and the
         customization, logo and favicon included. It never contains users, passwords, sessions, configuration items or
         their relationships.
       </p>
@@ -182,6 +179,13 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
       <div v-if="applied" class="alert" role="status">
         <strong>Imported {{ fileName }}.</strong>
         {{ plural(totals(applied).created, "row") }} created, {{ plural(totals(applied).updated, "row") }} updated. Every change is in the audit log.
+      </div>
+      <div v-if="applied && (applied.warnings.length > 0 || applied.uiSettingsIssues.length > 0)" class="alert alert-warn" role="status">
+        <strong>Imported with warnings</strong>
+        <ul>
+          <li v-for="(w, i) in applied.warnings" :key="`w${i}`"><code>{{ w.path }}</code> {{ w.message }}</li>
+          <li v-for="(w, i) in applied.uiSettingsIssues" :key="`u${i}`"><code>uiSettings.settings.{{ w.path }}</code> {{ w.message }}</li>
+        </ul>
       </div>
     </div>
 

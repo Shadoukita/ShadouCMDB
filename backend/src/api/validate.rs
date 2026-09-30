@@ -208,6 +208,8 @@ struct Walker<'a> {
     location: FieldLocation,
     components: Option<&'a Map<String, Value>>,
     errors: Vec<FieldError>,
+    /// Inside an `x-multiline` field: line breaks, tabs and bidi controls are allowed.
+    multiline: bool,
 }
 
 impl<'a> Walker<'a> {
@@ -231,11 +233,19 @@ impl<'a> Walker<'a> {
     }
 
     fn walk(&mut self, schema: &Value, value: &Value, path: &mut Vec<String>) {
+        // A multiline field, and everything below it, may hold line breaks,
+        // tabs and bidi controls (GH#289).
+        if schema.get("x-multiline") == Some(&Value::Bool(true)) && !self.multiline {
+            self.multiline = true;
+            self.walk(schema, value, path);
+            self.multiline = false;
+            return;
+        }
         // Before any union, so every branch does not report it again (GH#289).
         if let Value::String(s) = value
-            && s.contains('\0')
+            && let Some(message) = character_error(s, false)
         {
-            self.push(path, NUL_MESSAGE, "invalid_character");
+            self.push(path, message, "invalid_character");
             return;
         }
         let schema = self.resolve(schema);
@@ -298,7 +308,12 @@ impl<'a> Walker<'a> {
         let mut failures: Vec<(Vec<FieldError>, &Value)> = Vec::new();
         for b in branches {
             let b = self.resolve(b);
-            let mut sub = Walker { location: self.location, components: self.components, errors: Vec::new() };
+            let mut sub = Walker {
+                location: self.location,
+                components: self.components,
+                errors: Vec::new(),
+                multiline: self.multiline,
+            };
             sub.walk(b, value, path);
             if sub.errors.is_empty() {
                 return;
@@ -324,6 +339,23 @@ impl<'a> Walker<'a> {
     }
 
     fn string(&mut self, schema: &Value, s: &str, path: &[String]) {
+        // Typed text outside a multiline field is one line. Search terms are
+        // not stored, secrets (a `writeOnly` string, not a whole `writeOnly`
+        // object) and new passwords are never shown, and untyped (free-form)
+        // values are checked by their own rules, e.g. the attribute definition.
+        let typed = schema
+            .get("type")
+            .is_some_and(|t| t == "string" || t.as_array().is_some_and(|a| a.contains(&"string".into())));
+        if typed
+            && !self.multiline
+            && schema.get("format").and_then(Value::as_str) != Some("password")
+            && schema.get("writeOnly") != Some(&Value::Bool(true))
+            && self.location != FieldLocation::Query
+            && let Some(message) = character_error(s, true)
+        {
+            self.push(path, message, "invalid_character");
+            return;
+        }
         let len = s.chars().count() as u64;
         let pattern = schema.get("pattern").and_then(Value::as_str);
         // Trimmed, non-blank strings: one "Must not be blank" instead of a length and a pattern error.
@@ -442,20 +474,65 @@ impl<'a> Walker<'a> {
     }
 }
 
-const NUL_MESSAGE: &str = "Must not contain the NUL character (U+0000)";
+// ---------------------------------------------------------------------------
+// Characters (GH#289)
+// ---------------------------------------------------------------------------
 
-/// Every string and object key in `value` that contains U+0000. PostgreSQL
-/// cannot store it in text or jsonb, so it is refused at the boundary with
-/// `invalid_character` instead of failing in the database (GH#289). Covers
-/// free-form parts of a body that no schema rule walks into.
-pub fn nul_errors(value: &Value, location: FieldLocation) -> Vec<FieldError> {
+/// Refused in every string and object key: C0 controls other than TAB, LF and
+/// CR, DEL and the C1 controls. U+0000 cannot be stored by PostgreSQL; the
+/// rest act as terminal escapes in logs and exports and have no place in
+/// CMDB text. Refused, never stripped, so what is stored is what was sent.
+pub fn refused_everywhere(c: char) -> bool {
+    matches!(c, '\u{0}'..='\u{8}' | '\u{B}' | '\u{C}' | '\u{E}'..='\u{1F}' | '\u{7F}'..='\u{9F}')
+}
+
+/// Allowed only in multiline fields (schema extension `x-multiline`, or a
+/// multiline text attribute): TAB, line breaks and the bidirectional
+/// embedding, override and isolate controls (Trojan Source spoofing). The
+/// implicit direction marks (U+200E, U+200F, U+061C) and zero-width joiners
+/// stay allowed everywhere: right-to-left names and emoji need them.
+fn multiline_only(c: char) -> Option<&'static str> {
+    Some(match c {
+        '\t' => "tab",
+        '\n' | '\r' | '\u{2028}' | '\u{2029}' => "line break",
+        '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => "bidirectional control character",
+        _ => return None,
+    })
+}
+
+/// The problem with the first refused character in `s`, if any.
+fn character_error(s: &str, single_line: bool) -> Option<String> {
+    s.chars().find_map(|c| {
+        if c == '\0' {
+            Some("Must not contain the NUL character (U+0000)".to_owned())
+        } else if refused_everywhere(c) {
+            Some(format!("Must not contain the control character U+{:04X}", c as u32))
+        } else if single_line {
+            multiline_only(c)
+                .map(|name| format!("Must not contain a {name} (U+{:04X}) in a single-line field", c as u32))
+        } else {
+            None
+        }
+    })
+}
+
+/// Every string and object key in `value` with a character refused
+/// everywhere (see [`refused_everywhere`]), as `invalid_character`. Runs over
+/// the whole body before the schema check, so it also covers free-form parts
+/// no schema rule walks into (UI settings, attribute values). Which fields
+/// may hold line breaks is up to the schema check.
+pub fn character_errors(value: &Value, location: FieldLocation) -> Vec<FieldError> {
     fn scan(value: &Value, path: &mut Vec<String>, out: &mut Vec<FieldError>, location: FieldLocation) {
-        let push = |out: &mut Vec<FieldError>, path: &[String]| {
+        let push = |out: &mut Vec<FieldError>, path: &[String], message: String| {
             let field = if path.is_empty() { "(root)".to_owned() } else { path.join(".") };
-            out.push(FieldError { location, field, message: NUL_MESSAGE.into(), code: "invalid_character".into() });
+            out.push(FieldError { location, field, message, code: "invalid_character".into() });
         };
         match value {
-            Value::String(s) if s.contains('\0') => push(out, path),
+            Value::String(s) => {
+                if let Some(message) = character_error(s, false) {
+                    push(out, path, message);
+                }
+            }
             Value::Array(items) => {
                 for (i, item) in items.iter().enumerate() {
                     path.push(i.to_string());
@@ -465,10 +542,10 @@ pub fn nul_errors(value: &Value, location: FieldLocation) -> Vec<FieldError> {
             }
             Value::Object(obj) => {
                 for (key, v) in obj {
-                    // The key itself is the offending field; show it without the NUL.
-                    path.push(key.replace('\0', "\u{FFFD}"));
-                    if key.contains('\0') {
-                        push(out, path);
+                    // The key itself is the offending field; show it without the character.
+                    path.push(key.replace(refused_everywhere, "\u{FFFD}"));
+                    if let Some(message) = character_error(key, false) {
+                        push(out, path, message);
                     } else {
                         scan(v, path, out, location);
                     }
@@ -490,7 +567,7 @@ pub fn check(
     location: FieldLocation,
     components: Option<&Map<String, Value>>,
 ) -> Vec<FieldError> {
-    let mut w = Walker { location, components, errors: Vec::new() };
+    let mut w = Walker { location, components, errors: Vec::new(), multiline: false };
     w.walk(schema, value, &mut Vec::new());
     w.errors
 }
@@ -672,7 +749,7 @@ mod tests {
     /// GH#289: U+0000 is refused wherever it appears, with one error per value.
     #[test]
     fn nul_characters() {
-        let text = json!({"type": "string", "maxLength": 100});
+        let text = json!({"type": "string", "maxLength": 100, "x-multiline": true});
         assert_eq!(codes(text.clone(), json!("abc\u{0}def")), vec![("(root)".into(), "invalid_character".into())]);
         assert!(codes(text, json!("tab\tand\nnewline")).is_empty());
         // Unions report it once, not once per branch.
@@ -680,7 +757,7 @@ mod tests {
         assert_eq!(codes(ip, json!("10.0.0.1\u{0}")), vec![("(root)".into(), "invalid_character".into())]);
 
         let body = json!({"name": "ok", "attributes": {"note": "a\u{0}", "tags": ["x", "\u{0}"]}, "k\u{0}": 1});
-        let got: Vec<_> = nul_errors(&body, FieldLocation::Body).into_iter().map(|e| (e.field, e.code)).collect();
+        let got: Vec<_> = character_errors(&body, FieldLocation::Body).into_iter().map(|e| (e.field, e.code)).collect();
         assert_eq!(
             got,
             vec![
@@ -689,6 +766,90 @@ mod tests {
                 ("k\u{FFFD}".to_owned(), "invalid_character".to_owned()),
             ]
         );
-        assert!(nul_errors(&json!({"a": ["b", 1, null, {"c": "d"}]}), FieldLocation::Body).is_empty());
+        assert!(character_errors(&json!({"a": ["b", 1, null, {"c": "d"}]}), FieldLocation::Body).is_empty());
+    }
+
+    /// GH#289 policy: C0 (but TAB, LF, CR), DEL and C1 are refused everywhere;
+    /// TAB, line breaks and bidi controls only outside multiline fields.
+    #[test]
+    fn control_characters() {
+        let bad = |schema: &Value, v: &str| {
+            codes(schema.clone(), json!(v)) == [("(root)".into(), "invalid_character".into())]
+        };
+        let single = json!({"type": "string", "maxLength": 100});
+        let nullable = json!({"anyOf": [{"type": "string"}, {"type": "null"}]});
+        let multi = json!({"anyOf": [{"type": "string"}, {"type": "null"}], "x-multiline": true});
+        let write_only = json!({"type": "string", "writeOnly": true});
+        let password = json!({"type": "string", "format": "password"});
+
+        for s in ["a\u{1}b", "\u{8}", "\u{B}", "\u{C}", "\u{1B}[31m", "\u{1F}", "\u{7F}", "\u{85}", "\u{9B}", "\u{9F}"]
+        {
+            for schema in [&single, &multi, &write_only, &json!({})] {
+                assert!(bad(schema, s), "{s:?} in {schema}");
+            }
+        }
+        for s in
+            ["a\tb", "a\nb", "a\rb", "a\u{2028}b", "a\u{2029}b", "\u{202A}", "\u{202E}evil", "\u{2066}", "\u{2069}"]
+        {
+            assert!(bad(&single, s), "{s:?}");
+            assert!(bad(&nullable, s), "{s:?}");
+            assert!(codes(multi.clone(), json!(s)).is_empty(), "{s:?}");
+            assert!(codes(write_only.clone(), json!(s)).is_empty(), "{s:?}");
+            // Free-form values (e.g. CI attributes at the body level) are checked by their own rules.
+            assert!(codes(json!({}), json!(s)).is_empty(), "{s:?}");
+        }
+        assert!(codes(password, json!("correct\thorse battery")).is_empty());
+        // Right-to-left text, direction marks, joiners and emoji are fine everywhere.
+        for s in ["שלום עולם", "abc\u{200F}", "\u{200E}x\u{061C}", "a\u{200B}b\u{200C}c", "👩\u{200D}💻", "Größe"]
+        {
+            assert!(codes(single.clone(), json!(s)).is_empty(), "{s:?}");
+        }
+        // The message names the character.
+        let e = check(&single, &json!("a\u{202E}b"), FieldLocation::Body, None);
+        assert_eq!(e[0].message, "Must not contain a bidirectional control character (U+202E) in a single-line field");
+        let e = check(&single, &json!("\u{1B}"), FieldLocation::Body, None);
+        assert_eq!(e[0].message, "Must not contain the control character U+001B");
+        // Nested: the marker covers what is below it.
+        let obj = json!({"type": "object", "properties": {
+            "name": {"type": "string"},
+            "notes": {"anyOf": [{"type": "string"}, {"type": "null"}], "x-multiline": true}}});
+        let got = codes(obj, json!({"name": "a\nb", "notes": "a\nb"}));
+        assert_eq!(got, vec![("name".to_owned(), "invalid_character".to_owned())]);
+
+        // `writeOnly` exempts only the secret string itself, not the text inside
+        // a write-only object such as the deprecated v1 layout `panels` (SHAA-765).
+        let components = json!({"Panel": {"type": "object", "properties": {"label": {"type": "string"}}}});
+        let components = components.as_object();
+        let panels = json!({"type": "object", "properties": {
+            "panels": {"type": "array", "items": {"$ref": "#/components/schemas/Panel", "writeOnly": true}},
+            "legacy": {"type": "object", "writeOnly": true, "properties": {"label": {"type": "string"}}},
+            "password": {"type": "string", "writeOnly": true},
+            "clientSecret": {"anyOf": [{"type": "string", "writeOnly": true}, {"type": "null"}]}}});
+        for label in ["Ops\nTeam", "\u{202E}evil", "a\tb"] {
+            let body = json!({"panels": [{"label": label}], "legacy": {"label": label}});
+            let got: Vec<_> =
+                check(&panels, &body, FieldLocation::Body, components).into_iter().map(|e| (e.field, e.code)).collect();
+            let want = |f: &str| (f.to_owned(), "invalid_character".to_owned());
+            assert_eq!(got, vec![want("panels.0.label"), want("legacy.label")], "{label:?}");
+        }
+        let secrets = json!({"password": "a\tb\u{202E}", "clientSecret": "line\nbreak"});
+        assert!(check(&panels, &secrets, FieldLocation::Body, components).is_empty());
+
+        // Search terms are not stored: only the characters refused everywhere.
+        let params = vec![QueryParam { name: "q".into(), required: false, schema: single.clone() }];
+        assert!(parse_query(Some("q=a%09b%0Ac%E2%80%AE"), &params).is_ok());
+        let e = parse_query(Some("q=a%1Bb"), &params).unwrap_err();
+        assert_eq!((e[0].field.as_str(), e[0].code.as_str()), ("q", "invalid_character"));
+
+        // The body scan: keys and values, everywhere-refused characters only.
+        let body = json!({"a": "x\ny\u{202E}", "b\u{1B}": 1, "c": ["\u{7F}"]});
+        let got: Vec<_> = character_errors(&body, FieldLocation::Body).into_iter().map(|e| (e.field, e.code)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("b\u{FFFD}".to_owned(), "invalid_character".to_owned()),
+                ("c.0".to_owned(), "invalid_character".to_owned())
+            ]
+        );
     }
 }

@@ -1,4 +1,4 @@
-import { apiGet, apiSend, applySchemaChange, classIdByName, createCi, snap, expect, test } from "./support";
+import { apiGet, apiSend, applySchemaChange, classIdByName, createCi, csrf, snap, expect, test } from "./support";
 
 // Multi-line text attributes (GH#109): a text attribute flagged validation.multiline is a text
 // area on the CI form that keeps line breaks and indentation exactly, and the detail page shows
@@ -67,6 +67,7 @@ test("the class editor sets and clears Multiline, keeping the other text rules",
   await applySchemaChange(page, "Add attribute", "ADD COLUMN");
   await expect(page.getByRole("status").filter({ hasText: "Added attribute Runbook." })).toBeVisible();
   expect((await runbook())?.validation).toEqual({ maxLength: 2000, multiline: true });
+  const ci = await createCi(request, cls.id, `e2e-runbook-${stamp}`, { runbook: "Line 1\nLine 2" });
 
   // Cleared: the key goes, maxLength stays.
   await page.locator("table.attributes").getByRole("button", { name: "Runbook", exact: true }).click();
@@ -76,14 +77,23 @@ test("the class editor sets and clears Multiline, keeping the other text rules",
   await expect(page.getByRole("status").filter({ hasText: "Saved attribute Runbook." })).toBeVisible();
   expect((await runbook())?.validation).toEqual({ maxLength: 2000 });
 
-  // Without the flag, a value that already has line breaks (from the API or an import) still gets a
-  // text area, so an edit cannot flatten it.
-  const ci = await createCi(request, cls.id, `e2e-runbook-${stamp}`, { runbook: "Line 1\nLine 2" });
+  // Without the flag, new line breaks are refused (GH#289), but a value stored while the attribute
+  // was multi-line still gets a text area, so an edit cannot flatten it. The form sends only changed
+  // attributes, so the stored value does not block editing the other fields.
+  const refused = await request.patch(`/api/v1/configuration-items/${ci.id}`, {
+    data: { attributes: { runbook: "Line 1\nLine 3" }, version: ci.version },
+    headers: { "X-CSRF-Token": await csrf(request) },
+  });
+  expect(refused.status()).toBe(400);
+  expect((await refused.json()).error.details).toEqual([expect.objectContaining({ field: "attributes.runbook", code: "invalid_character" })]);
+
   await page.goto(`/cis/${ci.id}/edit`);
   await expect(page.locator("#attr-runbook")).toHaveJSProperty("tagName", "TEXTAREA");
-  await page.locator("#attr-runbook").press("ControlOrMeta+End");
-  await page.locator("#attr-runbook").pressSequentially(" (checked)");
+  await expect(page.locator("#attr-runbook")).toHaveValue("Line 1\nLine 2");
+  await page.locator("#attr-name").fill(`e2e-runbook-${stamp} (checked)`);
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));
-  expect((await apiGet<Ci>(request, `/configuration-items/${ci.id}`)).attributes.runbook).toBe("Line 1\nLine 2 (checked)");
+  const saved = await apiGet<Ci>(request, `/configuration-items/${ci.id}`);
+  expect(saved.attributes.name).toBe(`e2e-runbook-${stamp} (checked)`);
+  expect(saved.attributes.runbook).toBe("Line 1\nLine 2");
 });

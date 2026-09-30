@@ -1,7 +1,7 @@
 import { apiGet, applySchemaChange, classIdByName, snap, expect, expectDialogLaidOut, test } from "./support";
 
-// Administration › Data model, Lookups and Templates, in order: a lookup list, a class
-// built in the editor, a CI of that class, archiving, relationship rules and lookups.
+// Administration › Data model, Dropdowns and Templates, in order: a lookup list, a class
+// built in the editor, a CI of that class, archiving, relationship rules and lookup values.
 // Every name carries a stamp, so the walk can run against a shared (demo) database.
 test.describe.configure({ mode: "serial" });
 
@@ -34,7 +34,7 @@ test("the sub-navigation groups Access, Data model and System", async ({ page })
   await page.goto("/admin/templates");
   const sub = page.getByRole("navigation", { name: "Administration" });
   await expect(sub.getByRole("heading")).toHaveText(["Access", "Data model", "System"]);
-  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Lookups", "Templates", "Customization", "Export / import", "Audit log"]);
+  await expect(sub.getByRole("link")).toHaveText(["Users", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Templates", "Customization", "Export / import", "Audit log"]);
   await expect(sub.getByRole("link", { name: "Templates" })).toHaveAttribute("aria-current", "page");
 });
 
@@ -48,10 +48,7 @@ test("templates: the installed starter cannot be installed twice", async ({ page
 });
 
 test("a lookup list with ordered values", async ({ page, request }) => {
-  await page.goto("/admin/lookups");
-  await expect(page).toHaveURL(/\/admin\/lookups\/statuses$/);
   // Lookup lists live under Data model › Dropdowns; the old Lookups › Lists address leads there.
-  await expect(page.getByRole("navigation", { name: "Lookups" }).getByRole("link")).toHaveText(["Statuses", "Environments", "Locations", "Owners"]);
   await page.goto("/admin/lookups/lists");
   await expect(page).toHaveURL(/\/admin\/dropdowns$/);
   await expect(page.getByRole("heading", { level: 1, name: "Dropdowns" })).toBeVisible();
@@ -242,20 +239,20 @@ test("a relationship type with a rule", async ({ page, request }) => {
   expect(legal.data.map((t) => t.name)).toContain(REL);
 });
 
-test("lookups are read only and point to Dropdowns; values in use cannot be deleted", async ({ page }) => {
-  // The pre-0016 tables are history: no add, edit, reorder, archive or delete.
-  await page.goto("/admin/lookups/environments");
-  await expect(page.getByRole("note")).toContainText("Read only.");
-  const envs = page.getByRole("region", { name: "Environments" });
-  await expect(envs.getByRole("button")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /^\+ Add/ })).toHaveCount(0);
-  await page.getByRole("note").getByRole("link", { name: "Edit the “Environment” list under Dropdowns" }).click();
-  await expect(page).toHaveURL(/\/admin\/dropdowns\?list=/);
-  await expect(page.getByRole("heading", { name: "Values of “Environment”" })).toBeVisible();
+test("the former Lookups tabs lead to Dropdowns; values in use cannot be deleted", async ({ page, request }) => {
+  // The read-only tabs of the pre-0016 tables are gone; bookmarks of Lookups and its tabs land on Dropdowns.
+  for (const path of ["/admin/lookups", "/admin/lookups/statuses", "/admin/lookups/environments", "/admin/lookups/locations", "/admin/lookups/owners"]) {
+    await page.goto(path);
+    await expect(page).toHaveURL(/\/admin\/dropdowns$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Dropdowns" })).toBeVisible();
+  }
 
   // CIs hold their status as a value of the "status" lookup list, under Dropdowns.
-  await page.goto("/admin/lookups/statuses");
-  await page.getByRole("note").getByRole("link", { name: "Edit the “Status” list under Dropdowns" }).click();
+  const lists = await apiGet<Page_<{ id: string; key: string }>>(request, "/lookup-lists?limit=200");
+  const status = lists.data.find((l) => l.key === "status");
+  expect(status, "lookup list status").toBeTruthy();
+  await page.goto(`/admin/dropdowns?list=${status!.id}`);
+  await expect(page.getByRole("heading", { name: "Values of “Status”" })).toBeVisible();
   await page.getByRole("button", { name: "Delete value “In service”" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("cannot be deleted while it is in use");
@@ -263,22 +260,6 @@ test("lookups are read only and point to Dropdowns; values in use cannot be dele
   // Opened from a table row, the dialog is still centred and its long lines wrap (GH#279).
   await expectDialogLaidOut(dialog);
   await dialog.getByRole("button", { name: "Cancel" }).click();
-
-  // Owners and locations stay searchable, with the search in the URL.
-  await page.goto("/admin/lookups/owners");
-  await expect(page.getByRole("button", { name: "+ Add owner" })).toHaveCount(0);
-  // The Kind filter is wide enough for its longest option (GH#158): text + padding + the native arrow.
-  const kindFit = await page.locator("#own-kind").evaluate((el: HTMLSelectElement) => {
-    const s = getComputedStyle(el);
-    const ctx = document.createElement("canvas").getContext("2d")!;
-    ctx.font = s.font;
-    const text = Math.max(...Array.from(el.options, (o) => ctx.measureText(o.text).width));
-    return el.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight) - 16 - text;
-  });
-  expect(kindFit).toBeGreaterThanOrEqual(0);
-  await page.locator("#own-q").fill("nobody-" + stamp);
-  await expect(page).toHaveURL(/\/admin\/lookups\/owners\?q=/);
-  await expect(page.getByRole("heading", { name: "No owners match these filters" })).toBeVisible();
 });
 
 test("a fresh install guides the administrator to the data model", async ({ page }) => {
