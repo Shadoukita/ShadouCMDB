@@ -662,8 +662,14 @@ the `linux-x64` / `linux-arm64` downloads. Usage is the same:
 
 ```sh
 docker run --rm --env-file .env ghcr.io/shadoukita/shadoucmdb:<version> migrate
-docker run -d --name shadoucmdb --env-file .env -p 3000:3000 ghcr.io/shadoukita/shadoucmdb:<version>
+docker run -d --name shadoucmdb --env-file .env -p 3000:3000 \
+  -v "$PWD/encryption.key:/run/secrets/encryption_key:ro" -e ENCRYPTION_KEY_FILE=/run/secrets/encryption_key \
+  ghcr.io/shadoukita/shadoucmdb:<version>
 ```
+
+`serve` refuses to start without the key; `migrate` only warns if it is missing. The image runs as the
+distroless `nonroot` user (uid 65532), so the key file must be readable by that uid, as
+described above.
 
 The image has no `HEALTHCHECK` because it has no shell or curl. Probe
 `GET /healthz` (liveness) and `GET /readyz` (readiness) over HTTP from your
