@@ -309,8 +309,9 @@ test.describe("administrators: required two-factor authentication and reset", ()
     await expect(other.getByRole("heading", { level: 1, name: "Sign in again with a code" })).toBeVisible(ARGON2);
     await expect(other.getByText("Your authenticator app is already set up")).toBeVisible();
     await expect(other.getByRole("button", { name: "Set up authenticator app" })).toHaveCount(0);
-    // A reload shows the same, straight from the session.
+    // A reload shows the same, straight from the session, and keeps where the user was going.
     await other.reload();
+    await expect(other).toHaveURL(at("/two-factor-setup", "?redirect=/cis"));
     await expect(other.getByRole("heading", { level: 1, name: "Sign in again with a code" })).toBeVisible();
     await snap(other, "mfa-forced-sign-in-again");
 
