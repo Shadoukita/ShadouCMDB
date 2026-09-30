@@ -26512,7 +26512,7 @@
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+              "pattern": "^(label|ident|class|criticality|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             },
             "description": "Fields not shown on the detail page or the form. Presentation only: the API still returns them; restrict access with permission profiles",
             "maxItems": 200,
@@ -26522,7 +26522,7 @@
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+              "pattern": "^(label|ident|class|criticality|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             },
             "description": "Fields shown but not editable on the form. Presentation only: the API still accepts writes to them; restrict access with permission profiles",
             "maxItems": 200,
@@ -26569,7 +26569,7 @@
           "field": {
             "type": "string",
             "description": "A built-in field or attributes.<key>",
-            "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+            "pattern": "^(label|ident|class|criticality|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
           },
           "width": {
             "type": "integer",
@@ -26605,7 +26605,7 @@
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+              "pattern": "^(label|ident|class|criticality|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             },
             "description": "Fields in display order (built-in fields or attributes.<key>)",
             "maxItems": 200,
@@ -26782,7 +26782,7 @@
         "properties": {
           "field": {
             "type": "string",
-            "pattern": "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+            "pattern": "^(label|ident|className|criticality|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
           },
           "direction": {
             "type": "string",
@@ -26810,9 +26810,9 @@
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+              "pattern": "^(label|ident|class|criticality|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             },
-            "description": "Columns in display order: built-in fields (label, ident, class, validFrom, validUntil, active, createdAt, updatedAt) or attributes.<key>",
+            "description": "Columns in display order: built-in fields (label, ident, class, criticality, validFrom, validUntil, active, createdAt, updatedAt) or attributes.<key>",
             "maxItems": 200,
             "uniqueItems": true
           },
@@ -27027,7 +27027,7 @@
                 "properties": {
                   "field": {
                     "type": "string",
-                    "pattern": "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+                    "pattern": "^(label|ident|className|criticality|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
                   },
                   "direction": {
                     "type": "string",
