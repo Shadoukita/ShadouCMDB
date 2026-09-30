@@ -21,6 +21,12 @@ env:
   # sqlx checks its compile-time queries against backend/.sqlx, not a live database.
   SQLX_OFFLINE: "true"
 
+defaults:
+  run:
+    # An explicit `shell: bash` runs with -o pipefail (the default shell does not),
+    # so `cmd | tee file` fails the step when cmd fails (GH#335).
+    shell: bash
+
 jobs:
   build:
     name: Build this commit
