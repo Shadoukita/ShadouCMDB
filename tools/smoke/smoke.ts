@@ -880,7 +880,8 @@ async function permissions(x: Json) {
   await get(`/api/v1/audit-log?entityType=permission_profiles&entityId=${readers.id}`);
 
   console.log('\n# Audit of authentication');
-  // Through a proxy that sets X-Forwarded-For: its first hop is the client IP.
+  // X-Forwarded-For from a peer that is not in TRUSTED_PROXIES: its first hop is only a claim (GH#282).
+  // ipAddress is the address the server can vouch for (the peer, or the client a trusted proxy reports).
   const viaProxy = { 'x-forwarded-for': '203.0.113.38, 10.0.0.1' };
   const loginVia = (username: string, pw: string, expect: number) =>
     as(null, () => call('POST', '/api/v1/auth/login', { username, password: pw }, expect, viaProxy));
@@ -896,31 +897,33 @@ async function permissions(x: Json) {
   const about = (e: Json, name: string) => [e.newValue?.username, e.newValue?.attemptedUsername].includes(name);
   const ofReader = events.filter((e) => about(e, reader.username));
   const success = ofReader.find((e) => e.action === 'login.success');
+  const clientIp = success?.newValue.ipAddress;
   check(success && success.actorType === 'user' && success.actorId === reader.id && success.newValue.userId === reader.id &&
-    success.newValue.ipAddress === '203.0.113.38' && typeof success.newValue.userAgent === 'string' && success.oldValue === null &&
-    typeof success.requestId === 'string', 'login.success: the user as actor, client IP from X-Forwarded-For, user agent, request id');
+    typeof clientIp === 'string' && clientIp !== '203.0.113.38' && success.newValue.claimedIpAddress === '203.0.113.38' &&
+    typeof success.newValue.userAgent === 'string' && success.oldValue === null && typeof success.requestId === 'string',
+    'login.success: the user as actor, the vouched client IP, the forwarded claim apart, user agent, request id');
   const failure = ofReader.find((e) => e.action === 'login.failure');
   const ghostFailure = events.find((e) => e.action === 'login.failure' && about(e, ghost));
   const strangerFailure = events.find((e) => e.action === 'login.failure' && about(e, stranger));
   const keys = (e: Json) => Object.keys(e?.newValue ?? {}).sort().join(',');
   const { attemptedUsername: _a, ...readerRest } = failure?.newValue ?? {};
   const { attemptedUsername: _b, ...strangerRest } = strangerFailure?.newValue ?? {};
-  check(failure && failure.actorId === null && failure.newValue.attemptedUsername === reader.username && failure.newValue.ipAddress === '203.0.113.38',
+  check(failure && failure.actorId === null && failure.newValue.attemptedUsername === reader.username && failure.newValue.ipAddress === clientIp,
     'login.failure: no actor id, the attempted username and the client IP');
-  check([success, failure].every((e) => typeof e?.newValue.peerIpAddress === 'string' && e.newValue.peerIpAddress !== '203.0.113.38') &&
-    ghostFailure && ghostFailure.newValue.peerIpAddress === undefined,
-    'the TCP peer is kept as peerIpAddress when X-Forwarded-For names another address, and only then');
-  // Same request headers, existing vs unknown name: every field but the name itself must match, peerIpAddress included.
-  check(strangerFailure && keys(failure) === 'attemptedUsername,ipAddress,peerIpAddress,userAgent' && keys(strangerFailure) === keys(failure) &&
+  check([success, failure].every((e) => e?.newValue.claimedIpAddress === '203.0.113.38') &&
+    ghostFailure && ghostFailure.newValue.claimedIpAddress === undefined && ghostFailure.newValue.peerIpAddress === undefined,
+    'the forwarded claim is kept as claimedIpAddress, never as ipAddress, and only when it names another address');
+  // Same request headers, existing vs unknown name: every field but the name itself must match, claimedIpAddress included.
+  check(strangerFailure && keys(failure).includes('claimedIpAddress,ipAddress') && keys(strangerFailure) === keys(failure) &&
     JSON.stringify(readerRest) === JSON.stringify(strangerRest),
     'login.failure looks the same for existing and unknown usernames (no enumeration oracle)');
   const locked = events.find((e) => e.action === 'login.locked' && about(e, ghost));
   check(locked && locked.actorId === null && locked.newValue.lockedForSeconds >= 1, 'login.locked: the lock and its duration');
-  check(ofReader.some((e) => e.action === 'logout' && e.actorId === reader.id && e.newValue.ipAddress === '203.0.113.38' &&
-    e.newValue.session?.ipAddress === '203.0.113.38'), 'logout: the user as actor, with the session\'s IP');
+  check(ofReader.some((e) => e.action === 'logout' && e.actorId === reader.id && e.newValue.ipAddress === clientIp &&
+    e.newValue.session?.ipAddress === clientIp), 'logout: the user as actor, with the session\'s IP');
   const revoked = (reason: string) => ofReader.filter((e) => e.action === 'session.revoke' && e.newValue.reason === reason);
   check(revoked('user_disabled').some((e) => e.actorId === adminMe.user.id && e.newValue.userId === reader.id), 'disabling a user writes session.revoke (actor: the administrator)');
-  check(revoked('password_reset').some((e) => e.actorId === adminMe.user.id && e.newValue.session?.ipAddress === '203.0.113.38'), 'an admin password reset writes session.revoke');
+  check(revoked('password_reset').some((e) => e.actorId === adminMe.user.id && e.newValue.session?.ipAddress === clientIp), 'an admin password reset writes session.revoke');
   // Nothing secret: passwords, hashes, session tokens (or their SHA-256), CSRF tokens.
   const { createHash } = await import('node:crypto');
   const secrets = [audited, revokedByReset, me!].flatMap((s) => {

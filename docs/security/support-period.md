@@ -46,4 +46,4 @@ update. To hear about security releases:
 - `TODO(owner): customer notification channel, e.g. a security-announce mailing list`.
 
 Check every download against `SHA256SUMS` (see [deployment](../deployment.md#release-downloads)).
-Once signed releases are available (SHAA-77 workstream 1), verify the signature as well.
+Verify the cosign signature and the build provenance as well ([supply chain](../supply-chain.md#verifying-a-download)).

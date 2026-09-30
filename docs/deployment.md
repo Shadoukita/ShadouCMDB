@@ -172,13 +172,14 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
   origin needs that origin in `CORS_ORIGINS`, spelled exactly as the browser sends it
   (`https://cmdb.example.com`: no path, no trailing slash); those origins may send the session
   cookie. `*` and anything that is not an origin stop the server at startup.
-- The proxy should set `X-Forwarded-For` (or `Forwarded: for=`) to the client address,
-  **replacing** any value the client sent. The API records the first address in it (else the
-  TCP peer) with sign-in events in the audit log. Without a proxy that overwrites the header a
-  client can claim any address, and so can one behind a proxy that *appends* to it, so treat
-  it as evidence, never as an access control. When the recorded address is not the TCP peer,
-  the row also has `peerIpAddress`: the proxy's address, or the real client's when there is
-  no proxy, which the client cannot forge.
+- The proxy should add the client address to `X-Forwarded-For` (or `Forwarded: for=`). The
+  audit log (`ipAddress`), the sessions list and an API token's last-used address record the
+  client as the sign-in throttle sees it (next item): the TCP peer, or, when the peer is listed
+  in `TRUSTED_PROXIES`, the client that proxy reports. **Until you list the proxy, that is the
+  proxy's address for every client.** When they differ from `ipAddress`, audit rows also keep
+  `peerIpAddress` (the TCP peer) and `claimedIpAddress` (the first address in the forwarding
+  header, which any client can set, directly or through a proxy that appends to it: evidence,
+  never an access control).
 - List the proxy's address in `TRUSTED_PROXIES` (addresses or CIDR ranges, comma-separated, for
   example `TRUSTED_PROXIES=10.0.0.5` or `10.20.0.0/24,fd00:1::/64` for a load balancer pool).
   The sign-in throttle believes the forwarding headers only from a listed peer: it reads
