@@ -3,7 +3,11 @@ import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { extendTrail, type TrailStep } from "../lib/trail";
 
-/** Link to a CI detail page. Pass `from` + `trail` to carry the walk trail into the breadcrumb. */
+/**
+ * Link to a CI detail page. Pass `from` + `trail` to carry the walk trail into the breadcrumb.
+ * `dir="auto"` isolates the label for bidi (GH#289): its own direction, and a stored override
+ * character cannot reorder the text around the link.
+ */
 const props = withDefaults(defineProps<{ id: string; from?: TrailStep; trail?: TrailStep[] }>(), { from: undefined, trail: () => [] });
 const to = computed(() => ({
   path: `/cis/${props.id}`,
@@ -12,5 +16,5 @@ const to = computed(() => ({
 </script>
 
 <template>
-  <RouterLink :to="to"><slot /></RouterLink>
+  <RouterLink :to="to" dir="auto"><slot /></RouterLink>
 </template>
