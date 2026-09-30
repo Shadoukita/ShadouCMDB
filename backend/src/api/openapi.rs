@@ -22,7 +22,8 @@ use super::route::{Access, Route};
 use crate::auth::session::SESSION_COOKIE;
 use crate::http::error::ErrorCode;
 
-pub const API_VERSION: &str = "0.1.0";
+/// `info.version`: the release, so the document never claims another version than the server it came from.
+pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
     ("Health", "Liveness and readiness probes for orchestrators and load balancers."),
@@ -74,17 +75,29 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
     ),
 ];
 
+// `{public}` is replaced with the operations that need no session.
 const DESCRIPTION: &str = "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.
 
-- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`.
+- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes` and `listTemplates` (`{ data }` with every item) and the `.../usage` operations (`{ inUse, data }`).
 - `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.
 - Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.
-- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Every operation except the health probes, login and first-run setup answers 401 `UNAUTHENTICATED` without a live session.
+- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Without a live session every operation answers 401 `UNAUTHENTICATED`, except these public ones: {public}.
 - POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie, `__Host-shadoucmdb_csrf` behind HTTPS); without it: 403 `CSRF_TOKEN_INVALID`.
-- Scripts and services use an API token instead (`Authorization: Bearer scmdb_...`, created under `/api/v1/admin/api-tokens`). With that header the cookies are ignored and no CSRF token is needed; an invalid, expired or revoked token is 401. A token may do what both its owner and its permission profile allow. Operations that answer 403 to tokens say so (sign-out, password change, `/auth/me` and token administration need a session). Every request made with a token is recorded in the audit log.
+- Scripts and services use an API token instead (`Authorization: Bearer scmdb_...`, created under `/api/v1/admin/api-tokens`). With that header the cookies are ignored and no CSRF token is needed; an invalid, expired or revoked token is 401. A token may do what both its owner and its permission profile allow. Operations that need a signed-in session say so in their description and answer 403 `FORBIDDEN` to a token. Every request made with a token is recorded in the audit log.
 - Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.
 - Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.
-- Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.";
+- Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.
+- Request bodies are limited to 1 MiB (64 KiB on public operations; configuration import allows more): 413 `PAYLOAD_TOO_LARGE`. A request not answered within `HTTP_REQUEST_TIMEOUT_SECS` answers 408 `REQUEST_TIMEOUT`.";
+
+/// [`DESCRIPTION`] with the public operations listed.
+fn description(routes: &[Route]) -> String {
+    let public: Vec<String> = routes
+        .iter()
+        .filter(|r| r.access == Access::Public)
+        .map(|r| format!("`{} {}` ({})", r.method, r.path, r.operation_id))
+        .collect();
+    DESCRIPTION.replace("{public}", &public.join(", "))
+}
 
 // Documentation shape of the error envelope (see http/error.rs).
 #[derive(ToSchema)]
@@ -164,7 +177,7 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             (429, "Too many failed password attempts (code RATE_LIMITED); see the Retry-After header")
         }
         ErrorCode::UnsupportedMediaType => (415, "Body is not application/json"),
-        ErrorCode::PayloadTooLarge => (413, "Body too large"),
+        ErrorCode::PayloadTooLarge => (413, "Body too large (code PAYLOAD_TOO_LARGE)"),
         ErrorCode::RequestTimeout => (408, "Request not completed in time (code REQUEST_TIMEOUT)"),
         ErrorCode::DatabaseUnavailable | ErrorCode::SchemaNotMigrated | ErrorCode::ServerBusy => (
             503,
@@ -308,8 +321,10 @@ pub fn document(routes: &[Route]) -> OpenApi {
             codes.extend([ErrorCode::DatabaseUnavailable, ErrorCode::SchemaNotMigrated, ErrorCode::ServerBusy]);
         }
         if r.body.is_some() {
-            codes.push(ErrorCode::UnsupportedMediaType);
+            codes.extend([ErrorCode::UnsupportedMediaType, ErrorCode::PayloadTooLarge]);
         }
+        // The request timeout (http/mod.rs) bounds every route.
+        codes.push(ErrorCode::RequestTimeout);
         for code in codes {
             let (status, description) = error_status(code);
             responses.entry(status).or_insert_with(|| {
@@ -398,7 +413,13 @@ pub fn document(routes: &[Route]) -> OpenApi {
     }
 
     let mut doc = OpenApiBuilder::new()
-        .info(InfoBuilder::new().title("ShadouCMDB API").version(API_VERSION).description(Some(DESCRIPTION)).build())
+        .info(
+            InfoBuilder::new()
+                .title("ShadouCMDB API")
+                .version(API_VERSION)
+                .description(Some(description(routes)))
+                .build(),
+        )
         .servers(Some([ServerBuilder::new()
             .url("/")
             .description(Some("Same origin the document was fetched from"))
@@ -416,4 +437,84 @@ pub fn document(routes: &[Route]) -> OpenApi {
         SecurityRequirement::new(TOKEN_SCHEME, Vec::<String>::new()),
     ]);
     doc
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    fn spec() -> Value {
+        serde_json::from_str(&crate::api::openapi_json()).expect("the document is JSON")
+    }
+
+    fn operations(spec: &Value) -> impl Iterator<Item = (&String, &Value)> {
+        spec["paths"].as_object().unwrap().values().flat_map(|item| item.as_object().unwrap())
+    }
+
+    #[test]
+    fn version_is_the_release() {
+        assert_eq!(spec()["info"]["version"], env!("CARGO_PKG_VERSION"));
+        let committed: Value =
+            serde_json::from_str(include_str!("../../openapi.json")).expect("backend/openapi.json is JSON");
+        assert_eq!(
+            committed["info"]["version"],
+            env!("CARGO_PKG_VERSION"),
+            "backend/openapi.json is stale: run `shadoucmdb openapi > openapi.json` after a version bump"
+        );
+    }
+
+    #[test]
+    fn description_lists_every_public_operation() {
+        let spec = spec();
+        let description = spec["info"]["description"].as_str().unwrap();
+        let public: Vec<&str> = operations(&spec)
+            .filter(|(_, op)| op["security"].as_array().is_some_and(Vec::is_empty))
+            .map(|(_, op)| op["operationId"].as_str().unwrap())
+            .collect();
+        assert!(!public.is_empty());
+        for id in public {
+            assert!(description.contains(&format!("({id})")), "{id} is public but not listed");
+        }
+        assert!(!description.contains("{public}"));
+    }
+
+    /// The collections sentence of [`DESCRIPTION`] names every list without `page`.
+    #[test]
+    fn unpaginated_lists_are_named() {
+        let spec = spec();
+        let description = spec["info"]["description"].as_str().unwrap();
+        for (method, op) in operations(&spec) {
+            let id = op["operationId"].as_str().unwrap();
+            let Some(name) = op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].as_str() else {
+                continue;
+            };
+            let schema = &spec["components"]["schemas"][name.rsplit('/').next().unwrap()];
+            let props = &schema["properties"];
+            let list = schema["type"] == "array" || props["data"]["type"] == "array";
+            if method != "get" || !list || props.get("page").is_some() || props.get("inUse").is_some() {
+                continue;
+            }
+            assert!(description.contains(&format!("`{id}`")), "{id} returns a list without `page`");
+        }
+    }
+
+    #[test]
+    fn size_and_timeout_errors_are_published() {
+        let spec = spec();
+        for (_, op) in operations(&spec) {
+            let id = op["operationId"].as_str().unwrap();
+            assert!(op["responses"].get("408").is_some(), "{id} lacks 408");
+            if op.get("requestBody").is_some() {
+                assert!(op["responses"].get("413").is_some(), "{id} lacks 413");
+            }
+        }
+    }
+
+    #[test]
+    fn no_component_is_named_after_a_rust_type() {
+        let spec = spec();
+        for name in spec["components"]["schemas"].as_object().unwrap().keys() {
+            assert!(!["Vec", "Option", "HashMap", "BTreeMap", "String"].contains(&name.as_str()), "schema {name}");
+        }
+    }
 }

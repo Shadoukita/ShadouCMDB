@@ -1905,6 +1905,33 @@ mod tests {
         db.drop().await;
     }
 
+    /// GH#289: an import file follows the same character policy as the API:
+    /// line breaks in descriptions, not in names; control characters nowhere.
+    #[tokio::test]
+    async fn import_file_follows_the_character_policy() {
+        use crate::api::route::BodyInput;
+        let Some(db) = scratch::database("import_file_follows_the_character_policy").await else { return };
+        crate::seed::install_template(&db.pool, "it_infrastructure").await.unwrap();
+        let file = export(&db.pool, &RequestContext::system("test", "test")).await.unwrap();
+        let raw = serde_json::to_value(&file).unwrap();
+        let refused = |path: &str, value: &str| {
+            let mut raw = raw.clone();
+            *raw.pointer_mut(path).unwrap() = value.into();
+            Body::<ConfigFile>::parse(Some(raw))
+                .err()
+                .map(|e| e.details.unwrap().into_iter().map(|d| (d.field, d.code)).collect::<Vec<_>>())
+        };
+        let character = |field: &str| Some(vec![(field.to_owned(), "invalid_character".to_owned())]);
+        assert_eq!(refused("/dataModel/classes/0/name", "Ser\nver"), character("dataModel.classes.0.name"));
+        assert_eq!(refused("/dataModel/classes/0/name", "\u{202E}revreS"), character("dataModel.classes.0.name"));
+        assert_eq!(
+            refused("/dataModel/classes/0/description", "a\u{1B}[0m"),
+            character("dataModel.classes.0.description")
+        );
+        assert_eq!(refused("/dataModel/classes/0/description", "Line 1\nLine 2\t\u{2067}x\u{2069}"), None);
+        db.drop().await;
+    }
+
     #[test]
     fn parents_come_first_and_cycles_are_left_over() {
         let items = vec![

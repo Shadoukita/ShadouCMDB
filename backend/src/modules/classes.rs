@@ -1014,7 +1014,7 @@ pub(crate) fn group_name_schema() -> Schema {
 }
 
 pub(crate) fn help_text_schema() -> Schema {
-    schemas::nullable_string_schema(2000)
+    schemas::multiline_text_schema(2000)
 }
 
 pub(crate) fn default_value_schema() -> Schema {
@@ -1027,6 +1027,8 @@ pub(crate) fn default_value_schema() -> Schema {
             "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). \
              Not allowed for \"reference\" attributes.",
         ))
+        // Line breaks are up to the attribute: its value rules check the default.
+        .extensions(Some(schemas::multiline_extension()))
         .into()
 }
 
@@ -2029,6 +2031,84 @@ mod tests {
         items_service::update(pool, &ctx, id, &update).await.unwrap();
         let stored = items_service::get(pool, &ctx, id).await.unwrap();
         assert_eq!(serde_json::to_value(&stored).unwrap()["attributes"]["remarks"], json!("a\r\nb\n"));
+        db.drop().await;
+    }
+
+    /// GH#289: TAB, line breaks and bidi controls only in multiline text
+    /// attributes; control characters nowhere. Checked on write only: a stored
+    /// value does not block changing another attribute.
+    #[tokio::test]
+    async fn control_characters_follow_the_multiline_flag() {
+        use crate::api::route::{Body, BodyInput};
+        use crate::modules::items::schemas::UpdateItemBody;
+        let Some(db) = scratch::database("control_characters_follow_the_multiline_flag").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("characters-test", "characters-test");
+        let class: CiClass = simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Char Box"}))).await.unwrap();
+        let remarks: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "key": "remarks", "label": "Remarks", "dataType": "text",
+                         "validation": {"multiline": true}})),
+        )
+        .await
+        .unwrap();
+        simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "key": "tag", "label": "Tag", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        let codes = |err: AppError| -> Vec<(String, String)> {
+            err.details.into_iter().flatten().map(|d| (d.field, d.code)).collect()
+        };
+        let refused = |field: &str| vec![(format!("attributes.{field}"), "invalid_character".to_owned())];
+        let ctx_ref = &ctx;
+        let create = |attributes: Value| {
+            let body = Body::<CreateItemBody>::parse(Some(json!({"classId": class.id, "attributes": attributes})));
+            async move { items_service::create(pool, ctx_ref, &body?.0).await }
+        };
+
+        // Multiline: line breaks, tabs and bidi controls (RTL notes) are kept.
+        let notes = "Line 1\r\n\tLine 2\u{2028}\u{2067}עברית\u{2069}";
+        let id = create(json!({"remarks": notes, "tag": "rack-7"})).await.unwrap().summary.id;
+        let stored = items_service::get(pool, &ctx, id).await.unwrap();
+        assert_eq!(serde_json::to_value(&stored).unwrap()["attributes"]["remarks"], json!(notes));
+        // Single-line: refused, not stripped.
+        for tag in ["a\nb", "a\tb", "\u{202E}gpj.exe", "a\u{2029}b"] {
+            assert_eq!(codes(create(json!({"tag": tag})).await.unwrap_err()), refused("tag"), "{tag:?}");
+        }
+        // Control characters: refused in both, before the value rules.
+        for (field, value) in [("remarks", "\u{1B}[2J"), ("tag", "a\u{7F}"), ("remarks", "\u{9B}31m")] {
+            assert_eq!(codes(create(json!({field: value})).await.unwrap_err()), refused(field), "{value:?}");
+        }
+        // A default is checked against its own attribute.
+        let parsed = Body::<AttributeDefinitionCreate>::parse(Some(json!({"classId": class.id, "label": "Motd",
+            "dataType": "text", "defaultValue": "a\nb"})));
+        assert!(parsed.is_ok(), "{:?}", parsed.err());
+        let err = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "label": "Motd", "dataType": "text", "defaultValue": "a\nb"})),
+        )
+        .await
+        .unwrap_err();
+        let detail = &err.details.as_ref().unwrap()[0];
+        assert_eq!((detail.field.as_str(), detail.code.as_str()), ("defaultValue", "invalid"));
+        assert!(detail.message.ends_with("line break (U+000A) in a single-line field"), "{}", detail.message);
+
+        // Write only: after remarks become single-line, the stored value stays
+        // and another attribute can still change; resending it is refused.
+        simple::update::<AttributeDefinitions>(pool, &ctx, remarks.id, &body(json!({"validation": null})))
+            .await
+            .unwrap();
+        let update = Body::<UpdateItemBody>::parse(Some(json!({"attributes": {"tag": "rack-8"}}))).unwrap().0;
+        items_service::update(pool, &ctx, id, &update).await.unwrap();
+        let stored = items_service::get(pool, &ctx, id).await.unwrap();
+        assert_eq!(serde_json::to_value(&stored).unwrap()["attributes"]["remarks"], json!(notes));
+        let update = Body::<UpdateItemBody>::parse(Some(json!({"attributes": {"remarks": notes}}))).unwrap().0;
+        assert_eq!(codes(items_service::update(pool, &ctx, id, &update).await.unwrap_err()), refused("remarks"));
         db.drop().await;
     }
 

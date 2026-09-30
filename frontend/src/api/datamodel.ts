@@ -1,10 +1,10 @@
-// TanStack Query composables for Administration › Data model, Lookups and
+// TanStack Query composables for Administration › Data model, Dropdowns and
 // Templates. Same rules as queries.ts: every request goes through the typed
 // client, and a mutation invalidates every cached view its change can reach
-// (a renamed status also shows in CI lists; a new attribute changes CI forms).
-import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/vue-query";
+// (a renamed lookup value also shows in CI lists; a new attribute changes CI forms).
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/vue-query";
 import { toValue, type MaybeRefOrGetter } from "vue";
-import { api, unwrap, type JsonBody, type ListQuery, type Schemas } from "./client";
+import { api, unwrap, type JsonBody, type Schemas } from "./client";
 import { MAX_PAGE } from "./queries";
 
 export type Area = Schemas["Area"];
@@ -28,10 +28,6 @@ export type RelTypeUpdateBody = JsonBody<"/api/v1/relationship-types/{id}", "pat
 export type RuleCreateBody = JsonBody<"/api/v1/relationship-rules", "post">;
 export type LookupListBody = JsonBody<"/api/v1/lookup-lists", "post">;
 export type LookupListValueBody = JsonBody<"/api/v1/lookup-list-values", "post">;
-export type LocationListQuery = ListQuery<"/api/v1/locations">;
-export type OwnerListQuery = ListQuery<"/api/v1/owners">;
-export type LocationType = Schemas["Location"]["locationType"];
-export type OwnerKind = Schemas["Owner"]["kind"];
 
 /** Every data model and lookup resource. Each has GET/PATCH/DELETE /{resource}/{id} and GET …/{id}/usage. */
 export type Resource =
@@ -40,10 +36,6 @@ export type Resource =
   | "attribute-definitions"
   | "relationship-types"
   | "relationship-rules"
-  | "statuses"
-  | "environments"
-  | "locations"
-  | "owners"
   | "lookup-lists"
   | "lookup-list-values";
 
@@ -52,7 +44,6 @@ export const dmKeys = {
   relTypeList: ["relationship-types", "admin"] as const,
   relType: (id: string) => ["relationship-types", "detail", id] as const,
   rules: (q: { relationshipTypeId?: string; classId?: string }) => ["relationship-rules", q] as const,
-  lookupAdmin: (kind: string, q: unknown) => ["lookup", kind, "admin", q] as const,
   lookupLists: ["lookup-lists"] as const,
   lookupListValues: (listId: string, parentValueId?: string) =>
     (parentValueId ? ["lookup-list-values", listId, parentValueId] : ["lookup-list-values", listId]) as readonly string[],
@@ -67,10 +58,6 @@ const AFFECTS: Record<Resource, readonly (readonly unknown[])[]> = {
   "attribute-definitions": [["technical-names"], ["ci-classes"], ["attribute-definitions"], ["cis", "detail"], ["schema-changes"], dmKeys.templates],
   "relationship-types": [["relationship-types"], ["relationship-rules"], ["relationships"], ["cis", "graph"], dmKeys.templates],
   "relationship-rules": [["relationship-rules"], ["relationship-types"], dmKeys.templates],
-  statuses: [["lookup", "statuses"], ["cis"], dmKeys.templates],
-  environments: [["lookup", "environments"], ["cis"], dmKeys.templates],
-  locations: [["lookup", "locations"], ["cis"], dmKeys.templates],
-  owners: [["lookup", "owners"], ["cis"]],
   "lookup-lists": [["lookup-lists"], ["lookup-list-values"], ["ci-classes"], ["attribute-definitions"]],
   "lookup-list-values": [["lookup-list-values"], ["cis", "detail"]],
 };
@@ -81,8 +68,8 @@ export function invalidateResource(qc: QueryClient, resource: Resource) {
 }
 
 // The generic operations share one shape across resources; the path cast picks one representative for typing.
-type ItemPath = "/api/v1/statuses/{id}";
-type UsagePath = "/api/v1/statuses/{id}/usage";
+type ItemPath = "/api/v1/lookup-list-values/{id}";
+type UsagePath = "/api/v1/lookup-list-values/{id}/usage";
 const itemPath = (r: Resource) => `/api/v1/${r}/{id}` as ItemPath;
 
 /** What still refers to a row (fetched fresh when a delete dialog opens). */
@@ -257,49 +244,8 @@ export function useCreateRule() {
   });
 }
 
-// ---------- Lookups ----------
-
-/** Statuses and environments: short, ordered lists, fetched whole so they can be reordered. */
-export function useStatusesAdmin() {
-  return useQuery({
-    queryKey: dmKeys.lookupAdmin("statuses", {}),
-    queryFn: ({ signal }) => unwrap(api.GET("/api/v1/statuses", { params: { query: { limit: MAX_PAGE, sort: "sortOrder" } }, signal })),
-  });
-}
-
-export function useEnvironmentsAdmin() {
-  return useQuery({
-    queryKey: dmKeys.lookupAdmin("environments", {}),
-    queryFn: ({ signal }) =>
-      unwrap(api.GET("/api/v1/environments", { params: { query: { limit: MAX_PAGE, sort: "sortOrder" } }, signal })),
-  });
-}
-
-/** Locations and owners can grow large: searched, sorted and paged by the API. */
-export function useLocationsAdmin(query: MaybeRefOrGetter<LocationListQuery>) {
-  return useQuery(() => {
-    const q = toValue(query);
-    return {
-      queryKey: dmKeys.lookupAdmin("locations", q),
-      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/locations", { params: { query: q }, signal })),
-      placeholderData: keepPreviousData,
-    };
-  });
-}
-
-export function useOwnersAdmin(query: MaybeRefOrGetter<OwnerListQuery>) {
-  return useQuery(() => {
-    const q = toValue(query);
-    return {
-      queryKey: dmKeys.lookupAdmin("owners", q),
-      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/owners", { params: { query: q }, signal })),
-      placeholderData: keepPreviousData,
-    };
-  });
-}
-
-/** POST a lookup row. Bodies are built by the lookup editors from their typed field lists. */
-export function useCreateLookup(resource: Extract<Resource, "statuses" | "environments" | "locations" | "owners" | "lookup-list-values">) {
+/** POST a lookup list value. Bodies are built by the value editor from its typed field list. */
+export function useCreateLookup(resource: Extract<Resource, "lookup-list-values">) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: Record<string, unknown>) =>

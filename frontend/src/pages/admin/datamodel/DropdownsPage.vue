@@ -11,7 +11,7 @@ import LoadingState from "../../../components/LoadingState.vue";
 import RecordDialog, { type FieldSpec } from "../../../components/RecordDialog.vue";
 import { useDocumentTitle } from "../../../lib/composables";
 import { useListQuery } from "../../../lib/listQuery";
-import OrderedLookupTable, { type Row } from "../lookups/OrderedLookupTable.vue";
+import OrderedLookupTable, { type Row } from "./OrderedLookupTable.vue";
 
 /**
  * Administration › Data model › Dropdowns: admin-defined lookup lists ("Support

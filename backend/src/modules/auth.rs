@@ -20,7 +20,7 @@ use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{
     Body, Check, Either, ErrorWithCookies, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, WithCookies, route,
 };
-use crate::api::schemas::{name_schema, trimmed};
+use crate::api::schemas::{self, name_schema, trimmed};
 use crate::auth::events::{self, LoginMethod, ProviderMfa, RevokeReason};
 use crate::auth::permissions::{ClassRights, GlobalPermission, Permissions};
 use crate::auth::secret::Secret;
@@ -63,7 +63,7 @@ pub struct SetupBody {
 }
 
 fn setup_token_schema() -> Schema {
-    ObjectBuilder::new().schema_type(Type::String).min_length(Some(1)).max_length(Some(1024)).into()
+    schemas::secret_builder().min_length(Some(1)).max_length(Some(1024)).into()
 }
 
 impl Check for SetupBody {
@@ -76,13 +76,18 @@ pub(crate) fn login_field_schema() -> Schema {
     ObjectBuilder::new().schema_type(Type::String).min_length(Some(1)).max_length(Some(password::MAX_LENGTH)).into()
 }
 
+/// A password to check (sign-in, confirming the current one): as typed, never returned.
+pub(crate) fn password_field_schema() -> Schema {
+    schemas::secret_builder().min_length(Some(1)).max_length(Some(password::MAX_LENGTH)).into()
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LoginBody {
     /// Case-insensitive
     #[schema(schema_with = login_field_schema)]
     username: String,
-    #[schema(schema_with = login_field_schema)]
+    #[schema(schema_with = password_field_schema)]
     password: Secret,
 }
 impl Check for LoginBody {}
@@ -98,7 +103,7 @@ impl Check for MfaLoginBody {}
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasswordChange {
-    #[schema(schema_with = login_field_schema)]
+    #[schema(schema_with = password_field_schema)]
     current_password: Secret,
     #[schema(schema_with = password_schema)]
     new_password: Secret,
@@ -173,7 +178,9 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, session_id: Uuid, csrf_token:
 /// checked against, None when an identity provider checked it. The user's row
 /// is locked first; a password changed since, or an account disabled or
 /// deleted since, gets no session but a 401 (GH#209), as does an account
-/// whose identity provider was disabled or deleted since (GH#250).
+/// whose identity provider was disabled or deleted since (GH#250), and a
+/// password-only sign-in (`Password`, `Ldap`) to an account whose
+/// authenticator was confirmed since (GH#303).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_session(
     pool: &PgPool,
@@ -207,7 +214,16 @@ pub(crate) async fn try_open_session(
     let mut tx = pool.begin().await?;
     // First, so the row is locked before anything the reset or disable also takes.
     let stamp = data::record_login(&mut tx, user_id).await?;
-    if let Some(changed) = changed_since(&mut tx, stamp, verified).await? {
+    let mut changed = changed_since(&mut tx, stamp, verified).await?;
+    // A password alone was enough when checked; an authenticator confirmed
+    // since (under the lock on the row) asks for its code (GH#303).
+    if changed.is_none()
+        && matches!(method, LoginMethod::Password | LoginMethod::Ldap)
+        && mfa_data::get_totp(&mut tx, user_id, false).await?.is_some_and(|t| t.confirmed)
+    {
+        changed = Some(Changed::MfaEnrolled);
+    }
+    if let Some(changed) = changed {
         drop(tx);
         return Ok(Err(refused(pool, request, username, changed).await?));
     }
@@ -240,6 +256,9 @@ pub(crate) enum Changed {
     Account,
     /// The account's identity provider was disabled or deleted (GH#250).
     Provider,
+    /// An authenticator was set up for the account after the password was
+    /// checked; password sign-ins only (GH#303).
+    MfaEnrolled,
 }
 
 impl Changed {
@@ -248,6 +267,7 @@ impl Changed {
         match self {
             Changed::Account => "account_changed",
             Changed::Provider => "provider_disabled",
+            Changed::MfaEnrolled => "mfa_enrolled",
         }
     }
 }
@@ -256,6 +276,9 @@ impl From<Changed> for AppError {
     fn from(changed: Changed) -> Self {
         let message = match changed {
             Changed::Account => "The account was changed during the sign-in; enter your username and password again",
+            Changed::MfaEnrolled => {
+                "Two-factor authentication was set up for this account during the sign-in; sign in again and enter the code from your authenticator app"
+            }
             Changed::Provider => {
                 "The identity provider of this account was disabled during the sign-in; ask an administrator"
             }
@@ -280,10 +303,10 @@ async fn changed_since(
     }
 }
 
-/// A sign-in refused because the account or its provider changed while it
-/// was checked (GH#209, GH#250): logged and audited.
+/// A sign-in refused because the account, its provider or its second factor
+/// changed while it was checked (GH#209, GH#250, GH#303): logged and audited.
 async fn refused(pool: &PgPool, ctx: &RequestContext, username: &str, changed: Changed) -> Result<Changed, AppError> {
-    tracing::warn!(user = %username, ip = ?ctx.client.ip, reason = changed.reason(), "sign-in refused: the account or its identity provider changed while it was checked");
+    tracing::warn!(user = %username, ip = ?ctx.client.ip, reason = changed.reason(), "sign-in refused: the account, its identity provider or its second factor changed while it was checked");
     record_failure(pool, ctx, username, Some(changed.reason()), None).await?;
     Ok(changed)
 }
@@ -840,7 +863,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Create the first administrator and sign them in (only while no users exist)")
             .description(
-                "The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. After 5 wrong tokens from one client network (the IPv4 /24 or IPv6 /64 of the client address), each further one locks setup for that network for 1 s, 2 s, 4 s, ... up to 15 min, and wrong tokens from several networks that add up to 15 lock it for every network; while locked the answer is 429 RATE_LIMITED with Retry-After and the token is not checked. The 409 answer is never throttled. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.",
+                "The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. The first 4 wrong tokens from one client network (the IPv4 /24 or IPv6 /64 of the client address) cost nothing; from the 5th on, each one locks setup for that network for 1 s, 2 s, 4 s, ... up to 15 min, and wrong tokens from several networks that add up to 15 lock it for every network; while locked the answer is 429 RATE_LIMITED with Retry-After and the token is not checked. The 409 answer is never throttled. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.",
             )
             .public()
             .status(StatusCode::CREATED)
@@ -852,7 +875,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Sign in with username and password")
             .description(
-                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, 503, MFA_REQUIRED and successful answers are not delayed. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
+                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, 503, MFA_REQUIRED and successful answers are not delayed. The first 4 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report) cost nothing; from the 5th on, each failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
             )
             .public()
             .errors(&[ErrorCode::MfaRequired, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
@@ -897,7 +920,7 @@ pub fn routes() -> Vec<Route> {
             .session_only()
             .before_mfa_enrolment()
             .description(
-                "Every API token you own that still works is revoked; create new ones after the change. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. After 5 wrong current passwords, each further one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
+                "Every API token you own that still works is revoked; create new ones after the change. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. The first 4 wrong current passwords cost nothing; from the 5th on, each one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
             )
             .errors(&[ErrorCode::RateLimited, ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<PasswordChange>>| async move {

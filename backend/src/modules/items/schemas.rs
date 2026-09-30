@@ -291,7 +291,11 @@ fn valid_until_schema() -> Schema {
 }
 
 fn attributes_schema(description: &str) -> Schema {
-    let value = AnyOfBuilder::new().item(attribute_value_schema()).item(ObjectBuilder::new().schema_type(Type::Null));
+    // Line breaks are up to each attribute: its value rules check them (GH#289).
+    let value = AnyOfBuilder::new()
+        .item(attribute_value_schema())
+        .item(ObjectBuilder::new().schema_type(Type::Null))
+        .extensions(Some(crate::api::schemas::multiline_extension()));
     ObjectBuilder::new()
         .schema_type(Type::Object)
         .description(Some(description))

@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use utoipa::openapi::extensions::{Extensions, ExtensionsBuilder};
 use utoipa::openapi::schema::{ArrayBuilder, KnownFormat, ObjectBuilder, Schema, SchemaFormat, Type};
 use utoipa::openapi::{RefOr, schema::AnyOfBuilder};
 use utoipa::{PartialSchema, ToSchema};
@@ -112,7 +113,29 @@ pub fn name_schema() -> Schema {
 }
 
 pub fn description_schema() -> Schema {
-    nullable(string().max_length(Some(4000)))
+    multiline_text_schema(4000)
+}
+
+/// `x-multiline`: the field is free text that may span lines. The request
+/// validator allows line breaks, tabs and bidi controls only in such fields
+/// (GH#289); forms edit them in a text area.
+pub fn multiline_extension() -> Extensions {
+    ExtensionsBuilder::new().add("x-multiline", true).build()
+}
+
+/// Nullable free text of up to `max` characters that may span lines.
+pub fn multiline_text_schema(max: usize) -> Schema {
+    AnyOfBuilder::new()
+        .item(string().max_length(Some(max)))
+        .item(ObjectBuilder::new().schema_type(Type::Null))
+        .extensions(Some(multiline_extension()))
+        .into()
+}
+
+/// A secret the client sends and the API never returns (password, token,
+/// client secret). `writeOnly`: kept exactly as typed, tabs included.
+pub fn secret_builder() -> ObjectBuilder {
+    string().write_only(true)
 }
 
 pub fn uuid_builder() -> ObjectBuilder {

@@ -170,6 +170,10 @@ pub fn value_schema(
             if let Some(p) = rules.get("pattern").and_then(Value::as_str) {
                 s["pattern"] = p.into();
             }
+            // Line breaks, tabs and bidi controls only in multiline text (GH#289).
+            if rules.get("multiline") == Some(&Value::Bool(true)) {
+                s["x-multiline"] = true.into();
+            }
             s
         }
         AttributeDataType::Enum => {
