@@ -657,6 +657,14 @@ async function main() {
   await get('/api/v1/auth/me', 401);
   me = await login(ADMIN_USERNAME, ADMIN_PASSWORD);
 
+  // --- Bulk import ------------------------------------------------------------------
+  console.log('\n# Bulk import');
+  const importSettings = (await get('/api/v1/imports/settings')).json;
+  check(importSettings.enabled === false && importSettings.locked === false && importSettings.limits.maxRows > 0, 'bulk import is off after install and reports its limits');
+  check((await call('PUT', '/api/v1/imports/settings', { enabled: true }, 200)).json.enabled === true, 'an administrator turns bulk import on');
+  await call('PUT', '/api/v1/imports/settings', { enabled: 'yes' }, 400);
+  check((await call('PUT', '/api/v1/imports/settings', { enabled: false }, 200)).json.enabled === false, 'and off again');
+
   // --- HTTP-level errors ---------------------------------------------------------
   console.log('\n# HTTP errors');
   await call('POST', '/api/v1/lookup-lists', '{"key":', 400);
@@ -705,7 +713,7 @@ async function permissions(x: Json) {
   check(editors.classPermissions[0]?.view === true, 'write rights imply view');
   await patch(`/api/v1/admin/profiles/${editors.id}`, { description: null, globalPermissions: [] });
   const copy = (await post(`/api/v1/admin/profiles/${builtin.id}/clone`, { name: `smoke-admin-copy-${RUN}` })).json;
-  check(!copy.isBuiltin && copy.globalPermissions.length === 6 && copy.classPermissions[0]?.classId === null, 'cloning Administrator gives an editable profile with every permission');
+  check(!copy.isBuiltin && copy.globalPermissions.length === 7 && copy.classPermissions[0]?.classId === null, 'cloning Administrator gives an editable profile with every permission');
   await post(`/api/v1/admin/profiles/${readers.id}/clone`, { name: `smoke-readers-${RUN}` }, 409);
   await get(`/api/v1/admin/profiles?q=smoke-&limit=5`);
 
@@ -817,6 +825,8 @@ async function permissions(x: Json) {
     }
     check(guarded >= 20, `every permission-guarded operation answers 403 (${guarded} checked)`);
     check((await get('/api/v1/configuration-items')).json.page.total === 0, 'no class permissions: an empty inventory');
+    await get('/api/v1/imports/settings');
+    await call('PUT', '/api/v1/imports/settings', { enabled: true }, 403);
   });
 
   console.log('\n# Escalation guards (users.manage without other permissions)');

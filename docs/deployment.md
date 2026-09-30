@@ -452,6 +452,28 @@ All optional; every variable is in [`.env.example`](../.env.example).
   `rowHash`; the full row stays in the database.
   Export starts at the newest row when the server starts, so rows written while it was stopped (for
   example by `create-admin`) are not sent; the `chainSeq` gap shows it. Run export on one instance only.
+- **Bulk import** (CSV and Excel files, v0.2.0) is **off** after install and upgrade. An administrator
+  turns it on under *Administration › Import* (audited), and users also need the global right
+  `cis.import`, which no profile holds after the upgrade. Every row is still checked against the
+  class rights of the importing user. The operator settings bound what it may cost the host:
+  - `IMPORT_ALLOWED=false` keeps import off whatever an administrator sets: the switch shows as
+    locked ("disabled by the server configuration") and turning it on is `409 import_locked`.
+  - `IMPORT_MAX_FILE_MB` (default 50, 1–200) and `IMPORT_MAX_ROWS` (default 100,000, 1–1,000,000)
+    bound one file. Files have at most 200 columns and 10,000 characters per cell.
+  - `IMPORT_MAX_STORED_MB` (default 2048, 100–100,000) caps the uploaded files the database keeps at
+    once, all jobs together (`429 import_storage_full` beyond it), so uploads cannot fill the
+    PostgreSQL volume. Files are stored in the database (table `import_job_files`, 1 MiB chunks) and
+    deleted 24 hours after their job ends. Each upload is written once to the WAL and to replicas.
+  - `IMPORT_UPLOAD_TIMEOUT_SECS` (default 900, 60–3600) is the upload route's own time limit, in
+    place of `HTTP_REQUEST_TIMEOUT_SECS`; an upload that sends nothing for 60 s is dropped as well.
+    Keep the reverse proxy's body size limit at or above `IMPORT_MAX_FILE_MB`, and its request
+    timeout for `POST /api/v1/imports` at or above the upload timeout.
+  - `IMPORT_WORKERS` (default 1, 1–4) is the number of import jobs one server process works on at
+    once; more wait as queued. Each running job holds one database connection, so add
+    `IMPORT_WORKERS` to your `DATABASE_POOL_MAX` sizing. An upload in progress holds no connection
+    between its 1 MiB chunks.
+  - Import makes no outbound connections: external links, embedded objects and images in a workbook
+    are never fetched or opened.
 - **Audit integrity:** run `shadoucmdb audit-verify` on a schedule and compare the printed chain head
   with the `rowHash` of the same `chainSeq` in the SIEM (see
   [data model › Tamper evidence](data-model.md#tamper-evidence)). Rows removed by `prune-audit`

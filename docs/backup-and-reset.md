@@ -39,6 +39,15 @@ the database credentials can.
   when an administrator edits a type.
 - **Not the sessions.** Restoring them would sign people back in with tokens from
   the past. After a restore, everyone signs in again.
+- **Not the bulk import files** (`import_job_files`), their per-row problems
+  (`import_job_issues`) or idempotency keys (`import_idempotency_keys`). They
+  hold raw uploaded spreadsheet cells, possibly personal data, can be large, and
+  are deleted 24 hours after their job ends anyway. The import switch
+  (`import_settings`), saved column mappings (`import_mappings`) and the job
+  records with their counts (`import_jobs`, needed to explain the audit trail)
+  are backed up. `restore` marks every job that had not finished as `expired`,
+  in its own transaction, so no server picks up a job whose file is gone. The
+  CIs such a job had already imported are in the restored data.
 - **Not the server's own keys** (`server_keys`). The restored server generates a
   new key for OIDC sign-ins; a sign-in in progress during the restore ends with
   "expired", and the user starts it again.
@@ -250,8 +259,10 @@ database. Record the date and the result.
 
 This returns an installation to the state of a fresh install. It deletes every
 CI, relationship, the data model with every area schema and type table, every
-user, the settings, the logo, the schema change history and the audit log. It
-then rebuilds the empty schema through the migrations. No user
+user, the settings, the logo, the schema change history, the audit log, and all
+bulk import jobs, files and saved mappings. It
+then rebuilds the empty schema through the migrations, so bulk import is
+switched off again. No user
 exists afterwards, so the web UI shows first-run setup again. `create-admin`
 works as well.
 

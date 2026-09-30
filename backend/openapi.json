@@ -2785,6 +2785,191 @@
         ]
       }
     },
+    "/api/v1/imports/settings": {
+      "get": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Whether bulk import is on, and its limits",
+        "description": "Any signed-in user (session only). `enabled` is true when an administrator switched import on and the server configuration allows it; `locked` is true when the server configuration (`IMPORT_ALLOWED=false`) keeps it off. `limits` are the effective upload limits. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "getImportSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Bulk import"
+        ],
+        "summary": "Turn bulk import on or off (Administrator)",
+        "description": "Administrator only (session only). The change is audited as an `update` of `import_settings`. Turning import on while the server configuration forbids it (`IMPORT_ALLOWED=false`) is `409 CONFLICT` with `details[0].code = import_locked`; turning it off always works. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "updateImportSettings",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Turns bulk import on or off for the whole instance.",
+                "required": [
+                  "enabled"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/relationships": {
       "get": {
         "tags": [
@@ -14328,7 +14513,10 @@
                 "api_tokens",
                 "identity_providers",
                 "lookup_lists",
-                "lookup_list_values"
+                "lookup_list_values",
+                "import_jobs",
+                "import_settings",
+                "import_mappings"
               ]
             }
           },
@@ -14364,7 +14552,9 @@
                 "mfa.failure",
                 "mfa.recovery_code_used",
                 "mfa.recovery_codes",
-                "schema_change.refused"
+                "schema_change.refused",
+                "import.commit",
+                "import.report_read"
               ]
             }
           },
@@ -15499,7 +15689,8 @@
                         "datamodel.manage",
                         "customization.manage",
                         "config.export_import",
-                        "audit.view"
+                        "audit.view",
+                        "cis.import"
                       ]
                     },
                     "description": "Replaces all global permissions",
@@ -15898,7 +16089,8 @@
                         "datamodel.manage",
                         "customization.manage",
                         "config.export_import",
-                        "audit.view"
+                        "audit.view",
+                        "cis.import"
                       ]
                     },
                     "description": "Replaces all global permissions",
@@ -17955,7 +18147,8 @@
                               "datamodel.manage",
                               "customization.manage",
                               "config.export_import",
-                              "audit.view"
+                              "audit.view",
+                              "cis.import"
                             ]
                           },
                           "uniqueItems": true
@@ -18610,7 +18803,9 @@
               "mfa.failure",
               "mfa.recovery_code_used",
               "mfa.recovery_codes",
-              "schema_change.refused"
+              "schema_change.refused",
+              "import.commit",
+              "import.report_read"
             ]
           },
           "entityType": {
@@ -18943,7 +19138,8 @@
                       "datamodel.manage",
                       "customization.manage",
                       "config.export_import",
-                      "audit.view"
+                      "audit.view",
+                      "cis.import"
                     ]
                   },
                   "uniqueItems": true
@@ -20020,7 +20216,8 @@
                 "datamodel.manage",
                 "customization.manage",
                 "config.export_import",
-                "audit.view"
+                "audit.view",
+                "cis.import"
               ]
             }
           },
@@ -20482,6 +20679,43 @@
         },
         "additionalProperties": false
       },
+      "ImportLimits": {
+        "type": "object",
+        "description": "The effective limits of an upload.",
+        "required": [
+          "maxFileBytes",
+          "maxRows",
+          "maxColumns",
+          "maxCellChars"
+        ],
+        "properties": {
+          "maxFileBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Largest file accepted, in bytes (`IMPORT_MAX_FILE_MB`)",
+            "minimum": 0
+          },
+          "maxRows": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Most data rows per file (`IMPORT_MAX_ROWS`)",
+            "minimum": 0
+          },
+          "maxColumns": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Most columns per file",
+            "minimum": 0
+          },
+          "maxCellChars": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Most characters per cell",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "ImportResult": {
         "type": "object",
         "required": [
@@ -20538,6 +20772,29 @@
               "$ref": "#/components/schemas/Issue"
             },
             "description": "References in the imported UI settings that do not resolve after the import (see GET /api/v1/ui-settings)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportSettings": {
+        "type": "object",
+        "description": "Whether bulk import may be used on this instance, and its limits.",
+        "required": [
+          "enabled",
+          "locked",
+          "limits"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Import is switched on and not forbidden by the server configuration."
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "The server configuration (`IMPORT_ALLOWED=false`) keeps import off; the switch cannot be turned on."
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ImportLimits"
           }
         },
         "additionalProperties": false
@@ -21541,7 +21798,8 @@
                 "datamodel.manage",
                 "customization.manage",
                 "config.export_import",
-                "audit.view"
+                "audit.view",
+                "cis.import"
               ]
             }
           },
@@ -24372,6 +24630,10 @@
     {
       "name": "Search",
       "description": "Global search across CIs and their attribute values."
+    },
+    {
+      "name": "Bulk import",
+      "description": "Import CIs from CSV and Excel files: upload, map columns, dry run, commit. Session only; needs the switch on, cis.import, and the class rights for every row."
     },
     {
       "name": "Relationships",

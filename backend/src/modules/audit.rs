@@ -54,6 +54,12 @@ pub enum EntityType {
     IdentityProviders,
     LookupLists,
     LookupListValues,
+    /// Bulk import jobs: `import.commit` per commit, `import.report_read`
+    ImportJobs,
+    /// The bulk import switch
+    ImportSettings,
+    /// Saved bulk import column mappings
+    ImportMappings,
 }
 
 impl EntityType {
@@ -81,6 +87,9 @@ impl EntityType {
             EntityType::IdentityProviders => "identity_providers",
             EntityType::LookupLists => "lookup_lists",
             EntityType::LookupListValues => "lookup_list_values",
+            EntityType::ImportJobs => "import_jobs",
+            EntityType::ImportSettings => "import_settings",
+            EntityType::ImportMappings => "import_mappings",
         }
     }
 }
@@ -283,6 +292,13 @@ fn push_visible(qb: &mut QueryBuilder<Postgres>, visible: &[Uuid]) {
         qb.push("))");
     }
     qb.push("))");
+    // Import jobs and saved mappings name their class by key (T21).
+    qb.push(
+        " AND (entity_type NOT IN ('import_jobs', 'import_mappings') \
+         OR coalesce(new_value ->> 'classKey', old_value ->> 'classKey') IN (SELECT key FROM cmdb.ci_classes WHERE id = ANY(",
+    )
+    .push_bind(visible.to_vec())
+    .push(")))");
 }
 
 fn uuid_at(value: &Value, key: &str) -> Option<Uuid> {
@@ -838,6 +854,54 @@ mod tests {
 
         // A caller with no class at all sees none of it.
         assert_eq!(total(viewer(&[]), purge(EntityType::CiRelationships)).await.page.total, 0);
+        db.drop().await;
+    }
+
+    /// T21 (SHAA-799): import job and saved-mapping entries name their class by
+    /// key; a reader who may not view that class neither sees nor counts them.
+    #[tokio::test]
+    async fn import_entries_of_hidden_classes_are_neither_listed_nor_counted() {
+        let Some(db) = crate::db::scratch::database("import_entries_of_hidden_classes").await else { return };
+        let pool = &db.pool;
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        let class = |key: &'static str| async move {
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM ci_classes WHERE key = $1")
+                .bind(key)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        };
+        let server = class("server").await;
+        let insert = |action: &'static str, entity_type: &'static str, old: Option<Value>, new: Value| async move {
+            sqlx::query(
+                "INSERT INTO audit_log (actor_type, actor_name, action, entity_type, entity_id, old_value, new_value, request_id)
+                 VALUES ('import', 'alice', $1, $2, gen_random_uuid(), $3, $4, 'import-t21')",
+            )
+            .bind(action)
+            .bind(entity_type)
+            .bind(old)
+            .bind(new)
+            .execute(pool)
+            .await
+            .unwrap();
+        };
+        insert("import.commit", "import_jobs", None, json!({ "classKey": "server" })).await;
+        insert("import.commit", "import_jobs", None, json!({ "classKey": "virtual_machine" })).await;
+        insert("import.report_read", "import_jobs", None, json!({ "classKey": "virtual_machine" })).await;
+        insert("create", "import_mappings", None, json!({ "classKey": "server", "name": "Vendor" })).await;
+        insert("delete", "import_mappings", Some(json!({ "classKey": "virtual_machine" })), json!({})).await;
+        insert("update", "import_settings", Some(json!({ "enabled": false })), json!({ "enabled": true })).await;
+
+        let q = query(|q| (q.request_id, q.limit) = (Some("import-t21".into()), 50));
+        let admin = list(pool, &RequestContext::system("test", "test"), &q).await.unwrap();
+        assert_eq!(admin.page.total, 6);
+        let restricted = list(pool, &viewer(&[server]), &q).await.unwrap();
+        assert_eq!(restricted.page.total, 3, "{:?}", restricted.data);
+        assert_eq!(restricted.data.len(), 3);
+        for e in &restricted.data {
+            let key = e.new_value.iter().chain(e.old_value.iter()).find_map(|v| v.get("classKey"));
+            assert!(key.is_none() || key == Some(&json!("server")), "{e:?}");
+        }
         db.drop().await;
     }
 

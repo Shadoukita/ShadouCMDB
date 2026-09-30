@@ -303,6 +303,14 @@ pub enum AuditAction {
     #[serde(rename = "schema_change.refused")]
     #[sqlx(rename = "schema_change.refused")]
     SchemaChangeRefused,
+    /// One bulk import commit (entity type `import_jobs`; the counts in new_value).
+    #[serde(rename = "import.commit")]
+    #[sqlx(rename = "import.commit")]
+    ImportCommit,
+    /// An administrator read another user's import error report (entity type `import_jobs`).
+    #[serde(rename = "import.report_read")]
+    #[sqlx(rename = "import.report_read")]
+    ImportReportRead,
 }
 
 impl AuditAction {
@@ -325,6 +333,8 @@ impl AuditAction {
             AuditAction::MfaRecoveryCodeUsed => "mfa.recovery_code_used",
             AuditAction::MfaRecoveryCodes => "mfa.recovery_codes",
             AuditAction::SchemaChangeRefused => "schema_change.refused",
+            AuditAction::ImportCommit => "import.commit",
+            AuditAction::ImportReportRead => "import.report_read",
         }
     }
 }

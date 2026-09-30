@@ -17,7 +17,7 @@ Migrations: [`sql/migrations/`](../sql/migrations/)
 `0014_enterprise_sign_in`, `0015_lookup_parent_lists`, `0016_core_ci_model`, `0017_layout_tabs`,
 `0018_audit_hash_chain`, `0019_multiline_notes`, `0020_attribute_sorts`,
 `0021_stateless_oidc_start`, `0022_api_token_creator`, `0023_oidc_mfa_assurance`,
-`0024_api_token_mfa`).
+`0024_api_token_mfa` … `0029_bulk_import`).
 SQL that reads and writes them: `backend/src/data/`; the DDL engine: `backend/src/schema/`.
 
 Every system table lives in the **`cmdb` schema** (the application connects with
@@ -76,7 +76,7 @@ ui_assets (logo, favicon)
 | `identity_provider_group_mappings` | A group the provider reports (`group_name`: an OIDC groups-claim value or an LDAP group DN) grants a permission profile. | unique (`provider_id`, `lower(group_name)`, `profile_id`); cascades with the provider and the profile |
 | `server_keys` | Secrets the server generates for itself, one row per `purpose`, with the `key_id` byte sent in front of every value sealed with it. `oidc_state` seals the `shadoucmdb_oidc` cookie: an OIDC sign-in between the redirect to the provider and its callback (provider, `state`, `nonce`, PKCE verifier, return path, expiry after 10 minutes), encrypted and authenticated with AES-256-GCM, so starting a sign-in stores nothing (migration 0021 replaced the former `oidc_login_states` table). The first API process that needs a key inserts it; all processes then share it. Never backed up. | PK `purpose`; `key_id` 0–255; `secret` exactly 32 bytes; the API role may only `SELECT` and `INSERT` |
 | `permission_profiles` | Named sets of permissions. `is_builtin` marks the one Administrator profile (created by the migration), which holds every permission implicitly. `require_mfa`: holders must set up two-factor authentication. | unique `lower(name)`; at most one built-in; built-in cannot be updated (except `require_mfa`) or deleted (trigger) |
-| `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`. | PK; permission check; no rows for the built-in profile (trigger) |
+| `permission_profile_global_permissions` | (`profile_id`, `permission`) for `users.manage`, `profiles.manage`, `datamodel.manage`, `customization.manage`, `config.export_import`, `audit.view`, `cis.import` (since 0029; granted to no profile by the migration). | PK; permission check; no rows for the built-in profile (trigger) |
 | `permission_profile_class_permissions` | `can_view` / `can_create` / `can_edit` / `can_delete` per profile and class; `class_id` NULL is the "all classes" wildcard. | one row per (profile, class) and one wildcard per profile (partial unique indexes); `can_view` required; cascades with the class and the profile |
 | `user_permission_profiles` | Which profiles each user holds (any number). | PK (`user_id`, `profile_id`); **never zero active users holding the Administrator profile** (deferred constraint trigger, serialised by an advisory lock) |
 | `api_tokens` | API tokens: `name`, owner `user_id`, scope `profile_id`, SHA-256 of the secret (`token_hash`), `token_prefix` (first 14 characters), `expires_at` (required), `revoked_at`/`revoked_by`, `last_used_at`/`last_used_ip` (evidence only), `created_by` (the creator's name, for display) and `created_by_user_id` (the creating user; NULL for the CLI, a deleted creator, or an older token whose audit `create` row was purged), `mfa_verified` (the creating session proved a second factor; set once at creation, migration 0024 backfilled it for tokens whose creator had a confirmed authenticator at the time). A token is refused while a profile of its owner requires MFA (the same rule as for sessions) and `mfa_verified` is false (GH#200), and while its owner's identity provider is disabled (GH#257). An administrator's password reset revokes the working tokens they created for other users. | unique `token_hash` (32 bytes); expiry after creation; `revoked_at` and `revoked_by` set together; cascades with the owner, `profile_id` set NULL when the profile is deleted, `created_by_user_id` set NULL when the creator is deleted |
@@ -88,6 +88,12 @@ ui_assets (logo, favicon)
 | `ui_settings_versions` | Every saved version of the document with actor, time and an optional comment. | PK `version`; **UPDATE/DELETE rejected** (trigger); comment at most 500 characters |
 | `ui_assets` | Logo and favicon bytes with `content_type` and `sha256` (ETag). Stored in the database so no shared file storage is needed and backups include them. | unique `kind` (`logo`, `favicon`); content type allowlist; size 1 byte to 512 KiB (logo) / 128 KiB (favicon); `sha256` format |
 | `audit_log` | actor (`actor_type`, `actor_id`, `actor_name`), `action`, `entity_type`, `entity_id`, `occurred_at`, `old_value`, `new_value` (jsonb), `request_id`. | action/actor checks; old/new presence per action; **UPDATE/DELETE/TRUNCATE rejected** (trigger; the purge function is the only exception) |
+| `import_settings` | The bulk import switch (`enabled`, off after install and upgrade) and who changed it last. `IMPORT_ALLOWED=false` in the server configuration overrides it. | exactly one row (`id` is `true`, check) |
+| `import_jobs` | One bulk import from upload to commit: owner (`created_by_id`, `created_by_name`), `status` (`uploading` → `queued` → `analysing` → `ready` → `validating` → `validated` → `committing` → `completed` / `completed_with_errors`, or `failed`, `cancelled`, `expired`) and `phase`, file metadata (`file_name`, `file_format`, `file_size`, `file_sha256`, `file_options`, `file_info`), the target `class_key` and `mapping` (by key, never by id), `summary` and `preview` of the dry run, the data model `model_fingerprint` it ran against, the commit cursor `committed_through_row`, the worker lease (`lease_owner`, `lease_until`, `lease_epoch` as the fencing token), `attempts`, `error`, `expires_at`. Metadata and counts only, no row data. | status and phase checks; size > 0 and a SHA-256 once the upload is complete; progress bounds; partial indexes for the per-user limits (unfinished jobs), for claiming work and for stale uploads; owner FK `ON DELETE SET NULL` |
+| `import_job_files` | The uploaded file in chunks (`seq`, `data` ≤ 1 MiB, `STORAGE EXTERNAL`: an XLSX is already compressed). Never served back to a client. | PK (`job_id`, `seq`); cascades with the job |
+| `import_job_issues` | Problems found per row by the dry run or at commit: `row_no` (as the spreadsheet counts, the header is row 1), column, `field`, `value` (the cell, shortened to 200 characters), `severity`, `code`, `message`, `phase`. At most 10,000 per job. | PK (`job_id`, `seq`); cascades with the job; deleted together with the file |
+| `import_idempotency_keys` | `Idempotency-Key` of an upload or a commit, per user, kept 24 h. | PK (`user_id`, `operation`, `key`); key 1–128 visible ASCII characters; cascades with the user and the job |
+| `import_mappings` | Saved column mappings, shared with everyone who has `cis.import` and may view the class: `name`, `description`, `class_key`, `definition` (the mapping, with columns identified by header; classes, attributes and relationship types by key), `version`, creator and last editor. | name 1–100 characters, **unique per class** regardless of case (`class_key`, `lower(name)`), so a clash says nothing about another class; definition an object of at most 64 KiB |
 
 All primary keys are `uuid` (`gen_random_uuid()`), except `audit_log.id`, which is a
 `bigint` identity column for cheap append ordering. `created_at`/`updated_at` are
@@ -467,6 +473,10 @@ value before and after the upgrade.
 | `user_totp`, `user_recovery_codes`, `mfa_challenges` | **Hard delete** | Turning MFA off (by the user or an administrator) deletes the authenticator and codes; the `mfa.disable` audit row is the history. A used recovery code keeps its row (`used_at`) until the codes are replaced. Challenges are deleted when used, after 5 wrong codes, at the next sign-in once expired, and by `prune-audit --scope auth`. |
 | `identity_providers`, `identity_provider_group_mappings` | **Disable** (`is_enabled = false`), hard delete only without accounts | Disabling stops sign-ins through the provider and ends its accounts' sessions. A provider that accounts still belong to cannot be deleted (FK `RESTRICT`, checked by the API first: `409 IN_USE`). Mappings are configuration: replaced as a whole, history in `audit_log`. |
 | `server_keys` | **Never changed by the API** | The API only reads and adds keys. To rotate the OIDC sign-in key, delete its row as the owner role (`DELETE FROM cmdb.server_keys WHERE purpose = 'oidc_state';`) and restart every API process: they generate a new key, and sign-ins in progress end with "expired" once. A restore does the same, since the table is not backed up. |
+| `import_jobs` | **Expire, then hard delete** | The uploaded file and the issue rows (they hold cell values) are deleted 24 h after the job ends or after its last activity, and the job becomes `expired`; the record with its counts stays 90 days after the job ends, next to its `import.commit` audit row. Deleting a job (`DELETE /imports/{id}`) removes it, its file and issues at once and never touches CIs. Deleting a user deletes their unfinished jobs and files and keeps the finished ones with `created_by_id` NULL. |
+| `import_job_files`, `import_job_issues`, `import_idempotency_keys` | **Hard delete** | Transient run data, deleted with the job's file (keys after 24 h). Never backed up. |
+| `import_mappings` | **Hard delete** | Team configuration; `create`, `update` and `delete` are audited with the full definition. |
+| `import_settings` | **Never deleted** | One row; each change is an audited `update`. |
 | `sessions` | **Hard delete** | Logout, disabling, password resets and expiry remove rows; expired rows are purged at each login, and `prune-audit` removes any left 30 days after their expiry. Every session the API ends (not expiry) leaves a `logout` or `session.revoke` row in `audit_log`. |
 
 ## Auditing
@@ -587,14 +597,15 @@ These fields hold it:
 | `sessions` | `ip_address`, `user_agent` |
 | `api_tokens` | `last_used_ip` |
 | `users` | `username`, `display_name`, `email` |
+| `import_job_files`, `import_job_issues.value`, `import_jobs.file_name` | whatever the uploaded spreadsheet holds (owners, device users); deleted 24 h after the job ends and never backed up |
 | `audit_log`, `entity_type = 'users'` and every row's `actor_name` | the same user details, as history |
 
 **Retention policy** (decided in SHAA-54):
 
 | Data | Kept | How it goes |
 | --- | --- | --- |
-| Authentication events (including `mfa.*`) and `token.use` rows in `audit_log` | **180 days** | `shadoucmdb prune-audit --older-than 180d --execute`, run by the operator (scope `auth`, the default) |
-| CI and configuration change history in `audit_log` (`create`, `update`, `delete`, `restore`, `schema_change.refused`) | **Indefinitely** | Only if an operator explicitly runs `prune-audit --scope changes` |
+| Authentication events (including `mfa.*`), `token.use` and `import.report_read` rows in `audit_log` | **180 days** | `shadoucmdb prune-audit --older-than 180d --execute`, run by the operator (scope `auth`, the default) |
+| CI and configuration change history in `audit_log` (`create`, `update`, `delete`, `restore`, `schema_change.refused`, `import.commit`) | **Indefinitely** | Only if an operator explicitly runs `prune-audit --scope changes` |
 | `sessions` rows | Until **30 days after expiry**; revoked sessions are deleted at once | Deleted at sign-in once expired; `prune-audit` (scope `auth`) removes any older than 30 days past expiry |
 | `audit.purge` rows | **Forever** | Never deleted, not even by the purge |
 

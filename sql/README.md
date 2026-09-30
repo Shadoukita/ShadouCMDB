@@ -62,6 +62,12 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   `shadoucmdb_app` (see [`docs/deployment.md`](../docs/deployment.md#database-roles)). The one
   exception is 0016, which moves the fixed CI columns into type tables; it runs as the schema owner,
   a member of `shadoucmdb_app`, so the tables keep their owner.
+- Bulk import stores classes, attributes and relationship types **by key** in `import_mappings.definition`
+  and `import_jobs.mapping`/`class_key` (0029). A migration that renames keys or field references (as
+  0020 did for UI settings) must rewrite those too.
+- A migration that adds a global permission re-creates `permission_profile_global_permissions_valid` with
+  the full list from the latest migration and extends `GlobalPermission::ALL`; the upgrade test of that
+  migration calls `assert_permissions_match` (see `backend/src/db/upgrade_0029.rs`).
 - Adding areas, CI types, fields or relationship types is data, not a migration: do it through the
   API or a starter template (`backend/src/modules/templates/`). The DDL engine creates the matching
   schema, table or column; never create or alter type tables by hand.

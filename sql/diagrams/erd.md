@@ -51,6 +51,11 @@ erDiagram
     ci_classes |o--o{ permission_profile_class_permissions : "class_id (NULL = all classes)"
     users ||--o{ sessions : "user_id"
     ui_settings_versions ||--o| ui_settings : "version (current)"
+    users |o--o{ import_jobs : "created_by_id (SET NULL)"
+    import_jobs ||--o{ import_job_files : "job_id"
+    import_jobs ||--o{ import_job_issues : "job_id"
+    import_jobs ||--o{ import_idempotency_keys : "job_id"
+    users |o--o{ import_mappings : "created_by_id (SET NULL)"
 
     areas {
         uuid id PK
@@ -240,6 +245,47 @@ erDiagram
         text actor_type
         text actor_name
         text comment
+    }
+    import_settings {
+        boolean id PK "always true: one row"
+        boolean enabled "off after install"
+    }
+    import_jobs {
+        uuid id PK
+        uuid created_by_id FK
+        text status
+        text file_name
+        text file_sha256
+        text class_key "by key, no FK"
+        jsonb mapping
+        integer committed_through_row "commit cursor"
+        integer lease_epoch "fencing token"
+        timestamptz expires_at
+    }
+    import_job_files {
+        uuid job_id PK,FK
+        integer seq PK
+        bytea data "at most 1 MiB"
+    }
+    import_job_issues {
+        uuid job_id PK,FK
+        integer seq PK
+        integer row_no
+        text code
+        text value "shortened cell"
+    }
+    import_idempotency_keys {
+        uuid user_id PK,FK
+        text operation PK
+        text key PK
+        uuid job_id FK
+    }
+    import_mappings {
+        uuid id PK
+        text name UK "unique per class_key, lower(name)"
+        text class_key "by key, no FK"
+        jsonb definition
+        integer version
     }
     ui_assets {
         uuid id PK
