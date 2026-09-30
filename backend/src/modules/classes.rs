@@ -12,6 +12,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::areas;
+use super::impact::ImpactDirection;
 use super::items::service as items_service;
 use super::schema_changes::{PurgeRequest, PurgeResult, check_purge};
 use super::simple_resource::{
@@ -1544,6 +1545,8 @@ pub struct RelationshipType {
     pub reverse_label: String,
     /// false for symmetric types such as connected_to
     pub is_directional: bool,
+    #[schema(inline)]
+    pub impact_direction: ImpactDirection,
     pub sort_order: i32,
     pub is_active: bool,
     #[serde(serialize_with = "ts::serialize")]
@@ -1559,6 +1562,8 @@ pub struct RelationshipTypeCreate {
     key: String,
     #[schema(nullable = false)]
     is_directional: Option<bool>,
+    #[schema(nullable = false, inline)]
+    impact_direction: Option<ImpactDirection>,
     #[schema(schema_with = name_schema)]
     #[serde(deserialize_with = "trimmed")]
     name: String,
@@ -1597,6 +1602,8 @@ pub struct RelationshipTypeUpdate {
     sort_order: Option<i32>,
     #[schema(nullable = false)]
     is_active: Option<bool>,
+    #[schema(nullable = false, inline)]
+    impact_direction: Option<ImpactDirection>,
 }
 
 impl Writable for RelationshipTypeCreate {
@@ -1604,6 +1611,7 @@ impl Writable for RelationshipTypeCreate {
         let mut c = ColumnSet::default();
         c.opt("key", Some(self.key.clone()))
             .opt("is_directional", self.is_directional)
+            .opt("impact_direction", self.impact_direction.map(|d| d.as_str().to_owned()))
             .opt("name", Some(self.name.clone()))
             .opt("description", self.description.clone().map(Some))
             .opt("forward_label", Some(self.forward_label.clone()))
@@ -1613,7 +1621,21 @@ impl Writable for RelationshipTypeCreate {
         c
     }
 }
-impl Check for RelationshipTypeCreate {}
+impl Check for RelationshipTypeCreate {
+    fn check(&self) -> Vec<FieldError> {
+        match (self.is_directional, self.impact_direction) {
+            (Some(false), Some(d)) if !d.allowed_without_direction() => vec![FieldError {
+                location: FieldLocation::Body,
+                field: "impactDirection".into(),
+                message: "A non-directional type has no source or target side: impact can only flow both ways or \
+                          not at all"
+                    .into(),
+                code: "invalid".into(),
+            }],
+            _ => Vec::new(),
+        }
+    }
+}
 
 impl Writable for RelationshipTypeUpdate {
     fn columns(&self) -> ColumnSet {
@@ -1623,7 +1645,8 @@ impl Writable for RelationshipTypeUpdate {
             .opt("forward_label", self.forward_label.clone())
             .opt("reverse_label", self.reverse_label.clone())
             .opt("sort_order", self.sort_order)
-            .opt("is_active", self.is_active);
+            .opt("is_active", self.is_active)
+            .opt("impact_direction", self.impact_direction.map(|d| d.as_str().to_owned()));
         c
     }
 }
@@ -1712,7 +1735,7 @@ impl Resource for RelationshipTypes {
     const TAG: &'static str = "Relationship types";
     const SINGULAR: &'static str = "relationshipType";
     const PLURAL: &'static str = "relationshipTypes";
-    const COLUMNS: &'static str = "id, key, name, description, forward_label, reverse_label, is_directional, sort_order, is_active, created_at, updated_at";
+    const COLUMNS: &'static str = "id, key, name, description, forward_label, reverse_label, is_directional, impact_direction, sort_order, is_active, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "forward_label", "reverse_label"];
     const USAGE: &'static [Usage] = &[
         Usage {

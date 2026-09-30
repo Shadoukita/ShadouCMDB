@@ -283,6 +283,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             sort_order: l.sort_order,
             is_active: l.is_active,
             parent: l.parent_list_id.and_then(|id| list_key.get(&id).cloned()),
+            system_role: l.system_role,
             values: values
                 .iter()
                 .filter(|v| v.list_id == l.id)
@@ -358,6 +359,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             forward_label: t.forward_label.clone(),
             reverse_label: t.reverse_label.clone(),
             is_directional: t.is_directional,
+            impact_direction: Some(t.impact_direction),
             sort_order: t.sort_order,
             is_active: t.is_active,
         })
@@ -755,6 +757,14 @@ fn validate(
                 "Cannot change isDirectional of an existing relationship type",
             );
         }
+        if !t.is_directional && t.impact_direction.is_some_and(|d| !d.allowed_without_direction()) {
+            problem(
+                &mut e,
+                format!("dataModel.relationshipTypes.{i}.impactDirection"),
+                "invalid",
+                "A non-directional type has no source or target side: impact can only flow both ways or not at all",
+            );
+        }
     }
     for (i, r) in dm.relationship_rules.iter().enumerate() {
         let p = format!("dataModel.relationshipRules.{i}");
@@ -1086,7 +1096,7 @@ async fn run(
     if file.format_version < 3 {
         file = keep_current_parents(&file, &snap.file);
     }
-    let file = &file;
+    let file = &keep_current_settings(file, &snap.file);
     let decoded = validate(file, &snap, ctx, legacy_problems, &mut warnings)?;
     let Snapshot { file: current, ids, .. } = snap;
     let cur_dm = current.data_model.unwrap_or_default();
@@ -1380,6 +1390,7 @@ async fn run(
                 .opt("description", Some(t.description.clone()))
                 .opt("forward_label", Some(t.forward_label.clone()))
                 .opt("reverse_label", Some(t.reverse_label.clone()))
+                .opt("impact_direction", t.impact_direction.map(|d| d.as_str().to_owned()))
                 .opt("sort_order", Some(t.sort_order))
                 .opt("is_active", Some(t.is_active));
             let mut create = c.clone();
@@ -1618,6 +1629,30 @@ fn keep_current_parents(file: &ConfigFile, current: &ConfigFile) -> ConfigFile {
         for a in &mut dm.attributes {
             a.parent_attribute =
                 attrs.get(&(a.class.as_str(), a.key.as_str())).and_then(|o| o.parent_attribute.clone());
+        }
+    }
+    file
+}
+
+/// What a file leaves out keeps its current value: the impact direction of an
+/// existing relationship type (files before version 4, or a hand-written
+/// one), which a new type gets as none. The system role of a list is never
+/// imported, so the file's is replaced with the current one.
+fn keep_current_settings(mut file: ConfigFile, current: &ConfigFile) -> ConfigFile {
+    if let Some(dm) = file.data_model.as_mut() {
+        let cur: HashMap<&str, &RelationshipTypeSpec> =
+            current.data_model.iter().flat_map(|d| d.relationship_types.iter()).map(|t| (t.key.as_str(), t)).collect();
+        for t in &mut dm.relationship_types {
+            if t.impact_direction.is_none() {
+                t.impact_direction = Some(cur.get(t.key.as_str()).and_then(|o| o.impact_direction).unwrap_or_default());
+            }
+        }
+    }
+    if let Some(lk) = file.lookups.as_mut() {
+        let cur: HashMap<&str, &LookupListSpec> =
+            current.lookups.iter().flat_map(|l| l.lists.iter()).map(|l| (l.key.as_str(), l)).collect();
+        for l in &mut lk.lists {
+            l.system_role = cur.get(l.key.as_str()).and_then(|o| o.system_role);
         }
     }
     file
@@ -2430,6 +2465,8 @@ mod tests {
             .unwrap()
             .lists
             .iter()
+            // The criticality system list (migration 0030) is on every install.
+            .filter(|l| l.system_role.is_none())
             .flat_map(|l| l.values.iter().map(|v| (l.key.clone(), v.key.clone(), v.description.clone())))
             .collect();
         assert_eq!(
@@ -2461,5 +2498,89 @@ mod tests {
             "{fields:?}"
         );
         db.drop().await;
+    }
+
+    /// Format 4: impactDirection and the criticality list round-trip; a file
+    /// before version 4 leaves the impact direction as it is; a dry run shows
+    /// a change; a non-directional type is refused a one-way direction.
+    #[tokio::test]
+    async fn impact_directions_round_trip() {
+        use crate::modules::impact::ImpactDirection;
+        const TEST: &str = "impact_directions_round_trip";
+        let Some(a) = scratch::database(TEST).await else { return };
+        let Some(b) = scratch::database(TEST).await else {
+            a.drop().await;
+            return;
+        };
+        let ctx = RequestContext::system("test", "test");
+        for db in [&a, &b] {
+            crate::seed::seed_system_rows(&db.pool).await.unwrap();
+            crate::modules::templates::install_by_key(&db.pool, &ctx, "it_infrastructure").await.unwrap();
+        }
+        sqlx::query("UPDATE relationship_types SET impact_direction = 'both' WHERE key = 'connected_to'")
+            .execute(&a.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE lookup_list_values SET name = 'Mission critical' WHERE key = 'critical'")
+            .execute(&a.pool)
+            .await
+            .unwrap();
+
+        let exported = export(&a.pool, &ctx).await.unwrap();
+        assert_eq!(exported.format_version, 4);
+        let direction = |f: &ConfigFile, key: &str| {
+            f.data_model.as_ref().unwrap().relationship_types.iter().find(|t| t.key == key).unwrap().impact_direction
+        };
+        assert_eq!(direction(&exported, "runs_on"), Some(ImpactDirection::TargetToSource));
+        assert_eq!(direction(&exported, "connected_to"), Some(ImpactDirection::Both));
+        let lists = &exported.lookups.as_ref().unwrap().lists;
+        let criticality = lists.iter().find(|l| l.key == "criticality").unwrap();
+        assert_eq!(criticality.system_role, Some(crate::modules::lookups::SystemRole::Criticality));
+
+        // The dry run shows the change, the import applies it, and the target then exports the same file.
+        let result = import(&b.pool, &ctx, &exported, ImportMode::DryRun).await.unwrap();
+        let changed: Vec<(&str, &str, Vec<&str>)> = result
+            .changes
+            .iter()
+            .map(|c| (c.section.as_str(), c.key.as_str(), c.fields.iter().map(|f| f.field.as_str()).collect()))
+            .collect();
+        assert!(changed.contains(&("relationshipTypes", "connected_to", vec!["impactDirection"])), "{changed:?}");
+        import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
+        let reexported = export(&b.pool, &ctx).await.unwrap();
+        assert_eq!(
+            serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
+            serde_json::to_string_pretty(&comparable(&reexported)).unwrap()
+        );
+        let role: Option<String> = sqlx::query_scalar("SELECT system_role FROM lookup_lists WHERE key = 'criticality'")
+            .fetch_one(&b.pool)
+            .await
+            .unwrap();
+        assert_eq!(role.as_deref(), Some("criticality"));
+
+        // A version 3 file (no impactDirection, no systemRole) changes neither.
+        let mut v3 = ConfigFile { format_version: 3, ..exported.clone() };
+        for t in &mut v3.data_model.as_mut().unwrap().relationship_types {
+            t.impact_direction = None;
+        }
+        for l in &mut v3.lookups.as_mut().unwrap().lists {
+            l.system_role = None;
+        }
+        let result = import(&b.pool, &ctx, &v3, ImportMode::DryRun).await.unwrap();
+        assert!(result.changes.is_empty(), "{:?}", result.changes);
+        import(&b.pool, &ctx, &v3, ImportMode::Apply).await.unwrap();
+        assert_eq!(direction(&export(&b.pool, &ctx).await.unwrap(), "connected_to"), Some(ImpactDirection::Both));
+
+        // One-way impact on a non-directional type is refused.
+        let mut bad = exported.clone();
+        for t in &mut bad.data_model.as_mut().unwrap().relationship_types {
+            if t.key == "connected_to" {
+                t.impact_direction = Some(ImpactDirection::SourceToTarget);
+            }
+        }
+        let err = import(&b.pool, &ctx, &bad, ImportMode::DryRun).await.unwrap_err();
+        let fields: Vec<String> = err.details.unwrap().into_iter().map(|d| d.field).collect();
+        assert!(fields.iter().any(|f| f.ends_with(".impactDirection")), "{fields:?}");
+        a.drop().await;
+        b.drop().await;
     }
 }

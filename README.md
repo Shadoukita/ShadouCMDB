@@ -85,23 +85,21 @@ the same flow for a source checkout.
    shadoucmdb migrate
    ```
 
-   Expected output on an empty database:
+   Expected output on an empty database (`<N>` is the number of migrations shipped in the binary,
+   one per file in [`sql/migrations/`](sql/migrations/); it grows with new releases):
 
    ```
    Connected to database "shadoucmdb" (PostgreSQL 18.1), ssl=verify-full
-   Migrations: 10 in binary, 0 applied, 10 pending
+   Migrations: <N> in binary, 0 applied, <N> pending
      applied 0000_extensions
      applied 0001_core_schema
-     applied 0002_integrity_triggers
-     applied 0003_users_and_permission_profiles
-     applied 0004_data_model_admin
-     applied 0005_ui_settings
-     applied 0006_auth_audit
-     applied 0007_audit_retention
-     applied 0008_cmdb_schema_and_areas
-     applied 0009_type_tables
-   Database is at migration 10/10
+     …
+     applied <latest migration>
+   Database is at migration <N>/<N>
    ```
+
+   `migrate` can also print a `Data model: … statements applied` line when it brings the reporting
+   views and grants in line with the data model.
 
    Re-running is safe; it reports `nothing to do`. Applied migrations are tracked in `_sqlx_migrations`.
    A dev database that was migrated by the retired Node/Drizzle runner needs a one-time

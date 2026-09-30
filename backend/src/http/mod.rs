@@ -57,6 +57,8 @@ pub struct AppState {
     pub capacity: Capacity,
     /// The last `/readyz` check, reused briefly (GH#242).
     pub readiness: Arc<crate::modules::health::ReadinessCache>,
+    /// Impact analysis limits and the analyses in progress (`IMPACT_*`).
+    pub impact: Arc<crate::modules::impact::ImpactState>,
     /// Bulk import limits (`IMPORT_*`).
     pub imports: Arc<crate::config::ImportConfig>,
 }
@@ -83,6 +85,7 @@ impl AppState {
             sealed: Arc::default(),
             capacity: Capacity::new(512, Duration::from_secs(10)),
             readiness: Arc::default(),
+            impact: Arc::default(),
             imports: Arc::default(),
         }
     }
@@ -110,6 +113,11 @@ impl AppState {
 
     pub fn limited(mut self, http: &HttpConfig) -> Self {
         self.capacity = Capacity::new(http.max_concurrent_requests, http.header_read_timeout);
+        self
+    }
+
+    pub fn with_impact(mut self, impact: crate::config::ImpactConfig) -> Self {
+        self.impact = Arc::new(crate::modules::impact::ImpactState::new(impact));
         self
     }
 }
@@ -576,6 +584,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     let state = AppState::new(pool.clone(), cfg.auth.clone(), keyring)
         .capturing(&cfg.audit)
         .limited(&cfg.http)
+        .with_impact(cfg.impact)
         .importing(&cfg.imports);
     // Before listening: rows under a key that is not configured stop the server
     // here, and rows not encrypted yet are encrypted. An unreachable or
@@ -797,6 +806,7 @@ mod tests {
             auth: auth.clone(),
             audit: AuditConfig::default(),
             encryption: Default::default(),
+            impact: Default::default(),
             imports: Default::default(),
         };
         configure(&mut cfg);

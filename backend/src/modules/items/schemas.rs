@@ -49,6 +49,21 @@ pub struct ConfigurationItemSummary {
     #[serde(serialize_with = "ts_opt::serialize")]
     #[schema(required = true)]
     pub deleted_at: Option<DateTime<Utc>>,
+    /// How critical the CI is (a value of the criticality lookup list); null when not set
+    #[schema(required = true)]
+    pub criticality: Option<CriticalityRef>,
+}
+
+/// A CI's criticality: a value of the system lookup list `criticality`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CriticalityRef {
+    /// The lookup list value id (send it as `criticalityValueId`)
+    pub id: Uuid,
+    pub key: String,
+    pub name: String,
+    /// Position in the criticality list (its sort order): 1 is the most critical
+    pub rank: i64,
 }
 
 /// The summary's object schema with extra properties, for types that
@@ -74,6 +89,7 @@ fn summary_with(extra: Vec<(&str, RefOr<Schema>, Option<&str>)>) -> RefOr<Schema
 
 fn summary_nested(schemas: &mut Vec<(String, RefOr<Schema>)>) {
     schemas.push((LookupRef::name().into_owned(), LookupRef::schema()));
+    schemas.push((CriticalityRef::name().into_owned(), CriticalityRef::schema()));
 }
 
 /// The referenced CI of a reference attribute; `name` is its label. When the
@@ -330,6 +346,9 @@ pub struct CreateItemBody {
     #[schema(schema_with = create_attributes_schema)]
     #[serde(default)]
     pub attributes: Option<Map<String, Value>>,
+    #[schema(schema_with = criticality_schema)]
+    #[serde(default)]
+    pub criticality_value_id: Option<Uuid>,
 }
 impl Check for CreateItemBody {
     fn check(&self) -> Vec<FieldError> {
@@ -347,6 +366,17 @@ fn validity_errors(from: Option<DateTime<Utc>>, until: Option<DateTime<Utc>>) ->
         }],
         _ => Vec::new(),
     }
+}
+
+fn criticality_schema() -> Schema {
+    AnyOfBuilder::new()
+        .item(schemas::uuid_builder())
+        .item(ObjectBuilder::new().schema_type(Type::Null))
+        .description(Some(
+            "A value of the criticality lookup list (GET /api/v1/lookup-lists?systemRole=criticality); null: not set. \
+             A retired value can be kept but not newly set",
+        ))
+        .into()
 }
 
 fn version_schema() -> Schema {
@@ -380,6 +410,9 @@ pub struct UpdateItemBody {
     #[schema(schema_with = update_attributes_schema)]
     #[serde(default)]
     pub attributes: Option<Map<String, Value>>,
+    #[schema(schema_with = criticality_schema)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    pub criticality_value_id: Option<Option<Uuid>>,
     #[schema(schema_with = version_schema)]
     pub version: Option<i32>,
 }
@@ -390,7 +423,8 @@ impl Check for UpdateItemBody {
             || self.ident.is_some()
             || self.valid_from.is_some()
             || self.valid_until.is_some()
-            || self.attributes.is_some();
+            || self.attributes.is_some()
+            || self.criticality_value_id.is_some();
         if !any {
             return vec![FieldError {
                 location: FieldLocation::Body,
@@ -484,6 +518,10 @@ fn active_schema() -> Schema {
         .into()
 }
 
+fn criticality_filter_schema() -> Schema {
+    schemas::uuid_list_described("Criticality value ids, comma-separated: CIs holding one of them")
+}
+
 fn deleted_items_schema() -> Schema {
     schemas::deleted_schema("Soft-deleted CIs: exclude (default), include, or only")
 }
@@ -495,6 +533,7 @@ pub trait ItemFilterQuery {
     fn active(&self) -> ActiveQuery;
     fn lookup_value_id(&self) -> Option<&UuidList>;
     fn ip_within(&self) -> Option<&str>;
+    fn criticality_value_id(&self) -> Option<&UuidList>;
     fn deleted(&self) -> Deleted;
 }
 
@@ -515,6 +554,9 @@ macro_rules! item_filters {
             }
             fn ip_within(&self) -> Option<&str> {
                 self.ip_within.as_deref()
+            }
+            fn criticality_value_id(&self) -> Option<&UuidList> {
+                self.criticality_value_id.as_ref()
             }
             fn deleted(&self) -> Deleted {
                 self.deleted
@@ -548,6 +590,8 @@ pub struct ListItemsQuery {
     pub lookup_value_id: Option<UuidList>,
     #[param(schema_with = ip_within_schema)]
     pub ip_within: Option<String>,
+    #[param(schema_with = criticality_filter_schema)]
+    pub criticality_value_id: Option<UuidList>,
     #[param(required = false, schema_with = deleted_items_schema)]
     pub deleted: Deleted,
 }
@@ -578,6 +622,8 @@ pub struct SearchQuery {
     pub lookup_value_id: Option<UuidList>,
     #[param(schema_with = ip_within_schema)]
     pub ip_within: Option<String>,
+    #[param(schema_with = criticality_filter_schema)]
+    pub criticality_value_id: Option<UuidList>,
     #[param(required = false, schema_with = deleted_items_schema)]
     pub deleted: Deleted,
 }

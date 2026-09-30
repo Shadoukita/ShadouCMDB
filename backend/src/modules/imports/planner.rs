@@ -1102,6 +1102,7 @@ fn plan_row(
                 valid_from,
                 valid_until: valid_until.flatten(),
                 attributes: Some(attributes),
+                criticality_value_id: None,
             };
             let class_defs = defs.get(&r.class_id).map(Vec::as_slice).unwrap_or_default();
             match plan::plan_create(c.ctx, model, class_defs, &body, &*resolver) {
@@ -1175,6 +1176,7 @@ fn plan_row(
                 valid_from,
                 valid_until,
                 attributes: if attributes.is_empty() { None } else { Some(attributes) },
+                criticality_value_id: None,
                 version: None,
             };
             let class_defs = defs.get(&class).map(Vec::as_slice).unwrap_or_default();

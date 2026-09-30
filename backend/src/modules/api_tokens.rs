@@ -642,6 +642,7 @@ pub(crate) mod tests {
             auth: auth.clone(),
             audit: Default::default(),
             encryption: Default::default(),
+            impact: Default::default(),
             imports: imports.clone(),
         };
         let state = AppState::new(pool, auth, crate::secrets::Keyring::for_tests()).importing(&imports);

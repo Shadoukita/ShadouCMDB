@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use super::classes::{AttributeDefinition, AttributeDefinitions};
 use super::simple_resource::{
-    self as simple, BoxFuture, LOOKUP_VALUE_SPANS, ListQuery, Resource, Usage, Writable, bool_filter, non_empty,
+    self as simple, BoxFuture, CRITICALITY_VALUE_SPANS, LOOKUP_VALUE_SPANS, ListQuery, Resource, Usage, Writable,
+    bool_filter, non_empty,
 };
 use crate::api::context::{Count, RequestContext};
 use crate::api::route::{Check, Route};
@@ -800,6 +801,18 @@ pub struct LookupList {
     /// The list this one depends on (e.g. "Model" depends on "Manufacturer"): each value names its parent value
     #[schema(required = true)]
     pub parent_list_id: Option<Uuid>,
+    /// Set on a system list, which the application itself uses and which cannot be deleted: `criticality` (the
+    /// values of every CI's criticality). Its values can be renamed, reordered, added and retired like any other.
+    #[schema(required = true, inline)]
+    pub system_role: Option<SystemRole>,
+}
+
+/// What a system lookup list is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum SystemRole {
+    Criticality,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -892,6 +905,9 @@ pub struct LookupListList {
     is_active: Option<QueryBool>,
     #[param(schema_with = list_parent_schema)]
     parent_list_id: Option<IdOrNone>,
+    /// Only the system list with this role
+    #[param(inline)]
+    system_role: Option<SystemRole>,
 }
 paged!(LookupListList);
 
@@ -910,6 +926,9 @@ impl ListQuery for LookupListList {
     fn filter(&self, w: &mut Where<'_>) {
         bool_filter(w, "is_active", self.is_active);
         id_or_none_filter(w, "parent_list_id", self.parent_list_id);
+        if let Some(role) = self.system_role {
+            w.and().push("system_role = ").push_bind(role);
+        }
     }
 }
 
@@ -937,9 +956,9 @@ impl Resource for LookupLists {
     const SINGULAR: &'static str = "lookupList";
     const PLURAL: &'static str = "lookupLists";
     const COLUMNS: &'static str =
-        "id, key, name, description, sort_order, is_active, created_at, updated_at, parent_list_id";
+        "id, key, name, description, sort_order, is_active, created_at, updated_at, parent_list_id, system_role";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
-    const DELETE_DESCRIPTION: &'static str = "Hard delete of the list and its values, allowed only while no attribute definition uses the list and no other list depends on it (409 IN_USE otherwise). Retire it with `PATCH {\"isActive\": false}` instead.";
+    const DELETE_DESCRIPTION: &'static str = "Hard delete of the list and its values, allowed only while no attribute definition uses the list, no other list depends on it and it is not a system list (409 IN_USE otherwise). Retire it with `PATCH {\"isActive\": false}` instead.";
     const UPDATE_DESCRIPTION: &'static str = "`parentListId` makes the list depend on another list (no cycles). Setting, changing or clearing it unassigns every value's `parentValueId` and every bound field's `parentAttributeId` in the same transaction (each change audited): reassign them afterwards with `PATCH /api/v1/lookup-list-values/{id}` and `PATCH /api/v1/attribute-definitions/{id}`. Until a value is assigned, it cannot be chosen on a field that has a parent field.";
     const USAGE: &'static [Usage] = &[
         Usage {
@@ -953,6 +972,13 @@ impl Resource for LookupLists {
             kind: "childLists",
             label: "lists that depend on it",
             sql: "SELECT count(*) FROM lookup_lists WHERE parent_list_id = $1",
+            spans: None,
+            blocking: true,
+        },
+        Usage {
+            kind: "systemRole",
+            label: "system role (a system list cannot be deleted)",
+            sql: "SELECT count(*) FROM lookup_lists WHERE id = $1 AND system_role IS NOT NULL",
             spans: None,
             blocking: true,
         },
@@ -1243,6 +1269,13 @@ impl Resource for LookupListValues {
             blocking: true,
         },
         Usage {
+            kind: "criticality",
+            label: "configuration items with this criticality",
+            sql: "SELECT count(*) FROM configuration_items WHERE criticality_value_id = $1",
+            spans: Some(CRITICALITY_VALUE_SPANS),
+            blocking: true,
+        },
+        Usage {
             kind: "childValues",
             label: "values of dependent lists that belong to it",
             sql: "SELECT count(*) FROM lookup_list_values WHERE parent_value_id = $1",
@@ -1462,6 +1495,20 @@ mod tests {
         assert!(report.in_use);
         let values = report.data.iter().find(|u| u.kind == "attributeValues").unwrap();
         assert_eq!((values.count.exact(), values.withheld), (None, true));
+        // No CI can hold a model as its criticality: that count is told, not withheld.
+        let criticality = report.data.iter().find(|u| u.kind == "criticality").unwrap();
+        assert_eq!((criticality.count.exact(), criticality.withheld), (Some(0), false));
+        // A value of the system list Criticality can be on a CI of any class.
+        let high: Uuid = sqlx::query_scalar(
+            "SELECT v.id FROM lookup_list_values v JOIN lookup_lists l ON l.id = v.list_id
+             WHERE l.system_role = 'criticality' AND v.key = 'high'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let report = simple::usage::<LookupListValues>(pool, &restricted, high).await.unwrap();
+        let criticality = report.data.iter().find(|u| u.kind == "criticality").unwrap();
+        assert_eq!((criticality.count.exact(), criticality.withheld), (None, true));
         let report = simple::usage::<LookupListValues>(pool, &viewer, rocket.id).await.unwrap();
         let values = report.data.iter().find(|u| u.kind == "attributeValues").unwrap();
         assert_eq!((values.count.exact(), values.withheld), (Some(1), false));

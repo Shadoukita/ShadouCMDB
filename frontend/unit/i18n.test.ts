@@ -1,0 +1,113 @@
+// Unit tests for the message catalog (SHAA-927 §5.9, §7.4 item 13). Run: npm run test:unit -w frontend
+import assert from "node:assert/strict";
+import { afterEach, describe, test } from "node:test";
+import { currentLocale, parseMessage, setLocaleForTests, t } from "../src/i18n/index";
+import { de } from "../src/i18n/de";
+import { en } from "../src/i18n/en";
+
+afterEach(() => setLocaleForTests(null));
+
+describe("catalogs", () => {
+  test("de has exactly the keys of en", () => {
+    assert.deepEqual(Object.keys(de).sort(), Object.keys(en).sort());
+  });
+  test("every message parses in both languages and uses the same parameters", () => {
+    type Tree = ReturnType<typeof parseMessage>;
+    const walk = (nodes: Tree, out: Set<string>): Set<string> => {
+      for (const node of nodes) {
+        if (typeof node === "string" || node.kind === "hash") continue;
+        out.add(node.name);
+        if (node.kind === "plural") for (const branch of node.branches.values()) walk(branch, out);
+      }
+      return out;
+    };
+    const names = (src: string) => [...walk(parseMessage(src), new Set())].sort();
+    for (const key of Object.keys(en) as (keyof typeof en)[]) {
+      assert.doesNotThrow(() => parseMessage(en[key]), key);
+      assert.doesNotThrow(() => parseMessage(de[key]), key);
+      assert.deepEqual(names(de[key]), names(en[key]), key);
+    }
+  });
+  test("malformed messages are rejected", () => {
+    assert.throws(() => parseMessage("{n, plural, one {# x}}"), /other/);
+    assert.throws(() => parseMessage("{n, select, a {x} other {y}}"), /unsupported/);
+    assert.throws(() => parseMessage("Open {name"), /unexpected end/);
+    assert.throws(() => parseMessage("stray }"), /unmatched/);
+  });
+});
+
+describe("locale", () => {
+  test("the UI is English by default, with no setting to change it", () => {
+    assert.equal(currentLocale(), "en");
+    assert.equal(t("services.nav"), "Business services");
+  });
+  test("the test-only override forces German", () => {
+    setLocaleForTests("de");
+    assert.equal(t("services.nav"), "Business-Services");
+    setLocaleForTests(null);
+    assert.equal(t("services.nav"), "Business services");
+  });
+  test("the Playwright hook on globalThis forces German", () => {
+    const g = globalThis as { __shadoucmdbTestLocale?: string };
+    g.__shadoucmdbTestLocale = "de";
+    try {
+      assert.equal(t("common.retry"), "Erneut versuchen");
+      g.__shadoucmdbTestLocale = "fr";
+      assert.equal(t("common.retry"), "Retry");
+    } finally {
+      delete g.__shadoucmdbTestLocale;
+    }
+  });
+});
+
+describe("parameters and plurals", () => {
+  test("simple parameters", () => {
+    assert.equal(t("services.owners.remove", { name: "Ops team", role: "Technical owners" }), "Remove Ops team as Technical owners");
+    assert.equal(t("services.tab.members", { n: 0 }), "Members (0)");
+  });
+  test("English plurals", () => {
+    assert.equal(t("services.picker.submit", { n: 1 }), "Add 1 member");
+    assert.equal(t("services.picker.submit", { n: 3 }), "Add 3 members");
+    assert.equal(t("services.picker.submit", { n: 0 }), "Add 0 members");
+    assert.equal(t("services.picker.submit", { n: 1200 }), "Add 1,200 members");
+    assert.equal(
+      t("services.members.removeConfirm", { n: 2, service: "Payroll" }),
+      "Remove 2 members from Payroll? The CIs themselves are not deleted.",
+    );
+    assert.equal(
+      t("services.delete.nested", { n: 1 }),
+      "It is also part of 1 other business service; it is removed from it.",
+    );
+    assert.equal(
+      t("services.delete.nested", { n: 4 }),
+      "It is also part of 4 other business services; it is removed from them.",
+    );
+  });
+  test("German plurals", () => {
+    setLocaleForTests("de");
+    assert.equal(t("services.picker.submit", { n: 1 }), "1 Mitglied hinzufügen");
+    assert.equal(t("services.picker.submit", { n: 5 }), "5 Mitglieder hinzufügen");
+    assert.equal(t("services.picker.added", { n: 1200 }), "1.200 Mitglieder hinzugefügt.");
+    assert.equal(
+      t("services.delete.body", { n: 1 }),
+      "Seine 1 Mitgliedschaft wird entfernt. Die Mitglieds-CIs selbst werden nicht gelöscht.",
+    );
+    assert.equal(
+      t("groups.delete.body", { n: 2 }),
+      "Sie ist für 2 Business-Services verantwortlich und wird dort überall als Verantwortliche entfernt.",
+    );
+  });
+  test("a missing parameter stays visible instead of rendering undefined", () => {
+    assert.equal(t("services.picker.title"), "Add members to {service}");
+    assert.equal(t("services.owners.remove", { name: "Ops team" }), "Remove Ops team as {role}");
+    assert.equal(t("services.partOf.via", { service: null }), "via {service}");
+  });
+  test("a missing or non-numeric plural count falls back to `other` and keeps the placeholder", () => {
+    assert.equal(t("services.picker.submit"), "Add {n} members");
+    assert.equal(t("services.picker.submit", { n: "three" }), "Add {n} members");
+    assert.equal(
+      t("services.members.removeConfirm", { service: "Payroll" }),
+      "Remove {n} members from Payroll? The CIs themselves are not deleted.",
+    );
+  });
+});

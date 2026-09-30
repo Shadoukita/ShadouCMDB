@@ -577,6 +577,44 @@ async function main() {
   );
   await get(`/api/v1/configuration-items/${server.id}/graph?depth=9`, 400);
 
+  // --- Impact analysis ----------------------------------------------------------
+  console.log('\n# Impact analysis');
+  const impactSettings = (await get('/api/v1/settings/impact')).json;
+  check(impactSettings.defaultDepth <= impactSettings.maxDepth && impactSettings.defaultMaxNodes <= impactSettings.maxNodesLimit, 'impact settings');
+  // A fresh install's starter types propagate impact (target to source); an edited instance may differ.
+  const propagates = async (id: string) => (await get(`/api/v1/relationship-types/${id}`)).json.impactDirection === 'target_to_source';
+  const starterImpact = (await propagates(runsOn)) && (await propagates(dependsOn));
+  const down = (await get(`/api/v1/configuration-items/${server.id}/impact?depth=2`)).json;
+  const up = (await get(`/api/v1/configuration-items/${app.id}/impact?direction=upstream&depth=1`)).json;
+  const both = (await get(`/api/v1/configuration-items/${database.id}/impact?direction=both&depth=2&includeInactive=false&maxNodes=50`)).json;
+  const ids = (a: Json) => a.items.map((i: Json) => i.id);
+  if (starterImpact) {
+    check(
+      ids(down).includes(app.id) && ids(down).includes(database.id) &&
+        down.items.some((i: Json) => i.id === app.id && i.hops === 1 && i.via.parentId === server.id && i.via.relationshipType.key === 'runs_on'),
+      'a failing server affects the application and the database (downstream)',
+    );
+    check(ids(up).includes(server.id) && ids(up).includes(database.id), 'the application depends on the server and the database (upstream)');
+    check(both.items.some((i: Json) => i.id === app.id && i.directions.includes('downstream')), 'both directions');
+  } else {
+    console.log('  (runs_on / depends_on do not propagate impact here: semantics not checked)');
+  }
+  check(!down.items.some((i: Json) => i.id === server.id) && down.visibility === 'all_classes' && !down.truncated, 'the root is not listed; nothing hidden or truncated');
+  await get(`/api/v1/configuration-items/${server.id}/impact?depth=0`, 400);
+  await get(`/api/v1/configuration-items/${server.id}/impact?relationshipTypeId=00000000-0000-4000-8000-000000000000`, 400);
+  await get(`/api/v1/configuration-items/00000000-0000-4000-8000-000000000000/impact`, 404);
+  // Exported from the database: the export row joins that CI's history (the server's is checked below).
+  const csv = await get(`/api/v1/configuration-items/${database.id}/impact/export?direction=both&depth=2`);
+  const csvLines = new TextDecoder().decode(csv.bytes).split('\r\n');
+  check(
+    csv.headers.get('content-type') === 'text/csv; charset=utf-8' && csv.headers.get('cache-control') === 'no-store' &&
+      /^attachment; filename="impact-.+-both-\d{8}-\d{4}\.csv"$/.test(csv.headers.get('content-disposition') ?? '') &&
+      csvLines[0]!.startsWith('"# Impact analysis of ') && csvLines[1]!.startsWith('"ci_id","ident","name","class"'),
+    'impact analysis CSV export',
+  );
+  const exportRows = (await get(`/api/v1/audit-log?action=export&entityId=${database.id}`)).json;
+  check(exportRows.data.length === 1 && exportRows.data[0].newValue.kind === 'impact', 'the CSV export is audited');
+
   // --- Search -------------------------------------------------------------------
   console.log('\n# Search');
   const s1 = (await get(`/api/v1/search?q=smoke-srv-${RUN}.example`)).json;
@@ -840,6 +878,9 @@ async function permissions(x: Json) {
     const g = (await get(`/api/v1/configuration-items/${server.id}/graph?depth=2`)).json;
     check(g.nodes.every((n: Json) => n.classId === serverClass) && g.edges.length === 0, 'graph leaves out classes the user may not view');
     await get(`/api/v1/configuration-items/${app.id}/graph`, 404);
+    const impact = (await get(`/api/v1/configuration-items/${server.id}/impact?direction=both&depth=3`)).json;
+    check(impact.visibility === 'restricted' && impact.items.every((i: Json) => i.classId === serverClass), 'impact analysis leaves out classes the user may not view');
+    await get(`/api/v1/configuration-items/${app.id}/impact`, 404);
     const found = (await get(`/api/v1/search?q=smoke-`)).json;
     check(found.data.every((h: Json) => h.item.classId === serverClass), 'search only returns classes the user may view');
     const edges = (await get(`/api/v1/relationships?ciId=${app.id}`)).json;

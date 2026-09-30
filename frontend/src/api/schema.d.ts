@@ -435,6 +435,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/configuration-items/{id}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Impact analysis: the CIs affected by this CI (downstream) or that it depends on (upstream)
+         * @description Breadth-first traversal over live relationships whose type propagates impact (`impactDirection` on the relationship type). Downstream follows impact the way it flows, upstream against it; `both` runs the two walks separately. Each CI appears once, at its shortest hop distance, with the last hop of that path (`via`); `via` chains resolve inside `items` plus the root. Bounded by `depth`, `maxNodes`, an edge budget of 5 × maxNodes and IMPACT_TIMEOUT_MS: an analysis stopped by a bound answers 200 with `truncated` and `truncatedReason`. Not paginated: the result is bounded (at most IMPACT_MAX_NODES items). Needs view on the CI's class (404 otherwise, as for a missing CI). CIs of classes the caller may not view are neither returned, counted nor traversed: a CI reachable only through one is left out, and `visibility` says `restricted` whenever the caller's profile limits the classes they may view. 429 RATE_LIMITED when the caller already runs IMPACT_MAX_CONCURRENT_PER_USER analyses, 503 SERVER_BUSY when the server runs IMPACT_MAX_CONCURRENT.
+         */
+        get: operations["getConfigurationItemImpact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/configuration-items/{id}/impact/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Impact analysis as CSV
+         * @description The same analysis as getConfigurationItemImpact (same parameters, limits and visibility) as a CSV file (`Content-Disposition: attachment`). Every field is quoted; a value starting with =, +, -, @, a tab or a line break is prefixed with ' so spreadsheets do not run it as a formula. The first row is a comment with the root, the parameters, whether the result was truncated and the visibility note; then the columns ci_id, ident, name, class, criticality, direction, hops, via_relationship, via_ci_ident, path_idents, active, status. Each export is recorded in the audit log (action `export` on the CI, with the parameters and the row count, never the rows). Needs view on the CI's class.
+         */
+        get: operations["exportConfigurationItemImpact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Impact analysis limits and whether any relationship type propagates impact
+         * @description The bounds a request may use (IMPACT_MAX_DEPTH, IMPACT_MAX_NODES), the defaults and the deadline, and `anyTypePropagates`: false while every relationship type has impactDirection none, so every analysis would be empty.
+         */
+        get: operations["getImpactSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imports/settings": {
         parameters: {
             query?: never;
@@ -1642,7 +1702,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a lookup list
-         * @description Requires `datamodel.manage`. Hard delete of the list and its values, allowed only while no attribute definition uses the list and no other list depends on it (409 IN_USE otherwise). Retire it with `PATCH {"isActive": false}` instead.
+         * @description Requires `datamodel.manage`. Hard delete of the list and its values, allowed only while no attribute definition uses the list, no other list depends on it and it is not a system list (409 IN_USE otherwise). Retire it with `PATCH {"isActive": false}` instead.
          */
         delete: operations["deleteLookupList"];
         options?: never;
@@ -1663,7 +1723,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list
-         * @description Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, systemRole, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLookupListUsage"];
         put?: never;
@@ -1732,7 +1792,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list value
-         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, criticality, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLookupListValueUsage"];
         put?: never;
@@ -1924,7 +1984,7 @@ export interface paths {
         };
         /**
          * Change history (read-only, paginated, newest first by default)
-         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do). In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
+         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export (today the impact analysis CSV) is an `export` row on what was exported (`entityType` configuration_items, the analysed CI), `newValue` holding `kind`, `format`, the `parameters`, `rowCount`, `truncated` and `visibility`, never the rows. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do). In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
          */
         get: operations["listAuditLog"];
         put?: never;
@@ -2399,7 +2459,7 @@ export interface components {
             actorId: string | null;
             actorName: string | null;
             /** @enum {string} */
-            action: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "import.commit" | "import.report_read";
+            action: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read";
             /** @description Table of the changed entity, e.g. configuration_items (sessions for authentication events) */
             entityType: string;
             /** Format: uuid */
@@ -2562,6 +2622,7 @@ export interface components {
              * @description Set when the CI was deleted (soft delete); history keeps resolving
              */
             deletedAt: string | null;
+            criticality: components["schemas"]["CriticalityRef"] | null;
             /** @description Class attribute values by attribute key; unset attributes are absent */
             attributes: {
                 [key: string]: string | number | boolean;
@@ -2620,6 +2681,7 @@ export interface components {
              * @description Set when the CI was deleted (soft delete); history keeps resolving
              */
             deletedAt: string | null;
+            criticality: components["schemas"]["CriticalityRef"] | null;
         };
         ConnectionTest: {
             /** @description The provider answered as expected */
@@ -2635,6 +2697,21 @@ export interface components {
             token: components["schemas"]["ApiToken"];
             /** @description Send as `Authorization: Bearer <secret>`. Not retrievable later. */
             secret: string;
+        };
+        /** @description A CI's criticality: a value of the system lookup list `criticality`. */
+        CriticalityRef: {
+            /**
+             * Format: uuid
+             * @description The lookup list value id (send it as `criticalityValueId`)
+             */
+            id: string;
+            key: string;
+            name: string;
+            /**
+             * Format: int64
+             * @description Position in the criticality list (its sort order): 1 is the most critical
+             */
+            rank: number;
         };
         /** @description Areas, classes (parents before children is not required), attributes, relationship types and rules */
         DataModelSection: {
@@ -2711,6 +2788,11 @@ export interface components {
                 forwardLabel: string;
                 reverseLabel: string;
                 isDirectional?: boolean;
+                /**
+                 * @description How impact flows across the type's edges. Left out (files before version 4): an existing type keeps its
+                 *     value, a new one gets none
+                 */
+                impactDirection?: ("none" | "target_to_source" | "source_to_target" | "both") | null;
                 sortOrder?: number;
                 isActive?: boolean;
             }[];
@@ -2925,6 +3007,185 @@ export interface components {
              */
             rows: number | null;
             message: string;
+        };
+        ImpactAnalysis: {
+            root: components["schemas"]["ImpactRoot"];
+            parameters: components["schemas"]["ImpactParameters"];
+            /** @description Ordered by hops, then name */
+            items: components["schemas"]["ImpactItem"][];
+            summary: components["schemas"]["ImpactSummary"];
+            /**
+             * @description The analysis stopped early: `items` holds every CI up to the last complete hop, plus those found in the
+             *     partial one
+             */
+            truncated: boolean;
+            truncatedReason: ("max_nodes" | "max_edges" | "timeout") | null;
+            /** @description The requested depth was reached and further CIs lie beyond it (not truncation) */
+            hasMoreBeyondDepth: boolean;
+            /** @enum {string} */
+            visibility: "all_classes" | "restricted";
+            limits: components["schemas"]["ImpactLimits"];
+            /** Format: int64 */
+            elapsedMs: number;
+        };
+        /** @description A criticality value as impact analysis reports it. */
+        ImpactCriticality: {
+            key: string;
+            label: string;
+            /**
+             * Format: int64
+             * @description Position in the criticality list: 1 is the most critical
+             */
+            rank: number;
+        };
+        /** @description An affected CI. */
+        ImpactItem: {
+            /** Format: uuid */
+            id: string;
+            ident: string;
+            /** @description The CI's label (display name) */
+            name: string;
+            /** Format: uuid */
+            classId: string;
+            className: string;
+            criticality: components["schemas"]["ImpactCriticality"] | null;
+            active: boolean;
+            status: components["schemas"]["ImpactStatus"] | null;
+            /** @description The walks that reached the CI: one, or both in direction=both */
+            directions: ("downstream" | "upstream")[];
+            /**
+             * Format: int32
+             * @description Hops from the root on the shortest path (in both mode: the shorter direction, downstream on a tie)
+             */
+            hops: number;
+            /** @description The last hop of that path */
+            via: components["schemas"]["ImpactVia"];
+            upstreamVia: components["schemas"]["ImpactVia"] | null;
+            downstreamVia: components["schemas"]["ImpactVia"] | null;
+            /**
+             * Format: int64
+             * @description Propagating relationships into this CI from CIs of the result (root included), at least 1: more than 1 means
+             *     it is also reached another way
+             */
+            reachedByCount: number;
+        };
+        ImpactLimits: {
+            /** Format: int32 */
+            maxDepth: number;
+            /** Format: int32 */
+            maxNodes: number;
+        };
+        ImpactParameters: {
+            /**
+             * @description Which way to analyse, relative to the flow of impact.
+             * @enum {string}
+             */
+            direction: "downstream" | "upstream" | "both";
+            /** Format: int32 */
+            depth: number;
+            /** @description The types followed: those asked for, or every type that propagates impact */
+            relationshipTypeIds: string[];
+            includeInactive: boolean;
+            /** Format: int32 */
+            maxNodes: number;
+        };
+        ImpactRelationshipType: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+            name: string;
+            forwardLabel: string;
+            reverseLabel: string;
+        };
+        /** @description The analysed CI. */
+        ImpactRoot: {
+            /** Format: uuid */
+            id: string;
+            ident: string;
+            /** @description The CI's label (display name) */
+            name: string;
+            /** Format: uuid */
+            classId: string;
+            className: string;
+            criticality: components["schemas"]["ImpactCriticality"] | null;
+            /** @description Inside its validity period */
+            active: boolean;
+        };
+        /** @description Impact analysis settings, for clients building the controls. */
+        ImpactSettings: {
+            /**
+             * Format: int32
+             * @description Largest depth (IMPACT_MAX_DEPTH)
+             */
+            maxDepth: number;
+            /**
+             * Format: int32
+             * @description Largest maxNodes (IMPACT_MAX_NODES)
+             */
+            maxNodesLimit: number;
+            /** Format: int32 */
+            defaultDepth: number;
+            /** Format: int32 */
+            defaultMaxNodes: number;
+            /**
+             * Format: int64
+             * @description Deadline of one analysis (IMPACT_TIMEOUT_MS)
+             */
+            timeoutMs: number;
+            /**
+             * @description Whether any relationship type propagates impact; false: every analysis is empty until an administrator
+             *     configures one
+             */
+            anyTypePropagates: boolean;
+        };
+        /** @description The value of the CI's `status` attribute (a lookup attribute keyed status). */
+        ImpactStatus: {
+            key: string;
+            label: string;
+        };
+        /** @description Counts over the returned items only: exact for the response, a lower bound of the whole when truncated. */
+        ImpactSummary: {
+            /** Format: int64 */
+            total: number;
+            /** @description By class name */
+            byClass: {
+                /** Format: uuid */
+                classId: string;
+                className: string;
+                /** Format: int64 */
+                count: number;
+            }[];
+            /** @description By rank, most critical first, not set last */
+            byCriticality: {
+                /** @description null: not set */
+                key: string | null;
+                /** Format: int64 */
+                count: number;
+            }[];
+            byHops: {
+                /** Format: int32 */
+                hops: number;
+                /** Format: int64 */
+                count: number;
+            }[];
+        };
+        /** @description The relationship that first reached a CI: the last hop of its shortest path. */
+        ImpactVia: {
+            /**
+             * Format: uuid
+             * @description The CI one hop closer to the root (the root itself at hop 1); always the root or another item
+             */
+            parentId: string;
+            /** Format: uuid */
+            relationshipId: string;
+            relationshipType: components["schemas"]["ImpactRelationshipType"];
+            /**
+             * Format: uuid
+             * @description The relationship's source (read with forwardLabel: source runs on target)
+             */
+            edgeSourceId: string;
+            /** Format: uuid */
+            edgeTargetId: string;
         };
         ImportChange: {
             /** @description e.g. classes, attributes, lookupListValues, permissionProfiles, uiSettings */
@@ -3478,6 +3739,11 @@ export interface components {
              * @description The list this one depends on (e.g. "Model" depends on "Manufacturer"): each value names its parent value
              */
             parentListId: string | null;
+            /**
+             * @description Set on a system list, which the application itself uses and which cannot be deleted: `criticality` (the
+             *     values of every CI's criticality). Its values can be renamed, reordered, added and retired like any other.
+             */
+            systemRole: "criticality" | null;
         };
         LookupListList: {
             data: components["schemas"]["LookupList"][];
@@ -3581,6 +3847,11 @@ export interface components {
                 sortOrder?: number;
                 isActive?: boolean;
                 parent?: string | null;
+                /**
+                 * @description Set on a system list (criticality). Informational: an import never gives a list a system role or takes
+                 *     one away, and never deletes a list
+                 */
+                systemRole?: "criticality" | null;
                 values?: {
                     /** @description Stable machine key, lower_snake_case */
                     key: string;
@@ -3836,6 +4107,7 @@ export interface components {
                  * @description Set when the CI was deleted (soft delete); history keeps resolving
                  */
                 deletedAt: string | null;
+                criticality: components["schemas"]["CriticalityRef"] | null;
                 /** @description Hops from the root (root = 0) */
                 depth: number;
             }[];
@@ -3883,6 +4155,12 @@ export interface components {
             reverseLabel: string;
             /** @description false for symmetric types such as connected_to */
             isDirectional: boolean;
+            /**
+             * @description How impact flows across an edge `source -forward_label-> target`
+             *     (`relationship_types.impact_direction`).
+             * @enum {string}
+             */
+            impactDirection: "none" | "target_to_source" | "source_to_target" | "both";
             /** Format: int32 */
             sortOrder: number;
             isActive: boolean;
@@ -6140,7 +6418,7 @@ export interface operations {
                 offset?: number;
                 /** @description Search label, ident and attribute values */
                 q?: string;
-                /** @description Sort field; prefix with "-" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt, or attributes.<key> (needs classId; the attribute must be the same one on every class in classId, and not a reference). Attributes sort case-insensitively for text, by address for IP/CIDR and by list order for lookups; CIs without a value come last. */
+                /** @description Sort field; prefix with "-" for descending. One of: label, ident, className, criticality, validFrom, validUntil, createdAt, updatedAt, or attributes.<key> (needs classId; the attribute must be the same one on every class in classId, and not a reference). Attributes sort case-insensitively for text, by address for IP/CIDR and by list order for lookups; CIs without a value come last. */
                 sort?: string;
                 /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
                 classId?: string;
@@ -6151,6 +6429,8 @@ export interface operations {
                 lookupValueId?: string;
                 /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
                 ipWithin?: string;
+                /** @description Criticality value ids, comma-separated: CIs holding one of them */
+                criticalityValueId?: string;
                 /** @description Soft-deleted CIs: exclude (default), include, or only */
                 deleted?: "exclude" | "include" | "only";
             };
@@ -6253,6 +6533,8 @@ export interface operations {
                     attributes?: {
                         [key: string]: (string | number | boolean) | null;
                     };
+                    /** @description A value of the criticality lookup list (GET /api/v1/lookup-lists?systemRole=criticality); null: not set. A retired value can be kept but not newly set */
+                    criticalityValueId?: string | null;
                 };
             };
         };
@@ -6547,6 +6829,8 @@ export interface operations {
                     attributes?: {
                         [key: string]: (string | number | boolean) | null;
                     };
+                    /** @description A value of the criticality lookup list (GET /api/v1/lookup-lists?systemRole=criticality); null: not set. A retired value can be kept but not newly set */
+                    criticalityValueId?: string | null;
                     /** @description If sent and stale, the update fails with 409 VERSION_CONFLICT */
                     version?: number;
                 };
@@ -6766,6 +7050,8 @@ export interface operations {
                 lookupValueId?: string;
                 /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
                 ipWithin?: string;
+                /** @description Criticality value ids, comma-separated: CIs holding one of them */
+                criticalityValueId?: string;
                 /** @description Soft-deleted CIs: exclude (default), include, or only */
                 deleted?: "exclude" | "include" | "only";
             };
@@ -6791,6 +7077,281 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConfigurationItemImpact: {
+        parameters: {
+            query?: {
+                /** @description downstream: the CIs affected if this CI fails (impact flows along each relationship type's impactDirection); upstream: the CIs this CI depends on (against it); both: the two walks, run separately */
+                direction?: "downstream" | "upstream" | "both";
+                /** @description Hops from the CI; default 3 (or maxDepth when lower). At most `maxDepth` of GET /api/v1/settings/impact (IMPACT_MAX_DEPTH): a larger value is refused, never lowered */
+                depth?: number;
+                /** @description Relationship types to follow, comma-separated (at most 50); default: every type that propagates impact. A type whose impactDirection is none is accepted and contributes nothing; an unknown id is refused */
+                relationshipTypeId?: string;
+                /** @description true: CIs outside their validity period are followed and returned with active=false; false: they are neither returned nor followed */
+                includeInactive?: "true" | "false";
+                /** @description Largest number of affected CIs returned; default 500 (or maxNodesLimit when lower). At most `maxNodesLimit` of GET /api/v1/settings/impact (IMPACT_MAX_NODES): a larger value is refused */
+                maxNodes?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactAnalysis"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    exportConfigurationItemImpact: {
+        parameters: {
+            query?: {
+                /** @description downstream: the CIs affected if this CI fails (impact flows along each relationship type's impactDirection); upstream: the CIs this CI depends on (against it); both: the two walks, run separately */
+                direction?: "downstream" | "upstream" | "both";
+                /** @description Hops from the CI; default 3 (or maxDepth when lower). At most `maxDepth` of GET /api/v1/settings/impact (IMPACT_MAX_DEPTH): a larger value is refused, never lowered */
+                depth?: number;
+                /** @description Relationship types to follow, comma-separated (at most 50); default: every type that propagates impact. A type whose impactDirection is none is accepted and contributes nothing; an unknown id is refused */
+                relationshipTypeId?: string;
+                /** @description true: CIs outside their validity period are followed and returned with active=false; false: they are neither returned nor followed */
+                includeInactive?: "true" | "false";
+                /** @description Largest number of affected CIs returned; default 500 (or maxNodesLimit when lower). At most `maxNodesLimit` of GET /api/v1/settings/impact (IMPACT_MAX_NODES): a larger value is refused */
+                maxNodes?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getImpactSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactSettings"];
                 };
             };
             /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
@@ -11686,6 +12247,12 @@ export interface operations {
                     /** @description Stable machine key, lower_snake_case */
                     key: string;
                     isDirectional?: boolean;
+                    /**
+                     * @description How impact flows across an edge `source -forward_label-> target`
+                     *     (`relationship_types.impact_direction`).
+                     * @enum {string}
+                     */
+                    impactDirection?: "none" | "target_to_source" | "source_to_target" | "both";
                     name: string;
                     description?: string | null;
                     forwardLabel: string;
@@ -11983,6 +12550,12 @@ export interface operations {
                     reverseLabel?: string;
                     sortOrder?: number;
                     isActive?: boolean;
+                    /**
+                     * @description How impact flows across an edge `source -forward_label-> target`
+                     *     (`relationship_types.impact_direction`).
+                     * @enum {string}
+                     */
+                    impactDirection?: "none" | "target_to_source" | "source_to_target" | "both";
                 };
             };
         };
@@ -15121,6 +15694,8 @@ export interface operations {
                 isActive?: "true" | "false";
                 /** @description Lists that depend on this list; "none" for lists without a parent list */
                 parentListId?: "none" | string;
+                /** @description Only the system list with this role */
+                systemRole?: "criticality";
             };
             header?: never;
             path?: never;
@@ -17220,7 +17795,7 @@ export interface operations {
                 entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings";
                 /** @description History of these entities */
                 entityId?: string;
-                action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "import.commit" | "import.report_read";
+                action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read";
                 /** @description Changes made by this user (their id) */
                 actorId?: string;
                 /** @description Case-insensitive substring */

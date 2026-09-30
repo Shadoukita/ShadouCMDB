@@ -22,7 +22,8 @@ use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
 use utoipa::{PartialSchema, ToSchema};
 
 use super::super::classes::{AttributeDataType, ValidationRules};
-use super::super::lookups::LocationType;
+use super::super::impact::ImpactDirection;
+use super::super::lookups::{LocationType, SystemRole};
 use super::super::ui_settings::assets::ImageType;
 use super::super::ui_settings::document::UiSettingsDocument;
 use crate::api::schemas::{self, OwnerKind, description_schema, key_schema, name_schema, sort_order_schema, trimmed};
@@ -30,8 +31,10 @@ use crate::auth::permissions::GlobalPermission;
 
 pub const FORMAT: &str = "shadoucmdb.config";
 /// Version 2 adds areas (and the area of each class), version 3 dependent
-/// lookup lists (the parent of a list, a value and a field), version 4 saved
-/// import mappings; versions 1 to 3 are still read.
+/// lookup lists (the parent of a list, a value and a field), version 4 the
+/// impact direction of relationship types, the system role of lookup lists
+/// (the criticality list) and saved import mappings; versions 1 to 3 are still
+/// read.
 pub const FORMAT_VERSION: i32 = 4;
 
 fn yes() -> bool {
@@ -201,6 +204,11 @@ pub struct RelationshipTypeSpec {
     pub reverse_label: String,
     #[serde(default = "yes")]
     pub is_directional: bool,
+    /// How impact flows across the type's edges. Left out (files before version 4): an existing type keeps its
+    /// value, a new one gets none
+    #[schema(inline)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impact_direction: Option<ImpactDirection>,
     #[schema(schema_with = sort_order_schema)]
     #[serde(default)]
     pub sort_order: i32,
@@ -396,6 +404,11 @@ pub struct LookupListSpec {
     #[schema(schema_with = nullable_key_schema)]
     #[serde(default)]
     pub parent: Option<String>,
+    /// Set on a system list (criticality). Informational: an import never gives a list a system role or takes
+    /// one away, and never deletes a list
+    #[schema(inline)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_role: Option<SystemRole>,
     #[schema(schema_with = values_schema)]
     #[serde(default)]
     pub values: Vec<LookupValueSpec>,
