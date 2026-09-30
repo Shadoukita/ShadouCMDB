@@ -8,6 +8,11 @@ name: DAST
 # - API scan: imports backend/openapi.json and actively attacks every
 #   operation (injection, path traversal, SSRF, ...) with an administrator's
 #   API token, capped at 20 minutes.
+# - Session scan: the operations that refuse API tokens (account, MFA, users,
+#   profiles, API tokens, identity providers, configuration import) answer the
+#   token scan 403 before reading the body, so they are scanned again, actively,
+#   with an administrator's session cookie and X-CSRF-Token (SHAA-715), capped
+#   at 10 minutes. tools/dast/session-openapi.mjs picks them from openapi.json.
 # Pass/fail per rule is in .zap/rules.tsv. The reports are kept for 90 days as
 # release evidence (docs/security/pentest-v0.1.0.md).
 
@@ -97,6 +102,10 @@ jobs:
 
       # ZAP runs as uid 1000 in the container and writes its reports here.
       - run: mkdir -m 777 zap && cp .zap/rules.tsv zap/ && cp backend/openapi.json zap/
+      - name: Session-only operations (openapi-session.json)
+        run: |
+          node --test tools/dast/*.test.mjs
+          node tools/dast/session-openapi.mjs backend/openapi.json zap/openapi-session.json
 
       # Both scans run even if the first fails; the last step fails the job.
       - name: ZAP baseline scan (web UI and public API, passive)
@@ -136,6 +145,47 @@ jobs:
       - run: cat zap/api.md >> "$GITHUB_STEP_SUMMARY"
         if: always()
 
+      # A session of its own: the token scan above cannot have touched it.
+      - name: Session for the session scan
+        run: |
+          jar=$(mktemp)
+          csrf=$(curl -sf -c "$jar" -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg u "$DAST_USERNAME" --arg p "$DAST_PASSWORD" '{username: $u, password: $p}')" \
+            http://127.0.0.1:3000/api/v1/auth/login | jq -r .csrfToken)
+          cookie=$(sed 's/^#HttpOnly_//' "$jar" | awk '!/^#/ && NF >= 7 { printf "%s%s=%s", sep, $6, $7; sep = "; " }')
+          test -n "$csrf" && test "$csrf" != null && test -n "$cookie"
+          echo "::add-mask::$csrf"
+          echo "::add-mask::$cookie"
+          { echo "DAST_CSRF=$csrf"; echo "DAST_COOKIE=$cookie"; } >> "$GITHUB_ENV"
+
+      # ZAP_AUTH_HEADER sends the cookie; a replacer rule adds X-CSRF-Token to every request.
+      - name: ZAP API scan (session-only operations, active, as an administrator)
+        id: session
+        continue-on-error: true
+        run: |
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" \
+            -e ZAP_AUTH_HEADER=Cookie -e ZAP_AUTH_HEADER_VALUE="$DAST_COOKIE" -e ZAP_AUTH_HEADER_SITE=127.0.0.1 \
+            "$ZAP_IMAGE" \
+            zap-api-scan.py -t openapi-session.json -f openapi -O http://127.0.0.1:3000 -c rules.tsv -I \
+              -z "-config scanner.maxScanDurationInMins=10 -config scanner.maxRuleDurationInMins=2 \
+                  -config replacer.full_list(0).description=csrf -config replacer.full_list(0).enabled=true \
+                  -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=X-CSRF-Token \
+                  -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$DAST_CSRF" \
+              -r session.html -J session.json -w session.md
+      - run: cat zap/session.md >> "$GITHUB_STEP_SUMMARY"
+        if: always()
+
+      # Had the scan lost its session (signed out, password changed, account
+      # disabled), every later request would have been a 401 that passes every
+      # rule: fail instead of reporting coverage the scan did not have.
+      - name: The session scan kept its session
+        id: session_alive
+        continue-on-error: true
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: $DAST_COOKIE" http://127.0.0.1:3000/api/v1/auth/me)
+          echo "GET /api/v1/auth/me with the scan's session: $status"
+          test "$status" = 200
+
       # The active scan sends malformed input on purpose; a 5xx it provoked is
       # in the report (rule 90022), the server's side of it is in this log.
       - name: Error-level server log lines
@@ -161,6 +211,8 @@ jobs:
         env:
           BASELINE: ${{ steps.baseline.outcome }}
           API: ${{ steps.api.outcome }}
+          SESSION: ${{ steps.session.outcome }}
+          SESSION_ALIVE: ${{ steps.session_alive.outcome }}
         run: |
-          echo "baseline: $BASELINE, API scan: $API"
-          test "$BASELINE" = success && test "$API" = success
+          echo "baseline: $BASELINE, API scan: $API, session scan: $SESSION, session kept: $SESSION_ALIVE"
+          test "$BASELINE" = success && test "$API" = success && test "$SESSION" = success && test "$SESSION_ALIVE" = success
