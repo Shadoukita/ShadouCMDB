@@ -15,7 +15,6 @@ on the network path to PostgreSQL could pose as the database.
 - No TLS on the database (local development only): set `DATABASE_SSL=disable`.
 
 `DATABASE_SSL=require` still works as an explicit setting, and the server now logs a warning at
-startup when it is used with a host that is not loopback. See
-[docs/security/hardening.md](docs/security/hardening.md#database-tls).
+startup when it is used with a host that is not loopback.
 
 [#39]: https://github.com/Shadoukita/ShadouCMDB/issues/39

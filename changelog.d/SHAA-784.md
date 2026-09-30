@@ -4,7 +4,7 @@ Since migration 0016, CIs take their status, environment, owner and location fro
 `environment`, `owner` and `location`. The former tables are kept, read-only, for history. Until now the
 configuration export (`GET /api/v1/admin/config/export`) still copied those tables into `lookups.statuses`,
 `environments`, `locations` and `owners`, and an import wrote them back into the deprecated tables. The lists that
-CIs actually use were not changed ([SHAA-784]).
+CIs actually use were not changed (SHAA-784).
 
 - **Export:** those four sections are no longer written. The values are in `lookups.lists`, as before.
 - **Import of older files:** files that still carry the sections keep importing. A file from 0.1.0-rc.1, whose
@@ -23,5 +23,3 @@ CIs actually use were not changed ([SHAA-784]).
 **Upgrade:** nothing to do. Your data stays where it is, and migration 0016 already copied the deprecated tables
 into the lookup lists. Scripts that read `lookups.statuses`, `environments`, `locations` or `owners` from an export
 must read `lookups.lists` instead.
-
-[SHAA-784]: docs/api.md#customization-and-configuration-exportimport

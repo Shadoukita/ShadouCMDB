@@ -10,6 +10,4 @@ providers** (settings, group mappings, a connection test); the sign-in page show
 
 **Action** only if you want OIDC sign-in: set `PUBLIC_URL` to the address users open the web UI
 at (e.g. `https://cmdb.example.com`) and register `{PUBLIC_URL}/api/v1/auth/oidc/callback` at the
-provider. Allow outbound connections from the server to the provider or the directory. See
-[docs/api.md](docs/api.md#enterprise-sign-in) and
-[docs/security/hardening.md](docs/security/hardening.md#enterprise-sign-in).
+provider. Allow outbound connections from the server to the provider or the directory.

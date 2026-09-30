@@ -1,4 +1,4 @@
-// Hover text for the audit log's sign-in, MFA and API token rows (docs/data-model.md#auditing).
+// Hover text for the audit log's sign-in, MFA and API token rows.
 import type { AuditEntry } from "../../api/queries";
 
 export const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);

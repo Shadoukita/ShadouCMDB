@@ -8,7 +8,7 @@
 //! Decommission: every ShadouCMDB schema, table, row, setting and the migration
 //! history are dropped and nothing is rebuilt. What is left outside the database
 //! (the database and role themselves, the env file, backups, logs) is listed
-//! for the operator; see docs/backup-and-reset.md.
+//! for the operator.
 
 use anyhow::{Context, bail};
 use sqlx::Connection;
@@ -45,7 +45,7 @@ pub async fn decommission_cmd(cfg: &DatabaseConfig, args: ConfirmArgs) -> anyhow
     conn.close().await.ok();
     let dropped = dropped?;
     println!("Decommissioned {place}: {dropped} objects dropped, no ShadouCMDB data or settings remain in it.");
-    println!("To finish (see docs/backup-and-reset.md):");
+    println!("To finish:");
     println!("  1. As a PostgreSQL administrator: DROP DATABASE \"{database}\"; DROP ROLE <the application role>;");
     println!("  2. Remove the service (systemd unit, `shadoucmdb service uninstall`, or the container).");
     println!("  3. Delete the env file (it holds the database password), the log files and the binary.");

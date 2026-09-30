@@ -370,7 +370,7 @@ async fn security_headers(
 
 /// Security headers for every response. The UI is served same-origin with the
 /// API by this router, so this is the only place they can be set; a reverse
-/// proxy in front should not add its own copies (see docs/deployment.md).
+/// proxy in front should not add its own copies.
 ///
 /// CSP `frame-ancestors` only reaches HTML documents; `X-Frame-Options: DENY`
 /// keeps every other response (API JSON, assets, uploaded logos) out of frames

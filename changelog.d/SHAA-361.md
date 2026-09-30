@@ -2,7 +2,7 @@
 
 A layout tab can now set `placement: "free"`. Its sections become windows that can be placed anywhere,
 sized freely and stacked over each other: each has a `frame` with `x` and `w` as fractions of the tab
-width, `y` and `h` in pixels, a stacking order `z` and an optional `minH` ([layout format]). This entry covers
+width, `y` and `h` in pixels, a stacking order `z` and an optional `minH`. This entry covers
 the format, its validation and the grid ↔ free conversion in the API; placing windows in **Edit layout**
 and showing them on the detail page and form are described under "free window placement in Edit
 layout".
@@ -20,5 +20,3 @@ versions and configuration exports read and write back unchanged. What API clien
 - Frames that do not fit the tab (`x + w` over 1, `minH` over `h`, values out of range) are refused
   with `400 VALIDATION_ERROR` and the path of the value, also in configuration imports.
 - The audit trail and configuration export/import carry the new keys unchanged.
-
-[layout format]: docs/data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2

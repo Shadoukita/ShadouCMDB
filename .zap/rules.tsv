@@ -1,4 +1,4 @@
-# OWASP ZAP rule policy for .github/workflows/dast.yml (docs/security/pentest-v0.1.0.md).
+# OWASP ZAP rule policy for .github/workflows/dast.yml.
 # Format: <rule id><TAB><IGNORE|INFO|WARN|FAIL><TAB>(<name>). Rules not listed WARN.
 # FAIL: controls ShadouCMDB has and must keep, and every injection class.
 # IGNORE only with a reason on the line above.

@@ -1,7 +1,7 @@
 ### Added: a layout editor on the real CI page
 
 Users with **customization.manage** get an **Edit layout** button on the CI detail page and on the CI
-form (edit and new) ([editing a layout on the CI page]). It opens the layout editor in a separate browser window, one per class
+form (edit and new). It opens the layout editor in a separate browser window, one per class
 (a second click brings the open window to the front), while the page it came from stays as it is. The
 editor shows the real page, framed and with a sticky bar that names the class: the change applies to
 every CI of that class. The page keeps showing the
@@ -22,5 +22,3 @@ form layout** stays available and gains **Open on a CI** (the class's first CI, 
 class when it has none), in the same editor window. The editor's URLs (`/cis/<id>/layout-editor`,
 `/cis/<id>/edit/layout-editor`, `/cis/new/layout-editor?classId=…`) show the normal page to users
 without the permission. No API or database change.
-
-[editing a layout on the CI page]: docs/data-model.md#editing-a-layout-on-the-ci-page

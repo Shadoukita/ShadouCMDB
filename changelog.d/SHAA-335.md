@@ -1,7 +1,7 @@
 ### Fixed: the inventory sorts by attributes again (hostname, IP address, serial number, ...)
 
 `GET /api/v1/configuration-items` takes `sort=attributes.<key>` (and `-attributes.<key>` for
-descending) when the list is filtered by `classId` ([GH#112], [inventory endpoints]). The attribute must be the
+descending) when the list is filtered by `classId` ([GH#112]). The attribute must be the
 same one on every class in `classId` (its own or inherited, so `classId=<hardware>` sorts servers and
 network devices by their shared `ip_address`). Text sorts case-insensitively, IP and CIDR by address
 (`10.0.0.9` before `10.0.0.10`), numbers and dates by value, lookups by the list's value order; CIs
@@ -14,7 +14,7 @@ Stored UI settings accept the same field in a list view's `defaultSort` and a sa
 Where the class has no such attribute, the effective settings drop the sort (the list sorts by label)
 and report an `unknown_attribute` issue.
 
-In the web UI ([list views]), **Administration › Customization › List views** offers the class's
+In the web UI, **Administration › Customization › List views** offers the class's
 attributes (not references) as the default sort, and a saved-search widget under **Dashboard** offers
 the attributes every ticked class has. In the inventory of one class, the headers of attribute
 columns sort the list; the sort is dropped when the class filter changes.
@@ -28,5 +28,3 @@ changed since 0016, a saved search on several classes, and a class without the a
 current sort. Nothing to do otherwise.
 
 [GH#112]: https://github.com/Shadoukita/ShadouCMDB/issues/112
-[inventory endpoints]: docs/api.md#endpoints
-[list views]: docs/api.md#customization-and-configuration-exportimport
