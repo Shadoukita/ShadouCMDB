@@ -111,6 +111,8 @@ pub struct RelationshipType {
     pub forward: &'static str,
     pub reverse: &'static str,
     pub directional: bool,
+    /// How impact flows across the type's edges (impact analysis)
+    pub impact: crate::modules::impact::ImpactDirection,
 }
 
 /// A relationship rule by keys: type, source class, target class.
@@ -572,6 +574,7 @@ pub async fn install(
             .opt("forward_label", Some(text(t.forward)))
             .opt("reverse_label", Some(text(t.reverse)))
             .opt("is_directional", Some(t.directional))
+            .opt("impact_direction", Some(t.impact.as_str().to_owned()))
             .opt("sort_order", Some(i as i32 * 10));
         let id = ins.insert::<RelationshipTypes>(c).await?;
         state.types.insert(t.key.into(), id);

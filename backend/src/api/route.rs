@@ -50,6 +50,8 @@ pub struct Api {
     pub headers: HeaderMap,
     /// The last readiness check (`/readyz`).
     pub readiness: Arc<crate::modules::health::ReadinessCache>,
+    /// Impact analysis limits and concurrency.
+    pub impact: Arc<crate::modules::impact::ImpactState>,
     /// Bulk import limits (`IMPORT_*`).
     pub imports: Arc<crate::config::ImportConfig>,
 }
@@ -387,6 +389,20 @@ impl Output for Binary {
     }
     fn respond(self, status: StatusCode) -> Response {
         (status, [(header::CONTENT_TYPE, self.content_type)], self.body).into_response()
+    }
+}
+
+/// A CSV file (`text/csv; charset=utf-8`), e.g. an export. Documented as `text/csv`.
+pub struct Csv(pub String);
+
+impl Output for Csv {
+    fn doc() -> Option<ResponseDoc> {
+        let schema =
+            utoipa::openapi::schema::ObjectBuilder::new().schema_type(utoipa::openapi::schema::Type::String).into();
+        Some(ResponseDoc { name: String::new(), schema: RefOr::T(schema), nested: Vec::new(), media_type: "text/csv" })
+    }
+    fn respond(self, status: StatusCode) -> Response {
+        (status, [(header::CONTENT_TYPE, HeaderValue::from_static("text/csv; charset=utf-8"))], self.0).into_response()
     }
 }
 
@@ -730,6 +746,7 @@ impl RouteBuilder {
                         auth: state.auth,
                         headers,
                         readiness: state.readiness,
+                        impact: state.impact,
                         imports: state.imports,
                     };
                     let res = match f(api, input).await {

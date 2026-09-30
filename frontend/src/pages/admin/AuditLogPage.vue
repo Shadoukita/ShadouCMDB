@@ -67,6 +67,7 @@ const ACTION_SET: Record<Action, true> = {
   "mfa.recovery_code_used": true,
   "mfa.recovery_codes": true,
   "schema_change.refused": true,
+  export: true,
   "import.commit": true,
   "import.report_read": true,
 };

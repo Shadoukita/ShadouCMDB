@@ -480,6 +480,7 @@ pub enum Registry {
         ident: Option<String>,
         valid_from: Option<DateTime<Utc>>,
         valid_until: Option<DateTime<Utc>>,
+        criticality_value_id: Option<Uuid>,
     },
     Update {
         id: Uuid,
@@ -491,6 +492,8 @@ pub enum Registry {
         ident: Option<String>,
         valid_from: Option<DateTime<Utc>>,
         valid_until: Option<Option<DateTime<Utc>>>,
+        /// `Some(None)` clears the criticality.
+        criticality_value_id: Option<Option<Uuid>>,
     },
 }
 
@@ -536,6 +539,7 @@ pub fn plan_create<'d>(
             ident: input.ident.clone(),
             valid_from: input.valid_from,
             valid_until: input.valid_until,
+            criticality_value_id: input.criticality_value_id,
         },
         set: prepared.set,
         clear: prepared.clear,
@@ -636,6 +640,7 @@ pub fn plan_update<'d>(
             ident: new_ident.map(str::to_owned),
             valid_from: input.valid_from,
             valid_until: input.valid_until,
+            criticality_value_id: input.criticality_value_id,
         },
         set: prepared.set,
         clear: prepared.clear,
@@ -705,19 +710,20 @@ async fn write_type_rows(
 /// Returns the CI's id.
 pub async fn apply_rows(conn: &mut PgConnection, model: &Model, plan: &Plan<'_>) -> Result<Uuid, AppError> {
     match &plan.registry {
-        Registry::Create { class_id, ident, valid_from, valid_until } => {
+        Registry::Create { class_id, ident, valid_from, valid_until, criticality_value_id } => {
             let new = data::NewItem {
                 class_id: *class_id,
                 ident: ident.as_deref(),
                 valid_from: *valid_from,
                 valid_until: *valid_until,
+                criticality_value_id: *criticality_value_id,
             };
             let id = data::insert(conn, &new).await.map_err(registry_write_error)?;
             let lineage: Vec<Uuid> = model.lineage(*class_id).iter().map(|c| c.id).collect();
             write_type_rows(conn, model, id, *class_id, &plan.set, &[], &lineage).await?;
             Ok(id)
         }
-        Registry::Update { id, old_class_id, new_class_id, ident, valid_from, valid_until } => {
+        Registry::Update { id, old_class_id, new_class_id, ident, valid_from, valid_until, criticality_value_id } => {
             let class_id = new_class_id.unwrap_or(*old_class_id);
             let old_lineage: Vec<Uuid> = model.lineage(*old_class_id).iter().map(|c| c.id).collect();
             let new_lineage: Vec<Uuid> = model.lineage(class_id).iter().map(|c| c.id).collect();
@@ -732,6 +738,7 @@ pub async fn apply_rows(conn: &mut PgConnection, model: &Model, plan: &Plan<'_>)
                 ident: ident.as_deref(),
                 valid_from: *valid_from,
                 valid_until: *valid_until,
+                criticality_value_id: *criticality_value_id,
             };
             data::update(conn, *id, &patch).await.map_err(registry_write_error)?;
             let entering: Vec<Uuid> = new_lineage.iter().filter(|c| !old_lineage.contains(c)).copied().collect();

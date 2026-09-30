@@ -49,6 +49,12 @@ pub const LOOKUP_VALUE_SPANS: &str = "SELECT coalesce(array_agg(DISTINCT c.id), 
      JOIN lookup_list_values v ON v.list_id = d.lookup_list_id
      JOIN ci_classes c ON ci_class_is_a(c.id, d.class_id)
      WHERE v.id = $1 AND d.data_type = 'lookup'";
+/// [`Usage::spans`] of a count over the CIs whose Criticality is value `$1`:
+/// every class when the value is on the system list Criticality, none for a
+/// value of any other list (no CI can hold it as its criticality).
+pub const CRITICALITY_VALUE_SPANS: &str = "SELECT coalesce(array_agg(c.id), '{}') FROM ci_classes c
+     WHERE EXISTS (SELECT 1 FROM lookup_list_values v JOIN lookup_lists l ON l.id = v.list_id
+                   WHERE v.id = $1 AND l.system_role = 'criticality')";
 /// [`Usage::spans`] of a count over the values of field `$1`: its type's table
 /// holds the CIs of the type and of every type below it.
 pub const ATTRIBUTE_SPANS: &str = "SELECT coalesce(array_agg(c.id), '{}')

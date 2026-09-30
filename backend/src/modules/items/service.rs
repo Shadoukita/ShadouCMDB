@@ -11,8 +11,8 @@ use ipnetwork::IpNetwork;
 
 use super::plan::{self, DbResolver, Needs, is_visible};
 use super::schemas::{
-    ActiveQuery, AttributeReference, ConfigurationItem, ConfigurationItemSummary, CreateItemBody, Graph,
-    GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, ListItemsQuery, SearchHit,
+    ActiveQuery, AttributeReference, ConfigurationItem, ConfigurationItemSummary, CreateItemBody, CriticalityRef,
+    Graph, GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, ListItemsQuery, SearchHit,
     SearchMatch, SearchQuery, SearchResults, UpdateItemBody,
 };
 use crate::api::context::RequestContext;
@@ -43,6 +43,25 @@ pub fn summary_dto(r: SummaryRow) -> ConfigurationItemSummary {
         created_at: r.created_at,
         updated_at: r.updated_at,
         deleted_at: r.deleted_at,
+        criticality: match (r.criticality_id, r.criticality_key, r.criticality_name, r.criticality_rank) {
+            (Some(id), Some(key), Some(name), Some(rank)) => Some(CriticalityRef { id, key, name, rank }),
+            _ => None,
+        },
+    }
+}
+
+/// A criticality value sent in a body: one of the criticality list's values,
+/// active unless the CI already holds it (`current`).
+async fn check_criticality(
+    conn: &mut PgConnection,
+    value: Option<Uuid>,
+    current: Option<Uuid>,
+) -> Result<(), AppError> {
+    let Some(id) = value.filter(|v| Some(*v) != current) else { return Ok(()) };
+    match data::criticality_value_state(conn, id).await? {
+        Some(true) => Ok(()),
+        Some(false) => Err(AppError::field("criticalityValueId", "This criticality value is retired", "invalid")),
+        None => Err(AppError::field("criticalityValueId", "Not a value of the criticality list", "not_found")),
     }
 }
 
@@ -174,6 +193,7 @@ async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuer
         },
         lookups,
         ip_within: q.ip_within().map(str::to_owned),
+        criticality_value_ids: q.criticality_value_id().map(|l| l.0.clone()),
         deleted: Some(q.deleted()),
         visible_class_ids: None,
         // Also where ipWithin looks.
@@ -408,6 +428,7 @@ pub async fn create(
     let needs = Needs::for_create(&defs, input.attributes.as_ref());
     let resolver = DbResolver::load(&mut tx, visible.as_deref(), &needs).await?;
     let plan = plan::plan_create(ctx, &model, &defs, input, &resolver)?;
+    check_criticality(&mut tx, input.criticality_value_id, None).await?;
     let id = plan::apply(&mut tx, &model, &plan).await?;
 
     let dto = must_detail(&mut tx, &model, id, None).await?;
@@ -441,7 +462,9 @@ pub async fn update(
     let visible = ctx.class_scope(ClassOp::View);
     let needs = Needs::for_update(&defs, input.attributes.as_ref(), &before.attributes);
     let resolver = DbResolver::load(&mut tx, visible.as_deref(), &needs).await?;
+    let current_criticality = before.summary.criticality.as_ref().map(|c| c.id);
     let plan = plan::plan_update(ctx, &model, &defs, before, input, &resolver)?;
+    check_criticality(&mut tx, input.criticality_value_id.flatten(), current_criticality).await?;
     plan::apply(&mut tx, &model, &plan).await?;
 
     let dto = must_detail(&mut tx, &model, id, None).await?;

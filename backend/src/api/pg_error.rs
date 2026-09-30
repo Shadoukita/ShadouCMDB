@@ -64,6 +64,10 @@ const CONSTRAINT_FIELDS: &[(&str, &str)] = &[
     ("permission_profiles_name_not_blank", "name"),
     ("permission_profile_class_permissions_class_id_fkey", "classPermissions"),
     ("user_permission_profiles_profile_id_fkey", "profileIds"),
+    ("configuration_items_criticality_list", "criticalityValueId"),
+    ("configuration_items_criticality_value_id_fkey", "criticalityValueId"),
+    ("relationship_types_impact_direction_valid", "impactDirection"),
+    ("relationship_types_impact_nondirectional", "impactDirection"),
 ];
 
 fn snake_to_camel(s: &str) -> String {
@@ -142,6 +146,16 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
             return Some(AppError::new(ErrorCode::LastAdministrator, humanise(pg.message())));
         }
         Some("permission_profiles_builtin_protected") => return Some(AppError::conflict(humanise(pg.message()))),
+        Some("lookup_lists_system_protected") => {
+            return Some(AppError::new(ErrorCode::InUse, humanise(pg.message())));
+        }
+        Some("relationship_types_impact_nondirectional") => {
+            return Some(AppError::field(
+                "impactDirection",
+                "A non-directional type has no source or target side: impact can only flow both ways or not at all",
+                "invalid",
+            ));
+        }
         Some("configuration_items_validity_order") => {
             return Some(AppError::field("validUntil", "Must be after validFrom", "custom"));
         }
