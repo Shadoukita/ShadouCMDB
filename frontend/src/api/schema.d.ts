@@ -390,7 +390,7 @@ export interface paths {
         head?: never;
         /**
          * Update a CI (partial); attributes are merged, null clears one
-         * @description Needs edit on the CI's class (and create on the new class when `classId` changes). Changing `ident` is for administrators only (403 for anyone else; resending the current value is allowed) and is recorded in the audit log like every change.
+         * @description Needs edit on the CI's class (and create on the new class when `classId` changes). Changing `ident` is for administrators only (403 for anyone else; resending the current value is allowed) and is recorded in the audit log like every change. Resending the value a reference attribute already holds is no change: it is accepted whether the referenced CI is live, deleted or in a class the caller may not view. A new reference must be a live CI the caller may view (else `not_found`, as for a missing CI) of the attribute's reference class.
          */
         patch: operations["updateConfigurationItem"];
         trace?: never;
