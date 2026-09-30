@@ -316,6 +316,55 @@ fn all_schema() -> utoipa::openapi::schema::Schema {
         .into()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[schema(as = ImportIssueSeverity)]
+pub enum IssueSeverity {
+    Error,
+    Warning,
+}
+
+/// A problem the dry run or the commit found in one row (§3.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportIssue {
+    /// Row number in the file (the header is row 1)
+    pub row: u32,
+    /// 0-based column, when the problem is in one cell
+    pub column: Option<u32>,
+    /// The column's header
+    pub header: Option<String>,
+    /// The field concerned, e.g. `attributes.os`
+    pub field: Option<String>,
+    /// The cell, at most 200 characters
+    pub value: Option<String>,
+    pub severity: IssueSeverity,
+    pub code: String,
+    pub message: String,
+}
+
+/// `GET /imports/{id}/issues` filters.
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct ListImportIssuesQuery {
+    /// Page size (1-200)
+    #[param(required = false, default = 50, minimum = 1, maximum = 200)]
+    pub limit: i64,
+    /// Rows to skip
+    #[param(required = false, default = 0, minimum = 0, maximum = 1_000_000)]
+    pub offset: i64,
+    #[param(inline)]
+    pub severity: Option<IssueSeverity>,
+    /// Only problems with this code
+    #[param(max_length = 64)]
+    pub code: Option<String>,
+    /// Only problems in this 0-based column
+    #[param(minimum = 0, maximum = 199)]
+    pub column: Option<u32>,
+}
+crate::paged!(ListImportIssuesQuery);
+
 /// `PATCH /imports/{id}/file-options`: how to read the file; the analysis runs again.
 pub type UpdateFileOptions = super::analyse::FileOptions;
 impl Check for UpdateFileOptions {}
@@ -516,6 +565,9 @@ pub struct ImportMapping {
     pub options: MappingOptions,
     pub columns: Vec<ColumnMapping>,
 }
+
+/// Checked by `mapping::resolve` against the file and the data model.
+impl Check for ImportMapping {}
 
 fn ignore() -> EmptyCells {
     EmptyCells::Ignore

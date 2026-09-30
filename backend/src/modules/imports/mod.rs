@@ -5,9 +5,13 @@
 //! (D3) on top of the class rights, which every row is still checked against.
 
 pub mod analyse;
+pub mod convert;
 pub mod csv_safe;
+pub mod dry_run;
 pub mod jobs;
+pub mod mapping;
 pub mod parse;
+pub mod planner;
 pub mod schemas;
 pub mod settings;
 pub mod storage;
@@ -171,6 +175,51 @@ pub fn routes() -> Vec<Route> {
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<UpdateFileOptions>>| async move {
                 Ok(Json(jobs::update_file_options(&api.pool, &api.ctx, &api.imports, id, &b).await?))
             }),
+        route(Method::PUT, "/api/v1/imports/{id}/mapping", "setImportMapping")
+            .tag(TAG)
+            .summary("Set how the file's columns map to the class")
+            .description(
+                "Checked against the file's columns and the data model; every problem is reported at once in \
+                 `details`, with `field` such as `columns[3].target.key`. Any dry run is dropped and the job is \
+                 `ready`. In `ready` or `validated`; `409` while a step runs.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<schemas::ImportMapping>>| async move {
+                Ok(Json(jobs::set_mapping(&api.pool, &api.ctx, &api.imports, id, &b).await?))
+            }),
+        route(Method::POST, "/api/v1/imports/{id}/dry-run", "startImportDryRun")
+            .tag(TAG)
+            .summary("Check every row without writing anything")
+            .description(
+                "Runs the rows through the same validation as the CI API and records what each would do, and every \
+                 problem. `409` without a mapping (`mapping_required`) or while a step runs (`invalid_state`); \
+                 `429 import_busy` while another import of the job's owner runs.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .status(StatusCode::ACCEPTED)
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::RateLimited])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(jobs::start_dry_run(&api.pool, &api.ctx, &api.imports, id).await?))
+            }),
+        route(Method::GET, "/api/v1/imports/{id}/issues", "listImportIssues")
+            .tag(TAG)
+            .summary("The problems the dry run and the commit found, by row")
+            .description(
+                "In row order. `value` is the cell, cut to 200 characters. At most 10,000 problems are stored per \
+                 job; `summary.issuesTotal` counts them all. Empty once the file was deleted (24 h after the last \
+                 activity).",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<schemas::ListImportIssuesQuery>, NoBody>| async move {
+                    Ok(Json(jobs::issues(&api.pool, &api.ctx, &api.imports, id, &q).await?))
+                },
+            ),
         route(Method::POST, "/api/v1/imports/{id}/cancel", "cancelImport")
             .tag(TAG)
             .summary("Stop an import")

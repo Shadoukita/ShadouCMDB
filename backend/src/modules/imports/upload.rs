@@ -173,6 +173,31 @@ fn storage_full() -> AppError {
     )
 }
 
+/// Takes the user's import lock for the transaction and refuses with
+/// `429 import_busy` while it is held or another of their jobs is running
+/// (T19). Used by the upload, the dry run and the commit.
+pub async fn lock_user(tx: &mut sqlx::PgConnection, user: Uuid) -> Result<(), AppError> {
+    let busy = || limit("import_busy", "You already have an import running. Wait for it to finish or cancel it.");
+    let locked: bool =
+        sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended('cmdb.import:' || $1::text, 0))")
+            .bind(user)
+            .fetch_one(&mut *tx)
+            .await?;
+    if !locked {
+        return Err(busy());
+    }
+    let running: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM cmdb.import_jobs WHERE created_by_id = $1 AND status IN {RUNNING_STATUSES}"
+    )))
+    .bind(user)
+    .fetch_one(&mut *tx)
+    .await?;
+    if running >= MAX_RUNNING_PER_USER {
+        return Err(busy());
+    }
+    Ok(())
+}
+
 /// Creates the `uploading` job after the per-user limits (T19).
 async fn start(
     pool: &PgPool,
@@ -186,27 +211,15 @@ async fn start(
     let principal = ctx.principal().ok_or_else(AppError::internal)?;
     let mut tx = pool.begin().await?;
     jobs::require_enabled(&mut tx, cfg).await?;
-    let locked: bool =
-        sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended('cmdb.import:' || $1::text, 0))")
-            .bind(principal.user_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    let busy = || limit("import_busy", "You already have an import running. Wait for it to finish or cancel it.");
-    if !locked {
-        return Err(busy());
-    }
-    let (running, unfinished, recent): (i64, i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT count(*) FILTER (WHERE status IN {RUNNING_STATUSES}),
-                count(*) FILTER (WHERE status NOT IN {FINAL_STATUSES}),
+    lock_user(&mut tx, principal.user_id).await?;
+    let (unfinished, recent): (i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FILTER (WHERE status NOT IN {FINAL_STATUSES}),
                 count(*) FILTER (WHERE created_at > now() - interval '1 hour')
          FROM cmdb.import_jobs WHERE created_by_id = $1"
     )))
     .bind(principal.user_id)
     .fetch_one(&mut *tx)
     .await?;
-    if running >= MAX_RUNNING_PER_USER {
-        return Err(busy());
-    }
     if unfinished >= MAX_UNFINISHED_PER_USER {
         return Err(limit(
             "import_limit",

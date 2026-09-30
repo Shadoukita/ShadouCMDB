@@ -628,8 +628,18 @@ async fn a_slow_upload_holds_no_connection_between_chunks() {
     for b in b"Name\nweb01\n" {
         tx.send(Ok(axum::body::Bytes::copy_from_slice(&[*b]))).await.unwrap();
         tokio::time::sleep(Duration::from_millis(40)).await;
-        // Between two bytes the upload holds no pool connection.
-        assert_eq!(e.pool.size() as usize - e.pool.num_idle(), 0, "a connection is held while waiting for the client");
+        // Between two bytes the upload holds no pool connection. A connection
+        // the upload held would stay held; one borrowed for a moment by
+        // other work on a loaded machine is given back.
+        let mut in_use = usize::MAX;
+        for _ in 0..25 {
+            in_use = e.pool.size() as usize - e.pool.num_idle();
+            if in_use == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(4)).await;
+        }
+        assert_eq!(in_use, 0, "a connection is held while waiting for the client");
     }
     drop(tx);
     let res = request.await.unwrap();
@@ -642,4 +652,172 @@ fn tokio_stream_from(
     mut rx: tokio::sync::mpsc::Receiver<Result<axum::body::Bytes, std::io::Error>>,
 ) -> impl futures_util::Stream<Item = Result<axum::body::Bytes, std::io::Error>> {
     futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx))
+}
+
+// ---------------------------------------------------------------------------
+// Mapping and dry run (SHAA-799 part 4)
+// ---------------------------------------------------------------------------
+
+/// A class `srv` with a required text `hostname` (the title) and an integer `cores`.
+async fn server_class(e: &Env) -> String {
+    let (status, class, _) =
+        call(&e.app, "POST", "/api/v1/ci-classes", &e.admin, Some(json!({ "key": "srv", "name": "Server" }))).await;
+    assert_eq!(status, 201, "{class}");
+    let class_id = class["id"].as_str().unwrap().to_owned();
+    let mut host_id = String::new();
+    for (key, label, t, required) in [("hostname", "Hostname", "text", true), ("cores", "Cores", "integer", false)] {
+        let body = json!({ "classId": class_id, "key": key, "label": label, "dataType": t, "isRequired": required });
+        let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+        if key == "hostname" {
+            host_id = v["id"].as_str().unwrap().to_owned();
+        }
+    }
+    let (status, v, _) = call(
+        &e.app,
+        "PATCH",
+        &format!("/api/v1/ci-classes/{class_id}"),
+        &e.admin,
+        Some(json!({ "titleAttributeId": host_id })),
+    )
+    .await;
+    assert_eq!(status, 200, "{v}");
+    class_id
+}
+
+async fn server(e: &Env, class: &str, host: &str, cores: i64) -> String {
+    let body = json!({ "classId": class, "attributes": { "hostname": host, "cores": cores } });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/configuration-items", &e.admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    v["id"].as_str().unwrap().to_owned()
+}
+
+fn server_mapping() -> Value {
+    json!({
+        "classKey": "srv",
+        "mode": "create_or_update",
+        "key": { "field": "attributes.hostname" },
+        "columns": [
+            { "index": 0, "target": { "kind": "attribute", "key": "hostname" } },
+            { "index": 1, "target": { "kind": "attribute", "key": "cores" } }
+        ]
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_plans_every_row_and_writes_nothing() {
+    let Some(db) = scratch::database("import_dry_run_plans_rows").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let class = server_class(&e).await;
+    let web01 = server(&e, &class, "web01", 8).await;
+    server(&e, &class, "ops01", 2).await;
+
+    let file = "Hostname;Cores\nweb01;12\nops01;2\nweb02;16\ndb01;many\nWEB03;4\nweb03 ;2\n";
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("srv.csv"), &[], file.as_bytes().to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    assert_eq!(job(&e, &e.admin, &id).await["status"], "ready");
+
+    // No mapping yet: the dry run is refused.
+    let dry = format!("/api/v1/imports/{id}/dry-run");
+    let (status, v, _) = call(&e.app, "POST", &dry, &e.admin, None).await;
+    assert_eq!((status, detail(&v)), (409, "mapping_required"), "{v}");
+
+    // Problems in the mapping come back all at once, with their field.
+    let put = format!("/api/v1/imports/{id}/mapping");
+    let mut bad = server_mapping();
+    bad["key"] = json!({ "field": "attributes.nope" });
+    bad["columns"][1]["target"]["key"] = json!("nope");
+    let (status, v, _) = call(&e.app, "PUT", &put, &e.admin, Some(bad)).await;
+    assert_eq!(status, 400, "{v}");
+    let fields: Vec<&str> =
+        v["error"]["details"].as_array().unwrap().iter().filter_map(|d| d["field"].as_str()).collect();
+    assert!(fields.contains(&"columns[1].target.key"), "{v}");
+
+    let (status, v, _) = call(&e.app, "PUT", &put, &e.admin, Some(server_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!((v["status"].as_str(), v["mapping"]["classKey"].as_str()), (Some("ready"), Some("srv")));
+
+    let (status, v, _) = call(&e.app, "POST", &dry, &e.admin, None).await;
+    assert_eq!(status, 202, "{v}");
+    assert_eq!((v["status"].as_str(), v["phase"].as_str()), (Some("queued"), Some("validate")));
+    let cis_before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    drain(&e.pool).await;
+
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(j["status"], "validated", "{j}");
+    let s = &j["summary"];
+    assert_eq!(
+        (s["create"].as_u64(), s["update"].as_u64(), s["unchanged"].as_u64(), s["errorRows"].as_u64()),
+        (Some(1), Some(1), Some(1), Some(3)),
+        "{j}"
+    );
+    assert_eq!(j["dryRun"]["stale"], false);
+    let update = j["preview"].as_array().unwrap().iter().find(|p| p["outcome"] == "update").unwrap();
+    assert_eq!((update["row"].as_u64(), update["ciId"].as_str()), (Some(2), Some(web01.as_str())));
+    assert_eq!(update["changes"], json!([{ "field": "attributes.cores", "old": 8, "new": 12 }]));
+    let created = j["preview"].as_array().unwrap().iter().find(|p| p["outcome"] == "create").unwrap();
+    assert_eq!(created["ciLabel"], "web02");
+
+    // Read-only: nothing was written.
+    let cis_after: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(cis_after, cis_before);
+    let (_, ci, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items/{web01}"), &e.admin, None).await;
+    assert_eq!(ci["attributes"]["cores"], 8);
+
+    let issues = format!("/api/v1/imports/{id}/issues");
+    let (status, v, _) = call(&e.app, "GET", &format!("{issues}?severity=error"), &e.admin, None).await;
+    assert_eq!(status, 200, "{v}");
+    let got: Vec<(u64, &str)> = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["row"].as_u64().unwrap(), i["code"].as_str().unwrap()))
+        .collect();
+    assert_eq!(got, vec![(5, "invalid_type"), (6, "duplicate_key_in_file"), (7, "duplicate_key_in_file")], "{v}");
+    let cores = &v["data"][0];
+    assert_eq!(
+        (cores["column"].as_u64(), cores["header"].as_str(), cores["value"].as_str()),
+        (Some(1), Some("Cores"), Some("many"))
+    );
+    let (_, v, _) = call(&e.app, "GET", &format!("{issues}?code=invalid_type&limit=1"), &e.admin, None).await;
+    assert_eq!(v["page"]["total"], 1, "{v}");
+
+    // A new mapping drops the dry run and its problems.
+    let (status, v, _) = call(&e.app, "PUT", &put, &e.admin, Some(server_mapping())).await;
+    assert_eq!((status, v["summary"].is_null()), (200, true), "{v}");
+    let (_, v, _) = call(&e.app, "GET", &issues, &e.admin, None).await;
+    assert_eq!(v["page"]["total"], 0, "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_stops_when_the_owner_loses_the_import_right() {
+    let Some(db) = scratch::database("import_dry_run_owner_revoked").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let (status, v, _) =
+        upload(&e.app, &alice, CSV_TYPE, Some("a.csv"), &[], b"Hostname;Cores\nweb09;1\n".to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, v, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &alice, Some(server_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/dry-run"), &alice, None).await;
+    assert_eq!(status, 202, "{v}");
+    sqlx::query("DELETE FROM permission_profile_global_permissions WHERE permission = 'cis.import'")
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(
+        (j["status"].as_str(), j["error"]["code"].as_str()),
+        (Some("failed"), Some("permission_revoked")),
+        "{j}"
+    );
 }

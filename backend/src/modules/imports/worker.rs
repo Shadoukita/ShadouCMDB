@@ -218,8 +218,9 @@ pub async fn work(pool: &PgPool, cfg: &Arc<ImportConfig>, lease: Lease, stop: &m
 async fn run_phase(pool: PgPool, cfg: Arc<ImportConfig>, lease: Lease, lost: Arc<AtomicBool>) {
     match lease.phase {
         Phase::Analyse => analyse_phase(&pool, &cfg, &lease, &lost).await,
-        // The dry run and the commit arrive with the mapping (SHAA-799 part 4).
-        Phase::Validate | Phase::Commit => {
+        Phase::Validate => super::dry_run::run(&pool, &cfg, &lease, &lost).await,
+        // The commit arrives next (SHAA-799 part 4).
+        Phase::Commit => {
             let _ = fail(&pool, &lease, "internal_error", "This server cannot run this step of the import.").await;
         }
     }

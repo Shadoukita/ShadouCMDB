@@ -313,6 +313,8 @@ pub async fn summary(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<S
 
 /// Registry columns of a new CI; the label follows from its field values (see [`refresh_labels`]).
 pub struct NewItem<'a> {
+    /// None: generated. Bulk import chooses it, so later rows can refer to the CI.
+    pub id: Option<Uuid>,
     pub class_id: Uuid,
     /// None: generated (`cmdb.new_ci_ident()`)
     pub ident: Option<&'a str>,
@@ -325,14 +327,15 @@ pub async fn insert(conn: &mut PgConnection, ci: &NewItem<'_>) -> sqlx::Result<U
     // The label is set from the ident here and replaced once the field values are written.
     sqlx::query_scalar(
         "WITH new AS (SELECT COALESCE($2, cmdb.new_ci_ident()) AS ident)
-         INSERT INTO cmdb.configuration_items (class_id, ident, label, valid_from, valid_until)
-         SELECT $1, new.ident, new.ident, COALESCE($3, now()), $4 FROM new
+         INSERT INTO cmdb.configuration_items (id, class_id, ident, label, valid_from, valid_until)
+         SELECT COALESCE($5, gen_random_uuid()), $1, new.ident, new.ident, COALESCE($3, now()), $4 FROM new
          RETURNING id",
     )
     .bind(ci.class_id)
     .bind(ci.ident)
     .bind(ci.valid_from)
     .bind(ci.valid_until)
+    .bind(ci.id)
     .fetch_one(conn)
     .await
 }
@@ -410,6 +413,22 @@ pub async fn refresh_labels(
 const LABEL_MAX: usize = 500;
 
 /// A title field's value as label text (an inet without its /32, a datetime in UTC).
+/// The labels CIs would get from these values of `field` (their title
+/// field): the same expression [`refresh_labels`] uses, so bulk import can
+/// name a CI it has not created yet exactly as it will be stored (T9).
+/// `None` where the value gives no label (the CI is then labelled by its ident).
+pub async fn labels_of(conn: &mut PgConnection, field: &Field, values: &[String]) -> sqlx::Result<Vec<Option<String>>> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cast = format!("(v::{})", crate::schema::model::pg_type(field.data_type));
+    let sql = format!(
+        "SELECT nullif(btrim(left({}, {LABEL_MAX})), '') FROM unnest($1::text[]) WITH ORDINALITY AS u(v, n) ORDER BY n",
+        label_text(&cast, field.data_type)
+    );
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(values).fetch_all(conn).await
+}
+
 fn label_text(column: &str, t: AttributeDataType) -> String {
     use AttributeDataType as T;
     match t {
@@ -530,7 +549,8 @@ impl ItemValue {
     }
 }
 
-fn number_json(n: f64) -> Value {
+/// A stored number as the API shows it: whole numbers without a fraction.
+pub fn number_json(n: f64) -> Value {
     if n.fract() == 0.0 && n.abs() < 9.0e15 {
         Value::from(n as i64)
     } else {

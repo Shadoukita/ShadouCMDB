@@ -684,7 +684,7 @@ async function main() {
     let job: Json;
     for (let i = 0; i < 100; i++) {
       job = (await call('GET', `/api/v1/imports/${id}`, undefined, 200, {}, { cover: i === 0 })).json;
-      if (job.status !== 'queued' && job.status !== 'analysing') return job;
+      if (!['queued', 'analysing', 'validating'].includes(job.status)) return job;
       await new Promise((r) => setTimeout(r, 100));
     }
     return job;
@@ -698,6 +698,15 @@ async function main() {
   await call('DELETE', `/api/v1/imports/${uploaded.id}`, undefined, 204);
   const second = (await call('POST', '/api/v1/imports', importCsv, 202, { ...importHeaders, 'idempotency-key': `smoke-2-${RUN}` })).json;
   await settled(second.id);
+  await call('POST', `/api/v1/imports/${second.id}/dry-run`, undefined, 409);
+  const serverMapping = { classKey: 'server', mode: 'create_only', columns: [
+    { index: 0, target: { kind: 'attribute', key: 'name' } }, { index: 1, target: { kind: 'attribute', key: 'status' } }] };
+  await call('PUT', `/api/v1/imports/${second.id}/mapping`, { ...serverMapping, columns: [{ index: 0, target: { kind: 'attribute', key: 'nope' } }] }, 400);
+  check((await call('PUT', `/api/v1/imports/${second.id}/mapping`, serverMapping, 200)).json.mapping?.classKey === 'server', 'the mapping is checked and saved');
+  await call('POST', `/api/v1/imports/${second.id}/dry-run`, undefined, 202);
+  const validated = await settled(second.id);
+  check(validated.status === 'validated' && validated.summary?.create === 1 && validated.summary?.errorRows === 0, 'the dry run plans the row without writing it');
+  check((await get(`/api/v1/imports/${second.id}/issues?severity=error`)).json.page.total === 0, 'the dry run found no problems');
   check((await call('POST', `/api/v1/imports/${second.id}/cancel`, undefined, 202)).json.status === 'cancelled', 'an import can be cancelled');
   await call('POST', `/api/v1/imports/${second.id}/cancel`, undefined, 409);
   await call('DELETE', `/api/v1/imports/${second.id}`, undefined, 204);
