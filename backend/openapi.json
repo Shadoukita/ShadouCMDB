@@ -226,6 +226,7 @@
                   },
                   "setupToken": {
                     "type": "string",
+                    "writeOnly": true,
                     "maxLength": 1024,
                     "minLength": 1
                   }
@@ -347,6 +348,7 @@
                   },
                   "password": {
                     "type": "string",
+                    "writeOnly": true,
                     "maxLength": 256,
                     "minLength": 1
                   }
@@ -689,6 +691,7 @@
                 "properties": {
                   "currentPassword": {
                     "type": "string",
+                    "writeOnly": true,
                     "maxLength": 256,
                     "minLength": 1
                   },
@@ -887,6 +890,7 @@
                 "properties": {
                   "currentPassword": {
                     "type": "string",
+                    "writeOnly": true,
                     "maxLength": 256,
                     "minLength": 1
                   }
@@ -1017,6 +1021,7 @@
                 "properties": {
                   "currentPassword": {
                     "type": "string",
+                    "writeOnly": true,
                     "maxLength": 256,
                     "minLength": 1
                   },
@@ -1269,6 +1274,7 @@
                 "properties": {
                   "currentPassword": {
                     "type": "string",
+                    "writeOnly": true,
                     "maxLength": 256,
                     "minLength": 1
                   },
@@ -1954,7 +1960,8 @@
                         {
                           "type": "null"
                         }
-                      ]
+                      ],
+                      "x-multiline": true
                     }
                   }
                 },
@@ -2318,7 +2325,8 @@
                         {
                           "type": "null"
                         }
-                      ]
+                      ],
+                      "x-multiline": true
                     }
                   },
                   "version": {
@@ -3017,7 +3025,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   }
                 },
                 "additionalProperties": false
@@ -3349,7 +3358,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   }
                 },
                 "additionalProperties": false
@@ -3651,7 +3661,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "icon": {
                     "anyOf": [
@@ -4035,7 +4046,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "icon": {
                     "anyOf": [
@@ -4580,7 +4592,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "parentId": {
                     "anyOf": [
@@ -4990,7 +5003,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "parentId": {
                     "anyOf": [
@@ -5826,7 +5840,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "isRequired": {
                     "type": "boolean"
@@ -5912,7 +5927,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "defaultValue": {
                     "anyOf": [
@@ -5930,7 +5946,8 @@
                         "type": "null"
                       }
                     ],
-                    "description": "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). Not allowed for \"reference\" attributes."
+                    "description": "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). Not allowed for \"reference\" attributes.",
+                    "x-multiline": true
                   },
                   "sortOrder": {
                     "type": "integer",
@@ -6307,7 +6324,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "isRequired": {
                     "type": "boolean"
@@ -6393,7 +6411,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "defaultValue": {
                     "anyOf": [
@@ -6411,7 +6430,8 @@
                         "type": "null"
                       }
                     ],
-                    "description": "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). Not allowed for \"reference\" attributes."
+                    "description": "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). Not allowed for \"reference\" attributes.",
+                    "x-multiline": true
                   },
                   "sortOrder": {
                     "type": "integer",
@@ -7013,7 +7033,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "forwardLabel": {
                     "type": "string",
@@ -7376,7 +7397,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "forwardLabel": {
                     "type": "string",
@@ -11694,7 +11716,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "sortOrder": {
                     "type": "integer",
@@ -12061,7 +12084,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "sortOrder": {
                     "type": "integer",
@@ -12517,7 +12541,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "color": {
                     "anyOf": [
@@ -12896,7 +12921,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "color": {
                     "anyOf": [
@@ -15486,7 +15512,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "globalPermissions": {
                     "type": "array",
@@ -15885,7 +15912,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "globalPermissions": {
                     "type": "array",
@@ -16810,7 +16838,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "oidc": {
                     "oneOf": [
@@ -16837,6 +16866,7 @@
                             "anyOf": [
                               {
                                 "type": "string",
+                                "writeOnly": true,
                                 "maxLength": 4096
                               },
                               {
@@ -16920,6 +16950,7 @@
                             "anyOf": [
                               {
                                 "type": "string",
+                                "writeOnly": true,
                                 "maxLength": 4096
                               },
                               {
@@ -17334,7 +17365,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "x-multiline": true
                   },
                   "oidc": {
                     "oneOf": [
@@ -17357,6 +17389,7 @@
                             "anyOf": [
                               {
                                 "type": "string",
+                                "writeOnly": true,
                                 "maxLength": 4096
                               },
                               {
@@ -17435,6 +17468,7 @@
                             "anyOf": [
                               {
                                 "type": "string",
+                                "writeOnly": true,
                                 "maxLength": 4096
                               },
                               {
@@ -17942,7 +17976,8 @@
                             {
                               "type": "null"
                             }
-                          ]
+                          ],
+                          "x-multiline": true
                         },
                         "globalPermissions": {
                           "type": "array",
@@ -18930,7 +18965,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "globalPermissions": {
                   "type": "array",
@@ -19313,7 +19349,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "icon": {
                   "anyOf": [
@@ -19392,7 +19429,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "parent": {
                   "anyOf": [
@@ -19493,7 +19531,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "dataType": {
                   "type": "string",
@@ -19631,7 +19670,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "defaultValue": {
                   "anyOf": [
@@ -19649,7 +19689,8 @@
                       "type": "null"
                     }
                   ],
-                  "description": "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). Not allowed for \"reference\" attributes."
+                  "description": "Value in the same shape the CI API takes for this attribute (a lookup value id for \"lookup\"). Not allowed for \"reference\" attributes.",
+                  "x-multiline": true
                 },
                 "sortOrder": {
                   "type": "integer",
@@ -19695,7 +19736,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "forwardLabel": {
                   "type": "string",
@@ -20979,7 +21021,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "isOperational": {
                   "type": "boolean"
@@ -21026,7 +21069,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "sortOrder": {
                   "type": "integer",
@@ -21071,7 +21115,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "parent": {
                   "anyOf": [
@@ -21107,7 +21152,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "sortOrder": {
                   "type": "integer",
@@ -21208,7 +21254,8 @@
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "x-multiline": true
                 },
                 "sortOrder": {
                   "type": "integer",
@@ -21259,7 +21306,8 @@
                           {
                             "type": "null"
                           }
-                        ]
+                        ],
+                        "x-multiline": true
                       },
                       "color": {
                         "anyOf": [
@@ -23316,7 +23364,8 @@
             "description": "note: the text (required for that kind). Plain text or limited Markdown (emphasis, lists, links); raw HTML is shown as text, never rendered",
             "maxLength": 4000,
             "minLength": 1,
-            "pattern": "\\S"
+            "pattern": "\\S",
+            "x-multiline": true
           },
           "collapsed": {
             "type": "boolean",

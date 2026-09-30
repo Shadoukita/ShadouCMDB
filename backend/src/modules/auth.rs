@@ -20,7 +20,7 @@ use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{
     Body, Check, Either, ErrorWithCookies, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, WithCookies, route,
 };
-use crate::api::schemas::{name_schema, trimmed};
+use crate::api::schemas::{self, name_schema, trimmed};
 use crate::auth::events::{self, LoginMethod, ProviderMfa, RevokeReason};
 use crate::auth::permissions::{ClassRights, GlobalPermission, Permissions};
 use crate::auth::secret::Secret;
@@ -63,7 +63,7 @@ pub struct SetupBody {
 }
 
 fn setup_token_schema() -> Schema {
-    ObjectBuilder::new().schema_type(Type::String).min_length(Some(1)).max_length(Some(1024)).into()
+    schemas::secret_builder().min_length(Some(1)).max_length(Some(1024)).into()
 }
 
 impl Check for SetupBody {
@@ -76,13 +76,18 @@ pub(crate) fn login_field_schema() -> Schema {
     ObjectBuilder::new().schema_type(Type::String).min_length(Some(1)).max_length(Some(password::MAX_LENGTH)).into()
 }
 
+/// A password to check (sign-in, confirming the current one): as typed, never returned.
+pub(crate) fn password_field_schema() -> Schema {
+    schemas::secret_builder().min_length(Some(1)).max_length(Some(password::MAX_LENGTH)).into()
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LoginBody {
     /// Case-insensitive
     #[schema(schema_with = login_field_schema)]
     username: String,
-    #[schema(schema_with = login_field_schema)]
+    #[schema(schema_with = password_field_schema)]
     password: Secret,
 }
 impl Check for LoginBody {}
@@ -98,7 +103,7 @@ impl Check for MfaLoginBody {}
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasswordChange {
-    #[schema(schema_with = login_field_schema)]
+    #[schema(schema_with = password_field_schema)]
     current_password: Secret,
     #[schema(schema_with = password_schema)]
     new_password: Secret,
