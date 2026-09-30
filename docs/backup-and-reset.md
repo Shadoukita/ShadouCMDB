@@ -26,8 +26,8 @@ the database credentials can.
 
 - **Everything in the database:**
   - Every system table in the `cmdb` schema: CIs, relationships, the data model
-    (areas, types, fields, relationship types, lookup lists), locations, owners,
-    statuses, environments, users with their password hashes, permission
+    (areas, types, fields, relationship types, lookup lists), the deprecated
+    statuses, environments, locations and owners tables, users with their password hashes, permission
     profiles, UI settings including the logo and favicon, the schema change
     history and the full audit log.
   - The schema of every area (for example `infrastruktur`) with the table of each

@@ -542,7 +542,9 @@ fn write_routes<R: Resource>(label: &str, by_id: &str) -> Vec<Route> {
 }
 
 /// Create, update and delete of a resource whose writes moved elsewhere ([`Resource::WRITES_GONE`]):
-/// same paths, operation ids and permission as before, so a client learns why instead of getting 404/405.
+/// same paths and operation ids as before, so a client learns why instead of getting 404/405. They
+/// need no permission: nothing can succeed, so every signed-in caller gets the 410 and its message
+/// rather than a 403 that suggests a permission would help.
 fn gone_routes<R: Resource>(label: &str, by_id: &str, message: &'static str) -> Vec<Route> {
     let gone = move || async move { Err::<NoContent, _>(AppError::new(ErrorCode::Gone, message)) };
     let removed = |method: Method, path: &str, op: String, summary: String| {
@@ -550,7 +552,6 @@ fn gone_routes<R: Resource>(label: &str, by_id: &str, message: &'static str) -> 
             .tag(R::TAG)
             .summary(summary)
             .description(message)
-            .requires(GlobalPermission::DatamodelManage)
             .status(StatusCode::GONE)
             .errors(&[ErrorCode::Gone])
     };
