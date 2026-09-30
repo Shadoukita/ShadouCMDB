@@ -8,7 +8,7 @@ use axum::http::Method;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use utoipa::openapi::schema::{KnownFormat, ObjectBuilder, Schema, SchemaFormat, Type};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -109,9 +109,10 @@ pub struct AuditEntry {
     pub new_value: Option<Value>,
     #[schema(required = true)]
     pub request_id: Option<String>,
-    /// True when oldValue and newValue were withheld because the entry is about
-    /// a CI (or a relationship with an endpoint) in a class the caller may not
-    /// view, or about a schema change whose record no longer exists
+    /// True when oldValue and newValue were withheld: a schema change entry
+    /// whose record no longer exists, or a CI entry whose CI moved to a class
+    /// the caller may not view while the page was read (entries about CIs the
+    /// caller may not view are otherwise left out of the list)
     #[sqlx(skip)]
     pub redacted: bool,
 }
@@ -182,7 +183,11 @@ paged!(AuditQuery);
 const COLUMNS: &str = "id, occurred_at, actor_type, actor_id, actor_name, action, entity_type, entity_id, old_value, new_value, request_id";
 
 pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &AuditQuery) -> Result<Page<AuditEntry>, AppError> {
+    let scope = ctx.class_scope(ClassOp::View);
     let filter = |w: &mut Where<'_>| {
+        if let Some(visible) = &scope {
+            push_visible(w.and(), visible);
+        }
         if let Some(t) = q.entity_type {
             w.and().push("entity_type = ").push_bind(t.as_str());
         }
@@ -220,7 +225,7 @@ pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &AuditQuery) -> Result
         q.offset,
     )
     .await?;
-    if let Some(visible) = ctx.class_scope(ClassOp::View) {
+    if let Some(visible) = scope {
         let classes = ci_classes(pool, &referenced_cis(&rows)).await?;
         let changes = schema_changes::visible_changes(pool, &referenced_changes(&rows), &visible).await?;
         redact(&mut rows, &classes, &changes, &visible.into_iter().collect());
@@ -230,12 +235,49 @@ pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &AuditQuery) -> Result
 
 // CI and relationship entries hold the unredacted item as written, so a caller
 // whose view is limited to some classes gets them filtered the way the item
-// and relationship endpoints would: an entry about a CI they may not view (or
-// an edge with such an endpoint) keeps its metadata but loses both values, and
-// a reference attribute into such a CI keeps only its id. A schema change
-// entry holds the writer's record, counts of stored data included, so it shows
-// the summary and impact GET /schema-changes would show the caller (GH#261).
-// Rows are redacted, not dropped, so the page and its total stay consistent.
+// and relationship endpoints would. An entry about a CI they may not view (or
+// an edge with such an endpoint) is left out in SQL by [`push_visible`], so
+// neither the page, its total nor any filter (entityId, requestId, ...) tells
+// that it exists (GH#264). In the entries they may see, a reference attribute
+// into such a CI keeps only its id. A schema change entry holds the writer's
+// record, counts of stored data included, so it shows the summary and impact
+// GET /schema-changes would show the caller (GH#261); its existence is no
+// secret, so it stays listed. [`redact`] applies the same CI rules again to the
+// page, in case a CI changed class between the two queries.
+
+/// The condition that keeps only entries the caller may see in full, given the
+/// classes they may view: the rules of [`redact`], in SQL. A CI that no longer
+/// exists counts as hidden. `x IN (uncorrelated subquery)` runs as one hashed
+/// subplan per query, not as a lookup per audit row. Ids inside the values are
+/// compared as text, in the form the API writes them (`uuid::text`), which
+/// spares a cast per row; anything else matches nothing and counts as hidden.
+fn push_visible(qb: &mut QueryBuilder<Postgres>, visible: &[Uuid]) {
+    let texts: Vec<String> = visible.iter().map(Uuid::to_string).collect();
+    qb.push(
+        "(entity_type NOT IN ('configuration_items', 'ci_relationships') OR (entity_type = 'configuration_items' \
+         AND entity_id IN (SELECT id FROM cmdb.configuration_items WHERE class_id = ANY(",
+    )
+    .push_bind(visible.to_vec())
+    .push("))");
+    // A CI can change class, so the class it had in either value must be viewable as well.
+    for v in ["old_value", "new_value"] {
+        qb.push(format!(" AND ({v} IS NULL OR {v}->'classId' IS NULL OR coalesce({v}->>'classId' = ANY("))
+            .push_bind(texts.clone())
+            .push("), false))");
+    }
+    qb.push(") OR (entity_type = 'ci_relationships'");
+    for v in ["old_value", "new_value"] {
+        qb.push(format!(" AND ({v} IS NULL OR ("));
+        for (i, end) in ["sourceCiId", "targetCiId"].into_iter().enumerate() {
+            qb.push(if i == 0 { "" } else { " AND " })
+                .push(format!("{v}->>'{end}' IN (SELECT id::text FROM cmdb.configuration_items WHERE class_id = ANY("))
+                .push_bind(visible.to_vec())
+                .push("))");
+        }
+        qb.push("))");
+    }
+    qb.push("))");
+}
 
 fn uuid_at(value: &Value, key: &str) -> Option<Uuid> {
     value.get(key)?.as_str()?.parse().ok()
@@ -355,7 +397,7 @@ pub fn routes() -> Vec<Route> {
             .tag("Audit log")
             .summary("Change history (read-only, paginated, newest first by default)")
             .description(
-                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view gets `oldValue` and `newValue` withheld (both null, `redacted` true) on entries about a CI of another class and on relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value; in the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do). Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
+                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do). Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
             )
             .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<AuditQuery>, NoBody>| async move {
@@ -501,5 +543,139 @@ mod tests {
         let rows = run(vec![entry("ci_classes", id(20), None, Some(json!({ "id": id(20), "name": "Server" })))]);
         assert!(!rows[0].redacted);
         assert!(rows[0].new_value.is_some());
+    }
+
+    fn query(f: impl FnOnce(&mut AuditQuery)) -> AuditQuery {
+        let mut q = AuditQuery {
+            limit: 1,
+            offset: 0,
+            sort: Sort { field: "occurredAt".into(), desc: true },
+            entity_type: None,
+            entity_id: None,
+            action: None,
+            actor_id: None,
+            actor_name: None,
+            request_id: None,
+            from: None,
+            to: None,
+        };
+        f(&mut q);
+        q
+    }
+
+    fn viewer(classes: &[Uuid]) -> RequestContext {
+        use crate::auth::permissions::{ClassRights, Permissions};
+        let view = ClassRights { view: true, ..Default::default() };
+        let permissions = Permissions {
+            global: [GlobalPermission::AuditView, GlobalPermission::DatamodelManage].into(),
+            classes: classes.iter().map(|c| (*c, view)).collect(),
+            ..Default::default()
+        };
+        let principal = crate::auth::Principal {
+            user_id: Uuid::new_v4(),
+            username: "auditor".into(),
+            credential: crate::auth::Credential::Token,
+            permissions,
+        };
+        RequestContext::user(std::sync::Arc::new(principal), "test".into())
+    }
+
+    /// GH#264: entries about CIs the caller may not view are left out in SQL, so
+    /// neither the rows nor `total` under any filter reveal them.
+    #[tokio::test]
+    async fn entries_about_hidden_cis_are_neither_listed_nor_counted() {
+        let Some(db) = crate::db::scratch::database("audit_hidden_cis_are_not_counted").await else { return };
+        let pool = &db.pool;
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        crate::seed::seed_demo_data(pool).await.unwrap();
+        let ci = |label: &'static str| async move {
+            sqlx::query_as::<_, (Uuid, Uuid)>("SELECT id, class_id FROM configuration_items WHERE label = $1")
+                .bind(label)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        };
+        let (srv, server) = ci("fra1-esx-01").await;
+        let (sw, network_device) = ci("fra1-tor-a01").await;
+        let (vm, vm_class) = ci("crm-app-01").await;
+        let insert = |entity_type: &'static str, entity: Uuid, old: Option<Value>, new: Option<Value>| async move {
+            sqlx::query(
+                "INSERT INTO audit_log (actor_type, actor_name, action, entity_type, entity_id, old_value, new_value, request_id)
+                 VALUES ('user', 'admin', 'delete', $1, $2, $3, $4, 'purge-1')",
+            )
+            .bind(entity_type)
+            .bind(entity)
+            .bind(old)
+            .bind(new)
+            .execute(pool)
+            .await
+            .unwrap();
+        };
+        // A purge of a type the caller may not view: two CIs that no longer exist, one
+        // edge from one of them, and the type's own (unrestricted) entry.
+        let (gone1, gone2, gone_class) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        insert("configuration_items", gone1, Some(json!({ "classId": gone_class })), None).await;
+        insert("configuration_items", gone2, Some(json!({ "classId": gone_class })), None).await;
+        insert("ci_relationships", Uuid::new_v4(), Some(edge(gone1, srv)), None).await;
+        insert("ci_classes", gone_class, Some(json!({ "id": gone_class, "name": "Secrets" })), None).await;
+        // Edges: both endpoints visible; one hidden; a malformed endpoint.
+        let (both, half, bad) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        insert("ci_relationships", both, Some(edge(srv, sw)), None).await;
+        insert("ci_relationships", half, Some(edge(vm, srv)), None).await;
+        insert("ci_relationships", bad, Some(json!({ "sourceCiId": srv, "targetCiId": "nope" })), None).await;
+        // A visible CI that was in a hidden class before.
+        insert(
+            "configuration_items",
+            sw,
+            Some(json!({ "classId": vm_class })),
+            Some(json!({ "classId": network_device })),
+        )
+        .await;
+
+        let restricted = viewer(&[server, network_device]);
+        let admin = RequestContext::system("test", "test");
+        let total = |ctx: RequestContext, q: AuditQuery| async move { list(pool, &ctx, &q).await.unwrap() };
+        let purge = |t: EntityType| query(move |q| (q.request_id, q.entity_type) = (Some("purge-1".into()), Some(t)));
+
+        // The purge's counts: the full ones for a caller who may view every class, none otherwise.
+        assert_eq!(total(admin.clone(), purge(EntityType::ConfigurationItems)).await.page.total, 3);
+        assert_eq!(total(restricted.clone(), purge(EntityType::ConfigurationItems)).await.page.total, 0);
+        assert_eq!(total(admin.clone(), purge(EntityType::CiRelationships)).await.page.total, 4);
+        let edges = total(restricted.clone(), query(|q| (q.request_id, q.limit) = (Some("purge-1".into()), 50))).await;
+        let ids: HashSet<Uuid> = edges.data.iter().map(|e| e.entity_id).collect();
+        assert_eq!(ids, HashSet::from([both, gone_class]), "{:?}", edges.data);
+        assert_eq!(edges.page.total, 2);
+        assert!(edges.data.iter().all(|e| !e.redacted && e.old_value.is_some()));
+
+        // A hidden CI has no history for the caller; a visible one keeps it.
+        let history = |ci: Uuid| query(move |q| (q.entity_id, q.limit) = (Some(UuidList(vec![ci])), 50));
+        let hidden = total(restricted.clone(), history(vm)).await;
+        assert_eq!((hidden.page.total, hidden.data.len()), (0, 0));
+        assert_eq!(total(admin.clone(), history(vm)).await.page.total, 1);
+        let shown = total(restricted.clone(), history(srv)).await;
+        assert_eq!(shown.page.total, 1);
+        assert!(!shown.data[0].redacted && shown.data[0].new_value.is_some());
+
+        // The total is exactly what the caller can page through.
+        let everything = total(
+            restricted.clone(),
+            query(|q| (q.entity_type, q.limit) = (Some(EntityType::ConfigurationItems), 200)),
+        )
+        .await;
+        assert_eq!(everything.page.total, everything.data.len() as i64);
+        assert!(everything.data.iter().all(|e| !e.redacted), "nothing left to withhold");
+        let cis: HashSet<Uuid> = everything.data.iter().map(|e| e.entity_id).collect();
+        let viewable: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM configuration_items WHERE class_id = ANY($1)")
+            .bind(vec![server, network_device])
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        assert_eq!(cis, viewable.into_iter().collect());
+        assert!(cis.contains(&srv) && !cis.contains(&vm));
+        assert!(!everything.data.iter().any(|e| e.entity_id == sw && e.old_value.is_some()), "was in a hidden class");
+
+        // A caller with no class at all sees none of it.
+        assert_eq!(total(viewer(&[]), purge(EntityType::CiRelationships)).await.page.total, 0);
+        db.drop().await;
     }
 }
