@@ -7,12 +7,17 @@ The backend is the only database client. Everything the UI needs goes through th
   same JSON Schemas the document publishes. The running server serves it at `GET /openapi.json`, with a
   browsable UI (Swagger UI, bundled in the binary) at `GET /docs`, only when `API_DOCS` allows it: `off`
   (default, 404), `authenticated` (any signed-in user; 401 otherwise) or `public`.
-- **Base path:** `/api/v1`. The health probes `/healthz` and `/readyz` sit at the root.
-- **Sign-in required:** every operation except `/healthz`, `/readyz`, `GET /api/v1/version`,
-  `GET/POST /api/v1/setup` and `POST /api/v1/auth/login` needs a session (see
-  [Authentication and permissions](#authentication-and-permissions)). The web UI's static files stay public.
+- **Base path:** `/api/v1`. The health probes `/healthz` and `/readyz` sit at the root, and the binary serves
+  `GET /.well-known/security.txt` (RFC 9116, public) there too; it is not part of the API contract.
+- **Sign-in required:** every operation except the twelve public ones needs a session (see
+  [Authentication and permissions](#authentication-and-permissions)): `/healthz`, `/readyz`,
+  `GET /api/v1/version`, `GET/POST /api/v1/setup`, `POST /api/v1/auth/login`, `POST /api/v1/auth/login/mfa`,
+  `GET /api/v1/auth/providers`, `GET /api/v1/auth/oidc/{id}/start`, `GET /api/v1/auth/oidc/callback`,
+  `GET /api/v1/ui-settings/branding` and `GET /api/v1/ui-settings/assets/{kind}`. The spec lists them without
+  `security`. The web UI's static files stay public.
 - **Version:** `GET /healthz` returns `{"status":"ok","version":"…"}`; `GET /api/v1/version` returns the
-  version, the API major version (`v1`) and the number of migrations the build ships.
+  version, the API major version (`v1`) and the number of migrations the build ships. While migrations are
+  pending it is the only `/api/v1` route that still answers (see `SCHEMA_NOT_MIGRATED` below).
 - **Timeouts:** a request not answered within `HTTP_REQUEST_TIMEOUT_SECS` (default 120) gets
   `408 REQUEST_TIMEOUT` and its transaction is rolled back.
 - **Request bodies:** at most 1 MiB (16 MiB on `POST /api/v1/admin/config/import`, 64 KiB on the public
@@ -32,7 +37,7 @@ The backend is the only database client. Everything the UI needs goes through th
 | --- | --- |
 | Bodies | JSON only (`Content-Type: application/json`); any other type gets `415`. Unknown fields are rejected with `400`. |
 | Create / update / delete | `POST` returns `201` and the created resource. `PATCH` is partial and returns the full resource. `DELETE` returns `204`. |
-| Pagination | `limit` (1–200, default 50) and `offset`. Responses are `{ "data": [...], "page": { "limit", "offset", "total" } }`. There is no unpaginated collection. |
+| Pagination | `limit` (1–200, default 50) and `offset` (0–1 000 000; a larger value is a `400`). Responses are `{ "data": [...], "page": { "limit", "offset", "total" } }`, except `GET /ci-classes/{id}/attributes` and `GET /admin/templates` (`{ "data": [...] }`), every `…/{id}/usage` route (`{ "inUse", "data": [...] }`) and `GET /admin/identity-providers` (a bare array). |
 | Sorting | `sort=name` sorts ascending, `sort=-name` descending. Each endpoint lists its allowed fields in the spec. |
 | Search | `q` does a case-insensitive search. On CIs it covers the label, the ident and attribute values (text and enum by substring, IP and CIDR by prefix, and IP containment when `q` is an IP or CIDR). |
 | Id filters | Accept comma-separated lists (`lookupValueId=a,b`) or repeated keys. |
@@ -40,7 +45,8 @@ The backend is the only database client. Everything the UI needs goes through th
 | Audit | Every write adds an `audit_log` row in the same transaction, with the signed-in user as the actor (`actorType: user`, `actorId`, `actorName` = username). `X-Request-Id` is echoed back and stored. |
 | Sessions | The `shadoucmdb_session` cookie (see below). Writes (`POST`, `PUT`, `PATCH`, `DELETE`) also need `X-CSRF-Token`. |
 | API tokens | Scripts and services send `Authorization: Bearer scmdb_…` instead; no cookie, no CSRF token (see [API tokens](#api-tokens)). |
-| CORS | Off by default. Set `CORS_ORIGINS` when the UI is served from another origin; those origins may send credentials (the session cookie). |
+| Caching | Every `/api` response carries `Cache-Control: no-store` and `Vary: Cookie`, so a caching reverse proxy does not store it. |
+| CORS | Off by default. Set `CORS_ORIGINS` when the UI is served from another origin; those origins may send credentials (the session cookie), use the methods `GET`, `POST`, `PUT`, `PATCH` and `DELETE`, send the headers `Content-Type`, `X-Request-Id` and `X-CSRF-Token`, and read only `X-Request-Id` from a response. `Authorization` is not allowed, so a browser on another origin cannot use an API token, and `Retry-After` and `Content-Disposition` are not exposed to it. |
 
 ## Error envelope
 
@@ -66,8 +72,10 @@ Every non-2xx response has this shape:
 | 401 | `MFA_REQUIRED` | Login only: the password was right and the user has two-factor authentication; send the code to `POST /auth/login/mfa`. |
 | 403 | `FORBIDDEN` | Signed in, but a global permission or a class permission is missing; or an API token on a route that needs a session. A field change checked against stored values (a type change, a new enum list) also needs the view right on the field's type and every type below it (`details[].code` `view_required`). |
 | 403 | `CSRF_TOKEN_INVALID` | A write without the session's `X-CSRF-Token` header. |
-| 403 | `MFA_ENROLMENT_REQUIRED` | A profile the user holds requires two-factor authentication and they have not set it up: only sign-out, `/auth/me`, the password change and the `/auth/mfa` set-up routes answer. |
+| 403 | `MFA_ENROLMENT_REQUIRED` | A profile the user holds requires two-factor authentication and they have not set it up: only sign-out, `/auth/me`, the password change and the `/auth/mfa` routes except `recovery-codes` answer. |
+| 403 | `MFA_REQUIRED_FOR_TOKEN` | `POST /admin/api-tokens` would create a token that is refused because its owner must use two-factor authentication and the creating session did not prove a second factor (see [API tokens](#api-tokens)). |
 | 404 | `NOT_FOUND` | The id does not exist, or the route does not exist. |
+| 408 | `REQUEST_TIMEOUT` | The request was not answered within `HTTP_REQUEST_TIMEOUT_SECS`, or an unauthenticated caller was too slow to send its body (`HTTP_HEADER_READ_TIMEOUT_SECS`). |
 | 409 | `CONFLICT` | A duplicate (unique key or live edge), or a write to a soft-deleted CI or relationship. |
 | 409 | `IN_USE` | A hard delete of a row that is still referenced. `details[]` names each kind of reference and its count (`field` is the kind, e.g. `configurationItems`; `code` is `in_use`). Retire the row with `PATCH {"isActive": false}` instead. |
 | 409 | `VERSION_CONFLICT` | A stale `version` on a CI `PATCH`. |
@@ -77,11 +85,12 @@ Every non-2xx response has this shape:
 | 422 | `SCHEMA_CHANGE_REFUSED` | A data-loss guard stopped a schema change: a type change some stored values would not survive, `isRequired` while assets lack a value, removing stored enum values, or a purge that is not allowed yet (still active, wrong `confirm`, dependants). Nothing was changed. |
 | 422 | `SECRET_REQUIRED` | `PATCH /admin/identity-providers/{id}` changes `oidc.issuerUrl`, the scheme, host or port of `ldap.url`, or `ldap.bindDn` without sending the stored secret again. `details[]` names `oidc.clientSecret` or `ldap.bindPassword` with code `secret_required`. Nothing was changed. |
 | 409 | `CONFLICT` (password) | `PUT /auth/password` or `PUT /admin/users/{id}/password` for an account that signs in through an identity provider. |
-| 429 | `RATE_LIMITED` | Too many failed sign-ins (for this username, or on the whole server), or too many wrong current passwords on `PUT /auth/password`; wait for `Retry-After` seconds. |
+| 429 | `RATE_LIMITED` | Too many failed attempts: sign-ins (for this username, or on the whole server), wrong current passwords on `PUT /auth/password`, wrong passwords or codes on the `/auth/mfa` routes, or wrong setup tokens on `POST /setup`. Also a concurrent attempt while the free failures left are already in flight, and a sign-in when the slow lane is full (see *Login backoff*). Wait for `Retry-After` seconds. |
 | 413 / 415 | `PAYLOAD_TOO_LARGE` / `UNSUPPORTED_MEDIA_TYPE` | The body is over 1 MiB (16 MiB for a configuration import), or is not JSON. |
 | 503 | `DATABASE_UNAVAILABLE` | PostgreSQL is unreachable. |
-| 503 | `IDENTITY_PROVIDER_UNAVAILABLE` | Login only: the LDAP/AD directory that would check this username could not be reached (or its certificate is not trusted). Local accounts still sign in. |
-| 503 | `SCHEMA_NOT_MIGRATED` | The database has migrations pending (the message says how many are applied). Run `shadoucmdb migrate`; the server picks the change up without a restart. |
+| 503 | `SERVER_BUSY` | `HTTP_MAX_CONCURRENT_REQUESTS` requests are already in progress; retry after the `Retry-After` header. |
+| 503 | `IDENTITY_PROVIDER_UNAVAILABLE` | Login and the `/auth/mfa` routes that check a directory password: the LDAP/AD directory that would check this username could not be reached (or its certificate is not trusted). Local accounts still sign in. |
+| 503 | `SCHEMA_NOT_MIGRATED` | The database has migrations pending (the message says how many are applied). Every `/api/v1` route answers it, public ones included, except `GET /api/v1/version`, so nobody can sign in to the web UI until the migrations are applied (unknown paths still get `404`). Run `shadoucmdb migrate`; the server picks the change up without a restart. |
 | 500 | `INTERNAL_ERROR` | A bug. The message is generic and the log carries `requestId`. |
 
 ## Endpoints
@@ -92,18 +101,18 @@ Every non-2xx response has this shape:
 | Graph | `GET /configuration-items/{id}/graph?depth=1..6&direction=both\|outgoing\|incoming&relationshipTypeId=&maxNodes=` | Returns `{ nodes[], edges[], truncated }` in one call. `nodes[].depth` is the number of hops from the root. Each edge embeds its type and labels. |
 | Search | `GET /search?q=` | Results are ranked (exact label or ident first, then label prefix, then similarity), each with `matches[]` naming the field that hit (`label`, `ident`, `attributes.hostname`, …). It takes the same filters as the CI list, so it returns active CIs unless `active=false\|all`. |
 | Relationships | `GET/POST /relationships`, `GET/PATCH/DELETE /relationships/{id}` | Filters: `ciId` (either end), `sourceCiId`, `targetCiId`, `relationshipTypeId`, `deleted`. Each edge embeds `type`, `source` and `target`. PATCH changes only `notes` or `relationshipTypeId`. DELETE is a soft delete. |
-| Areas | `GET/POST /areas`, `GET/PATCH/DELETE /areas/{id}`, `POST /areas/{id}/purge` | An area is a menu tab and a PostgreSQL schema ("Bestand" → `bestand`). `key` is derived from `name` unless given, and immutable. DELETE archives; purge (`{"confirm": "<key>"}`) drops the empty schema. Writes need `datamodel.manage`. |
-| CI classes (types) | `GET/POST /ci-classes`, `GET/PATCH/DELETE /ci-classes/{id}`, `GET /ci-classes/{id}/attributes`, `GET /ci-classes/{id}/usage`, `POST /ci-classes/{id}/purge` | Each type has a table `<area>.<key>` and a reporting view `<area>.v_<key>`. `areaId` is immutable; left out on create, the type goes into its parent's area, or a root type into `infrastruktur` (created if missing). DELETE archives; purge drops the table with the type's CIs. `/attributes` returns every attribute a CI of this class can carry, inherited ones included, so the UI can render the CI form from it. A class has `name`, `parentId`, `isAbstract`, `icon`, `color` (`#rrggbb`), `sortOrder`, `isActive` (archive) and `titleAttributeId` (the field of the class or an ancestor that labels its CIs; a new subtype takes its parent's). `key` is immutable. Filters: `parentId` (`none` for roots), `descendantOf`, `isAbstract`, `isActive`; `sort=sortOrder` for menus. |
-| Attribute definitions (fields) | `GET/POST /attribute-definitions`, `GET/PATCH/DELETE /attribute-definitions/{id}`, `GET /attribute-definitions/{id}/usage`, `POST /attribute-definitions/{id}/purge` | Each field is a typed column of its type's table. Filters: `classId`, `effectiveForClassId`, `dataType`. A definition carries `label`, `isRequired`, `enumValues`, `validation`, `groupName` (the form section), `sortOrder` (order within the section), `helpText` and `defaultValue`. `classId`, `key`, `referenceClassId` and `lookupListId` cannot change after creation; `dataType` can, between the scalar types, after a dry run of every stored value. DELETE archives; purge drops the column. |
+| Areas | `GET/POST /areas`, `GET/PATCH/DELETE /areas/{id}`, `POST /areas/{id}/purge` | An area is a menu tab and a PostgreSQL schema ("Bestand" → `bestand`). `key` is derived from `name` unless given, and immutable. DELETE archives; purge (`{"confirm": "<key>"}`) drops the empty schema. Filter: `isActive`. Writes need `datamodel.manage`. |
+| CI classes (types) | `GET/POST /ci-classes`, `GET/PATCH/DELETE /ci-classes/{id}`, `GET /ci-classes/{id}/attributes`, `GET /ci-classes/{id}/usage`, `POST /ci-classes/{id}/purge` | Each type has a table `<area>.<key>` and a reporting view `<area>.v_<key>`. `areaId` is immutable; left out on create, the type goes into its parent's area, or a root type into `infrastruktur` (created if missing). DELETE archives; purge drops the table with the type's CIs. `/attributes` returns every attribute a CI of this class can carry, inherited ones included, so the UI can render the CI form from it; archived attributes are left out unless `includeInactive=true`. A class has `name`, `parentId`, `isAbstract`, `icon`, `color` (`#rrggbb`), `sortOrder`, `isActive` (archive) and `titleAttributeId` (the field of the class or an ancestor that labels its CIs; a new subtype takes its parent's). `key` is immutable. Filters: `parentId` (`none` for roots), `descendantOf`, `areaId`, `isAbstract`, `isActive`; `sort=sortOrder` for menus. |
+| Attribute definitions (fields) | `GET/POST /attribute-definitions`, `GET/PATCH/DELETE /attribute-definitions/{id}`, `GET /attribute-definitions/{id}/usage`, `POST /attribute-definitions/{id}/purge` | Each field is a typed column of its type's table. Filters: `classId`, `effectiveForClassId`, `dataType`, `isActive`, `isRequired`. A definition carries `label`, `isRequired`, `enumValues`, `validation`, `groupName` (the form section), `sortOrder` (order within the section), `helpText` and `defaultValue`. `classId`, `key`, `referenceClassId` and `lookupListId` cannot change after creation; `dataType` can, between the scalar types, after a dry run of every stored value. DELETE archives; purge drops the column. |
 | Schema changes | `GET /schema-changes`, `GET /schema-changes/{id}`, `POST /schema-changes/preview`, `POST /schema-changes/reconcile`, `GET /technical-names?name=&kind=` | Needs `datamodel.manage`. The history of every DDL plan (actor, time, exact statements, impact). `preview` runs any data model operation in a transaction that is rolled back and returns its DDL and impact. `reconcile` brings the catalog and reporting grants in line with the metadata. `technical-names` previews the key a display name maps to. |
-| Relationship types | `GET/POST /relationship-types`, `GET/PATCH/DELETE /relationship-types/{id}`, `GET /relationship-types/{id}/usage` | `?sourceClassId=&targetClassId=` returns only the types legal between two classes, which is what the "add relationship" picker needs. |
-| Relationship rules | `GET/POST /relationship-rules`, `GET/PATCH/DELETE /relationship-rules/{id}`, `GET /relationship-rules/{id}/usage` | Define which classes each type may connect. A rule also covers the subclasses of its classes. Deleting a rule keeps existing relationships; its usage counts them. |
-| Statuses, environments, locations, owners (deprecated, read-only) | `GET /{statuses\|environments\|locations\|owners}`, `GET /…/{id}`, `GET /…/{id}/usage` | **Deprecated since migration 0016:** CIs no longer refer to these rows; status, environment, owner and location are lookup attributes on the lists `status`, `environment`, `owner` and `location`, whose values kept the ids of these rows. Change those values through `/lookup-list-values`. `POST`, `PATCH` and `DELETE` here answer `410 GONE` (after the usual `401`/`403` checks) and change nothing; the reads stay for history until a later release. Filters include `isActive`, `isOperational` (statuses), `parentId` and `locationType` (locations), and `kind` (owners). |
+| Relationship types | `GET/POST /relationship-types`, `GET/PATCH/DELETE /relationship-types/{id}`, `GET /relationship-types/{id}/usage` | `?sourceClassId=&targetClassId=` returns only the types legal between two classes, which is what the "add relationship" picker needs. Filter: `isActive`. |
+| Relationship rules | `GET/POST /relationship-rules`, `GET/PATCH/DELETE /relationship-rules/{id}`, `GET /relationship-rules/{id}/usage` | Define which classes each type may connect. A rule also covers the subclasses of its classes. Deleting a rule keeps existing relationships; its usage counts them. Filters: `relationshipTypeId`, `sourceClassId`, `targetClassId` (rules on that class or an ancestor). |
+| Statuses, environments, locations, owners (deprecated, read-only) | `GET /{statuses\|environments\|locations\|owners}`, `GET /…/{id}`, `GET /…/{id}/usage` | **Deprecated since migration 0016:** CIs no longer refer to these rows; status, environment, owner and location are lookup attributes on the lists `status`, `environment`, `owner` and `location`, whose values kept the ids of these rows. Change those values through `/lookup-list-values`. `POST`, `PATCH` and `DELETE` here answer `410 GONE` (after the usual `401`/`403` checks) and change nothing; the reads stay for history until a later release. Filters include `isActive`, `isOperational` (statuses), `parentId` and `locationType` (locations), and `kind` and `id` (owners). |
 | Lookup lists | `GET/POST /lookup-lists`, `GET/PATCH/DELETE /lookup-lists/{id}`, `GET/POST /lookup-list-values`, `GET/PATCH/DELETE /lookup-list-values/{id}`, `GET /…/{id}/usage` | Lists an administrator defines (e.g. "Support contract": Gold, Silver). Values have `key`, `name`, `color`, `sortOrder`, `isActive`; filter values by `listId`. A `lookup` attribute stores one value by id. A list can be deleted with its values only while no attribute uses it and no list depends on it. Dependent lists: a list's `parentListId`, each value's `parentValueId` (filter `parentValueId=<id>|none`) and a field's `parentAttributeId`; see [Dependent lookup lists](data-model.md#dependent-lookup-lists). |
 | Templates | `GET /admin/templates`, `POST /admin/templates/{key}/install` | Needs `datamodel.manage`. Lists the starter templates (today `it_infrastructure`: classes, attributes, relationship types and rules, lookup lists and their values) with what each brings, how much of it exists already and a `status` (`not_installed`, `partial`, `installed`). Install adds every missing row in one transaction and leaves existing ones alone, so it is idempotent; the response counts `created` and `existing` rows. Every created row is audited with the installing user. |
 | UI settings | `GET/PUT /ui-settings`, `GET /ui-settings/branding`, `GET /ui-settings/versions`, `GET /ui-settings/versions/{version}`, `POST /ui-settings/versions/{version}/restore`, `GET/PUT/DELETE /ui-settings/assets/{logo\|favicon}` | One settings document for every user: branding, navigation, dashboard widgets, list views and detail/form layouts per class. Any signed-in user reads it; writes need `customization.manage`. `branding` and the images are public (login page). See [Customization](#customization-and-configuration-exportimport). |
 | Configuration export/import | `GET /admin/config/export`, `POST /admin/config/import?mode=dry_run\|apply` | Needs `config.export_import`; importing a non-empty `dataModel` or `lookups` section also needs `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Import needs a session (API tokens get `403`); export accepts tokens, and only includes `permissionProfiles` when the caller also holds `profiles.manage` or `users.manage`. One JSON file with the data model, lookups, permission profiles and UI settings (no users, passwords or CIs). See [Customization](#customization-and-configuration-exportimport). |
-| Audit log | `GET /audit-log` | Read-only, needs `audit.view`. Filters: `entityType`, `entityId`, `action`, `actorId`, `actorName`, `requestId`, `from`, `to`. Also records authentication events (`entityType=sessions`; actions `login.success`, `login.failure`, `login.locked`, `logout`, `session.revoke`) with the client `ipAddress` and `userAgent` in `newValue` (plus `peerIpAddress` when the TCP peer differs from the forwarded address); a failed sign-in has no actor id and stores only the attempted username. A schema change entry (`entityType=schema_changes`) shows `summary` and `impact` as `GET /schema-changes/{id}` shows them to the caller, so counts of stored data only with the view right on every type they describe. A caller who may view only some classes does not get entries about a CI of another class (or a CI that no longer exists) nor relationship entries with an endpoint in one: they are left out of the page and of `page.total` under every filter, `entityId` and `requestId` included, so the audit log does not reveal hidden CIs or how many there were. See [data model](data-model.md#auditing). |
+| Audit log | `GET /audit-log` | Read-only, needs `audit.view`. Filters: `entityType`, `entityId`, `action`, `actorId`, `actorName`, `requestId`, `from`, `to`; `sort=occurredAt` or `-occurredAt`. Also records authentication events (`entityType=sessions`; actions `login.success`, `login.failure`, `login.locked`, `logout`, `session.revoke`) with the client `ipAddress` and `userAgent` in `newValue` (plus `peerIpAddress` when the TCP peer differs from the forwarded address); a failed sign-in has no actor id and stores only the attempted username. A schema change entry (`entityType=schema_changes`) shows `summary` and `impact` as `GET /schema-changes/{id}` shows them to the caller, so counts of stored data only with the view right on every type they describe. A caller who may view only some classes does not get entries about a CI of another class (or a CI that no longer exists) nor relationship entries with an endpoint in one: they are left out of the page and of `page.total` under every filter, `entityId` and `requestId` included, so the audit log does not reveal hidden CIs or how many there were. See [data model](data-model.md#auditing). |
 | Setup | `GET /setup`, `POST /setup` | `setupRequired` is true while no user exists. `POST` creates the first user with the Administrator profile and signs them in; it needs `setupToken`, the one-time setup token from the server log (`403` if wrong; `429` while wrong tokens have locked setup for the client's network); `409` once any user exists, never throttled. |
 | Authentication | `POST /auth/login`, `POST /auth/login/mfa`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` | `login` and `me` return `{ user, permissions, mfa, csrfToken }`. `permissions` is the union of the user's profiles: `administrator`, `global[]`, `allClasses` and per-class `classes[]`. Changing your own password needs `currentPassword`, ends your other sessions and revokes your API tokens. |
 | Enterprise sign-in | `GET /auth/providers`, `GET /auth/oidc/{id}/start`, `GET /auth/oidc/callback` | Public. The sign-in page's OIDC buttons and whether a directory is enabled; the OIDC redirect flow (browser navigations, not fetches). See [Enterprise sign-in](#enterprise-sign-in). |
@@ -112,7 +121,7 @@ Every non-2xx response has this shape:
 | Users | `GET/POST /admin/users`, `GET/PATCH/DELETE /admin/users/{id}`, `PUT /admin/users/{id}/password`, `DELETE /admin/users/{id}/mfa` | Needs `users.manage`. `PATCH` renames, disables (`isActive: false`, which ends the user's sessions) and assigns profiles (`profileIds` replaces the set). `PUT …/password` sets a new password, ends the user's sessions and revokes their API tokens (`revokedBy` is the administrator), and also the working tokens the user created for other owners. `DELETE …/mfa` turns off a user's two-factor authentication (lost device). A user shows `mfaEnabled` and `identityProvider` (null for a local account). Filters: `q`, `isActive`, `profileId`. |
 | API tokens | `GET/POST /admin/api-tokens`, `GET/DELETE /admin/api-tokens/{id}` | Needs `users.manage` and a session. `POST {name, profileId, expiresAt, userId?}` answers `201 { token, secret }`; the secret is in that response only. `DELETE` revokes (the token stays listed with `status: revoked`). Filters: `q`, `userId` (owner), `createdBy` (the creating user, `createdByUserId`), `status` (`active`, `expired`, `revoked`). See [API tokens](#api-tokens). |
 | Permission profiles | `GET/POST /admin/profiles`, `GET/PATCH/DELETE /admin/profiles/{id}`, `POST /admin/profiles/{id}/clone` | Writes need `profiles.manage` and a session (API tokens get `403`); reading also works with `users.manage`. A profile is `{ name, description, globalPermissions[], classPermissions[], requireMfa }`; `PATCH` replaces whichever list it sends. `requireMfa` makes two-factor authentication mandatory for its holders. The built-in Administrator profile is read-only except for `requireMfa` (`409`) and listed first. |
-| Health | `GET /healthz`, `GET /readyz` | `/readyz` returns `503` when the database is unreachable or migrations are pending, and reports `migrations: { applied, expected, upToDate }`. `database` is `ok`, `unreachable` (no connection), `authentication_failed` (credentials refused), `permission_denied` (connected, but the role may not read the schema) or `error` (see the server log). |
+| Health | `GET /healthz`, `GET /readyz` | `/readyz` returns `503` when the database is unreachable or migrations are pending, and reports `migrations: { applied, expected, upToDate }`; `expected` (the migrations the build ships) is always present, `applied` and `upToDate` only when `database` is `ok`. The result is shared and reused for 1 s, so a probe never sees a state older than that. `database` is `ok`, `unreachable` (no connection), `authentication_failed` (credentials refused), `permission_denied` (connected, but the role may not read the schema) or `error` (see the server log). |
 
 ## Authentication and permissions
 
@@ -141,26 +150,34 @@ A session ends on logout, after `SESSION_IDLE_TIMEOUT_MINUTES` without a request
 user's password. `Secure` is added when the request reached the reverse proxy over HTTPS (`X-Forwarded-Proto: https`
 or `Forwarded: proto=https`); `COOKIE_SECURE=always|never` overrides that.
 
-**Login backoff.** After 5 failed sign-ins for a username, each further failure locks that username for 1 s, 2 s,
-4 s, … up to 15 min. While locked, login answers `429 RATE_LIMITED` with `Retry-After`, without checking the
-password. A success resets the counter. Unknown usernames are throttled the same way and cost the same argon2
-work, so neither the answer nor its timing reveals which usernames exist.
+**Login backoff.** Failed sign-ins are counted per username and client network: the IPv4 /24 or IPv6 /64 of the
+TCP peer or, when the peer is listed in `TRUSTED_PROXIES` (comma-separated IPs or CIDRs), of the client address the
+proxies report. Without `TRUSTED_PROXIES` the peer address is used, so every client behind a proxy shares one
+network. The first 4 failures are free; the 5th and every later one locks that username for that network for 1 s,
+2 s, 4 s, … up to 15 min. While locked, login answers `429 RATE_LIMITED` with `Retry-After`, without checking the
+password. A success resets the counter for that network. One network alone cannot lock the account holder out
+from another; only when failures from several networks add up to 15 (at most 5 counted per network) is the
+username locked for every network, with the same backoff. Counters are forgotten after 1 h without a failure.
+
+Unknown usernames are throttled the same way and cost the same argon2 work, and every `401` for a refused sign-in
+is held until `SIGN_IN_FAILURE_FLOOR_MS` (default 1000 ms, 0–10000, below `HTTP_REQUEST_TIMEOUT_SECS`) has passed
+since the throttle let it through, so neither the answer nor its timing reveals which usernames exist.
 
 The limits hold for concurrent requests too: an attempt is reserved when it passes the check and counts as if it
-had failed until it finishes. A username admits only as many attempts at once as it has free failures left (one at a
-time once it has been locked); further attempts that arrive meanwhile get `429` with `Retry-After: 1`. Attempts in
-progress also count towards the server-wide budget below.
+had failed until it finishes. A username admits from one network only as many attempts at once as it has free
+failures left (one at a time once it has been locked); further attempts that arrive meanwhile get `429` with
+`Retry-After: 1`. Attempts in progress also count towards the server-wide budget below.
 
 On top of that, the server counts failed sign-ins for all usernames together. Once 300 fall within any
 10 minutes, sign-in is slowed down, not refused: attempts wait in a single queue that lets one through every
 2 s, so guessing across all accounts stays at about 300 per 10 minutes while a correct password still signs in
 (after a short wait). This caps password spraying (a guess or two for each of many usernames), which the
-per-username lock does not see. Only when 64 attempts are already queued is the next one answered `429` with
-`Retry-After`. The server logs a warning (at most once per 10 minutes) when the budget is exceeded. Sessions
+per-username lock does not see. Only when 64 attempts are already queued, or 4 from the same client network, is
+the next one answered `429` with `Retry-After`. The server logs a warning (at most once per 10 minutes) when the budget is exceeded. Sessions
 that already exist are unaffected.
 
-`PUT /api/v1/auth/password` has the same per-user backoff for wrong `currentPassword` values (5 free, then 1 s,
-2 s, … up to 15 min), so a stolen session cannot be turned into the password by guessing. The counters live in
+`PUT /api/v1/auth/password` has the same per-user backoff for wrong `currentPassword` values (the first 4 free, then
+1 s, 2 s, … up to 15 min), so a stolen session cannot be turned into the password by guessing. The counters live in
 memory (per process, reset on restart).
 
 **Two-factor authentication.** <a id="two-factor-authentication"></a>Any user can add an authenticator app (TOTP,
@@ -194,7 +211,7 @@ A permission profile with `requireMfa: true` (any profile, including the built-i
 for its holders with a local or directory (LDAP/AD) account. OIDC accounts are exempt when their provider proved
 the second factor at sign-in or is trusted to enforce it (see *Enterprise sign-in*; `mfa.required` is then false).
 Local and directory users still sign in with their password, but until they have confirmed an authenticator every route
-except sign-out, `/auth/me`, `PUT /auth/password` and the `/auth/mfa` set-up routes answers
+except sign-out, `/auth/me`, `PUT /auth/password` and the `/auth/mfa` routes other than `recovery-codes` answers
 `403 MFA_ENROLMENT_REQUIRED`; `/auth/me` shows `mfa.enrolmentRequired`. The requirement applies to sessions only: API
 tokens are separate credentials and keep working. A user who lost their device and their recovery codes asks a
 user manager for `DELETE /api/v1/admin/users/{id}/mfa`; if every administrator is locked out,
@@ -237,10 +254,13 @@ and maps the provider's groups to permission profiles.
 `PUBLIC_URL` and register `{PUBLIC_URL}/api/v1/auth/oidc/callback` (shown as `oidc.redirectUri`) at the provider.
 Request a `groups` claim in the ID token (Entra ID: *Groups assigned to the application*, which also avoids the
 200-group overage; Keycloak: a group mapper, or `groupsClaim: realm_access.roles`). The web UI lists
-`GET /api/v1/auth/providers` as buttons and **navigates** to `startUrl` (with `?returnTo=/path`). After the provider,
+`GET /api/v1/auth/providers` as buttons and **navigates** to `startUrl` (with `?returnTo=/path`). The start route
+sets the `shadoucmdb_oidc` cookie (`HttpOnly`, sent only to `/api/v1/auth/oidc`, 10 minutes) holding the pending
+sign-in, sealed with a server key; the callback needs it, so start and callback must happen in
+the same browser and a reverse proxy must not strip it. After the provider,
 the callback sets the session cookies like `POST /auth/login` and redirects to `returnTo`; on a problem it redirects
 to `/login?ssoError=<code>`: `expired`, `cancelled`, `failed`, `unavailable`, `not_configured`, `not_authorised`,
-`account_conflict`, `account_disabled`, `invalid_username` or `last_administrator`. The ID token is verified in full:
+`account_conflict`, `account_disabled`, `invalid_username`, `last_administrator` or `mfa_not_enforced`. The ID token is verified in full:
 its signature against the provider's published keys (RS256/384/512, PS256/384/512, ES256/384, EdDSA; never `none`
 or HMAC), `iss`, `aud`/`azp`, `exp`, `iat`, `nbf`, the sign-in's `nonce`, and the callback's `iss` (RFC 9207) when
 sent. The issuer must be `https://` (plain `http://` only for a test issuer on the same host). The username comes
@@ -285,11 +305,11 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
 - The same server-side checks apply as for a session: the route's global permission, then class permissions in the
   service. Sign-out, `/auth/me`, the password change, MFA administration, token administration and account
   changes (creating, updating, deleting a user and setting their password) and identity provider changes (adding,
-  changing, including the group mappings, and deleting a provider), permission profile changes (creating,
+  changing, including the group mappings, and deleting a provider) and the provider connection test, permission profile changes (creating,
   updating, including `requireMfa` on the built-in Administrator profile, cloning and deleting a profile) and
   configuration import need a session and answer tokens with `403 FORBIDDEN`, so a token cannot mint a credential
   (a token, an account, a password or a sign-in path) or widen or weaken what an account may do in a way that
-  outlives its revocation. Listing and reading accounts, providers and profiles, the provider connection test and
+  outlives its revocation. Listing and reading accounts, providers and profiles and
   configuration export accept tokens.
 - Managing tokens needs `users.manage`. As for accounts, a non-administrator can only create or revoke tokens for
   users whose permissions they hold themselves (their own tokens are always revocable), and a token for another
@@ -326,8 +346,8 @@ while its owner is disabled or once its profile is deleted. Send it as `Authoriz
 `POST /api/v1/setup` creates the first administrator and signs them in. Its body carries `setupToken`: the
 one-time token the server writes to its log and setup token file, or the operator's `SETUP_TOKEN`
 (see [deployment](deployment.md#the-setup-token)); a missing or wrong token answers `403 FORBIDDEN` with a
-`setupToken` field detail. Wrong tokens are throttled like wrong passwords (5 free per client network,
-then a doubling lock up to 15 min; 15 from several networks lock every network): while locked, `429
+`setupToken` field detail. Wrong tokens are throttled like wrong passwords (the first 4 free per client
+network, then a doubling lock up to 15 min; 15 from several networks lock every network): while locked, `429
 RATE_LIMITED` with `Retry-After`, and the token is not checked. `shadoucmdb create-admin` does the same
 from the command line, and also works later to regain access (see [deployment](deployment.md#the-first-administrator)).
 
@@ -336,11 +356,11 @@ several; their effective permissions are the union.
 
 | Permission | Allows |
 | --- | --- |
-| `users.manage` | `/admin/users`: create, edit, disable, delete users, reset passwords, assign profiles |
+| `users.manage` | `/admin/users`: create, edit, disable, delete users, reset passwords, reset a user's MFA, assign profiles; `/admin/api-tokens`; `/admin/identity-providers` (with the Administrator profile); reading profiles |
 | `profiles.manage` | `/admin/profiles`: create, edit, clone, delete profiles |
-| `datamodel.manage` | Writes to CI classes, attribute definitions, relationship types and rules and lookup lists; `/admin/templates` |
-| `customization.manage` | Branding, navigation, dashboard and layouts (phase 3) |
-| `config.export_import` | Configuration export and import (phase 3) |
+| `datamodel.manage` | Writes to areas, CI classes, attribute definitions, relationship types and rules and lookup lists, purges included; `/schema-changes`, `/technical-names`, every `…/{id}/usage` route and `/admin/templates` |
+| `customization.manage` | Branding, navigation, dashboard and layouts |
+| `config.export_import` | Configuration export and import; an import also needs the permissions of the sections it carries (see the Configuration export/import row above) |
 | `audit.view` | `GET /audit-log` |
 | Class `view` / `create` / `edit` / `delete` | CIs of one class, or of every class with the `classId: null` wildcard. Any write right implies `view`. |
 
