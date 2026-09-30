@@ -10,6 +10,7 @@
   },
   "scripts": {
     "smoke": "node tools/smoke/smoke.ts",
+    "perf:import": "node tools/perf/import-100k.ts",
     "openapi:diff": "node tools/openapi-diff.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
