@@ -539,9 +539,10 @@ pub fn routes() -> Vec<Route> {
                 "Runs the operation exactly as its endpoint would, including every check and guard, inside a \
                  transaction that is always rolled back, and returns the DDL it would run. A refused change returns \
                  the same error the endpoint would (e.g. 422 SCHEMA_CHANGE_REFUSED when a type change would not \
-                 convert every stored value). A change checked against stored values (a type change, a new enum list \
-                 over existing data) needs the view right on the field's type and every type below it, else 403 \
-                 FORBIDDEN, audited as schema_change.refused. Nothing is changed.",
+                 convert every stored value). A change checked against stored CIs (a type change, a new enum list or \
+                 isRequired: true over existing data; isAbstract: true; a new parentId) needs the view right on the \
+                 type and every type below it (for isAbstract: the type), else 403 FORBIDDEN, audited as \
+                 schema_change.refused. Nothing is changed.",
             )
             .requires(GlobalPermission::DatamodelManage)
             .errors(&[

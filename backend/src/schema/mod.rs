@@ -233,6 +233,34 @@ pub fn refused(field: &str, code: &str, message: String) -> AppError {
     }])
 }
 
+/// 403 `view_required` for a change whose outcome depends on stored assets the
+/// caller may not view: refused before any of them is read.
+pub fn view_required(field: &str, message: String) -> AppError {
+    forbidden(message.clone()).with_details(vec![FieldError {
+        location: FieldLocation::Body,
+        field: field.into(),
+        message,
+        code: "view_required".into(),
+    }])
+}
+
+/// The types whose CIs the caller may learn about (`None`: every type): those
+/// they may view, and those created in this transaction, which hold no CIs
+/// anyone could have stored before (a config import creates a type and makes
+/// its fields required in one go).
+pub async fn visible_classes(conn: &mut PgConnection, ctx: &RequestContext) -> Result<Option<Vec<Uuid>>, AppError> {
+    let Some(mut visible) = ctx.class_scope(ClassOp::View) else { return Ok(None) };
+    let new: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM cmdb.ci_classes WHERE created_at = now()").fetch_all(&mut *conn).await?;
+    visible.extend(new);
+    Ok(Some(visible))
+}
+
+/// Whether the caller may learn about the CIs of every type in `classes`.
+pub async fn may_view_all(conn: &mut PgConnection, ctx: &RequestContext, classes: &[Uuid]) -> Result<bool, AppError> {
+    Ok(visible_classes(conn, ctx).await?.is_none_or(|v| classes.iter().all(|id| v.contains(id))))
+}
+
 /// 422 INVALID_NAME for a technical name.
 pub fn invalid_name(field: &str, code: &str, message: String) -> AppError {
     AppError::new(ErrorCode::InvalidName, message.clone()).with_details(vec![FieldError {
@@ -499,17 +527,14 @@ impl Planner<'_> {
         if self.reveals(f) {
             return Ok(());
         }
-        let message = format!(
-            "Changing \"{}\" this way is checked against the values its assets store; that needs the view right on \
-             its type and every type below it. Nothing was changed.",
-            f.key
-        );
-        Err(forbidden(message.clone()).with_details(vec![FieldError {
-            location: FieldLocation::Body,
-            field: field.into(),
-            message,
-            code: "view_required".into(),
-        }]))
+        Err(view_required(
+            field,
+            format!(
+                "Changing \"{}\" this way is checked against the values its assets store; that needs the view right \
+                 on its type and every type below it. Nothing was changed.",
+                f.key
+            ),
+        ))
     }
 
     async fn field(
@@ -607,6 +632,10 @@ impl Planner<'_> {
         // NOT NULL for a required, active field; refused while any asset has no value.
         let is_not_null = existing.is_some_and(|c| c.not_null);
         if f.not_null() && !is_not_null {
+            // Success or refusal would tell whether any asset lacks a value (GH#267).
+            if self.catalog.has_table(table) && !self.lenient_not_null {
+                self.may_check_values(f, "isRequired")?;
+            }
             let nulls = if !self.catalog.has_table(table) {
                 0
             } else if is_new {
@@ -627,14 +656,12 @@ impl Planner<'_> {
                     plan.note(None, "warning", None, without);
                 }
             } else {
-                // How many assets lack a value is theirs to know who may view them all.
-                let which = if self.reveals(f) { format!("{nulls} assets") } else { "Some assets".to_owned() };
                 return Err(field_error(
                     "isRequired",
                     "values_missing",
                     format!(
-                        "{which} (deleted ones included) have no value for \"{}\". Fill it in on those assets first, \
-                         or keep the field optional.",
+                        "{nulls} assets (deleted ones included) have no value for \"{}\". Fill it in on those assets \
+                         first, or keep the field optional.",
                         f.key
                     ),
                 ));
@@ -963,7 +990,7 @@ pub async fn apply_with(
     let summary = summary.into();
     lock(conn).await?;
     let model = Model::load(conn).await?;
-    let visible = ctx.class_scope(ClassOp::View);
+    let visible = visible_classes(conn, ctx).await?;
     let plan = build(conn, &model, &scope, &purge, lenient_not_null, visible.as_deref()).await?;
     if plan.is_empty() {
         return Ok(None);
