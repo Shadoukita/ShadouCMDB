@@ -129,7 +129,7 @@ test("a restricted user cannot call any administration endpoint", async ({ reque
     ["create a CI class", () => restricted.send("POST", "/ci-classes", { key: `x_${stamp}`, name: `X ${stamp}` })],
     ["rename a CI class", () => restricted.send("PATCH", `/ci-classes/${applicationId}`, { name: "Renamed by a restricted user" })],
     ["add an attribute", () => restricted.send("POST", "/attribute-definitions", { classId: applicationId, key: `x_${stamp}`, name: "X", dataType: "string" })],
-    ["create a status", () => restricted.send("POST", "/statuses", { key: `x_${stamp}`, name: `X ${stamp}` })],
+    ["create a lookup list", () => restricted.send("POST", "/lookup-lists", { key: `x_${stamp}`, name: `X ${stamp}` })],
   ];
   for (const [what, call] of refused) {
     const res = await call();

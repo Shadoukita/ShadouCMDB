@@ -135,7 +135,9 @@ Every version is released from its maintenance branch: `X.Y.0` and all `X.Y.Z` p
 version accordingly.
 
 1. **Bump the version** on `release/X.Y.x` in `backend/Cargo.toml` (`version = "1.2.0"`, or `"1.2.0-rc.1"` for a
-   pre-release) and refresh the lockfile with `cargo update -p shadoucmdb --offline`. For a stable
+   pre-release), refresh the lockfile with `cargo update -p shadoucmdb --offline` and regenerate the API
+   document, whose `info.version` is this version (`shadoucmdb openapi --out openapi.json` in `backend/`;
+   CI's `openapi --check` fails until it is committed). For a stable
    version, **collect the changelog** in the same PR:
 
    ```sh

@@ -583,8 +583,7 @@ pub fn routes() -> Vec<Route> {
             .summary("The UI settings every user sees")
             .description(
                 "Any signed-in user may read them; the web UI applies them for everyone. `settings` is the effective \
-                 document: entries that refer to classes, attributes, statuses, environments or locations that do not \
-                 exist are left out and listed in `issues` (they stay in the stored document, see the versions).",
+                 document: entries that refer to classes, attributes or lookup lists that do not exist are left out and listed in `issues` (they stay in the stored document, see the versions).",
             )
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 Ok(Json(get(&api.pool).await?))

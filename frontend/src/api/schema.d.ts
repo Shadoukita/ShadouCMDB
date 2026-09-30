@@ -614,7 +614,7 @@ export interface paths {
         };
         /**
          * What still refers to a ci class
-         * @description Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getCiClassUsage"];
         put?: never;
@@ -723,7 +723,7 @@ export interface paths {
         };
         /**
          * What still refers to a attribute definition
-         * @description Requires `datamodel.manage`. Counts of attributeValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of attributeValues, dependentFields. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getAttributeDefinitionUsage"];
         put?: never;
@@ -812,7 +812,7 @@ export interface paths {
         };
         /**
          * What still refers to a relationship type
-         * @description Requires `datamodel.manage`. Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of relationships, deletedRelationships, relationshipRules. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getRelationshipTypeUsage"];
         put?: never;
@@ -878,7 +878,7 @@ export interface paths {
         };
         /**
          * What still refers to a relationship rule
-         * @description Requires `datamodel.manage`. Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of relationships. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getRelationshipRuleUsage"];
         put?: never;
@@ -1006,7 +1006,7 @@ export interface paths {
         /**
          * Create a status (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createStatus"];
         delete?: never;
@@ -1033,7 +1033,7 @@ export interface paths {
         /**
          * Delete a status (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteStatus"];
         options?: never;
@@ -1041,7 +1041,7 @@ export interface paths {
         /**
          * Update a status (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Statuses are read-only since migration 0016: CIs take their status from the lookup list "status" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateStatus"];
         trace?: never;
@@ -1056,7 +1056,7 @@ export interface paths {
         /**
          * What still refers to a status
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the status of a CI is a lookup attribute; its values are the lookup list "status" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getStatusUsage"];
         put?: never;
@@ -1084,7 +1084,7 @@ export interface paths {
         /**
          * Create a environment (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createEnvironment"];
         delete?: never;
@@ -1111,7 +1111,7 @@ export interface paths {
         /**
          * Delete a environment (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteEnvironment"];
         options?: never;
@@ -1119,7 +1119,7 @@ export interface paths {
         /**
          * Update a environment (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Environments are read-only since migration 0016: CIs take their environment from the lookup list "environment" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateEnvironment"];
         trace?: never;
@@ -1134,7 +1134,7 @@ export interface paths {
         /**
          * What still refers to a environment
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the environment of a CI is a lookup attribute; its values are the lookup list "environment" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getEnvironmentUsage"];
         put?: never;
@@ -1162,7 +1162,7 @@ export interface paths {
         /**
          * Create a location (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createLocation"];
         delete?: never;
@@ -1189,7 +1189,7 @@ export interface paths {
         /**
          * Delete a location (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteLocation"];
         options?: never;
@@ -1197,7 +1197,7 @@ export interface paths {
         /**
          * Update a location (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Locations are read-only since migration 0016: CIs take their location from the lookup list "location" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateLocation"];
         trace?: never;
@@ -1212,7 +1212,7 @@ export interface paths {
         /**
          * What still refers to a location
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the location of a CI is a lookup attribute; its values are the lookup list "location" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems, childLocations. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLocationUsage"];
         put?: never;
@@ -1240,7 +1240,7 @@ export interface paths {
         /**
          * Create a owner (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         post: operations["createOwner"];
         delete?: never;
@@ -1267,7 +1267,7 @@ export interface paths {
         /**
          * Delete a owner (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         delete: operations["deleteOwner"];
         options?: never;
@@ -1275,7 +1275,7 @@ export interface paths {
         /**
          * Update a owner (removed)
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
+         * @description Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Owners are read-only since migration 0016: CIs take their owner from the lookup list "owner" (same ids). Change its values with /api/v1/lookup-list-values; the lists are at /api/v1/lookup-lists.
          */
         patch: operations["updateOwner"];
         trace?: never;
@@ -1290,7 +1290,7 @@ export interface paths {
         /**
          * What still refers to a owner
          * @deprecated
-         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Deprecated, read-only: CIs no longer refer to this table. Since migration 0016 the owner of a CI is a lookup attribute; its values are the lookup list "owner" (`/api/v1/lookup-lists`, same ids). Create, update and delete answer 410 GONE; the reads stay for history and will be removed in a later release. Counts of configurationItems. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getOwnerUsage"];
         put?: never;
@@ -1359,7 +1359,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list
-         * @description Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLookupListUsage"];
         put?: never;
@@ -1428,7 +1428,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list value
-         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLookupListValueUsage"];
         put?: never;
@@ -1470,7 +1470,7 @@ export interface paths {
         put?: never;
         /**
          * Install a starter template (idempotent)
-         * @description Requires `datamodel.manage`. Adds the template's area (a PostgreSQL schema), every class (a table in it), attribute (a column), relationship type and rule, status, environment and location of the template whose key does not exist yet, in one transaction. Existing rows are left unchanged, so installing again is a no-op and renamed or archived rows stay as they are. Each created row is written to the audit log.
+         * @description Requires `datamodel.manage`. Adds the template's area (a PostgreSQL schema), every class (a table in it), attribute (a column), relationship type and rule, lookup list (such as status, environment and location) and lookup value of the template whose key does not exist yet, in one transaction. Existing rows are left unchanged, so installing again is a no-op and renamed or archived rows stay as they are. Each created row is written to the audit log.
          */
         post: operations["installTemplate"];
         delete?: never;
@@ -1488,7 +1488,7 @@ export interface paths {
         };
         /**
          * The UI settings every user sees
-         * @description Any signed-in user may read them; the web UI applies them for everyone. `settings` is the effective document: entries that refer to classes, attributes, statuses, environments or locations that do not exist are left out and listed in `issues` (they stay in the stored document, see the versions).
+         * @description Any signed-in user may read them; the web UI applies them for everyone. `settings` is the effective document: entries that refer to classes, attributes or lookup lists that do not exist are left out and listed in `issues` (they stay in the stored document, see the versions).
          */
         get: operations["getUiSettings"];
         /**
@@ -1904,7 +1904,7 @@ export interface paths {
         };
         /**
          * Download the whole configuration as one JSON file
-         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookups (statuses, environments, locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched.
+         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookup lists and their values, permission profiles (not the built-in one) and UI settings including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched.
          */
         get: operations["exportConfig"];
         put?: never;
@@ -1926,7 +1926,7 @@ export interface paths {
         put?: never;
         /**
          * Import a configuration file (dry run or apply)
-         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Files of earlier versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, as migration 0016 converts those tables, or skipped when the file's lists already hold them; either way a warning names the section. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["importConfig"];
         delete?: never;
@@ -2618,7 +2618,7 @@ export interface components {
         ImportChange: {
             /** @description e.g. classes, attributes, lookupListValues, permissionProfiles, uiSettings */
             section: string;
-            /** @description The row's key in the file (class.key for attributes, list.value for list values, kind:name for owners) */
+            /** @description The row's key in the file (class.key for attributes, list.value for list values) */
             key: string;
             /** @enum {string} */
             action: "create" | "update" | "delete";
@@ -2762,6 +2762,10 @@ export interface components {
             name: string;
         };
         LookupSection: {
+            /**
+             * @deprecated
+             * @description Deprecated, read on import only: rows of the former statuses table, written by exports of 0.1.0-rc.1 and earlier builds. Exports leave it out; the values are in `lists` (list "status"). On import the rows become values of the lookup list "status", as migration 0016 converts the table, unless the file's own lists already hold them; the former table is never written.
+             */
             statuses?: {
                 /** @description Stable machine key, lower_snake_case */
                 key: string;
@@ -2771,6 +2775,10 @@ export interface components {
                 sortOrder?: number;
                 isActive?: boolean;
             }[];
+            /**
+             * @deprecated
+             * @description Deprecated, read on import only: rows of the former environments table, written by exports of 0.1.0-rc.1 and earlier builds. Exports leave it out; the values are in `lists` (list "environment"). On import the rows become values of the lookup list "environment", as migration 0016 converts the table, unless the file's own lists already hold them; the former table is never written.
+             */
             environments?: {
                 /** @description Stable machine key, lower_snake_case */
                 key: string;
@@ -2779,6 +2787,10 @@ export interface components {
                 sortOrder?: number;
                 isActive?: boolean;
             }[];
+            /**
+             * @deprecated
+             * @description Deprecated, read on import only: rows of the former locations table, written by exports of 0.1.0-rc.1 and earlier builds. Exports leave it out; the values are in `lists` (list "location"). On import the rows become values of the lookup list "location", as migration 0016 converts the table, unless the file's own lists already hold them; the former table is never written.
+             */
             locations?: {
                 /** @description Stable machine key, lower_snake_case */
                 key: string;
@@ -2791,6 +2803,10 @@ export interface components {
                 sortOrder?: number;
                 isActive?: boolean;
             }[];
+            /**
+             * @deprecated
+             * @description Deprecated, read on import only: rows of the former owners table, written by exports of 0.1.0-rc.1 and earlier builds. Exports leave it out; the values are in `lists` (list "owner"). On import the rows become values of the lookup list "owner", as migration 0016 converts the table, unless the file's own lists already hold them; the former table is never written.
+             */
             owners?: {
                 /** @enum {string} */
                 kind: "person" | "team";
@@ -3121,6 +3137,11 @@ export interface components {
             data: components["schemas"]["RelationshipType"][];
             page: components["schemas"]["PageMeta"];
         };
+        /**
+         * @description The operation that removes a record, which `inUse` and `blocking` refer to
+         * @enum {string}
+         */
+        Removal: "delete" | "purge";
         /** @description One applied schema change: the exact DDL, in order, and its impact */
         SchemaChange: {
             /** Format: uuid */
@@ -3755,13 +3776,15 @@ export interface components {
             count: number | null;
             /** @description True when the count spans CIs of a class the caller may not view: `count` is then null */
             withheld: boolean;
-            /** @description A non-zero count prevents deleting the row; retire it with isActive=false instead */
+            /** @description A non-zero count prevents removing the row (the operation named by `removal`). A non-blocking count is removed together with the row. */
             blocking: boolean;
         };
         /** @description What still refers to a record, so the UI can warn before a destructive change */
         UsageReport: {
-            /** @description True when a blocking count is non-zero: DELETE would return 409 IN_USE (decided on every count, withheld ones included) */
+            /** @description True when a blocking count is non-zero: the removal (see `removal`) would return 409 IN_USE (decided on every count, withheld ones included) */
             inUse: boolean;
+            /** @description Which operation removes the record: `delete`, or `purge` for a type or field, which DELETE only archives */
+            removal: components["schemas"]["Removal"];
             data: components["schemas"]["UsageCount"][];
         };
         User: {
