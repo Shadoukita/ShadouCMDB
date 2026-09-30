@@ -17,7 +17,7 @@ use super::auth::{confirm_current_password, confirm_current_password_attempt, lo
 use super::users;
 use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
-use crate::auth::events::{self, LoginMethod};
+use crate::auth::events::{self, LoginMethod, RevokeReason};
 use crate::auth::permissions::GlobalPermission;
 use crate::auth::secret::Secret;
 use crate::auth::throttle::Attempt;
@@ -41,8 +41,11 @@ pub struct MfaStatus {
     /// A permission profile the user holds requires MFA (local and directory
     /// accounts; never OIDC accounts, whose provider runs its own second factor)
     pub required: bool,
-    /// Required but not set up: until it is, the session only reaches sign-out,
-    /// /auth/me and the MFA set-up routes (others answer 403 MFA_ENROLMENT_REQUIRED)
+    /// Required, and this session did not prove a second factor against a set-up
+    /// authenticator (none is set up, or the session was opened with the
+    /// password alone): until then the session only reaches sign-out, /auth/me
+    /// and the MFA set-up routes (others answer 403 MFA_ENROLMENT_REQUIRED).
+    /// With an authenticator already set up, sign in again with a code.
     pub enrolment_required: bool,
     /// Unused recovery codes
     pub recovery_codes_remaining: i64,
@@ -53,7 +56,7 @@ impl From<data::Status> for MfaStatus {
         MfaStatus {
             totp_enabled: s.totp_enabled,
             required: s.required,
-            enrolment_required: s.required && !s.totp_enabled,
+            enrolment_required: s.required && !(s.totp_enabled && s.session_verified),
             recovery_codes_remaining: s.recovery_codes_remaining,
         }
     }
@@ -358,6 +361,9 @@ async fn disable(
     if data::delete_mfa(&mut tx, me.user_id).await? {
         let extra = json!({ "reason": "self_service" });
         events::mfa(&mut tx, ctx, AuditAction::MfaDisable, me.user_id, &me.username, extra).await?;
+        // Sessions that proved the old authenticator must not outlive it (GH#280).
+        let ended = auth_data::delete_user_sessions(&mut tx, me.user_id, me.session_id()).await?;
+        events::revoked(&mut tx, ctx, &ended, RevokeReason::MfaDisabled).await?;
         tracing::info!(user = %me.username, "two-factor authentication turned off");
     }
     tx.commit().await?;
@@ -384,8 +390,9 @@ async fn regenerate(
     Ok(codes)
 }
 
-/// An administrator turns a user's MFA off (lost device and recovery codes).
-/// If a profile requires MFA, the user sets it up again at their next sign-in.
+/// An administrator turns a user's MFA off (lost device and recovery codes)
+/// and ends the user's sessions. If a profile requires MFA, the user sets it
+/// up again at their next sign-in.
 pub async fn reset(pool: &PgPool, ctx: &RequestContext, user_id: Uuid) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
     let user = auth_data::get_user(&mut tx, user_id, true).await?.ok_or_else(|| AppError::missing("User", user_id))?;
@@ -393,6 +400,11 @@ pub async fn reset(pool: &PgPool, ctx: &RequestContext, user_id: Uuid) -> Result
     if data::delete_mfa(&mut tx, user_id).await? {
         let extra = json!({ "reason": "admin_reset" });
         events::mfa(&mut tx, ctx, AuditAction::MfaDisable, user_id, &user.username, extra).await?;
+        // Every session of the user ends, the caller's own excepted when they
+        // reset themselves: none may carry over to a later enrolment (GH#280).
+        let own = ctx.principal().filter(|p| p.user_id == user_id).and_then(|p| p.session_id());
+        let ended = auth_data::delete_user_sessions(&mut tx, user_id, own).await?;
+        events::revoked(&mut tx, ctx, &ended, RevokeReason::MfaReset).await?;
         tracing::info!(user = %user.username, "two-factor authentication reset by an administrator");
     }
     tx.commit().await?;
@@ -434,7 +446,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)")
             .description(
-                "From now on sign-in asks for a code after the password. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed.",
+                "From now on sign-in asks for a code after the password. This session counts as having proven the second factor; other sessions opened with the password alone stay limited to the set-up routes until they sign in again with a code. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed.",
             )
             .session_only()
             .before_mfa_enrolment()
@@ -446,7 +458,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Turn your two-factor authentication off (or cancel an unfinished set-up)")
             .description(format!(
-                "Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. {LOCK_NOTE}"
+                "Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too and ends your other sessions. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. {LOCK_NOTE}"
             ))
             .session_only()
             .before_mfa_enrolment()
@@ -470,7 +482,7 @@ pub fn routes() -> Vec<Route> {
             .tag("Users")
             .summary("Turn a user's two-factor authentication off (lost authenticator and recovery codes)")
             .description(
-                "Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403).",
+                "Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset) and ends every session of the user (`session.revoke`, reason mfa_reset; your own is kept when you reset yourself). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403).",
             )
             .requires(GlobalPermission::UsersManage)
             .session_only()
@@ -861,6 +873,96 @@ pub(crate) mod tests {
         assert_eq!((last.0.as_str(), last.1["reason"].as_str()), ("mfa.disable", Some("admin_reset")));
         let (status, _, _) = call(&app, "DELETE", &reset, &session, None).await;
         assert_eq!(status, 403, "the reset route is not an enrolment route");
+        db.drop().await;
+    }
+
+    /// GH#280: under requireMfa the gate follows what the session proved, not
+    /// the account's current state. A password-only session stays gated when
+    /// the user sets up MFA in another one; a reset or turning MFA off ends the
+    /// user's other sessions, so none carries over to a later enrolment.
+    #[tokio::test]
+    async fn require_mfa_gates_by_what_the_session_proved() {
+        let Some(db) = scratch::database("require_mfa_gates_by_what_the_session_proved").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, me) = setup(&app).await;
+        let owner = me["user"]["id"].as_str().unwrap().to_owned();
+        let admin_profile = me["user"]["profiles"][0]["id"].as_str().unwrap().to_owned();
+        let path = format!("/api/v1/admin/profiles/{admin_profile}");
+        let (status, v, _) = call(&app, "PATCH", &path, &session, Some(json!({ "requireMfa": true }))).await;
+        assert_eq!(status, 200, "{v}");
+        let gated = |creds: Creds| {
+            let app = app.clone();
+            async move {
+                let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &creds, None).await;
+                (status, code(&v).to_owned())
+            }
+        };
+        let enrolment_required = (403, "MFA_ENROLMENT_REQUIRED".to_owned());
+        let password = json!({ "username": "owner", "password": PASSWORD });
+
+        // Session A: the password alone (an attacker's phished password).
+        let (status, me_a, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(password)).await;
+        assert_eq!(status, 200, "{me_a}");
+        let a = session_of(&me_a, &headers);
+        assert_eq!(gated(a.clone()).await, enrolment_required);
+
+        // The real user enrols in their own session, which gets full access ...
+        let step = settled_step().await;
+        let (secret, _) = enrol(&app, pool, &session, step).await;
+        assert_eq!(gated(session.clone()).await.0, 200, "the enrolling session");
+        // ... and session A does not, whatever /auth/me reports.
+        assert_eq!(gated(a.clone()).await, enrolment_required, "session A after enrolment elsewhere");
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &a, None).await;
+        assert_eq!(
+            (status, &v["mfa"]["totpEnabled"], &v["mfa"]["enrolmentRequired"]),
+            (200, &json!(true), &json!(true))
+        );
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &session, None).await;
+        assert_eq!((status, &v["mfa"]["enrolmentRequired"]), (200, &json!(false)));
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &a, None).await;
+        assert!(v["error"]["message"].as_str().unwrap().contains("sign in again with a code"), "{status}: {v}");
+
+        // A sign-in with a code gets full access.
+        let challenge = password_step(&app).await;
+        let (status, me_c, headers) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!(status, 200, "{me_c}");
+        let c = session_of(&me_c, &headers);
+        assert_eq!(gated(c.clone()).await.0, 200);
+
+        // An administrator's reset (here: the owner themselves) ends every
+        // other session; the caller's own is limited to enrolment again.
+        let (status, _, _) = call(&app, "DELETE", &format!("/api/v1/admin/users/{owner}/mfa"), &session, None).await;
+        assert_eq!(status, 204);
+        for (name, ended) in [("A", &a), ("C", &c)] {
+            let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", ended, None).await;
+            assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "session {name} after the reset");
+        }
+        assert_eq!(gated(session.clone()).await, enrolment_required, "the caller's session after the reset");
+        // Setting it up again brings no ended session back.
+        let (secret, _) = enrol(&app, pool, &session, step).await;
+        assert_eq!(gated(session.clone()).await.0, 200);
+        let (status, _, _) = call(&app, "GET", "/api/v1/auth/me", &c, None).await;
+        assert_eq!(status, 401, "session C after re-enrolment");
+
+        // Turning MFA off ends the other sessions too; this one is limited to enrolment.
+        let challenge = password_step(&app).await;
+        let (status, me_d, headers) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!(status, 200, "{me_d}");
+        let d = session_of(&me_d, &headers);
+        let off = json!({ "currentPassword": PASSWORD, "code": totp::code_at(&secret, step + 1) });
+        let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(off)).await;
+        assert_eq!(status, 204, "{v}");
+        let (status, _, _) = call(&app, "GET", "/api/v1/auth/me", &d, None).await;
+        assert_eq!(status, 401, "session D after MFA was turned off");
+        assert_eq!(gated(session.clone()).await, enrolment_required, "the disabling session");
+
+        let reasons: Vec<String> = sqlx::query_scalar(
+            "SELECT new_value->>'reason' FROM audit_log WHERE action = 'session.revoke' ORDER BY id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(reasons, ["mfa_reset", "mfa_reset", "mfa_disabled"]);
         db.drop().await;
     }
 

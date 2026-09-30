@@ -53,6 +53,10 @@ pub enum RevokeReason {
     /// An OIDC session no longer met `requireMfa`: a profile now requires MFA,
     /// or the provider now verifies MFA and the sign-in did not prove it.
     MfaNotEnforced,
+    /// The user turned their own MFA off; their other sessions end (GH#280).
+    MfaDisabled,
+    /// An administrator reset the user's MFA; their sessions end (GH#280).
+    MfaReset,
 }
 
 impl RevokeReason {
@@ -65,6 +69,8 @@ impl RevokeReason {
             RevokeReason::Replaced => "replaced",
             RevokeReason::ProviderDisabled => "provider_disabled",
             RevokeReason::MfaNotEnforced => "mfa_not_enforced",
+            RevokeReason::MfaDisabled => "mfa_disabled",
+            RevokeReason::MfaReset => "mfa_reset",
         }
     }
 }

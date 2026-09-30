@@ -25,8 +25,12 @@ pub struct LiveSession {
     pub csrf_token: String,
     /// last_seen_at is more than a minute old: worth an UPDATE.
     pub needs_touch: bool,
-    /// A profile the user holds requires MFA and they have not set it up.
-    /// Local and directory (LDAP) accounts only (see [`MFA_REQUIRED`]).
+    /// A profile the user holds requires MFA and this session did not prove a
+    /// second factor against a confirmed authenticator: it was opened with the
+    /// password alone, or the authenticator was since turned off. It is judged
+    /// by the session, not by the account's current state, so a password-only
+    /// session does not gain full access when the user sets up MFA elsewhere
+    /// (GH#280). Local and directory (LDAP) accounts only (see [`MFA_REQUIRED`]).
     pub mfa_enrolment_required: bool,
     /// An OIDC session that [`MFA_REQUIRED`] no longer exempts: a profile now
     /// requires MFA and neither the provider is trusted nor the sign-in proved
@@ -92,6 +96,7 @@ pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -
         "SELECT s.id, u.id, u.username, s.csrf_token, s.last_seen_at < now() - interval '1 minute',
                 {MFA_REQUIRED}, {OIDC_ACCOUNT},
                 EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL)
+                  AND s.mfa_verified
          FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval AND u.is_active
            AND {PROVIDER_ENABLED}"
@@ -100,13 +105,13 @@ pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -
     .bind(interval(idle))
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, required, oidc, totp)| LiveSession {
+    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, required, oidc, proven)| LiveSession {
         session_id,
         user_id,
         username,
         csrf_token,
         needs_touch,
-        mfa_enrolment_required: required && !oidc && !totp,
+        mfa_enrolment_required: required && !oidc && !proven,
         mfa_not_enforced: required && oidc,
     }))
 }
