@@ -7,9 +7,9 @@ import FormField from "../pages/form/FormField.vue";
 import FormDialog from "./FormDialog.vue";
 
 /**
- * Create/edit dialog for simple rows (relationship types, statuses, environments,
- * locations, owners, lookup lists and their values), driven by a field list. The
- * caller's `save` sends the body; API field errors show next to their fields.
+ * Create/edit dialog for simple rows (relationship types, lookup lists and
+ * their values), driven by a field list. The caller's `save` sends the body;
+ * API field errors show next to their fields.
  */
 export interface FieldSpec {
   name: string;
