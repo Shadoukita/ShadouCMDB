@@ -270,6 +270,11 @@ fn parse_body<T: ToSchema + DeserializeOwned + Check + 'static>(value: Value) ->
             .collect();
         serde_json::json!({ "schema": T::schema(), "components": components })
     });
+    // Checked apart from the schema: free-form parts (settings, defaults) have no string rules.
+    let errors = validate::nul_errors(&value, FieldLocation::Body);
+    if !errors.is_empty() {
+        return Err(InvalidBody { raw: value, errors });
+    }
     let errors = validate::check(&spec["schema"], &value, FieldLocation::Body, spec["components"].as_object());
     if !errors.is_empty() {
         return Err(InvalidBody { raw: value, errors });

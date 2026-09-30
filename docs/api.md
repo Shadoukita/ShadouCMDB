@@ -62,6 +62,7 @@ Every non-2xx response has this shape:
 | HTTP | `code` | When |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | The body, query or path failed validation, including database rule violations such as an illegal relationship class, a class cycle or an abstract class. `details[]` gives each field. |
+| 400 | `VALIDATION_ERROR` (`invalid_character`) | A string in the body or query string (a value or an object key) contains the NUL character U+0000, which PostgreSQL cannot store. `details[]` names each field. |
 | 401 | `UNAUTHENTICATED` | No session, an expired or idle session, a disabled user, an unknown, expired or revoked API token, or (on login) a wrong username, password or authenticator code. |
 | 401 | `MFA_REQUIRED` | Login only: the password was right and the user has two-factor authentication; send the code to `POST /auth/login/mfa`. |
 | 403 | `FORBIDDEN` | Signed in, but a global permission or a class permission is missing; or an API token on a route that needs a session. A field change checked against stored values (a type change, a new enum list) also needs the view right on the field's type and every type below it (`details[].code` `view_required`). |

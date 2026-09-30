@@ -1884,6 +1884,27 @@ mod tests {
         db.drop().await;
     }
 
+    /// GH#289: a configuration file with a NUL anywhere, including free-form
+    /// parts like UI settings, is a 400 invalid_character before any import runs.
+    #[tokio::test]
+    async fn nul_in_import_file_is_refused() {
+        use crate::api::route::BodyInput;
+        let Some(db) = scratch::database("nul_in_import_file_is_refused").await else { return };
+        crate::seed::install_template(&db.pool, "it_infrastructure").await.unwrap();
+        let file = export(&db.pool, &RequestContext::system("test", "test")).await.unwrap();
+        let mut raw = serde_json::to_value(&file).unwrap();
+        assert!(Body::<ConfigFile>::parse(Some(raw.clone())).is_ok());
+        raw["dataModel"]["classes"][0]["name"] = "Ser\u{0}ver".into();
+        let Err(err) = Body::<ConfigFile>::parse(Some(raw)) else { panic!("file passed") };
+        assert_eq!(err.code, ErrorCode::ValidationError);
+        let details = err.details.unwrap();
+        assert_eq!(
+            (details[0].field.as_str(), details[0].code.as_str()),
+            ("dataModel.classes.0.name", "invalid_character")
+        );
+        db.drop().await;
+    }
+
     #[test]
     fn parents_come_first_and_cycles_are_left_over() {
         let items = vec![
