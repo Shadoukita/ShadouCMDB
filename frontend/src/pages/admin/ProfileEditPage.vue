@@ -239,7 +239,8 @@ const notFound = computed(() => {
         </label>
         <p class="hint" style="margin: 0">
           Users holding this profile must set up an authenticator app. Until they do, they can only sign in and set it up;
-          everything else is refused. API tokens are not affected.
+          everything else is refused. Their API tokens are refused too, unless the token was created from a session that
+          completed two-factor sign-in.
         </p>
         <div v-if="locksSelf" class="alert alert-warn" role="note">
           You hold this profile and have not set up two-factor authentication. After saving you will be asked to set it up
