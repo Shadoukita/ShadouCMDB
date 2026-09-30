@@ -2010,12 +2010,12 @@
           {
             "name": "sort",
             "in": "query",
-            "description": "Sort field; prefix with \"-\" for descending. One of: label, ident, className, validFrom, validUntil, createdAt, updatedAt, or attributes.<key> (needs classId; the attribute must be the same one on every class in classId, and not a reference). Attributes sort case-insensitively for text, by address for IP/CIDR and by list order for lookups; CIs without a value come last.",
+            "description": "Sort field; prefix with \"-\" for descending. One of: label, ident, className, criticality, validFrom, validUntil, createdAt, updatedAt, or attributes.<key> (needs classId; the attribute must be the same one on every class in classId, and not a reference). Attributes sort case-insensitively for text, by address for IP/CIDR and by list order for lookups; CIs without a value come last.",
             "required": false,
             "schema": {
               "type": "string",
               "default": "label",
-              "pattern": "^-?(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+              "pattern": "^-?(label|ident|className|criticality|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
             }
           },
           {
@@ -2080,6 +2080,15 @@
                   "format": "cidrv6"
                 }
               ]
+            }
+          },
+          {
+            "name": "criticalityValueId",
+            "in": "query",
+            "description": "Criticality value ids, comma-separated: CIs holding one of them",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -2243,6 +2252,18 @@
                       ],
                       "x-multiline": true
                     }
+                  },
+                  "criticalityValueId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "A value of the criticality lookup list (GET /api/v1/lookup-lists?systemRole=criticality); null: not set. A retired value can be kept but not newly set"
                   }
                 },
                 "additionalProperties": false
@@ -2648,6 +2669,18 @@
                       ],
                       "x-multiline": true
                     }
+                  },
+                  "criticalityValueId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "A value of the criticality lookup list (GET /api/v1/lookup-lists?systemRole=criticality); null: not set. A retired value can be kept but not newly set"
                   },
                   "version": {
                     "type": "integer",
@@ -3056,6 +3089,15 @@
             }
           },
           {
+            "name": "criticalityValueId",
+            "in": "query",
+            "description": "Criticality value ids, comma-separated: CIs holding one of them",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "deleted",
             "in": "query",
             "description": "Soft-deleted CIs: exclude (default), include, or only",
@@ -3088,6 +3130,449 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/configuration-items/{id}/impact": {
+      "get": {
+        "tags": [
+          "Impact analysis"
+        ],
+        "summary": "Impact analysis: the CIs affected by this CI (downstream) or that it depends on (upstream)",
+        "description": "Breadth-first traversal over live relationships whose type propagates impact (`impactDirection` on the relationship type). Downstream follows impact the way it flows, upstream against it; `both` runs the two walks separately. Each CI appears once, at its shortest hop distance, with the last hop of that path (`via`); `via` chains resolve inside `items` plus the root. Bounded by `depth`, `maxNodes`, an edge budget of 5 × maxNodes and IMPACT_TIMEOUT_MS: an analysis stopped by a bound answers 200 with `truncated` and `truncatedReason`. Not paginated: the result is bounded (at most IMPACT_MAX_NODES items). Needs view on the CI's class (404 otherwise, as for a missing CI). CIs of classes the caller may not view are neither returned, counted nor traversed: a CI reachable only through one is left out, and `visibility` says `restricted` whenever the caller's profile limits the classes they may view. 429 RATE_LIMITED when the caller already runs IMPACT_MAX_CONCURRENT_PER_USER analyses, 503 SERVER_BUSY when the server runs IMPACT_MAX_CONCURRENT.",
+        "operationId": "getConfigurationItemImpact",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "downstream: the CIs affected if this CI fails (impact flows along each relationship type's impactDirection); upstream: the CIs this CI depends on (against it); both: the two walks, run separately",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "downstream",
+              "enum": [
+                "downstream",
+                "upstream",
+                "both"
+              ]
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Hops from the CI; default 3 (or maxDepth when lower). At most `maxDepth` of GET /api/v1/settings/impact (IMPACT_MAX_DEPTH): a larger value is refused, never lowered",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "relationshipTypeId",
+            "in": "query",
+            "description": "Relationship types to follow, comma-separated (at most 50); default: every type that propagates impact. A type whose impactDirection is none is accepted and contributes nothing; an unknown id is refused",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "description": "true: CIs outside their validity period are followed and returned with active=false; false: they are neither returned nor followed",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "maxNodes",
+            "in": "query",
+            "description": "Largest number of affected CIs returned; default 500 (or maxNodesLimit when lower). At most `maxNodesLimit` of GET /api/v1/settings/impact (IMPACT_MAX_NODES): a larger value is refused",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10000,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactAnalysis"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/configuration-items/{id}/impact/export": {
+      "get": {
+        "tags": [
+          "Impact analysis"
+        ],
+        "summary": "Impact analysis as CSV",
+        "description": "The same analysis as getConfigurationItemImpact (same parameters, limits and visibility) as a CSV file (`Content-Disposition: attachment`). Every field is quoted; a value starting with =, +, -, @, a tab or a line break is prefixed with ' so spreadsheets do not run it as a formula. The first row is a comment with the root, the parameters, whether the result was truncated and the visibility note; then the columns ci_id, ident, name, class, criticality, direction, hops, via_relationship, via_ci_ident, path_idents, active, status. Each export is recorded in the audit log (action `export` on the CI, with the parameters and the row count, never the rows). Needs view on the CI's class.",
+        "operationId": "exportConfigurationItemImpact",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "downstream: the CIs affected if this CI fails (impact flows along each relationship type's impactDirection); upstream: the CIs this CI depends on (against it); both: the two walks, run separately",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "downstream",
+              "enum": [
+                "downstream",
+                "upstream",
+                "both"
+              ]
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Hops from the CI; default 3 (or maxDepth when lower). At most `maxDepth` of GET /api/v1/settings/impact (IMPACT_MAX_DEPTH): a larger value is refused, never lowered",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "relationshipTypeId",
+            "in": "query",
+            "description": "Relationship types to follow, comma-separated (at most 50); default: every type that propagates impact. A type whose impactDirection is none is accepted and contributes nothing; an unknown id is refused",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "description": "true: CIs outside their validity period are followed and returned with active=false; false: they are neither returned nor followed",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "maxNodes",
+            "in": "query",
+            "description": "Largest number of affected CIs returned; default 500 (or maxNodesLimit when lower). At most `maxNodesLimit` of GET /api/v1/settings/impact (IMPACT_MAX_NODES): a larger value is refused",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10000,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/settings/impact": {
+      "get": {
+        "tags": [
+          "Impact analysis"
+        ],
+        "summary": "Impact analysis limits and whether any relationship type propagates impact",
+        "description": "The bounds a request may use (IMPACT_MAX_DEPTH, IMPACT_MAX_NODES), the defaults and the deadline, and `anyTypePropagates`: false while every relationship type has impactDirection none, so every analysis would be empty.",
+        "operationId": "getImpactSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactSettings"
                 }
               }
             }
@@ -8913,6 +9398,16 @@
                   "isDirectional": {
                     "type": "boolean"
                   },
+                  "impactDirection": {
+                    "type": "string",
+                    "description": "How impact flows across an edge `source -forward_label-> target`\n(`relationship_types.impact_direction`).",
+                    "enum": [
+                      "none",
+                      "target_to_source",
+                      "source_to_target",
+                      "both"
+                    ]
+                  },
                   "name": {
                     "type": "string",
                     "maxLength": 200,
@@ -9354,6 +9849,16 @@
                   },
                   "isActive": {
                     "type": "boolean"
+                  },
+                  "impactDirection": {
+                    "type": "string",
+                    "description": "How impact flows across an edge `source -forward_label-> target`\n(`relationship_types.impact_direction`).",
+                    "enum": [
+                      "none",
+                      "target_to_source",
+                      "source_to_target",
+                      "both"
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -13950,6 +14455,19 @@
                 }
               ]
             }
+          },
+          {
+            "name": "systemRole",
+            "in": "query",
+            "description": "Only the system list with this role",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "What a system lookup list is for.",
+              "enum": [
+                "criticality"
+              ]
+            }
           }
         ],
         "responses": {
@@ -14327,7 +14845,7 @@
           "Lookup lists"
         ],
         "summary": "Delete a lookup list",
-        "description": "Requires `datamodel.manage`. Hard delete of the list and its values, allowed only while no attribute definition uses the list and no other list depends on it (409 IN_USE otherwise). Retire it with `PATCH {\"isActive\": false}` instead.",
+        "description": "Requires `datamodel.manage`. Hard delete of the list and its values, allowed only while no attribute definition uses the list, no other list depends on it and it is not a system list (409 IN_USE otherwise). Retire it with `PATCH {\"isActive\": false}` instead.",
         "operationId": "deleteLookupList",
         "parameters": [
           {
@@ -14637,7 +15155,7 @@
           "Lookup lists"
         ],
         "summary": "What still refers to a lookup list",
-        "description": "Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
+        "description": "Requires `datamodel.manage`. Counts of attributeDefinitions, childLists, systemRole, values. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
         "operationId": "getLookupListUsage",
         "parameters": [
           {
@@ -15566,7 +16084,7 @@
           "Lookup lists"
         ],
         "summary": "What still refers to a lookup list value",
-        "description": "Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
+        "description": "Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, criticality, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
         "operationId": "getLookupListValueUsage",
         "parameters": [
           {
@@ -16928,7 +17446,7 @@
           "Audit log"
         ],
         "summary": "Change history (read-only, paginated, newest first by default)",
-        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do). In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
+        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export (today the impact analysis CSV) is an `export` row on what was exported (`entityType` configuration_items, the analysed CI), `newValue` holding `kind`, `format`, the `parameters`, `rowCount`, `truncated` and `visibility`, never the rows. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do). In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
         "operationId": "listAuditLog",
         "parameters": [
           {
@@ -17039,6 +17557,7 @@
                 "mfa.recovery_code_used",
                 "mfa.recovery_codes",
                 "schema_change.refused",
+                "export",
                 "import.commit",
                 "import.report_read"
               ]
@@ -20898,8 +21417,8 @@
                   "formatVersion": {
                     "type": "integer",
                     "format": "int32",
-                    "description": "File format version; this server writes version 3 and reads 1 to 3",
-                    "maximum": 3,
+                    "description": "File format version; this server writes version 4 and reads 1 to 4",
+                    "maximum": 4,
                     "minimum": 1
                   },
                   "exportedAt": {
@@ -21649,6 +22168,7 @@
               "mfa.recovery_code_used",
               "mfa.recovery_codes",
               "schema_change.refused",
+              "export",
               "import.commit",
               "import.report_read"
             ]
@@ -21900,8 +22420,8 @@
           "formatVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "File format version; this server writes version 3 and reads 1 to 3",
-            "maximum": 3,
+            "description": "File format version; this server writes version 4 and reads 1 to 4",
+            "maximum": 4,
             "minimum": 1
           },
           "exportedAt": {
@@ -22058,6 +22578,7 @@
           "createdAt",
           "updatedAt",
           "deletedAt",
+          "criticality",
           "attributes",
           "attributeReferences"
         ],
@@ -22118,6 +22639,17 @@
             ],
             "format": "date-time",
             "description": "Set when the CI was deleted (soft delete); history keeps resolving"
+          },
+          "criticality": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CriticalityRef",
+                "description": "How critical the CI is (a value of the criticality lookup list); null when not set"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "attributes": {
             "type": "object",
@@ -22202,7 +22734,8 @@
           "version",
           "createdAt",
           "updatedAt",
-          "deletedAt"
+          "deletedAt",
+          "criticality"
         ],
         "properties": {
           "id": {
@@ -22261,6 +22794,17 @@
             ],
             "format": "date-time",
             "description": "Set when the CI was deleted (soft delete); history keeps resolving"
+          },
+          "criticality": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CriticalityRef",
+                "description": "How critical the CI is (a value of the criticality lookup list); null when not set"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -22317,6 +22861,35 @@
           "secret": {
             "type": "string",
             "description": "Send as `Authorization: Bearer <secret>`. Not retrievable later."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CriticalityRef": {
+        "type": "object",
+        "description": "A CI's criticality: a value of the system lookup list `criticality`.",
+        "required": [
+          "id",
+          "key",
+          "name",
+          "rank"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The lookup list value id (send it as `criticalityValueId`)"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "rank": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Position in the criticality list (its sort order): 1 is the most critical"
           }
         },
         "additionalProperties": false
@@ -22759,6 +23332,24 @@
                 },
                 "isDirectional": {
                   "type": "boolean"
+                },
+                "impactDirection": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "How impact flows across an edge `source -forward_label-> target`\n(`relationship_types.impact_direction`).",
+                      "enum": [
+                        "none",
+                        "target_to_source",
+                        "source_to_target",
+                        "both"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "How impact flows across the type's edges. Left out (files before version 4): an existing type keeps its\nvalue, a new one gets none"
                 },
                 "sortOrder": {
                   "type": "integer",
@@ -23500,6 +24091,533 @@
           },
           "message": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactAnalysis": {
+        "type": "object",
+        "required": [
+          "root",
+          "parameters",
+          "items",
+          "summary",
+          "truncated",
+          "truncatedReason",
+          "hasMoreBeyondDepth",
+          "visibility",
+          "limits",
+          "elapsedMs"
+        ],
+        "properties": {
+          "root": {
+            "$ref": "#/components/schemas/ImpactRoot"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/ImpactParameters"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImpactItem"
+            },
+            "description": "Ordered by hops, then name"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ImpactSummary"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "The analysis stopped early: `items` holds every CI up to the last complete hop, plus those found in the\npartial one"
+          },
+          "truncatedReason": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "max_nodes",
+                  "max_edges",
+                  "timeout"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hasMoreBeyondDepth": {
+            "type": "boolean",
+            "description": "The requested depth was reached and further CIs lie beyond it (not truncation)"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "all_classes",
+              "restricted"
+            ]
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ImpactLimits"
+          },
+          "elapsedMs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactCriticality": {
+        "type": "object",
+        "description": "A criticality value as impact analysis reports it.",
+        "required": [
+          "key",
+          "label",
+          "rank"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "rank": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Position in the criticality list: 1 is the most critical"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactItem": {
+        "type": "object",
+        "description": "An affected CI.",
+        "required": [
+          "id",
+          "ident",
+          "name",
+          "classId",
+          "className",
+          "criticality",
+          "active",
+          "status",
+          "directions",
+          "hops",
+          "via",
+          "upstreamVia",
+          "downstreamVia",
+          "reachedByCount"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ident": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The CI's label (display name)"
+          },
+          "classId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "className": {
+            "type": "string"
+          },
+          "criticality": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImpactCriticality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImpactStatus",
+                "description": "The value of the class's lookup attribute keyed `status`; null when the class has none or the CI holds none"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "directions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "downstream",
+                "upstream"
+              ]
+            },
+            "description": "The walks that reached the CI: one, or both in direction=both"
+          },
+          "hops": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Hops from the root on the shortest path (in both mode: the shorter direction, downstream on a tie)"
+          },
+          "via": {
+            "$ref": "#/components/schemas/ImpactVia",
+            "description": "The last hop of that path"
+          },
+          "upstreamVia": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImpactVia",
+                "description": "In both mode, for a CI reached both ways: the last hop of the upstream path when `via` is the downstream one"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "downstreamVia": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImpactVia",
+                "description": "In both mode, for a CI reached both ways: the last hop of the downstream path when `via` is the upstream one"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reachedByCount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Propagating relationships into this CI from CIs of the result (root included), at least 1: more than 1 means\nit is also reached another way"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactLimits": {
+        "type": "object",
+        "required": [
+          "maxDepth",
+          "maxNodes"
+        ],
+        "properties": {
+          "maxDepth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxNodes": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactParameters": {
+        "type": "object",
+        "required": [
+          "direction",
+          "depth",
+          "relationshipTypeIds",
+          "includeInactive",
+          "maxNodes"
+        ],
+        "properties": {
+          "direction": {
+            "type": "string",
+            "description": "Which way to analyse, relative to the flow of impact.",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ]
+          },
+          "depth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "relationshipTypeIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The types followed: those asked for, or every type that propagates impact"
+          },
+          "includeInactive": {
+            "type": "boolean"
+          },
+          "maxNodes": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactRelationshipType": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "name",
+          "forwardLabel",
+          "reverseLabel"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "forwardLabel": {
+            "type": "string"
+          },
+          "reverseLabel": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactRoot": {
+        "type": "object",
+        "description": "The analysed CI.",
+        "required": [
+          "id",
+          "ident",
+          "name",
+          "classId",
+          "className",
+          "criticality",
+          "active"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ident": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The CI's label (display name)"
+          },
+          "classId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "className": {
+            "type": "string"
+          },
+          "criticality": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImpactCriticality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Inside its validity period"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactSettings": {
+        "type": "object",
+        "description": "Impact analysis settings, for clients building the controls.",
+        "required": [
+          "maxDepth",
+          "maxNodesLimit",
+          "defaultDepth",
+          "defaultMaxNodes",
+          "timeoutMs",
+          "anyTypePropagates"
+        ],
+        "properties": {
+          "maxDepth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Largest depth (IMPACT_MAX_DEPTH)"
+          },
+          "maxNodesLimit": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Largest maxNodes (IMPACT_MAX_NODES)"
+          },
+          "defaultDepth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "defaultMaxNodes": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deadline of one analysis (IMPACT_TIMEOUT_MS)",
+            "minimum": 0
+          },
+          "anyTypePropagates": {
+            "type": "boolean",
+            "description": "Whether any relationship type propagates impact; false: every analysis is empty until an administrator\nconfigures one"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactStatus": {
+        "type": "object",
+        "description": "The value of the CI's `status` attribute (a lookup attribute keyed status).",
+        "required": [
+          "key",
+          "label"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactSummary": {
+        "type": "object",
+        "description": "Counts over the returned items only: exact for the response, a lower bound of the whole when truncated.",
+        "required": [
+          "total",
+          "byClass",
+          "byCriticality",
+          "byHops"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "byClass": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "classId",
+                "className",
+                "count"
+              ],
+              "properties": {
+                "classId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "className": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "By class name"
+          },
+          "byCriticality": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "count"
+              ],
+              "properties": {
+                "key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "null: not set"
+                },
+                "count": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "By rank, most critical first, not set last"
+          },
+          "byHops": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "hops",
+                "count"
+              ],
+              "properties": {
+                "hops": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "count": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactVia": {
+        "type": "object",
+        "description": "The relationship that first reached a CI: the last hop of its shortest path.",
+        "required": [
+          "parentId",
+          "relationshipId",
+          "relationshipType",
+          "edgeSourceId",
+          "edgeTargetId"
+        ],
+        "properties": {
+          "parentId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The CI one hop closer to the root (the root itself at hop 1); always the root or another item"
+          },
+          "relationshipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "relationshipType": {
+            "$ref": "#/components/schemas/ImpactRelationshipType"
+          },
+          "edgeSourceId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The relationship's source (read with forwardLabel: source runs on target)"
+          },
+          "edgeTargetId": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "additionalProperties": false
@@ -24956,7 +26074,8 @@
           "isActive",
           "createdAt",
           "updatedAt",
-          "parentListId"
+          "parentListId",
+          "systemRole"
         ],
         "properties": {
           "id": {
@@ -24997,6 +26116,21 @@
             ],
             "format": "uuid",
             "description": "The list this one depends on (e.g. \"Model\" depends on \"Manufacturer\"): each value names its parent value"
+          },
+          "systemRole": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "What a system lookup list is for.",
+                "enum": [
+                  "criticality"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on a system list, which the application itself uses and which cannot be deleted: `criticality` (the\nvalues of every CI's criticality). Its values can be renamed, reordered, added and retired like any other."
           }
         },
         "additionalProperties": false
@@ -25426,6 +26560,21 @@
                       "type": "null"
                     }
                   ]
+                },
+                "systemRole": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "What a system lookup list is for.",
+                      "enum": [
+                        "criticality"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Set on a system list (criticality). Informational: an import never gives a list a system role or takes\none away, and never deletes a list"
                 },
                 "values": {
                   "type": "array",
@@ -26177,6 +27326,7 @@
                 "createdAt",
                 "updatedAt",
                 "deletedAt",
+                "criticality",
                 "depth"
               ],
               "properties": {
@@ -26236,6 +27386,17 @@
                   ],
                   "format": "date-time",
                   "description": "Set when the CI was deleted (soft delete); history keeps resolving"
+                },
+                "criticality": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/CriticalityRef",
+                      "description": "How critical the CI is (a value of the criticality lookup list); null when not set"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "depth": {
                   "type": "integer",
@@ -26346,6 +27507,7 @@
           "forwardLabel",
           "reverseLabel",
           "isDirectional",
+          "impactDirection",
           "sortOrder",
           "isActive",
           "createdAt",
@@ -26379,6 +27541,16 @@
           "isDirectional": {
             "type": "boolean",
             "description": "false for symmetric types such as connected_to"
+          },
+          "impactDirection": {
+            "type": "string",
+            "description": "How impact flows across an edge `source -forward_label-> target`\n(`relationship_types.impact_direction`).",
+            "enum": [
+              "none",
+              "target_to_source",
+              "source_to_target",
+              "both"
+            ]
           },
           "sortOrder": {
             "type": "integer",
@@ -28494,6 +29666,10 @@
     {
       "name": "Search",
       "description": "Global search across CIs and their attribute values."
+    },
+    {
+      "name": "Impact analysis",
+      "description": "Which CIs are affected if a CI fails (downstream) and which it depends on (upstream), along the relationship types that propagate impact. Bounded, and limited to the CIs the caller may view."
     },
     {
       "name": "Bulk import",

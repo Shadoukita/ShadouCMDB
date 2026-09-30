@@ -56,9 +56,12 @@ test.describe("a bare install", () => {
 
   test("starts without a data model, and the starter template fills it in one click", async ({ page, request }) => {
     // What `seed` leaves: system rows only.
-    for (const path of ["/ci-classes", "/relationship-types", "/statuses", "/environments", "/locations", "/owners", "/lookup-lists", "/configuration-items"]) {
+    for (const path of ["/ci-classes", "/relationship-types", "/statuses", "/environments", "/locations", "/owners", "/configuration-items"]) {
       expect((await apiGet<Page_<unknown>>(request, path)).page.total, path).toBe(0);
     }
+    // The one lookup list is the system list behind the core Criticality field.
+    const lists = await apiGet<Page_<{ key: string; systemRole: string | null }>>(request, "/lookup-lists");
+    expect(lists.data.map((l) => [l.key, l.systemRole])).toEqual([["criticality", "criticality"]]);
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "No CI classes are defined yet" })).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Main" }).getByText("No classes yet.")).toBeVisible();
