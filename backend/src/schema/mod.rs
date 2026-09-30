@@ -29,7 +29,7 @@ pub mod model;
 pub mod naming;
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -142,6 +142,9 @@ pub struct Purge {
     /// before their definitions are deleted). How many values a purge deletes
     /// is only told to a caller who may view them all (GH#243).
     pub classes: Vec<Uuid>,
+    /// Rows of `tables` counted before the purge emptied them in the same
+    /// transaction; a table not listed is counted when the plan is built (GH#281).
+    pub rows: HashMap<TableName, i64>,
 }
 
 impl Purge {
@@ -849,7 +852,10 @@ async fn build(
         let i = plan.ddl(format!("DROP TABLE {}", table.sql()));
         let without = format!("Table {} and its rows are deleted", table.display());
         if counts {
-            let n = count(conn, format!("SELECT count(*) FROM {}", table.sql())).await?;
+            let n = match purge.rows.get(table) {
+                Some(n) => *n,
+                None => count(conn, format!("SELECT count(*) FROM {}", table.sql())).await?,
+            };
             let message = format!("Table {} and its {n} rows are deleted", table.display());
             plan.counted(Some(i), "drop_table", n, message, without, &purge.classes);
         } else {
