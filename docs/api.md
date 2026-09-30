@@ -127,11 +127,11 @@ Every non-2xx response has this shape:
 
 Behind HTTPS (whenever the cookies get `Secure`) they are named `__Host-shadoucmdb_session` and
 `__Host-shadoucmdb_csrf`. A browser keeps a `__Host-` cookie only if it is `Secure`, has `Path=/` and no `Domain`,
-so another host under the same domain cannot plant one ("cookie tossing"). When a request carries both names, the
-server reads only the `__Host-` cookie, whatever the order. A client that reads the CSRF cookie must likewise prefer
-`__Host-shadoucmdb_csrf`, or use `csrfToken` from the response. Sessions opened under the plain names before this
-change keep working over HTTPS for one more release: the first answer to such a session sets the `__Host-` cookies
-and deletes the plain ones.
+so another host under the same domain cannot plant one ("cookie tossing"). Behind HTTPS the server reads only the
+`__Host-` names and ignores a plain-named cookie, which such a host could have set with `Domain=`. A client that reads
+the CSRF cookie must likewise prefer `__Host-shadoucmdb_csrf`, or use `csrfToken` from the response. The sign-in
+flow cookies `shadoucmdb_mfa` and `shadoucmdb_oidc` follow the same rule: behind HTTPS they are
+`__Host-shadoucmdb_mfa` and `__Host-shadoucmdb_oidc`, with `Path=/`.
 
 Every `POST`, `PUT`, `PATCH` and `DELETE` must echo the token in `X-CSRF-Token`, or it is rejected with `403
 CSRF_TOKEN_INVALID` before anything else happens. Login and setup need no token: they accept only
@@ -178,7 +178,8 @@ runs the second factor.
    `{ codes: [10 recovery codes] }`. They are shown only in this response (the server keeps their SHA-256); each
    signs in once in place of a code. `POST /api/v1/auth/mfa/recovery-codes {currentPassword, code}` replaces them.
 3. From then on `POST /auth/login` with the right password (local or directory) answers `401 MFA_REQUIRED` and sets the
-   `shadoucmdb_mfa` cookie (`HttpOnly`, `Path=/api/v1/auth`, 5 minutes). `POST /api/v1/auth/login/mfa {code}` with an
+   `shadoucmdb_mfa` cookie (`HttpOnly`, `Path=/api/v1/auth`, 5 minutes; behind HTTPS `__Host-shadoucmdb_mfa`,
+   `Secure`, `Path=/`). `POST /api/v1/auth/login/mfa {code}` with an
    authenticator code or a recovery code then signs in like login did before. A challenge takes at most 5 wrong
    codes; after that, or after 5 minutes, the password is asked for again.
 

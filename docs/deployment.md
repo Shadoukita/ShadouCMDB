@@ -167,7 +167,9 @@ a cloud load balancer) in front of it for anything beyond a lab. Sessions are co
 - With `Secure`, the cookies are named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`
   (without it, `shadoucmdb_session` and `shadoucmdb_csrf`). Browsers accept a `__Host-` cookie
   only from the host itself, so another host under your domain cannot plant a session cookie for
-  ShadouCMDB. Do not rewrite cookie names, `Path` or `Domain` at the proxy.
+  ShadouCMDB; a plain-named cookie is ignored over HTTPS. The sign-in flow cookies are
+  `__Host-shadoucmdb_mfa` and `__Host-shadoucmdb_oidc` likewise. Do not rewrite cookie names,
+  `Path` or `Domain` at the proxy.
 - Serve the UI and the API from the same origin (the embedded UI does this). A UI on another
   origin needs that origin in `CORS_ORIGINS`, spelled exactly as the browser sends it
   (`https://cmdb.example.com`: no path, no trailing slash); those origins may send the session
