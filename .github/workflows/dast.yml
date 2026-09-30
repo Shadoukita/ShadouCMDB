@@ -159,6 +159,8 @@ jobs:
           { echo "DAST_CSRF=$csrf"; echo "DAST_COOKIE=$cookie"; } >> "$GITHUB_ENV"
 
       # ZAP_AUTH_HEADER sends the cookie; a replacer rule adds X-CSRF-Token to every request.
+      # ZAP also crawls the web UI, whose "Sign out" would end the session: logout is
+      # excluded for every ZAP component, not only left out of openapi-session.json.
       - name: ZAP API scan (session-only operations, active, as an administrator)
         id: session
         continue-on-error: true
@@ -170,7 +172,10 @@ jobs:
               -z "-config scanner.maxScanDurationInMins=10 -config scanner.maxRuleDurationInMins=2 \
                   -config replacer.full_list(0).description=csrf -config replacer.full_list(0).enabled=true \
                   -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=X-CSRF-Token \
-                  -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$DAST_CSRF" \
+                  -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$DAST_CSRF \
+                  -config globalexcludeurl.url_list.url(0).regex=.*/api/v1/auth/logout.* \
+                  -config globalexcludeurl.url_list.url(0).description=logout \
+                  -config globalexcludeurl.url_list.url(0).enabled=true" \
               -r session.html -J session.json -w session.md
       - run: cat zap/session.md >> "$GITHUB_STEP_SUMMARY"
         if: always()
