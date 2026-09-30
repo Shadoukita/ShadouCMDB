@@ -8,6 +8,7 @@ import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import { useDocumentTitle } from "../../lib/composables";
+import { plural } from "../../lib/format";
 import { lastReachableStep, shownStep, stepOf, type WizardStep } from "../../lib/imports";
 import { useImportAccess } from "../../lib/useImportAccess";
 import { useSessionStore } from "../../stores/session";
@@ -141,7 +142,7 @@ const committedRows = computed(() => {
       <div v-else-if="data.status === 'failed' && data.phase !== 'analyse'" class="alert alert-error" role="alert">
         <strong>The import stopped: {{ data.error?.message ?? "an unexpected error" }}.</strong>
         <template v-if="data.phase === 'commit'">
-          Rows imported before the stop stay imported ({{ committedRows.toLocaleString() }} rows). Run the same file again
+          Rows imported before the stop stay imported ({{ plural(committedRows, 'row') }}). Run the same file again
           to finish; rows already imported will be unchanged.
         </template>
       </div>

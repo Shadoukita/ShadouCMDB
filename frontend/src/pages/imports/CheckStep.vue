@@ -15,6 +15,7 @@ import { useCiClasses, useClassAttributes } from "../../api/queries";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
+import { plural } from "../../lib/format";
 import { columnLetter, refusalCode } from "../../lib/imports";
 import { changeText } from "../../lib/importMapping";
 import ImportProgress from "./ImportProgress.vue";
@@ -380,8 +381,8 @@ const fieldLabel = (f: string) => {
 
   <ConfirmDialog
     :open="skipping"
-    :title="`Skip ${summary?.errorRows.toLocaleString() ?? 0} rows with errors?`"
-    :confirm-label="`Import ${validRows.toLocaleString()} rows`"
+    :title="`Skip ${plural(summary?.errorRows ?? 0, 'row')} with errors?`"
+    :confirm-label="`Import ${plural(validRows, 'row')}`"
     :busy="commit.isPending.value"
     @cancel="skipping = false"
     @confirm="startCommit(true)"

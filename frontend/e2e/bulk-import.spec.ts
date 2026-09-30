@@ -401,7 +401,7 @@ test("errors and report: per-row problems, the neutralised report, a corrected f
   const skip = page.getByRole("button", { name: "Import 4 valid rows and skip 1…" });
   await skip.focus();
   await page.keyboard.press("Enter");
-  const dialog = page.getByRole("dialog", { name: "Skip 1 rows with errors?" });
+  const dialog = page.getByRole("dialog", { name: "Skip 1 row with errors?" });
   await expect(dialog).toContainText("1 row has errors and will not be imported. They are listed in the error report. The other 4 rows will be imported.");
   await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   await checkA11y(page, testInfo, "import-skip-dialog");
