@@ -12,7 +12,8 @@ against a real API with the demo inventory:
 | Screen | State checked |
 | --- | --- |
 | Sign-in | empty form; refused sign-in with its error |
-| Inventory list | the CI table with filters, sorting and paging |
+| Inventory list | the CI table (default view) |
+| Inventory Columns popover | open on the Server class's list, in light and dark theme (the only state checked in the dark theme) |
 | CI detail page | grid layout with sections and the relationships panel; the delete confirmation dialog |
 | CI edit form | the form generated from the class's attributes |
 | Class editor | a class with its attributes; the *Add attribute* dialog |
@@ -21,8 +22,8 @@ against a real API with the demo inventory:
 | Two-factor enrolment | the step with the QR code and setup key |
 
 A **critical** or **serious** violation fails the test and the pull request. **Moderate** and **minor** findings are
-printed in the test output and listed on the test in the HTML report, without failing it. Each checked state
-attaches `axe-<screen>.json` to the report with the violations and the checks axe could not decide on its own
+printed in the test output and, in CI, also listed on the test in the HTML report (locally only the console output
+shows them), without failing it. Each checked state attaches `axe-<screen>.json` to the test result (in CI, to the HTML report) with the violations and the checks axe could not decide on its own
 (for example text contrast over overlapping elements), which need a look by a person.
 
 No rule is turned off on any screen. A rule may only be turned off for one screen, with a comment in the spec
@@ -42,3 +43,8 @@ administration pages) share the same components and styles but are not checked o
 ```sh
 API_PROXY_TARGET=http://<api-host>:3000 npx playwright test a11y     # in frontend/, as in its README
 ```
+
+The tests sign in first (`frontend/e2e/global-setup.ts`). Set `E2E_USERNAME` and `E2E_PASSWORD` to an account with the
+Administrator profile (defaults `e2e-admin` / `e2e-admin-password`); on a database without users the run completes
+first-run setup as that account and also needs `E2E_SETUP_TOKEN` (or `SETUP_TOKEN`), the API's setup token. The
+*End-to-end tests* section of [`frontend/README.md`](../frontend/README.md) lists all variables.
