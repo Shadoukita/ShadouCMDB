@@ -72,14 +72,14 @@ function confirmRemove() {
           </thead>
           <tbody>
             <tr v-for="{ r, d } in rows" :key="r.id">
-              <td>{{ d.label }}</td>
+              <td dir="auto">{{ d.label }}</td>
               <td>
                 <CiLink :id="d.other.id" :from="self" :trail="trail">{{ d.other.name }}</CiLink>
                 <span v-if="d.other.deleted" class="badge danger"> deleted</span>
               </td>
               <td>{{ d.other.className }}</td>
               <td class="muted">{{ r.type.isDirectional ? (d.outgoing ? "outgoing →" : "← incoming") : "↔" }}</td>
-              <td :title="r.notes ?? undefined">{{ r.notes ?? "" }}</td>
+              <td :title="r.notes ?? undefined" dir="auto">{{ r.notes ?? "" }}</td>
               <td v-if="!ci.deletedAt" class="num">
                 <button
                   v-if="mayRemove(r)"
@@ -107,8 +107,8 @@ function confirmRemove() {
     >
       <ErrorAlert v-if="del.isError.value" :error="del.error.value" title="Remove failed" />
       <p v-if="removing">
-        <strong>{{ removing.source.name }}</strong> <em>{{ removing.type.forwardLabel }}</em>
-        <strong>{{ removing.target.name }}</strong> will be removed. Neither CI is deleted.
+        <strong dir="auto">{{ removing.source.name }}</strong> <em dir="auto">{{ removing.type.forwardLabel }}</em>
+        <strong dir="auto">{{ removing.target.name }}</strong> will be removed. Neither CI is deleted.
       </p>
     </ConfirmDialog>
   </section>
