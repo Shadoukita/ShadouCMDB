@@ -715,12 +715,8 @@ impl RouteBuilder {
                         read_body(&headers, body, body_limit).await?
                     };
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
-                    let upgrade = ctx
-                        .principal()
-                        .and_then(|p| p.csrf_token())
-                        .and_then(|csrf| auth::session::upgrade_cookies(&state.auth.config, &headers, csrf));
                     let api = Api { pool: state.pool, ctx, auth: state.auth, headers, readiness: state.readiness };
-                    let mut res = match f(api, input).await {
+                    let res = match f(api, input).await {
                         Ok(out) => out.respond(status),
                         // A refused sign-in answers no earlier than its floor (GH#216). The
                         // handler is done, so no database connection is held; the permit is
@@ -733,13 +729,6 @@ impl RouteBuilder {
                             return Err(e);
                         }
                     };
-                    // A session from before the __Host- names moves over on its first
-                    // HTTPS answer, unless the route set the session cookies itself (logout).
-                    if let Some(cookies) = upgrade
-                        && !res.headers().contains_key(header::SET_COOKIE)
-                    {
-                        res.headers_mut().extend(cookies.into_iter().map(|c| (header::SET_COOKIE, c)));
-                    }
                     Ok::<_, AppError>(res)
                 };
                 run.await.unwrap_or_else(IntoResponse::into_response)

@@ -154,7 +154,7 @@ pub async fn authenticate(
     headers: &HeaderMap,
     client: &ClientInfo,
 ) -> Result<Option<Principal>, AppError> {
-    let Some((token, _)) = session::session_token(headers) else { return Ok(None) };
+    let Some(token) = session::session_token(cfg, headers) else { return Ok(None) };
     let Some(s) = data::resolve_session(pool, &session::token_hash(token), cfg.session_idle).await? else {
         return Ok(None);
     };
