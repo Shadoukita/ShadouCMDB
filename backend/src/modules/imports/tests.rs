@@ -1206,6 +1206,201 @@ async fn a_commit_stops_when_the_owner_loses_the_import_right_and_keeps_earlier_
     assert_eq!((event["outcome"].as_str(), event["created"].as_u64()), (Some("failed"), Some(500)), "{event}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_cancelled_while_queued_writes_nothing_and_is_audited_once() {
+    let Some(db) = scratch::database("import_commit_cancel_queued").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let id = validated(&e, &e.admin, &hosts(3)).await;
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!((status, v["status"].as_str()), (202, Some("queued")), "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/cancel"), &e.admin, None).await;
+    assert_eq!((status, v["status"].as_str()), (202, Some("cancelled")), "{v}");
+    drain(&e.pool).await;
+
+    assert_eq!(job(&e, &e.admin, &id).await["status"], "cancelled");
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 0);
+    // No worker ever held it, so the cancel itself writes the one import.commit (§4.3).
+    let events: Vec<Value> = sqlx::query_scalar(
+        "SELECT new_value FROM audit_log WHERE action = 'import.commit' AND entity_id = $1
+           AND actor_type = 'import' AND actor_name = 'admin' AND request_id = 'import:' || $1::text",
+    )
+    .bind(Uuid::parse_str(&id).unwrap())
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!((events[0]["outcome"].as_str(), events[0]["created"].as_u64()), (Some("cancelled"), Some(0)));
+
+    // A dry run that is cancelled is no commit: no event.
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("b.csv"), &[], hosts(2).into_bytes()).await;
+    assert_eq!(status, 202, "{v}");
+    let other = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, v, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{other}/mapping"), &e.admin, Some(server_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{other}/dry-run"), &e.admin, None).await;
+    assert_eq!(status, 202, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{other}/cancel"), &e.admin, None).await;
+    assert_eq!(status, 202, "{v}");
+    let events = count(&e.pool, "SELECT count(*) FROM audit_log WHERE request_id = $1", &other).await;
+    assert_eq!(events, 0);
+}
+
+/// `srv` with a reference attribute `peer` (to `srv`) and a `depends_on`
+/// relationship type from `srv` to `srv`.
+async fn linked_server_class(e: &Env) -> (String, Uuid) {
+    let class = server_class(e).await;
+    let body = json!({
+        "classId": class, "key": "peer", "label": "Peer", "dataType": "reference", "referenceClassId": class
+    });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let depends: Uuid = sqlx::query_scalar(
+        "INSERT INTO relationship_types (key, name, forward_label, reverse_label)
+         VALUES ('depends_on', 'Depends on', 'depends on', 'required by') RETURNING id",
+    )
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id) VALUES ($1, $2, $2)",
+    )
+    .bind(depends)
+    .bind(class.parse::<Uuid>().unwrap())
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    (class, depends)
+}
+
+fn linked_mapping() -> Value {
+    let by_host = json!({ "by": "attribute", "attributeKey": "hostname" });
+    json!({
+        "classKey": "srv",
+        "mode": "create_or_update",
+        "key": { "field": "attributes.hostname" },
+        "columns": [
+            { "index": 0, "target": { "kind": "attribute", "key": "hostname" } },
+            { "index": 1, "target": { "kind": "attribute", "key": "cores" } },
+            { "index": 2, "target": { "kind": "attribute", "key": "peer", "match": by_host } },
+            { "index": 3, "target": {
+                "kind": "relationship", "typeKey": "depends_on", "direction": "outgoing", "match": by_host
+            } }
+        ]
+    })
+}
+
+async fn validated_linked(e: &Env, file: &str) -> String {
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("linked.csv"), &[], file.as_bytes().to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, v, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &e.admin, Some(linked_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/dry-run"), &e.admin, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    assert_eq!(job(e, &e.admin, &id).await["status"], "validated");
+    id
+}
+
+async fn ci_id(pool: &PgPool, label: &str) -> Uuid {
+    sqlx::query_scalar("SELECT id FROM configuration_items WHERE label = $1").bind(label).fetch_one(pool).await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn references_reach_cis_of_earlier_rows_and_relationships_are_only_added() {
+    let Some(db) = scratch::database("import_commit_references").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let (class, depends) = linked_server_class(&e).await;
+    let web01 = server(&e, &class, "web01", 8).await;
+    let db01 = server(&e, &class, "db01", 4).await;
+    let edge = json!({ "relationshipTypeId": depends, "sourceCiId": web01, "targetCiId": db01 });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/relationships", &e.admin, Some(edge)).await;
+    assert_eq!(status, 201, "{v}");
+
+    // Row 2 refers to CIs in the database; row 3 to the CI row 2 creates
+    // (pending); row 4 leaves web01's existing relationship out; row 5 names
+    // the CI of row 6, which is created later (forward).
+    let file = "Hostname,Cores,Peer,Depends on\n\
+                app01,4,web01,db01;web01;db01\n\
+                app02,4,app01,app01\n\
+                web01,8,,\n\
+                app03,4,app04,\n\
+                app04,4,,\n";
+    let id = validated_linked(&e, file).await;
+    let j = job(&e, &e.admin, &id).await;
+    let s = &j["summary"];
+    assert_eq!(
+        (s["create"].as_u64(), s["unchanged"].as_u64(), s["errorRows"].as_u64()),
+        (Some(3), Some(1), Some(1)),
+        "{j}"
+    );
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/v1/imports/{id}/issues?severity=error"), &e.admin, None).await;
+    let got: Vec<(u64, &str, &str)> = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["row"].as_u64().unwrap(), i["code"].as_str().unwrap(), i["header"].as_str().unwrap()))
+        .collect();
+    assert_eq!(got, vec![(5, "reference_to_later_row", "Peer")], "{v}");
+
+    let (status, v) = commit(&e, &e.admin, &id, true, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed_with_errors"), (3, 0, 1, 1, 0)), "{j}");
+    // app01 → db01, app01 → web01 (the second db01 in the cell is the same edge), app02 → app01.
+    assert_eq!(j["summary"]["committed"]["relationshipsAdded"], 3, "{j}");
+
+    let (app01, app02) = (ci_id(&e.pool, "app01").await, ci_id(&e.pool, "app02").await);
+    let (_, ci, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items/{app02}"), &e.admin, None).await;
+    assert_eq!(ci["attributes"]["peer"], json!(app01.to_string()), "the pending CI of row 2: {ci}");
+    let (_, ci, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items/{app01}"), &e.admin, None).await;
+    assert_eq!(ci["attributes"]["peer"], json!(web01), "{ci}");
+    let skipped: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE label = 'app03'")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(skipped, 0);
+
+    let mut edges: Vec<(String, String)> = sqlx::query_as(
+        "SELECT s.label, t.label FROM ci_relationships r
+           JOIN configuration_items s ON s.id = r.source_ci_id JOIN configuration_items t ON t.id = r.target_ci_id
+          WHERE r.relationship_type_id = $1",
+    )
+    .bind(depends)
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    edges.sort();
+    let pair = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+    assert_eq!(
+        edges,
+        vec![pair("app01", "db01"), pair("app01", "web01"), pair("app02", "app01"), pair("web01", "db01")],
+        "web01's relationship was left out of the file and stays"
+    );
+    let audited = count(
+        &e.pool,
+        "SELECT count(*) FROM audit_log WHERE request_id = $1 AND entity_type = 'ci_relationships' AND actor_type = 'import'",
+        &id,
+    )
+    .await;
+    assert_eq!(audited, 3);
+
+    // Again: every edge exists already, so nothing is added.
+    let again = validated_linked(&e, "Hostname,Cores,Peer,Depends on\napp01,4,web01,db01;web01\n").await;
+    let (status, v) = commit(&e, &e.admin, &again, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &again).await;
+    assert_eq!((committed(&j), &j["summary"]["committed"]["relationshipsAdded"]), ((0, 0, 1, 0, 0), &json!(0)), "{j}");
+}
+
 // ---------------------------------------------------------------------------
 // Error report (SHAA-799 part 4, §3.4, §5.1)
 // ---------------------------------------------------------------------------

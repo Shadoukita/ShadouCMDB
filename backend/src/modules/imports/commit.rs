@@ -693,6 +693,13 @@ async fn finish(pool: &PgPool, lease: &Lease, status: &str, error: Option<Value>
     Ok(true)
 }
 
+/// Writes the `import.commit` event of a commit cancelled while still
+/// `queued`: no worker holds it, so no worker would end it (§4.3). `job` is
+/// the row as the cancel left it.
+pub(super) async fn record_queued_cancel(conn: &mut PgConnection, job: &JobRow) -> sqlx::Result<()> {
+    crud::write_audit(conn, &audit_context(job), vec![commit_event(job)]).await
+}
+
 /// The `import.commit` event (§4.3).
 fn commit_event(job: &JobRow) -> AuditEntry {
     let mapping = job.mapping();

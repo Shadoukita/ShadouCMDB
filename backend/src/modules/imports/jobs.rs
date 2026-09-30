@@ -314,6 +314,9 @@ pub async fn cancel(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Imp
     .bind(id)
     .fetch_one(&mut *tx)
     .await?;
+    if job.status == JobStatus::Queued && job.phase == Some(Phase::Commit) {
+        super::commit::record_queued_cancel(&mut tx, &row).await?;
+    }
     tx.commit().await?;
     Ok(row.dto(None))
 }
