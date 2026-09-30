@@ -821,3 +821,375 @@ async fn a_dry_run_stops_when_the_owner_loses_the_import_right() {
         "{j}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Commit (SHAA-799 part 4, §2.6)
+// ---------------------------------------------------------------------------
+
+/// Uploads `file`, maps it with [`server_mapping`] and runs the dry run.
+async fn validated(e: &Env, creds: &Creds, file: &str) -> String {
+    let (status, v, _) = upload(&e.app, creds, CSV_TYPE, Some("srv.csv"), &[], file.as_bytes().to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, v, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), creds, Some(server_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/dry-run"), creds, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    assert_eq!(job(e, creds, &id).await["status"], "validated");
+    id
+}
+
+/// `POST /imports/{id}/commit`, with an optional `Idempotency-Key`.
+async fn commit(e: &Env, creds: &Creds, id: &str, skip: bool, key: Option<&str>) -> (u16, Value) {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/imports/{id}/commit"))
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(c) = &creds.cookie {
+        req = req.header(header::COOKIE, c);
+    }
+    if let Some(c) = &creds.csrf {
+        req = req.header("x-csrf-token", c);
+    }
+    if let Some(k) = key {
+        req = req.header("idempotency-key", k);
+    }
+    let body = json!({ "skipErrorRows": skip }).to_string();
+    let res = e.app.clone().oneshot(req.body(HttpBody::from(body)).unwrap()).await.unwrap();
+    let status = res.status().as_u16();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 22).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+fn committed(j: &Value) -> (u64, u64, u64, u64, u64) {
+    let c = &j["summary"]["committed"];
+    let n = |k: &str| c[k].as_u64().unwrap_or(u64::MAX);
+    (n("created"), n("updated"), n("unchanged"), n("skipped"), n("failed"))
+}
+
+async fn count(pool: &PgPool, sql: &str, job: &str) -> i64 {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_owned())).bind(format!("import:{job}")).fetch_one(pool).await.unwrap()
+}
+
+/// The type table of `srv`, for triggers that fail rows only at commit.
+async fn srv_table(pool: &PgPool) -> String {
+    sqlx::query_scalar(
+        "SELECT format('%I.%I', table_schema, table_name) FROM information_schema.columns
+         WHERE table_name = 'srv' AND column_name = 'hostname'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+fn hosts(n: usize) -> String {
+    let mut file = String::from("Hostname;Cores\n");
+    for i in 0..n {
+        file.push_str(&format!("host-{i:05};{}\n", i % 64));
+    }
+    file
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_writes_the_valid_rows_and_audits_them() {
+    let Some(db) = scratch::database("import_commit_writes").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let class = server_class(&e).await;
+    let web01 = server(&e, &class, "web01", 8).await;
+    let ops01 = server(&e, &class, "ops01", 2).await;
+    // A title longer than a label: the label is its first 500 characters, trimmed (T9).
+    let long = format!("{} {}", "x".repeat(499), "y".repeat(100));
+    let file = format!("Hostname;Cores\nweb01;12\nops01;2\nweb02;16\ndb01;many\n{long};1\n");
+    let id = validated(&e, &e.admin, &file).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(j["summary"]["errorRows"], 1, "{j}");
+    let planned_label = j["preview"].as_array().unwrap().iter().find(|p| p["row"] == 6).unwrap()["ciLabel"].clone();
+    assert_eq!(planned_label, json!("x".repeat(499)));
+
+    // Error rows need skipErrorRows.
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!((status, detail(&v)), (409, "has_error_rows"), "{v}");
+    let (status, v) = commit(&e, &e.admin, &id, true, Some("commit-1")).await;
+    assert_eq!(status, 202, "{v}");
+    assert_eq!((v["status"].as_str(), v["phase"].as_str()), (Some("queued"), Some("commit")));
+    // The same key again: the job as it is, no second commit.
+    let (status, v) = commit(&e, &e.admin, &id, true, Some("commit-1")).await;
+    assert_eq!((status, v["status"].as_str()), (202, Some("queued")), "{v}");
+    drain(&e.pool).await;
+
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(j["status"], "completed_with_errors", "{j}");
+    assert_eq!(committed(&j), (2, 1, 1, 1, 0), "{j}");
+    let (_, ci, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items/{web01}"), &e.admin, None).await;
+    assert_eq!((ci["attributes"]["cores"].as_i64(), ci["version"].as_i64()), (Some(12), Some(2)), "{ci}");
+    let label: String = sqlx::query_scalar("SELECT label FROM configuration_items WHERE label LIKE 'xxx%'")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(json!(label), planned_label, "the dry run's label is the stored one (T9)");
+
+    // Audit (§4.3): per CI as the owner via import, nothing for the unchanged row, one import.commit.
+    let per_ci = count(
+        &e.pool,
+        "SELECT count(*) FROM audit_log WHERE request_id = $1 AND entity_type = 'configuration_items'
+           AND actor_type = 'import' AND actor_name = 'admin'",
+        &id,
+    )
+    .await;
+    assert_eq!(per_ci, 3);
+    let unchanged: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE entity_id = $1 AND request_id LIKE 'import:%'")
+            .bind(Uuid::parse_str(&ops01).unwrap())
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(unchanged, 0);
+    let event: Value = sqlx::query_scalar(
+        "SELECT new_value FROM audit_log WHERE action = 'import.commit' AND entity_type = 'import_jobs' AND entity_id = $1",
+    )
+    .bind(Uuid::parse_str(&id).unwrap())
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (event["outcome"].as_str(), event["created"].as_u64(), event["skipped"].as_u64(), event["classKey"].as_str()),
+        (Some("completed_with_errors"), Some(2), Some(1), Some("srv")),
+        "{event}"
+    );
+
+    // A job commits once.
+    let (status, v) = commit(&e, &e.admin, &id, true, None).await;
+    assert_eq!((status, detail(&v)), (409, "invalid_state"), "{v}");
+
+    // The same file again: nothing changes and nothing is audited (D1).
+    let again = validated(&e, &e.admin, &file).await;
+    let (status, v) = commit(&e, &e.admin, &again, true, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &again).await;
+    assert_eq!(committed(&j), (0, 0, 4, 1, 0), "{j}");
+    let per_ci = count(
+        &e.pool,
+        "SELECT count(*) FROM audit_log WHERE request_id = $1 AND entity_type = 'configuration_items'",
+        &again,
+    )
+    .await;
+    assert_eq!(per_ci, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_commit_needs_a_current_dry_run() {
+    let Some(db) = scratch::database("import_commit_stale").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let class = server_class(&e).await;
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("s.csv"), &[], hosts(3).into_bytes()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, v, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &e.admin, Some(server_mapping())).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!((status, detail(&v)), (409, "dry_run_required"), "{v}");
+
+    let id = validated(&e, &e.admin, &hosts(3)).await;
+    // The data model changes after the dry run (T14).
+    let body = json!({ "classId": class, "key": "rack", "label": "Rack", "dataType": "text" });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(
+        (j["dryRun"]["stale"].as_bool(), j["dryRun"]["staleReason"].as_str()),
+        (Some(true), Some("model_changed"))
+    );
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!((status, detail(&v)), (409, "dry_run_stale"), "{v}");
+
+    // A dry run older than 24 hours.
+    let id = validated(&e, &e.admin, &hosts(3)).await;
+    sqlx::query("UPDATE import_jobs SET dry_run_finished_at = now() - interval '25 hours' WHERE id = $1")
+        .bind(Uuid::parse_str(&id).unwrap())
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!((status, detail(&v)), (409, "dry_run_stale"), "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_row_failing_only_at_commit_is_failed_and_the_other_499_are_written() {
+    let Some(db) = scratch::database("import_commit_replay").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let table = srv_table(&e.pool).await;
+    // A rule the plan step does not know: only the database refuses the row (T2).
+    for sql in [
+        "CREATE FUNCTION public.refuse_boom() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN IF NEW.hostname = 'host-00250' THEN
+           RAISE EXCEPTION 'refused' USING ERRCODE = 'check_violation'; END IF; RETURN NEW; END $$"
+            .to_owned(),
+        format!(
+            "CREATE TRIGGER refuse_boom BEFORE INSERT ON {table} FOR EACH ROW EXECUTE FUNCTION public.refuse_boom()"
+        ),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&e.pool).await.unwrap();
+    }
+    let id = validated(&e, &e.admin, &hosts(500)).await;
+    assert_eq!(job(&e, &e.admin, &id).await["summary"]["create"], 500);
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(j["status"], "completed_with_errors", "{j}");
+    assert_eq!(committed(&j), (499, 0, 0, 0, 1), "{j}");
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 499);
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/v1/imports/{id}/issues?severity=error"), &e.admin, None).await;
+    let rows: Vec<u64> = v["data"].as_array().unwrap().iter().map(|i| i["row"].as_u64().unwrap()).collect();
+    assert_eq!(rows, vec![252], "{v}");
+    let per_ci = count(
+        &e.pool,
+        "SELECT count(*) FROM audit_log WHERE request_id = $1 AND entity_type = 'configuration_items'",
+        &id,
+    )
+    .await;
+    assert_eq!(per_ci, 499);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deadlock_runs_the_chunk_again_and_it_commits_once() {
+    let Some(db) = scratch::database("import_commit_deadlock").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let table = srv_table(&e.pool).await;
+    // The first insert of the commit loses a deadlock (T3); a sequence is not rolled back.
+    for sql in [
+        "CREATE SEQUENCE public.deadlock_once".to_owned(),
+        "CREATE FUNCTION public.deadlock_once() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN IF nextval('public.deadlock_once') = 1 THEN
+           RAISE EXCEPTION 'deadlock detected' USING ERRCODE = 'deadlock_detected'; END IF; RETURN NEW; END $$"
+            .to_owned(),
+        format!(
+            "CREATE TRIGGER deadlock_once BEFORE INSERT ON {table} FOR EACH ROW EXECUTE FUNCTION public.deadlock_once()"
+        ),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&e.pool).await.unwrap();
+    }
+    let id = validated(&e, &e.admin, &hosts(20)).await;
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed"), (20, 0, 0, 0, 0)), "{j}");
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 20);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_killed_commit_resumes_after_its_cursor_and_a_stalled_worker_is_fenced() {
+    let Some(db) = scratch::database("import_commit_resume").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+
+    // The worker dies after the first chunk; the next one resumes after the cursor.
+    let id = validated(&e, &e.admin, &hosts(1_200)).await;
+    let job_id = Uuid::parse_str(&id).unwrap();
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    super::commit::test_hooks::die_after(job_id, 1);
+    drain(&e.pool).await;
+    let (status, cursor): (String, i32) =
+        sqlx::query_as("SELECT status, committed_through_row FROM import_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), cursor), ("committing", 501));
+    sqlx::query("UPDATE import_jobs SET lease_until = now() - interval '1 second' WHERE id = $1")
+        .bind(job_id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed"), (1_200, 0, 0, 0, 0)), "{j}");
+    let (all, distinct): (i64, i64) = sqlx::query_as("SELECT count(*), count(DISTINCT label) FROM configuration_items")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!((all, distinct), (1_200, 1_200), "no row was written twice");
+    let events =
+        count(&e.pool, "SELECT count(*) FROM audit_log WHERE action = 'import.commit' AND $1 <> ''", &id).await;
+    assert_eq!(events, 1);
+
+    // Worker A stalls past its lease, B takes the job over: A's chunk is rolled back (T13).
+    let file: String = hosts(1_800).lines().skip(1_201).map(|l| format!("{l}\n")).collect();
+    let id = validated(&e, &e.admin, &format!("Hostname;Cores\n{file}")).await;
+    let job_id = Uuid::parse_str(&id).unwrap();
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    let a = worker::claim(&e.pool, "worker-a").await.unwrap().unwrap();
+    sqlx::query("UPDATE import_jobs SET lease_until = now() - interval '1 second' WHERE id = $1")
+        .bind(job_id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let b = worker::claim(&e.pool, "worker-b").await.unwrap().unwrap();
+    assert_eq!((b.job, b.epoch), (a.job, a.epoch + 1));
+    let cfg = ImportConfig::default();
+    let lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    super::commit::run(&e.pool, &cfg, &a, &lost).await;
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 1_200, "A wrote nothing");
+    let (_stop, mut rx) = watch::channel(false);
+    worker::work(&e.pool, &std::sync::Arc::new(cfg), b, &mut rx).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed"), (600, 0, 0, 0, 0)), "{j}");
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 1_800);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_stops_when_the_owner_loses_the_import_right_and_keeps_earlier_chunks() {
+    let Some(db) = scratch::database("import_commit_revoked").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let id = validated(&e, &alice, &hosts(700)).await;
+    let job_id = Uuid::parse_str(&id).unwrap();
+    let (status, v) = commit(&e, &alice, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    super::commit::test_hooks::die_after(job_id, 1);
+    drain(&e.pool).await;
+    sqlx::query("DELETE FROM permission_profile_global_permissions WHERE permission = 'cis.import'")
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE import_jobs SET lease_until = now() - interval '1 second' WHERE id = $1")
+        .bind(job_id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(
+        (j["status"].as_str(), j["error"]["code"].as_str(), committed(&j)),
+        (Some("failed"), Some("permission_revoked"), (500, 0, 0, 0, 0)),
+        "{j}"
+    );
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 500);
+    let event: Value = sqlx::query_scalar(
+        "SELECT new_value FROM audit_log WHERE action = 'import.commit' AND entity_id = $1 AND actor_type = 'import'
+           AND actor_name = 'alice'",
+    )
+    .bind(job_id)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!((event["outcome"].as_str(), event["created"].as_u64()), (Some("failed"), Some(500)), "{event}");
+}

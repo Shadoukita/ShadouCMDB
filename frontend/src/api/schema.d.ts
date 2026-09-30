@@ -607,6 +607,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/imports/{id}/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write the rows the dry run checked
+         * @description Requires `cis.import`. Queues the commit (`202`, then `committing`). Rows are written in file order, 500 per transaction, and planned again against the current data, so changes since the dry run are caught; each row is applied completely or not at all. Rows the dry run found errors in are never written. `409` with `details[0].code`: `dry_run_required`, `dry_run_stale` (the data model changed, or the dry run is older than 24 hours), `has_error_rows` (send `skipErrorRows: true` to import the other rows) or `invalid_state`. `429 import_busy` while another import of the job's owner runs. An optional `Idempotency-Key` returns the job as it is now instead of starting a second commit. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["commitImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imports/{id}/cancel": {
         parameters: {
             query?: never;
@@ -7263,6 +7283,129 @@ export interface operations {
             };
             /** @description Not found (code NOT_FOUND) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    commitImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Import the valid rows and leave out the rows the dry run found errors
+                     *     in. Without it, a dry run with error rows refuses the commit
+                     *     (`has_error_rows`).
+                     */
+                    skipErrorRows?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportJob"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The Idempotency-Key was already used for another operation or target (code IDEMPOTENCY_KEY_REUSED, details[0].code idempotency_key_reused). Nothing was changed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

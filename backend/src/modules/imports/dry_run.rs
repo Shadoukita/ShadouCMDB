@@ -201,7 +201,7 @@ async fn validate(pool: &PgPool, cfg: &ImportConfig, lease: &Lease, lost: &Arc<A
         ("mapping_invalid", format!("The mapping no longer fits the data model{detail}. Check it and save it again."))
     })?;
     let fingerprint = model_fingerprint(&mut conn).await.map_err(|_| internal())?;
-    let data = JobData::load(&mut conn, job.id, resolved).await.map_err(|_| internal())?;
+    let data = JobData::load(&mut conn, resolved).await.map_err(|_| internal())?;
     drop(conn);
 
     let file = || DbFile {

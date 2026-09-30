@@ -5,6 +5,7 @@
 //! (D3) on top of the class rights, which every row is still checked against.
 
 pub mod analyse;
+pub mod commit;
 pub mod convert;
 pub mod csv_safe;
 pub mod dry_run;
@@ -220,6 +221,25 @@ pub fn routes() -> Vec<Route> {
                     Ok(Json(jobs::issues(&api.pool, &api.ctx, &api.imports, id, &q).await?))
                 },
             ),
+        route(Method::POST, "/api/v1/imports/{id}/commit", "commitImport")
+            .tag(TAG)
+            .summary("Write the rows the dry run checked")
+            .description(
+                "Queues the commit (`202`, then `committing`). Rows are written in file order, 500 per transaction, \
+                 and planned again against the current data, so changes since the dry run are caught; each row is \
+                 applied completely or not at all. Rows the dry run found errors in are never written. `409` with \
+                 `details[0].code`: `dry_run_required`, `dry_run_stale` (the data model changed, or the dry run is \
+                 older than 24 hours), `has_error_rows` (send `skipErrorRows: true` to import the other rows) or \
+                 `invalid_state`. `429 import_busy` while another import of the job's owner runs. An optional \
+                 `Idempotency-Key` returns the job as it is now instead of starting a second commit.",
+            )
+            .requires(GlobalPermission::CisImport)
+            .session_only()
+            .status(StatusCode::ACCEPTED)
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::RateLimited, ErrorCode::IdempotencyKeyReused])
+            .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<schemas::CommitImport>>| async move {
+                Ok(Json(commit::start(&api.pool, &api.ctx, &api.imports, &api.headers, id, &b).await?))
+            }),
         route(Method::POST, "/api/v1/imports/{id}/cancel", "cancelImport")
             .tag(TAG)
             .summary("Stop an import")

@@ -369,6 +369,19 @@ crate::paged!(ListImportIssuesQuery);
 pub type UpdateFileOptions = super::analyse::FileOptions;
 impl Check for UpdateFileOptions {}
 
+/// `POST /imports/{id}/commit`.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schema(as = CommitImport)]
+pub struct CommitImport {
+    /// Import the valid rows and leave out the rows the dry run found errors
+    /// in. Without it, a dry run with error rows refuses the commit
+    /// (`has_error_rows`).
+    #[serde(default)]
+    pub skip_error_rows: bool,
+}
+impl Check for CommitImport {}
+
 // ---------------------------------------------------------------------------
 // Mapping (§3.2): which file column goes where
 // ---------------------------------------------------------------------------

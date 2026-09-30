@@ -73,9 +73,6 @@ pub struct Issue {
 
 /// What the whole job needs, loaded once.
 pub struct JobData {
-    // Read by the commit (the next step of SHAA-799 part 4).
-    #[allow(dead_code)]
-    pub job_id: Uuid,
     pub resolved: Resolved,
     pub model: Model,
     /// Every value of the lists the class's lookup fields use: id → (list, active, parent).
@@ -87,7 +84,7 @@ pub struct JobData {
 }
 
 impl JobData {
-    pub async fn load(conn: &mut PgConnection, job_id: Uuid, resolved: Resolved) -> sqlx::Result<JobData> {
+    pub async fn load(conn: &mut PgConnection, resolved: Resolved) -> sqlx::Result<JobData> {
         let model = Model::load(conn).await?;
         let lists: Vec<Uuid> = resolved.defs.iter().filter_map(|d| d.lookup_list_id).collect();
         let rows: Vec<(Uuid, Uuid, String, String, bool, Option<Uuid>)> = sqlx::query_as(
@@ -126,7 +123,7 @@ impl JobData {
                 e.1.push((s, g));
             }
         }
-        Ok(JobData { job_id, resolved, model, values, by_list, rules })
+        Ok(JobData { resolved, model, values, by_list, rules })
     }
 
     /// The type allows an edge from a CI of class `source` to one of `target`.
@@ -497,8 +494,6 @@ pub enum Matches<'a> {
     /// The dry run's job-wide index: canonical key → (CI, class).
     Index(&'a HashMap<String, Vec<(Uuid, Uuid)>>),
     /// The commit re-resolves each chunk's keys (T4) and locks the CIs (T3).
-    // Read by the commit (the next step of SHAA-799 part 4).
-    #[allow(dead_code)]
     Chunk,
 }
 
@@ -555,8 +550,6 @@ impl Planned {
 }
 
 /// The chunk's plans, with what applying them needs.
-// `resolver` and `defs` are read by the commit (the next step of SHAA-799 part 4).
-#[allow(dead_code)]
 pub struct ChunkPlan<'j> {
     pub rows: Vec<Planned>,
     pub resolver: ImportResolver<'j>,
@@ -1342,16 +1335,19 @@ fn resolve_target(
 }
 
 /// Issues from the CI API's plan step: each field error on its column.
+/// The column mapped to a field of the CI API (`attributes.<key>`, `ident`, …).
+pub fn column_of_field<'r>(r: &'r Resolved, field: &str) -> Option<&'r Column> {
+    r.columns.iter().find(|c| match &c.target {
+        Target::Attribute { def, .. } => field == format!("attributes.{}", r.defs[*def].key),
+        Target::Ident => field == "ident",
+        Target::ValidFrom => field == "validFrom",
+        Target::ValidUntil => field == "validUntil",
+        Target::Relationship { .. } => false,
+    })
+}
+
 fn plan_errors(p: &mut Planned, row: &Row, r: &Resolved, e: AppError) {
-    let column_of = |field: &str| -> Option<&Column> {
-        r.columns.iter().find(|c| match &c.target {
-            Target::Attribute { def, .. } => field == format!("attributes.{}", r.defs[*def].key),
-            Target::Ident => field == "ident",
-            Target::ValidFrom => field == "validFrom",
-            Target::ValidUntil => field == "validUntil",
-            Target::Relationship { .. } => false,
-        })
-    };
+    let column_of = |field: &str| column_of_field(r, field);
     match (e.code, e.details) {
         (ErrorCode::ValidationError, Some(details)) if !details.is_empty() => {
             for f in details {

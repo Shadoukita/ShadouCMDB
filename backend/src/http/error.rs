@@ -221,7 +221,8 @@ impl IntoResponse for AppError {
 impl From<sqlx::Error> for AppError {
     /// Client-caused constraint violations become 400/409 with field details
     /// (see [`crate::api::pg_error`]); connection-level failures become 503
-    /// DATABASE_UNAVAILABLE; anything else is logged and hidden behind
+    /// DATABASE_UNAVAILABLE; deadlocks and serialization failures 503
+    /// SERVER_BUSY with Retry-After; anything else is logged and hidden behind
     /// INTERNAL_ERROR.
     fn from(err: sqlx::Error) -> Self {
         if let Some(mapped) = crate::api::pg_error::map(&err, None) {
@@ -230,6 +231,12 @@ impl From<sqlx::Error> for AppError {
         if crate::api::pg_error::is_connection_error(&err) {
             tracing::error!(error = %err, "database unavailable");
             return AppError::new(ErrorCode::DatabaseUnavailable, "The database is unreachable; try again shortly");
+        }
+        if crate::api::pg_error::is_retryable(&err) {
+            tracing::warn!(error = %err, "transaction lost a race with another one");
+            let mut e = AppError::new(ErrorCode::ServerBusy, "The request conflicted with another one; retry it");
+            e.retry_after = Some(1);
+            return e;
         }
         tracing::error!(error = %err, "unhandled database error");
         AppError::internal()

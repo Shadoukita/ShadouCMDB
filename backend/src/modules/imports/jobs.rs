@@ -22,7 +22,7 @@ use crate::http::error::{AppError, ErrorCode};
 
 /// A job row as stored.
 #[derive(Debug, Clone, sqlx::FromRow)]
-// The fingerprint, cursor and lease are read by the dry run and the commit (part 4 of SHAA-799).
+// The lease columns are read only by the workers' own queries.
 #[allow(dead_code)]
 pub struct JobRow {
     pub id: Uuid,
@@ -121,6 +121,11 @@ impl JobRow {
     }
 
     pub fn dto(&self, queue_position: Option<i64>) -> ImportJob {
+        self.dto_with(queue_position, false)
+    }
+
+    /// The job as callers see it; `model_changed` marks its dry run stale (T14).
+    pub fn dto_with(&self, queue_position: Option<i64>, model_changed: bool) -> ImportJob {
         let info = self.info();
         let options = self.options();
         let file = ImportFile {
@@ -152,7 +157,7 @@ impl JobRow {
             progress: self.progress(queue_position),
             summary: self.summary(),
             preview,
-            dry_run: self.dry_run(false),
+            dry_run: self.dry_run(model_changed),
             error: self.error(),
             created_at: self.created_at,
             created_by: self.owner(),
@@ -244,7 +249,11 @@ pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Import
     let mut conn = pool.acquire().await?;
     let job = check_owner(ctx, fetch(&mut conn, id).await?, id)?;
     let position = queue_position(&mut conn, &job).await?;
-    Ok(job.dto(position))
+    // A validated job's dry run goes stale when the data model changes: the
+    // fingerprint takes milliseconds, so the poll can say so (T14).
+    let model_changed = job.status == JobStatus::Validated
+        && job.model_fingerprint.as_deref() != Some(super::dry_run::model_fingerprint(&mut conn).await?.as_str());
+    Ok(job.dto_with(position, model_changed))
 }
 
 pub async fn list(
