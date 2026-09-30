@@ -678,15 +678,13 @@ impl RouteBuilder {
                     let capture = state.capture;
                     let peer = peer.map(|Extension(ConnectInfo(a))| a.ip());
                     let peer_ip = peer.filter(|_| capture.ip);
+                    let trusted_ip = auth::session::throttle_ip(&headers, peer, &state.auth.config.trusted_proxies);
                     let client = ClientInfo {
-                        ip: auth::session::client_ip(&headers, peer_ip).filter(|_| capture.ip),
+                        ip: trusted_ip.filter(|_| capture.ip),
+                        claimed_ip: auth::session::client_ip(&headers, peer_ip).filter(|_| capture.ip),
                         peer_ip,
                         user_agent: auth::session::user_agent(&headers).filter(|_| capture.user_agent),
-                        net: auth::throttle::Net::of(auth::session::throttle_ip(
-                            &headers,
-                            peer,
-                            &state.auth.config.trusted_proxies,
-                        )),
+                        net: auth::throttle::Net::of(trusted_ip),
                     };
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
                     let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };
