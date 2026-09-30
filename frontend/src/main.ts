@@ -2,6 +2,7 @@ import { VueQueryPlugin } from "@tanstack/vue-query";
 import { createPinia } from "pinia";
 import { createApp } from "vue";
 import { watch } from "vue";
+import { START_LOCATION } from "vue-router";
 import { onMfaEnrolmentRequired, onSessionEnded } from "./api/client";
 import { queryClient } from "./api/queryClient";
 import App from "./App.vue";
@@ -36,8 +37,9 @@ watch(
   () => useSessionStore().enrolmentRequired,
   (required) => {
     const here = router.currentRoute.value;
-    // From sign-in, the router guard sends the user there on the way in.
-    if (!required || here.path === TWO_FACTOR_SETUP || here.meta.public) return;
+    // From sign-in, and on a page load (the session is read during the first navigation), the router
+    // guard sends the user there on the way in, keeping ?redirect; replacing it here would drop that.
+    if (!required || here === START_LOCATION || here.path === TWO_FACTOR_SETUP || here.meta.public) return;
     router.replace({ path: TWO_FACTOR_SETUP, query: here.fullPath === "/" ? {} : { redirect: here.fullPath } });
   },
 );

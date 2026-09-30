@@ -231,6 +231,13 @@ impl<'a> Walker<'a> {
     }
 
     fn walk(&mut self, schema: &Value, value: &Value, path: &mut Vec<String>) {
+        // Before any union, so every branch does not report it again (GH#289).
+        if let Value::String(s) = value
+            && s.contains('\0')
+        {
+            self.push(path, NUL_MESSAGE, "invalid_character");
+            return;
+        }
         let schema = self.resolve(schema);
 
         if let Some(branches) = schema.get("anyOf").or_else(|| schema.get("oneOf")).and_then(Value::as_array) {
@@ -435,6 +442,47 @@ impl<'a> Walker<'a> {
     }
 }
 
+const NUL_MESSAGE: &str = "Must not contain the NUL character (U+0000)";
+
+/// Every string and object key in `value` that contains U+0000. PostgreSQL
+/// cannot store it in text or jsonb, so it is refused at the boundary with
+/// `invalid_character` instead of failing in the database (GH#289). Covers
+/// free-form parts of a body that no schema rule walks into.
+pub fn nul_errors(value: &Value, location: FieldLocation) -> Vec<FieldError> {
+    fn scan(value: &Value, path: &mut Vec<String>, out: &mut Vec<FieldError>, location: FieldLocation) {
+        let push = |out: &mut Vec<FieldError>, path: &[String]| {
+            let field = if path.is_empty() { "(root)".to_owned() } else { path.join(".") };
+            out.push(FieldError { location, field, message: NUL_MESSAGE.into(), code: "invalid_character".into() });
+        };
+        match value {
+            Value::String(s) if s.contains('\0') => push(out, path),
+            Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    path.push(i.to_string());
+                    scan(item, path, out, location);
+                    path.pop();
+                }
+            }
+            Value::Object(obj) => {
+                for (key, v) in obj {
+                    // The key itself is the offending field; show it without the NUL.
+                    path.push(key.replace('\0', "\u{FFFD}"));
+                    if key.contains('\0') {
+                        push(out, path);
+                    } else {
+                        scan(v, path, out, location);
+                    }
+                    path.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    scan(value, &mut Vec::new(), &mut out, location);
+    out
+}
+
 /// Validate `value` against `schema`, returning every problem found.
 pub fn check(
     schema: &Value,
@@ -616,5 +664,31 @@ mod tests {
         let got: Vec<_> = e.iter().map(|e| (e.field.as_str(), e.code.as_str())).collect();
         assert_eq!(got, vec![("limit", "too_big"), ("q", "required"), ("(root)", "unrecognized_keys")]);
         assert!(parse_query(Some("limit=abc&q=x"), &params).is_err());
+        // GH#289: a NUL in a query string is refused, not sent to the database.
+        let e = parse_query(Some("q=a%00b"), &params).unwrap_err();
+        assert_eq!((e[0].field.as_str(), e[0].code.as_str()), ("q", "invalid_character"));
+    }
+
+    /// GH#289: U+0000 is refused wherever it appears, with one error per value.
+    #[test]
+    fn nul_characters() {
+        let text = json!({"type": "string", "maxLength": 100});
+        assert_eq!(codes(text.clone(), json!("abc\u{0}def")), vec![("(root)".into(), "invalid_character".into())]);
+        assert!(codes(text, json!("tab\tand\nnewline")).is_empty());
+        // Unions report it once, not once per branch.
+        let ip = json!({"anyOf": [{"type": "string", "format": "ipv4"}, {"type": "string", "format": "ipv6"}]});
+        assert_eq!(codes(ip, json!("10.0.0.1\u{0}")), vec![("(root)".into(), "invalid_character".into())]);
+
+        let body = json!({"name": "ok", "attributes": {"note": "a\u{0}", "tags": ["x", "\u{0}"]}, "k\u{0}": 1});
+        let got: Vec<_> = nul_errors(&body, FieldLocation::Body).into_iter().map(|e| (e.field, e.code)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("attributes.note".to_owned(), "invalid_character".to_owned()),
+                ("attributes.tags.1".to_owned(), "invalid_character".to_owned()),
+                ("k\u{FFFD}".to_owned(), "invalid_character".to_owned()),
+            ]
+        );
+        assert!(nul_errors(&json!({"a": ["b", 1, null, {"c": "d"}]}), FieldLocation::Body).is_empty());
     }
 }

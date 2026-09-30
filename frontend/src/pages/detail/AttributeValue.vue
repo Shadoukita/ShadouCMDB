@@ -20,6 +20,8 @@ defineProps<{
 const isUrl = (v: unknown) => /^https?:\/\//.test(String(v));
 </script>
 
+<!-- User text renders isolated (<bdi>, dir="auto", GH#289): a bidi control allowed in a multiline value
+     cannot reorder the unit, label or link next to it. -->
 <template>
   <span v-if="value === null || value === undefined || value === ''" class="muted">—</span>
   <template v-else-if="def.dataType === 'boolean'">{{ value ? "Yes" : "No" }}</template>
@@ -31,7 +33,7 @@ const isUrl = (v: unknown) => /^https?:\/\//.test(String(v));
     {{ refInfo?.name ?? String(value) }}{{ refInfo?.deleted ? " (deleted)" : "" }}
   </CiLink>
   <LookupValueName v-else-if="def.dataType === 'lookup'" :list-id="def.lookupListId" :value-id="String(value)" />
-  <span v-else-if="isMultiline(def) || (def.dataType === 'text' && String(value).includes('\n'))" class="multiline">{{ String(value) }}</span>
-  <a v-else-if="def.dataType === 'text' && isUrl(value)" :href="String(value)" target="_blank" rel="noreferrer noopener">{{ String(value) }}</a>
-  <template v-else>{{ String(value) }}</template>
+  <span v-else-if="isMultiline(def) || (def.dataType === 'text' && String(value).includes('\n'))" class="multiline" dir="auto">{{ String(value) }}</span>
+  <a v-else-if="def.dataType === 'text' && isUrl(value)" :href="String(value)" target="_blank" rel="noreferrer noopener" dir="auto">{{ String(value) }}</a>
+  <bdi v-else>{{ String(value) }}</bdi>
 </template>

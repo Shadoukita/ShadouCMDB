@@ -24,9 +24,9 @@ const self = computed(() => ({ id: props.ci.id, name: props.ci.label }));
     <AttributeValue v-if="def" :def="def" :value="values?.[attr]" :ref-info="refs?.[attr]" :self="self" :trail="[]" />
     <span v-else class="muted">—</span>
   </template>
-  <RouterLink v-else-if="field === 'label'" :to="`/cis/${ci.id}`">{{ ci.label }}</RouterLink>
+  <RouterLink v-else-if="field === 'label'" :to="`/cis/${ci.id}`" dir="auto">{{ ci.label }}</RouterLink>
   <span v-else-if="field === 'ident'" class="mono">{{ ci.ident }}</span>
-  <template v-else-if="field === 'class'">{{ ci.class.name }}</template>
+  <bdi v-else-if="field === 'class'">{{ ci.class.name }}</bdi>
   <CiStateBadge v-else-if="field === 'active'" :ci="ci" show-active />
   <span v-else-if="field === 'validFrom'" :title="formatDateTime(ci.validFrom)">{{ formatDate(ci.validFrom) }}</span>
   <template v-else-if="field === 'validUntil'">

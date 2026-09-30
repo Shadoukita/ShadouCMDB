@@ -297,6 +297,11 @@ async fn confirm(
     let codes = new_recovery_codes(&mut tx, me.user_id).await?;
     let extra = json!({ "method": "totp", "recoveryCodes": codes.codes.len() });
     events::mfa(&mut tx, ctx, AuditAction::MfaEnrol, me.user_id, &me.username, extra).await?;
+    // Sessions opened with the password alone never proved the new
+    // authenticator: they end, so none can change the password or end the
+    // verified sessions (GH#292). Their users sign in again with a code.
+    let ended = auth_data::delete_unverified_sessions(&mut tx, me.user_id, me.session_id()).await?;
+    events::revoked(&mut tx, ctx, &ended, RevokeReason::MfaEnrolled).await?;
     tx.commit().await?;
     tracing::info!(user = %me.username, "two-factor authentication set up");
     Ok(codes)
@@ -446,7 +451,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)")
             .description(
-                "From now on sign-in asks for a code after the password. This session counts as having proven the second factor; other sessions opened with the password alone stay limited to the set-up routes until they sign in again with a code. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed.",
+                "From now on sign-in asks for a code after the password. This session counts as having proven the second factor; your other sessions that did not prove one end (audited as `session.revoke`, reason mfa_enrolled) and sign in again with a code. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed.",
             )
             .session_only()
             .before_mfa_enrolment()
@@ -877,8 +882,8 @@ pub(crate) mod tests {
     }
 
     /// GH#280: under requireMfa the gate follows what the session proved, not
-    /// the account's current state. A password-only session stays gated when
-    /// the user sets up MFA in another one; a reset or turning MFA off ends the
+    /// the account's current state. A password-only session ends when the user
+    /// sets up MFA in another one (GH#292); a reset or turning MFA off ends the
     /// user's other sessions, so none carries over to a later enrolment.
     #[tokio::test]
     async fn require_mfa_gates_by_what_the_session_proved() {
@@ -913,17 +918,16 @@ pub(crate) mod tests {
         let step = settled_step().await;
         let (secret, _) = enrol(&app, pool, &session, step).await;
         assert_eq!(gated(session.clone()).await.0, 200, "the enrolling session");
-        // ... and session A does not, whatever /auth/me reports.
-        assert_eq!(gated(a.clone()).await, enrolment_required, "session A after enrolment elsewhere");
-        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &a, None).await;
-        assert_eq!(
-            (status, &v["mfa"]["totpEnabled"], &v["mfa"]["enrolmentRequired"]),
-            (200, &json!(true), &json!(true))
-        );
         let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &session, None).await;
         assert_eq!((status, &v["mfa"]["enrolmentRequired"]), (200, &json!(false)));
-        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &a, None).await;
-        assert!(v["error"]["message"].as_str().unwrap().contains("sign in again with a code"), "{status}: {v}");
+        // ... and session A ends (GH#292): it can neither use the enrolment
+        // routes nor change the password, which would end the user's session.
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &a, None).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "session A after enrolment elsewhere");
+        let change = json!({ "currentPassword": PASSWORD, "newPassword": "a password the attacker chose" });
+        let (status, v, _) = call(&app, "PUT", "/api/v1/auth/password", &a, Some(change)).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "password change from session A");
+        assert_eq!(gated(session.clone()).await.0, 200, "the enrolling session after A's attempt");
 
         // A sign-in with a code gets full access.
         let challenge = password_step(&app).await;
@@ -931,15 +935,28 @@ pub(crate) mod tests {
         assert_eq!(status, 200, "{me_c}");
         let c = session_of(&me_c, &headers);
         assert_eq!(gated(c.clone()).await.0, 200);
+        // A session that did not prove the authenticator (none is left by the
+        // API; e.g. one opened before an upgrade) stays limited.
+        let latest = "(SELECT id FROM sessions ORDER BY created_at DESC LIMIT 1)";
+        let unverify = format!("UPDATE sessions SET mfa_verified = false WHERE id = {latest}");
+        sqlx::query(sqlx::AssertSqlSafe(unverify)).execute(pool).await.unwrap();
+        assert_eq!(gated(c.clone()).await, enrolment_required, "an unproven session C");
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &c, None).await;
+        assert_eq!(
+            (status, &v["mfa"]["totpEnabled"], &v["mfa"]["enrolmentRequired"]),
+            (200, &json!(true), &json!(true))
+        );
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &c, None).await;
+        assert!(v["error"]["message"].as_str().unwrap().contains("sign in again with a code"), "{status}: {v}");
+        let verify = format!("UPDATE sessions SET mfa_verified = true WHERE id = {latest}");
+        sqlx::query(sqlx::AssertSqlSafe(verify)).execute(pool).await.unwrap();
 
         // An administrator's reset (here: the owner themselves) ends every
         // other session; the caller's own is limited to enrolment again.
         let (status, _, _) = call(&app, "DELETE", &format!("/api/v1/admin/users/{owner}/mfa"), &session, None).await;
         assert_eq!(status, 204);
-        for (name, ended) in [("A", &a), ("C", &c)] {
-            let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", ended, None).await;
-            assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "session {name} after the reset");
-        }
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &c, None).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "session C after the reset");
         assert_eq!(gated(session.clone()).await, enrolment_required, "the caller's session after the reset");
         // Setting it up again brings no ended session back.
         let (secret, _) = enrol(&app, pool, &session, step).await;
@@ -965,7 +982,7 @@ pub(crate) mod tests {
         .fetch_all(pool)
         .await
         .unwrap();
-        assert_eq!(reasons, ["mfa_reset", "mfa_reset", "mfa_disabled"]);
+        assert_eq!(reasons, ["mfa_enrolled", "mfa_reset", "mfa_disabled"]);
         db.drop().await;
     }
 
