@@ -16,6 +16,7 @@ import { CLASS_ICONS, classIcon } from "../../../lib/classIcons";
 import { useDocumentTitle } from "../../../lib/composables";
 import { vAutofocus } from "../../../lib/directives";
 import { formatDateTime } from "../../../lib/format";
+import { changedFields } from "../../../lib/changes";
 import { keyError } from "../../../lib/keys";
 import { useSchemaChangeFlow } from "../../../lib/schemaChange";
 import { descendantIds, flattenTree } from "../../../lib/tree";
@@ -75,6 +76,20 @@ function seed(c: CiClass | undefined) {
   icon.value = c?.icon ?? "";
   color.value = c?.color ?? "";
   titleAttributeId.value = c?.titleAttributeId ?? "";
+  initial = c ? formBody() : {};
+}
+/** The form as loaded, to send only changed fields on save. */
+let initial: ClassUpdateBody = {};
+function formBody(): ClassUpdateBody {
+  return {
+    name: name.value.trim(),
+    description: description.value.trim() || null,
+    parentId: parentId.value || null,
+    isAbstract: isAbstract.value,
+    icon: icon.value || null,
+    color: color.value || null,
+    titleAttributeId: titleAttributeId.value || null,
+  };
 }
 watch(() => cls.data.value, seed, { immediate: true });
 watch(id, () => {
@@ -128,16 +143,9 @@ async function submit() {
     document.getElementById(errs.name ? "class-name" : errs.key ? "class-key" : "class-area")?.focus();
     return;
   }
-  const body: ClassUpdateBody = {
-    name: name.value.trim(),
-    description: description.value.trim() || null,
-    parentId: parentId.value || null,
-    isAbstract: isAbstract.value,
-    icon: icon.value || null,
-    color: color.value || null,
-  };
-  // Sent only when changed: it relabels every CI of the class.
-  if (!isNew.value && titleAttributeId.value !== (cls.data.value?.titleAttributeId ?? "")) body.titleAttributeId = titleAttributeId.value || null;
+  const body = formBody();
+  // A new class has no attributes to be labelled by yet.
+  delete body.titleAttributeId;
   if (isNew.value) {
     // New classes go to the end of the menu.
     const last = Math.max(0, ...(classes.data.value ?? []).map((c) => c.sortOrder));
@@ -160,10 +168,16 @@ async function submit() {
     } else if (outcome.status === "refused") error.value = outcome.error;
     return;
   }
+  // Only what changed (a changed title attribute relabels every CI of the class).
+  const changed = changedFields(formBody(), initial);
+  if (Object.keys(changed).length === 0) {
+    saved.value = "Nothing changed.";
+    return;
+  }
   const outcome = await flow.run({
     title: `Save class “${body.name}”`,
-    preview: { operation: "updateType", id: id.value!, body },
-    apply: () => update.mutateAsync({ id: id.value!, body }),
+    preview: { operation: "updateType", id: id.value!, body: changed },
+    apply: () => update.mutateAsync({ id: id.value!, body: changed }),
     applyLabel: "Save class",
   });
   if (outcome.status === "applied") saved.value = `Saved ${(outcome.result as CiClass).name}.`;
