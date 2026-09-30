@@ -212,7 +212,7 @@ pub(crate) async fn try_open_session(
         return Ok(Err(refused(pool, request, username, changed).await?));
     }
     // A cookie from an earlier session in this browser is replaced, not kept alive.
-    if let Some((old, _)) = session::session_token(headers)
+    if let Some(old) = session::session_token(&auth.config, headers)
         && let Some(ended) = data::delete_session_by_token(&mut tx, &session::token_hash(old)).await?
     {
         events::revoked(&mut tx, &ctx, &[ended], RevokeReason::Replaced).await?;
@@ -620,7 +620,7 @@ async fn login_mfa(
     ctx: &RequestContext,
     b: MfaLoginBody,
 ) -> Result<WithCookies<Json<Session>>, AppError> {
-    let Some(token) = session::cookie(headers, session::MFA_COOKIE) else { return Err(sign_in_expired()) };
+    let Some(token) = session::mfa_token(&auth.config, headers) else { return Err(sign_in_expired()) };
     let hash = session::token_hash(token);
     // Wait for the username's turn before locking anything.
     let Some(pending) = mfa_data::take_challenge(&mut *pool.acquire().await?, &hash).await? else {
@@ -852,7 +852,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Sign in with username and password")
             .description(
-                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, 503, MFA_REQUIRED and successful answers are not delayed. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
+                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min; `__Host-shadoucmdb_mfa` behind HTTPS): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, 503, MFA_REQUIRED and successful answers are not delayed. After 5 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report), each further failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
             )
             .public()
             .errors(&[ErrorCode::MfaRequired, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
@@ -863,7 +863,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Finish signing in with an authenticator code or a recovery code")
             .description(
-                "After POST /api/v1/auth/login answered MFA_REQUIRED: reads the `shadoucmdb_mfa` cookie it set and, for a right code, sets the session cookies like login. Each authenticator code works once; each recovery code works once and is then used up. 401 for a wrong code; after 5 wrong codes, or 5 minutes, the password is asked for again (401). Wrong codes count as failed sign-ins for the username: the same lock applies as for wrong passwords (429 RATE_LIMITED with Retry-After).",
+                "After POST /api/v1/auth/login answered MFA_REQUIRED: reads the `shadoucmdb_mfa` cookie it set (`__Host-shadoucmdb_mfa` behind HTTPS) and, for a right code, sets the session cookies like login. Each authenticator code works once; each recovery code works once and is then used up. 401 for a wrong code; after 5 wrong codes, or 5 minutes, the password is asked for again (401). Wrong codes count as failed sign-ins for the username: the same lock applies as for wrong passwords (429 RATE_LIMITED with Retry-After).",
             )
             .public()
             .errors(&[ErrorCode::Unauthenticated, ErrorCode::RateLimited])
@@ -1870,8 +1870,8 @@ pub(crate) mod tests {
     }
 
     /// Over HTTPS the session lives in `__Host-` cookies (GH-192): a planted
-    /// plain-named cookie never wins, sessions from before move over, and the
-    /// CSRF header must match the session that was actually used.
+    /// plain-named cookie is never read (GH#285), and the CSRF header must
+    /// match the session that was actually used.
     #[tokio::test]
     async fn host_prefixed_cookies_over_https() {
         use axum::body::Body as HttpBody;
@@ -1956,25 +1956,23 @@ pub(crate) mod tests {
         let dead = format!("shadoucmdb_session={a_token}; __Host-shadoucmdb_session={}", "0".repeat(64));
         assert_eq!(send("GET", "/api/v1/auth/me", true, Some(&dead), None, None).await.0, 401);
 
-        // Session A over plain HTTP: nothing to move.
+        // Session A over plain HTTP: read by its plain name.
         let plain = format!("shadoucmdb_session={a_token}");
         let (status, _, set) = send("GET", "/api/v1/auth/me", false, Some(&plain), None, None).await;
         assert_eq!((status, set.len()), (200, 0));
-        // Session A over HTTPS: still read, and moved to the __Host- names.
-        let (status, _, set) = send("GET", "/api/v1/auth/me", true, Some(&plain), None, None).await;
-        assert_eq!(status, 200);
-        assert_eq!(value(&set, "__Host-shadoucmdb_session"), Some(a_token.clone()));
-        assert_eq!(value(&set, "__Host-shadoucmdb_csrf"), Some(a_csrf.clone()));
-        assert_eq!(value(&set, "shadoucmdb_session").as_deref(), Some(""));
-        assert!(
-            set.iter()
-                .any(|c| c.starts_with("shadoucmdb_session=;") && c.contains("Max-Age=0; ") && c.contains("Path=/"))
-        );
-        // Signing out sets its own cookies (both names deleted), not the move.
-        let (status, _, set) = send("POST", "/api/v1/auth/logout", true, Some(&plain), Some(&a_csrf), None).await;
-        assert_eq!(status, 204);
-        assert_eq!(set.len(), 4, "{set:?}");
-        assert!(set.iter().all(|c| c.contains("Max-Age=0")), "{set:?}");
+        // GH#285: over HTTPS the same live session under the plain name is not
+        // read (a sibling subdomain could have planted it), nor moved over.
+        let (status, v, set) = send("GET", "/api/v1/auth/me", true, Some(&plain), None, None).await;
+        assert_eq!((status, v["error"]["code"].as_str()), (401, Some("UNAUTHENTICATED")));
+        assert!(set.iter().all(|c| !c.starts_with("__Host-shadoucmdb_session=")), "{set:?}");
+        let (status, v, _) =
+            send("PUT", "/api/v1/ui-settings", true, Some(&plain), Some(&a_csrf), Some(json!({}))).await;
+        assert_eq!((status, v["error"]["code"].as_str()), (401, Some("UNAUTHENTICATED")));
+        // A tossed plain cookie does not keep a signed-out browser signed in to it either.
+        let tossed = format!("shadoucmdb_session={a_token}; shadoucmdb_csrf={a_csrf}");
+        assert_eq!(send("GET", "/api/v1/auth/me", true, Some(&tossed), None, None).await.0, 401);
+        // Session A itself is untouched.
+        assert_eq!(send("GET", "/api/v1/auth/me", false, Some(&plain), None, None).await.0, 200);
         db.drop().await;
     }
 }

@@ -11,23 +11,27 @@
 //! [`CookieSecure`]), and then carry the `__Host-` prefix
 //! (`__Host-shadoucmdb_session`, `__Host-shadoucmdb_csrf`): the browser keeps
 //! such a cookie only if it is `Secure`, has `Path=/` and no `Domain`, so a
-//! sibling subdomain cannot plant one for this host ("cookie tossing"). A
-//! request carrying both names is always read by its `__Host-` cookie. Plain
+//! sibling subdomain cannot plant one for this host ("cookie tossing"). Plain
 //! HTTP setups (`COOKIE_SECURE=never`, or `auto` without HTTPS) keep the plain
 //! names, which a browser would not accept with the prefix.
 //!
-//! Sessions opened before the prefix are still read by their plain name as
-//! long as no `__Host-` cookie is present, and the first HTTPS answer moves
-//! them over ([`upgrade_cookies`]).
+//! A request is read by the names its answer would set: where cookies get
+//! `Secure`, only the `__Host-` names, so a plain-named cookie a sibling
+//! subdomain planted is never read (GH#285). Sessions a pre-release opened
+//! under the plain names over HTTPS are not carried over; their users sign in
+//! again.
 //!
 //! A sign-in whose password was right but whose second factor is due sets
 //! `shadoucmdb_mfa` instead: a random token naming the pending challenge,
-//! HttpOnly, sent only to `/api/v1/auth`, gone after a few minutes.
+//! HttpOnly, gone after a few minutes.
 //!
-//! An OIDC sign-in sets `shadoucmdb_oidc` (HttpOnly, sent only to
-//! `/api/v1/auth/oidc`, 10 minutes): the pending sign-in, including the
-//! `state` it sends the provider, sealed with a server key
-//! ([`crate::auth::sso::login_state`]). Nothing is stored in the database.
+//! An OIDC sign-in sets `shadoucmdb_oidc` (HttpOnly, 10 minutes): the pending
+//! sign-in, including the `state` it sends the provider, sealed with a server
+//! key ([`crate::auth::sso::login_state`]). Nothing is stored in the database.
+//!
+//! Under `Secure` these two carry the `__Host-` prefix as well and are sent
+//! to every path (the prefix requires `Path=/`); otherwise they are sent only
+//! to `/api/v1/auth` and `/api/v1/auth/oidc`.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -44,11 +48,15 @@ pub const HOST_SESSION_COOKIE: &str = "__Host-shadoucmdb_session";
 pub const HOST_CSRF_COOKIE: &str = "__Host-shadoucmdb_csrf";
 pub const CSRF_HEADER: &str = "x-csrf-token";
 pub const MFA_COOKIE: &str = "shadoucmdb_mfa";
+/// [`MFA_COOKIE`] under `Secure`.
+pub const HOST_MFA_COOKIE: &str = "__Host-shadoucmdb_mfa";
 const MFA_COOKIE_PATH: &str = "/api/v1/auth";
 /// The sealed pending OIDC sign-in; its `state` is checked against the
 /// callback's `state` parameter so a callback only completes in the browser
 /// that started it.
 pub const OIDC_COOKIE: &str = "shadoucmdb_oidc";
+/// [`OIDC_COOKIE`] under `Secure`.
+pub const HOST_OIDC_COOKIE: &str = "__Host-shadoucmdb_oidc";
 const OIDC_COOKIE_PATH: &str = "/api/v1/auth/oidc";
 
 /// 256 random bits, hex-encoded.
@@ -67,13 +75,8 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// Value of a cookie in the request (the first one if repeated).
+/// Value of a cookie in the request (the first one if repeated); None if empty.
 pub fn cookie<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
-    raw_cookie(headers, name).filter(|v| !v.is_empty())
-}
-
-/// Like [`cookie`], but an empty value is `Some("")`: the cookie is present.
-fn raw_cookie<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -82,6 +85,7 @@ fn raw_cookie<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
         .filter_map(|pair| pair.trim().split_once('='))
         .find(|(k, _)| *k == name)
         .map(|(_, v)| v.trim_matches('"'))
+        .filter(|v| !v.is_empty())
 }
 
 /// The session cookie's name on a response with or without `Secure`.
@@ -94,15 +98,22 @@ pub fn csrf_cookie_name(secure: bool) -> &'static str {
     if secure { HOST_CSRF_COOKIE } else { CSRF_COOKIE }
 }
 
-/// The session token the request carries, and whether it came under the
-/// plain name. A `__Host-` cookie, when present, is the only one read (even
-/// if empty, and wherever it stands among the cookies): a plain-named cookie
-/// may have been planted by a sibling subdomain.
-pub fn session_token(headers: &HeaderMap) -> Option<(&str, bool)> {
-    match raw_cookie(headers, HOST_SESSION_COOKIE) {
-        Some(v) => Some((v, false)).filter(|(v, _)| !v.is_empty()),
-        None => cookie(headers, SESSION_COOKIE).map(|v| (v, true)),
-    }
+/// The session token the request carries, under the name this answer would
+/// set it: only `__Host-shadoucmdb_session` where cookies get `Secure`, since a
+/// plain-named cookie there may have been planted by a sibling subdomain
+/// (GH#285).
+pub fn session_token<'h>(cfg: &AuthConfig, headers: &'h HeaderMap) -> Option<&'h str> {
+    cookie(headers, session_cookie_name(secure_cookies(cfg, headers)))
+}
+
+/// The pending second-factor challenge the request names, read like [`session_token`].
+pub fn mfa_token<'h>(cfg: &AuthConfig, headers: &'h HeaderMap) -> Option<&'h str> {
+    cookie(headers, if secure_cookies(cfg, headers) { HOST_MFA_COOKIE } else { MFA_COOKIE })
+}
+
+/// The sealed pending OIDC sign-in the request carries, read like [`session_token`].
+pub fn oidc_state<'h>(cfg: &AuthConfig, headers: &'h HeaderMap) -> Option<&'h str> {
+    cookie(headers, if secure_cookies(cfg, headers) { HOST_OIDC_COOKIE } else { OIDC_COOKIE })
 }
 
 /// Whether the client talked HTTPS to us or to the reverse proxy in front of us.
@@ -314,45 +325,40 @@ pub fn login_cookies(cfg: &AuthConfig, secure: bool, token: &str, csrf: &str) ->
     cookies
 }
 
-/// Set-Cookie headers moving a session that authenticated by the plain cookie
-/// name to the `__Host-` names, on a response that gets `Secure`; None when
-/// there is nothing to move. The new cookies get the full session lifetime:
-/// the server's own expiry of the session still applies.
-///
-/// TODO(GH-192): remove, with the plain-name fallback in [`session_token`],
-/// one release after the one that introduced `__Host-` cookies.
-pub fn upgrade_cookies(cfg: &AuthConfig, headers: &HeaderMap, csrf: &str) -> Option<Vec<HeaderValue>> {
-    if !secure_cookies(cfg, headers) {
-        return None;
-    }
-    let (token, true) = session_token(headers)? else { return None };
-    Some(login_cookies(cfg, true, token, csrf))
-}
-
 /// Deletes the plain-named session and CSRF cookies (same Path, so the
 /// browser matches them).
 fn clear_plain_cookies() -> [HeaderValue; 2] {
     [build(SESSION_COOKIE, "", 0, true, true), build(CSRF_COOKIE, "", 0, false, true)]
 }
 
+/// A sign-in flow cookie: under `Secure`, the `__Host-` name at `Path=/`;
+/// otherwise the plain name, sent only to `path`.
+fn flow_cookie(secure: bool, names: (&str, &str), path: &str, value: &str, max_age_secs: u64) -> HeaderValue {
+    if secure {
+        build(names.0, value, max_age_secs, true, true)
+    } else {
+        build_at(path, names.1, value, max_age_secs, true, false)
+    }
+}
+
 /// Set-Cookie header naming a pending second-factor challenge.
 pub fn mfa_cookie(secure: bool, token: &str, ttl: std::time::Duration) -> HeaderValue {
-    build_at(MFA_COOKIE_PATH, MFA_COOKIE, token, ttl.as_secs(), true, secure)
+    flow_cookie(secure, (HOST_MFA_COOKIE, MFA_COOKIE), MFA_COOKIE_PATH, token, ttl.as_secs())
 }
 
 /// Set-Cookie header that deletes the challenge cookie.
 pub fn clear_mfa_cookie(secure: bool) -> HeaderValue {
-    build_at(MFA_COOKIE_PATH, MFA_COOKIE, "", 0, true, secure)
+    flow_cookie(secure, (HOST_MFA_COOKIE, MFA_COOKIE), MFA_COOKIE_PATH, "", 0)
 }
 
 /// Set-Cookie header binding a pending OIDC sign-in to this browser. SameSite=Lax
 /// still sends it on the provider's top-level redirect back to the callback.
 pub fn oidc_cookie(secure: bool, sealed: &str, ttl: std::time::Duration) -> HeaderValue {
-    build_at(OIDC_COOKIE_PATH, OIDC_COOKIE, sealed, ttl.as_secs(), true, secure)
+    flow_cookie(secure, (HOST_OIDC_COOKIE, OIDC_COOKIE), OIDC_COOKIE_PATH, sealed, ttl.as_secs())
 }
 
 pub fn clear_oidc_cookie(secure: bool) -> HeaderValue {
-    build_at(OIDC_COOKIE_PATH, OIDC_COOKIE, "", 0, true, secure)
+    flow_cookie(secure, (HOST_OIDC_COOKIE, OIDC_COOKIE), OIDC_COOKIE_PATH, "", 0)
 }
 
 /// The value a Set-Cookie header built here sets for `name`.
@@ -412,20 +418,52 @@ mod tests {
         assert_eq!(cookie(&headers(&[("cookie", "shadoucmdb_session=")]), SESSION_COOKIE), None);
     }
 
-    #[test]
-    fn the_host_session_cookie_wins_in_either_order() {
-        let host_first = headers(&[("cookie", "__Host-shadoucmdb_session=good; shadoucmdb_session=tossed")]);
-        let plain_first = headers(&[("cookie", "shadoucmdb_session=tossed; __Host-shadoucmdb_session=good")]);
-        let split = headers(&[("cookie", "shadoucmdb_session=tossed"), ("cookie", "__Host-shadoucmdb_session=good")]);
-        for h in [&host_first, &plain_first, &split] {
-            assert_eq!(session_token(h), Some(("good", false)));
+    fn test_config(cookie_secure: CookieSecure) -> AuthConfig {
+        AuthConfig {
+            session_idle: Duration::from_secs(60),
+            session_max_age: Duration::from_secs(3600),
+            cookie_secure,
+            public_url: None,
+            oidc_allowed_hosts: None,
+            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
+            setup_token_file: None,
+            trusted_proxies: Default::default(),
+            sign_in_failure_floor: Duration::ZERO,
         }
-        // An empty __Host- cookie still shuts out the plain name.
-        let empty = headers(&[("cookie", "shadoucmdb_session=tossed; __Host-shadoucmdb_session=")]);
-        assert_eq!(session_token(&empty), None);
-        // Without one, the plain name is read (sessions from before the prefix).
-        assert_eq!(session_token(&headers(&[("cookie", "shadoucmdb_session=old")])), Some(("old", true)));
-        assert_eq!(session_token(&HeaderMap::new()), None);
+    }
+
+    /// GH#285: over HTTPS only the `__Host-` names are read, so a plain-named
+    /// cookie a sibling subdomain planted (`Domain=.example.com`) is ignored.
+    #[test]
+    fn over_https_only_host_cookies_are_read() {
+        let cfg = test_config(CookieSecure::Auto);
+        let https = |cookie: &'static str| headers(&[("cookie", cookie), ("x-forwarded-proto", "https")]);
+        for h in [
+            https("__Host-shadoucmdb_session=good; shadoucmdb_session=tossed"),
+            https("shadoucmdb_session=tossed; __Host-shadoucmdb_session=good"),
+            headers(&[
+                ("cookie", "shadoucmdb_session=tossed"),
+                ("cookie", "__Host-shadoucmdb_session=good"),
+                ("x-forwarded-proto", "https"),
+            ]),
+        ] {
+            assert_eq!(session_token(&cfg, &h), Some("good"));
+        }
+        assert_eq!(session_token(&cfg, &https("shadoucmdb_session=tossed; __Host-shadoucmdb_session=")), None);
+        assert_eq!(session_token(&cfg, &https("shadoucmdb_session=tossed")), None);
+        assert_eq!(mfa_token(&cfg, &https("shadoucmdb_mfa=tossed")), None);
+        assert_eq!(oidc_state(&cfg, &https("shadoucmdb_oidc=tossed")), None);
+        assert_eq!(mfa_token(&cfg, &https("shadoucmdb_mfa=x; __Host-shadoucmdb_mfa=m")), Some("m"));
+        assert_eq!(oidc_state(&cfg, &https("__Host-shadoucmdb_oidc=o; shadoucmdb_oidc=x")), Some("o"));
+        // COOKIE_SECURE=always reads the __Host- names whatever the request says.
+        let always = test_config(CookieSecure::Always);
+        assert_eq!(session_token(&always, &headers(&[("cookie", "shadoucmdb_session=tossed")])), None);
+        // Plain HTTP answers set, and so read, the plain names only.
+        let http = headers(&[("cookie", "__Host-shadoucmdb_session=h; shadoucmdb_session=p; shadoucmdb_mfa=m")]);
+        assert_eq!(session_token(&cfg, &http), Some("p"));
+        assert_eq!(mfa_token(&cfg, &http), Some("m"));
+        assert_eq!(session_token(&test_config(CookieSecure::Never), &https("__Host-shadoucmdb_session=h")), None);
+        assert_eq!(session_token(&cfg, &HeaderMap::new()), None);
     }
 
     #[test]
@@ -549,17 +587,7 @@ mod tests {
 
     #[test]
     fn cookie_attributes() {
-        let cfg = AuthConfig {
-            session_idle: Duration::from_secs(60),
-            session_max_age: Duration::from_secs(3600),
-            cookie_secure: CookieSecure::Auto,
-            public_url: None,
-            oidc_allowed_hosts: None,
-            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
-            setup_token_file: None,
-            trusted_proxies: Default::default(),
-            sign_in_failure_floor: Duration::ZERO,
-        };
+        let cfg = test_config(CookieSecure::Auto);
         let c = login_cookies(&cfg, true, "tok", "csrf");
         assert_eq!(c[0], "__Host-shadoucmdb_session=tok; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly; Secure");
         assert_eq!(c[1], "__Host-shadoucmdb_csrf=csrf; Path=/; Max-Age=3600; SameSite=Lax; Secure");
@@ -579,6 +607,20 @@ mod tests {
             mfa_cookie(false, "tok", Duration::from_secs(300)),
             "shadoucmdb_mfa=tok; Path=/api/v1/auth; Max-Age=300; SameSite=Lax; HttpOnly"
         );
+        // The flow cookies take the __Host- prefix, and so Path=/, under Secure.
+        assert_eq!(
+            mfa_cookie(true, "tok", Duration::from_secs(300)),
+            "__Host-shadoucmdb_mfa=tok; Path=/; Max-Age=300; SameSite=Lax; HttpOnly; Secure"
+        );
+        assert_eq!(clear_mfa_cookie(true), "__Host-shadoucmdb_mfa=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure");
+        assert_eq!(
+            oidc_cookie(true, "sealed", Duration::from_secs(600)),
+            "__Host-shadoucmdb_oidc=sealed; Path=/; Max-Age=600; SameSite=Lax; HttpOnly; Secure"
+        );
+        assert_eq!(
+            clear_oidc_cookie(false),
+            "shadoucmdb_oidc=; Path=/api/v1/auth/oidc; Max-Age=0; SameSite=Lax; HttpOnly"
+        );
         let c = logout_cookies(false);
         assert_eq!(c[0], "shadoucmdb_session=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly");
         assert_eq!(c.len(), 2);
@@ -588,30 +630,5 @@ mod tests {
         assert_eq!(c.len(), 4);
         assert!(secure_cookies(&AuthConfig { cookie_secure: CookieSecure::Always, ..cfg.clone() }, &HeaderMap::new()));
         assert!(!secure_cookies(&cfg, &HeaderMap::new()));
-    }
-
-    #[test]
-    fn plain_cookie_sessions_move_to_host_cookies_over_https() {
-        let cfg = AuthConfig {
-            session_idle: Duration::from_secs(60),
-            session_max_age: Duration::from_secs(3600),
-            cookie_secure: CookieSecure::Auto,
-            public_url: None,
-            oidc_allowed_hosts: None,
-            setup_token: Some(crate::auth::setup_token::TEST_TOKEN.into()),
-            setup_token_file: None,
-            trusted_proxies: Default::default(),
-            sign_in_failure_floor: Duration::ZERO,
-        };
-        let plain = headers(&[("cookie", "shadoucmdb_session=old; shadoucmdb_csrf=c"), ("x-forwarded-proto", "https")]);
-        let c = upgrade_cookies(&cfg, &plain, "c").unwrap();
-        assert_eq!(c[0], "__Host-shadoucmdb_session=old; Path=/; Max-Age=3600; SameSite=Lax; HttpOnly; Secure");
-        assert_eq!(c[1], "__Host-shadoucmdb_csrf=c; Path=/; Max-Age=3600; SameSite=Lax; Secure");
-        assert_eq!(c[2], "shadoucmdb_session=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure");
-        assert_eq!(c[3], "shadoucmdb_csrf=; Path=/; Max-Age=0; SameSite=Lax; Secure");
-        // Already moved, or plain HTTP (the plain name is the current one): nothing to do.
-        let host = headers(&[("cookie", "__Host-shadoucmdb_session=new"), ("x-forwarded-proto", "https")]);
-        assert_eq!(upgrade_cookies(&cfg, &host, "c"), None);
-        assert_eq!(upgrade_cookies(&cfg, &headers(&[("cookie", "shadoucmdb_session=old")]), "c"), None);
     }
 }
