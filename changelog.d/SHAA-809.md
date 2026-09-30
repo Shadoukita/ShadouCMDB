@@ -3,7 +3,7 @@
 Since migration 0016, CIs take their status, environment, location and owner from the lookup lists `status`,
 `environment`, `location` and `owner`, edited under *Administration › Data model › Dropdowns*. The *Lookups*
 section still showed the former tables as read-only tabs. They held frozen copies of values that are in the lookup
-lists, so the section is gone ([SHAA-809]).
+lists, so the section is gone (SHAA-809).
 
 - **Bookmarks:** `/admin/lookups` and the old tab addresses (`/admin/lookups/statuses`, `environments`,
   `locations`, `owners`) now open Dropdowns. `/admin/lookups/lists?list=…` still opens that list.
@@ -14,5 +14,3 @@ lists, so the section is gone ([SHAA-809]).
   `environments`, `locations`, `owners`) is unchanged.
 
 **Upgrade:** nothing to do.
-
-[SHAA-809]: docs/data-model.md

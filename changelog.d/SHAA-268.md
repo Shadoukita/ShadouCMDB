@@ -3,8 +3,7 @@
 A lookup list can now depend on another list, e.g. "Model" on "Manufacturer": each model names the
 manufacturer it belongs to, and a model field names its manufacturer field. The API then refuses a
 model that does not belong to the CI's manufacturer. Retiring a manufacturer retires its models
-(refused while CIs still use one of them); deleting it is refused while models belong to it. See
-[docs/data-model.md](docs/data-model.md#dependent-lookup-lists).
+(refused while CIs still use one of them); deleting it is refused while models belong to it.
 
 Migration `0015_lookup_parent_lists` adds nullable columns (`lookup_lists.parent_list_id`,
 `lookup_list_values.parent_value_id`, `ci_attribute_definitions.parent_attribute_id`) and their

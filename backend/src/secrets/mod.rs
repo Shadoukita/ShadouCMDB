@@ -282,8 +282,7 @@ pub fn missing_key_message() -> String {
     format!(
         "ENCRYPTION_KEY_FILE is not set. Since version {}, ShadouCMDB encrypts authenticator secrets and identity \
          provider secrets with a key kept outside the database. Create one with \"shadoucmdb generate-encryption-key --out <path>\", set \
-         ENCRYPTION_KEY_FILE in the env file, and back the key up separately from database backups. See \
-         docs/security/hardening.md#encryption-key.",
+         ENCRYPTION_KEY_FILE in the env file, and back the key up separately from database backups.",
         env!("CARGO_PKG_VERSION")
     )
 }

@@ -17,10 +17,8 @@ contacts the provider. Migration 0021 creates `server_keys` and drops `oidc_logi
   `sql/bootstrap/10_split_roles.sql` get this from migration 0021; if you re-run that script, use the
   one from this release.
 - Several API processes behind a load balancer share the key through the database; no configuration.
-- `server_keys` is not backed up: a restored server generates a new key. To rotate the key, see
-  [data model › Soft-delete decisions](docs/data-model.md#soft-delete-decisions) (`DELETE FROM cmdb.server_keys WHERE purpose =
-  'oidc_state'` as the owner role, then restart the API).
-- Limit anonymous requests per client address at your reverse proxy
-  ([deployment › Hardening settings](docs/deployment.md#hardening-settings)).
+- `server_keys` is not backed up: a restored server generates a new key. To rotate the key, run
+  `DELETE FROM cmdb.server_keys WHERE purpose = 'oidc_state'` as the owner role, then restart the API.
+- Limit anonymous requests per client address at your reverse proxy.
 
 [#122]: https://github.com/Shadoukita/ShadouCMDB/issues/122

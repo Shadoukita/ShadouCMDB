@@ -1,6 +1,6 @@
 ### Added: layout sections can hold a note or a built-in panel (API)
 
-A layout section has a new optional `kind` ([layout format]): `fields` (the default, a grid of fields as
+A layout section has a new optional `kind`: `fields` (the default, a grid of fields as
 before), `note` (static text written by an administrator in `text`, at most 4,000 characters, plain
 text or limited Markdown; the web UI never renders raw HTML from it), or one of the detail page's
 built-in panels `relations`, `history` and `audit`, which can then be placed in any tab. Each panel can
@@ -11,5 +11,3 @@ panel placed twice, `fields` or `text` on a section of the wrong kind and an emp
 **Upgrade:** nothing to do. The change is additive to layout format v2: saved layouts, earlier settings
 versions and configuration exports stay valid and are returned unchanged (`kind` is only written for
 sections that are not `fields`).
-
-[layout format]: docs/data-model.md#detail-and-form-layouts-ui-settings-layout-format-v2

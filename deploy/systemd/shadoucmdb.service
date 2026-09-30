@@ -23,7 +23,7 @@ Type=exec
 User=shadoucmdb
 Group=shadoucmdb
 ExecStart=/usr/local/bin/shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env serve
-# First-run setup token (docs/deployment.md#the-setup-token): /etc is read-only for the service, so a
+# First-run setup token: /etc is read-only for the service, so a
 # generated token is written here, readable only by the service account.
 StateDirectory=shadoucmdb
 StateDirectoryMode=0700

@@ -1,6 +1,6 @@
 ### Fixed: OpenAPI document version, public operations and error responses
 
-`backend/openapi.json` (and `/openapi.json` of a running server, see the [API reference][api]) now
+`backend/openapi.json` (and `/openapi.json` of a running server) now
 matches the server (SHAA-783). No request or response changed on the wire.
 
 - `info.version` is the release version (`0.1.0-rc.1`) instead of `0.1.0`.
@@ -15,5 +15,3 @@ matches the server (SHAA-783). No request or response changed on the wire.
 
 **Upgrade:** clients generated from the document that refer to the schema `Vec` must use
 `IdentityProviderList` after regenerating.
-
-[api]: docs/api.md

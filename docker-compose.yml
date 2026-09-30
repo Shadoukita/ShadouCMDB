@@ -3,7 +3,7 @@
 # external database described in .env (see .env.example). Point
 # PGHOST/DATABASE_URL at any reachable PostgreSQL 14+.
 #
-# Credentials are split by service (docs/deployment.md#database-roles):
+# Credentials are split by service:
 #   .env          every service; the API role (shadoucmdb_app) connection.
 #   .env.migrate  `migrate` only, optional: MIGRATION_DATABASE_URL (schema
 #                 owner) and MAINTENANCE_DATABASE_URL. Never read by `api`.
@@ -12,7 +12,7 @@
 #
 #   cp .env.example .env                        # then edit the connection settings
 #   openssl rand -base64 32 > encryption.key && chmod 600 encryption.key && sudo chown 65532:65532 encryption.key
-#                                               # the key `serve` needs (docs/security/hardening.md#encryption-key)
+#                                               # the key `serve` needs
 #   install -m 600 /dev/null .env.migrate       # then add MIGRATION_DATABASE_URL (and MAINTENANCE_DATABASE_URL)
 #   docker compose run --rm migrate             # apply migrations as the schema owner
 #   docker compose run --rm seed                # check system rows (the data model starts empty)

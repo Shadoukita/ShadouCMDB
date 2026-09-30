@@ -7,6 +7,8 @@ target/
 # The encryption key (ENCRYPTION_KEY_FILE) never goes into the repository or an image.
 encryption*.key
 *.log
+# Test fixtures that are server logs on purpose.
+!tools/dast/fixtures/*.log
 .DS_Store
 coverage/
 .claude/
