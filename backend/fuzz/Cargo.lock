@@ -440,6 +440,7 @@ dependencies = [
  "quick-xml",
  "serde",
  "utoipa",
+ "zip",
 ]
 
 [[package]]

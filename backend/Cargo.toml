@@ -87,6 +87,9 @@ tower-http = { version = "0.7", features = ["cors", "catch-panic", "set-header",
 tracing = "0.1"
 # Bulk import: cells are NFC-normalised before matching and validation (T10); header matching uses NFKC.
 unicode-normalization = "0.1"
+# Bulk import: the XLSX preflight checks that calamine's ZIP reader sees the same entries it
+# checked. Already in the tree through calamine, with the same features.
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "env-filter", "ansi", "std"] }
 url = "2"
 utoipa = { version = "6", features = ["uuid", "chrono", "preserve_order", "preserve_path_order"] }

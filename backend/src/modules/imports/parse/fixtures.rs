@@ -13,6 +13,8 @@ pub struct Part {
     pub local_method: Option<u16>,
     pub local_crc: Option<u32>,
     pub flags: u16,
+    /// Extra fields of the central directory entry.
+    pub extra: Vec<u8>,
 }
 
 impl Part {
@@ -25,6 +27,7 @@ impl Part {
             local_method: None,
             local_crc: None,
             flags: 0,
+            extra: Vec::new(),
         }
     }
 }
@@ -73,11 +76,13 @@ pub fn zip(parts: &[Part]) -> Vec<u8> {
         central.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
         central.extend_from_slice(&(p.data.len() as u32).to_le_bytes());
         central.extend_from_slice(&(p.name.len() as u16).to_le_bytes());
-        central.extend_from_slice(&[0; 4]);
+        central.extend_from_slice(&(p.extra.len() as u16).to_le_bytes());
+        central.extend_from_slice(&[0; 2]);
         central.extend_from_slice(&[0; 4]);
         central.extend_from_slice(&[0; 4]);
         central.extend_from_slice(&offset.to_le_bytes());
         central.extend_from_slice(p.name.as_bytes());
+        central.extend_from_slice(&p.extra);
     }
     let cd_offset = out.len() as u32;
     out.extend_from_slice(&central);
@@ -95,10 +100,10 @@ pub fn zip(parts: &[Part]) -> Vec<u8> {
 pub const CONTENT_TYPES: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>"#;
 
-const RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+pub const RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
 
-const WORKBOOK_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+pub const WORKBOOK_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
 
 /// Style 1 is a date (numFmt 14), style 2 a date and time (numFmt 22).

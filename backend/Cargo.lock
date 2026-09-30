@@ -2126,6 +2126,7 @@ dependencies = [
  "uuid",
  "webpki-roots",
  "windows-service",
+ "zip",
 ]
 
 [[package]]
