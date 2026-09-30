@@ -57,6 +57,8 @@ pub struct AppState {
     pub capacity: Capacity,
     /// The last `/readyz` check, reused briefly (GH#242).
     pub readiness: Arc<crate::modules::health::ReadinessCache>,
+    /// Bulk import limits (`IMPORT_*`).
+    pub imports: Arc<crate::config::ImportConfig>,
 }
 
 /// The start-up step for encrypted secrets ([`crate::secrets::sealed::prepare`]):
@@ -81,6 +83,7 @@ impl AppState {
             sealed: Arc::default(),
             capacity: Capacity::new(512, Duration::from_secs(10)),
             readiness: Arc::default(),
+            imports: Arc::default(),
         }
     }
 
@@ -97,6 +100,11 @@ impl AppState {
 
     pub fn capturing(mut self, audit: &AuditConfig) -> Self {
         self.capture = ClientCapture { ip: audit.capture_client_ip, user_agent: audit.capture_user_agent };
+        self
+    }
+
+    pub fn importing(mut self, imports: &crate::config::ImportConfig) -> Self {
+        self.imports = Arc::new(imports.clone());
         self
     }
 
@@ -500,7 +508,10 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
              list it there, or every client shares the proxy's network for throttling"
         );
     }
-    let state = AppState::new(pool.clone(), cfg.auth.clone(), keyring).capturing(&cfg.audit).limited(&cfg.http);
+    let state = AppState::new(pool.clone(), cfg.auth.clone(), keyring)
+        .capturing(&cfg.audit)
+        .limited(&cfg.http)
+        .importing(&cfg.imports);
     // Before listening: rows under a key that is not configured stop the server
     // here, and rows not encrypted yet are encrypted. An unreachable or
     // unmigrated database defers this to the first API request (`schema_gate`).
@@ -719,6 +730,7 @@ mod tests {
             auth: auth.clone(),
             audit: AuditConfig::default(),
             encryption: Default::default(),
+            imports: Default::default(),
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth, crate::secrets::Keyring::for_tests()), &cfg)

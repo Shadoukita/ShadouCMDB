@@ -131,6 +131,40 @@ pub struct HttpConfig {
     pub max_concurrent_requests: usize,
 }
 
+/// Bulk import limits (SHAA-714 §3.5). They protect the host, so they are
+/// operator settings; the instance switch itself lives in the database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportConfig {
+    /// `IMPORT_ALLOWED=false` keeps bulk import off whatever an administrator sets.
+    pub allowed: bool,
+    /// Largest uploaded file (`IMPORT_MAX_FILE_MB`).
+    pub max_file_bytes: u64,
+    /// Most data rows per file (`IMPORT_MAX_ROWS`).
+    pub max_rows: u32,
+    /// Uploaded bytes stored at once across all jobs (`IMPORT_MAX_STORED_MB`).
+    pub max_stored_bytes: u64,
+    /// Time allowed for one whole upload (`IMPORT_UPLOAD_TIMEOUT_SECS`); it
+    /// replaces `HTTP_REQUEST_TIMEOUT_SECS` on the upload route.
+    pub upload_timeout: Duration,
+    /// Import workers per server process (`IMPORT_WORKERS`).
+    pub workers: usize,
+}
+
+const MIB: u64 = 1024 * 1024;
+
+impl Default for ImportConfig {
+    fn default() -> Self {
+        ImportConfig {
+            allowed: true,
+            max_file_bytes: 50 * MIB,
+            max_rows: 100_000,
+            max_stored_bytes: 2048 * MIB,
+            upload_timeout: Duration::from_secs(900),
+            workers: 1,
+        }
+    }
+}
+
 /// Where exported audit events go.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuditSink {
@@ -211,6 +245,7 @@ pub struct Config {
     pub auth: AuthConfig,
     pub audit: AuditConfig,
     pub encryption: EncryptionConfig,
+    pub imports: ImportConfig,
 }
 
 /// The env file the variables were read from (`--env-file`, or the `.env` found).
@@ -275,6 +310,7 @@ impl std::fmt::Debug for Config {
             auth,
             audit,
             encryption,
+            imports,
         } = self;
         f.debug_struct("Config")
             .field("api_host", api_host)
@@ -289,6 +325,7 @@ impl std::fmt::Debug for Config {
             .field("auth", auth)
             .field("audit", audit)
             .field("encryption", encryption)
+            .field("imports", imports)
             .finish()
     }
 }
@@ -619,6 +656,20 @@ impl Config {
             previous_key_file: r.raw("ENCRYPTION_KEY_PREVIOUS_FILE").map(PathBuf::from),
         };
 
+        let defaults = ImportConfig::default();
+        let imports = ImportConfig {
+            allowed: r.bool("IMPORT_ALLOWED", true),
+            max_file_bytes: r.int::<u64>("IMPORT_MAX_FILE_MB", 1, 200).map_or(defaults.max_file_bytes, |mb| mb * MIB),
+            max_rows: r.int::<u32>("IMPORT_MAX_ROWS", 1, 1_000_000).unwrap_or(defaults.max_rows),
+            max_stored_bytes: r
+                .int::<u64>("IMPORT_MAX_STORED_MB", 100, 100_000)
+                .map_or(defaults.max_stored_bytes, |mb| mb * MIB),
+            upload_timeout: r
+                .int::<u64>("IMPORT_UPLOAD_TIMEOUT_SECS", 60, 3600)
+                .map_or(defaults.upload_timeout, Duration::from_secs),
+            workers: r.int::<usize>("IMPORT_WORKERS", 1, 4).unwrap_or(defaults.workers),
+        };
+
         if !r.errors.is_empty() {
             let detail: Vec<String> = r.errors.iter().map(|e| format!("  - {e}")).collect();
             anyhow::bail!(
@@ -667,6 +718,7 @@ impl Config {
             },
             audit: AuditConfig { capture_client_ip, capture_user_agent, export },
             encryption,
+            imports,
         })
     }
 }
@@ -798,6 +850,44 @@ mod tests {
         }
         let err = load_with(&[("SIGN_IN_FAILURE_FLOOR_MS", "2000"), ("HTTP_REQUEST_TIMEOUT_SECS", "2")]).unwrap_err();
         assert!(err.to_string().contains("SIGN_IN_FAILURE_FLOOR_MS"), "{err}");
+    }
+
+    #[test]
+    fn import_limits() {
+        assert_eq!(load_with(&[]).unwrap().imports, ImportConfig::default());
+        let cfg = load_with(&[
+            ("IMPORT_ALLOWED", "false"),
+            ("IMPORT_MAX_FILE_MB", "200"),
+            ("IMPORT_MAX_ROWS", "1"),
+            ("IMPORT_MAX_STORED_MB", "100"),
+            ("IMPORT_UPLOAD_TIMEOUT_SECS", "60"),
+            ("IMPORT_WORKERS", "4"),
+        ])
+        .unwrap()
+        .imports;
+        assert_eq!(
+            cfg,
+            ImportConfig {
+                allowed: false,
+                max_file_bytes: 200 * MIB,
+                max_rows: 1,
+                max_stored_bytes: 100 * MIB,
+                upload_timeout: Duration::from_secs(60),
+                workers: 4,
+            }
+        );
+        for (key, bad) in [
+            ("IMPORT_ALLOWED", "maybe"),
+            ("IMPORT_MAX_FILE_MB", "201"),
+            ("IMPORT_MAX_FILE_MB", "0"),
+            ("IMPORT_MAX_ROWS", "1000001"),
+            ("IMPORT_MAX_STORED_MB", "99"),
+            ("IMPORT_UPLOAD_TIMEOUT_SECS", "3601"),
+            ("IMPORT_WORKERS", "5"),
+        ] {
+            let err = load_with(&[(key, bad)]).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={bad}: {err}");
+        }
     }
 
     #[test]

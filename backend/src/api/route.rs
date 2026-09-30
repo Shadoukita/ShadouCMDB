@@ -50,6 +50,8 @@ pub struct Api {
     pub headers: HeaderMap,
     /// The last readiness check (`/readyz`).
     pub readiness: Arc<crate::modules::health::ReadinessCache>,
+    /// Bulk import limits (`IMPORT_*`).
+    pub imports: Arc<crate::config::ImportConfig>,
 }
 
 /// Who may call a route.
@@ -715,7 +717,14 @@ impl RouteBuilder {
                         read_body(&headers, body, body_limit).await?
                     };
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, B::parse(body)?);
-                    let api = Api { pool: state.pool, ctx, auth: state.auth, headers, readiness: state.readiness };
+                    let api = Api {
+                        pool: state.pool,
+                        ctx,
+                        auth: state.auth,
+                        headers,
+                        readiness: state.readiness,
+                        imports: state.imports,
+                    };
                     let res = match f(api, input).await {
                         Ok(out) => out.respond(status),
                         // A refused sign-in answers no earlier than its floor (GH#216). The

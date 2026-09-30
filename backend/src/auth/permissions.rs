@@ -32,16 +32,20 @@ pub enum GlobalPermission {
     /// Read the audit log
     #[serde(rename = "audit.view")]
     AuditView,
+    /// Import configuration items from CSV and Excel files (still limited by the class rights)
+    #[serde(rename = "cis.import")]
+    CisImport,
 }
 
 impl GlobalPermission {
-    pub const ALL: [GlobalPermission; 6] = [
+    pub const ALL: [GlobalPermission; 7] = [
         GlobalPermission::UsersManage,
         GlobalPermission::ProfilesManage,
         GlobalPermission::DatamodelManage,
         GlobalPermission::CustomizationManage,
         GlobalPermission::ConfigExportImport,
         GlobalPermission::AuditView,
+        GlobalPermission::CisImport,
     ];
 
     /// The value stored in permission_profile_global_permissions.permission.
@@ -53,6 +57,7 @@ impl GlobalPermission {
             GlobalPermission::CustomizationManage => "customization.manage",
             GlobalPermission::ConfigExportImport => "config.export_import",
             GlobalPermission::AuditView => "audit.view",
+            GlobalPermission::CisImport => "cis.import",
         }
     }
 
