@@ -11,15 +11,21 @@
 //!   once the last row with a problem was written.
 //! - A download by anyone but the job's owner is audited as
 //!   `import.report_read` (W7).
+//! - Each stream holds a blocking thread, so they are capped per process and
+//!   per user, and a client that stops reading is cut off (GH#351).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::ControlFlow;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::task::Poll;
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use serde_json::json;
 use sqlx::PgPool;
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use uuid::Uuid;
 
 use super::analyse::{self, FileFormat, FileOptions, REPORT_HEADERS};
@@ -32,10 +38,123 @@ use crate::api::context::RequestContext;
 use crate::api::route::CsvDownload;
 use crate::config::ImportConfig;
 use crate::data::crud::{self, AuditAction, AuditEntry};
-use crate::http::error::AppError;
+use crate::http::error::{AppError, ErrorCode};
 
 /// Bytes collected before a piece of the report is sent.
 const FLUSH_BYTES: usize = 64 * 1024;
+/// Reports streaming at once in this process; more are answered 503 SERVER_BUSY.
+const MAX_STREAMS: usize = 8;
+/// Reports one user streams at once; more are answered 429 RATE_LIMITED.
+const MAX_STREAMS_PER_USER: usize = 2;
+/// How long a piece may wait for the client to read before the download is cut off.
+const SEND_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long one download may take in all.
+const STREAM_DEADLINE: Duration = Duration::from_secs(15 * 60);
+
+static STREAMS: LazyLock<Streams> = LazyLock::new(|| Streams::new(MAX_STREAMS, MAX_STREAMS_PER_USER));
+
+/// The report downloads in progress in this process.
+struct Streams {
+    global: Arc<Semaphore>,
+    per_user: Arc<Mutex<HashMap<Uuid, usize>>>,
+    max_per_user: usize,
+}
+
+/// A download in progress; gives its places back when dropped, that is when
+/// the writer on the blocking thread has finished.
+struct StreamPermit {
+    _global: OwnedSemaphorePermit,
+    _user: UserSlot,
+}
+
+/// One of a user's places; given back when dropped.
+struct UserSlot {
+    per_user: Arc<Mutex<HashMap<Uuid, usize>>>,
+    user: Uuid,
+}
+
+impl Drop for UserSlot {
+    fn drop(&mut self) {
+        if let Ok(mut m) = self.per_user.lock()
+            && let Some(n) = m.get_mut(&self.user)
+        {
+            *n -= 1;
+            if *n == 0 {
+                m.remove(&self.user);
+            }
+        }
+    }
+}
+
+impl Streams {
+    fn new(max: usize, max_per_user: usize) -> Self {
+        Streams { global: Arc::new(Semaphore::new(max)), per_user: Arc::default(), max_per_user }
+    }
+
+    /// Never waits. The route is session-only, so there is always a user; a
+    /// caller without one shares the nil user's places.
+    fn acquire(&self, user: Option<Uuid>) -> Result<StreamPermit, AppError> {
+        let user = user.unwrap_or(Uuid::nil());
+        {
+            let mut m = self.per_user.lock().map_err(|_| AppError::internal())?;
+            let n = m.entry(user).or_insert(0);
+            if *n >= self.max_per_user {
+                let mut err = AppError::new(
+                    ErrorCode::RateLimited,
+                    format!(
+                        "You already have {} error report downloads in progress; retry when one has finished",
+                        self.max_per_user
+                    ),
+                );
+                err.retry_after = Some(1);
+                return Err(err);
+            }
+            *n += 1;
+        }
+        // Refused below, the user's place goes back with `slot`.
+        let slot = UserSlot { per_user: self.per_user.clone(), user };
+        let global = self.global.clone().try_acquire_owned().map_err(|_| {
+            tracing::warn!("import error report refused: too many downloads in progress");
+            let mut err =
+                AppError::new(ErrorCode::ServerBusy, "The server is sending too many error reports; retry shortly");
+            err.retry_after = Some(1);
+            err
+        })?;
+        Ok(StreamPermit { _global: global, _user: slot })
+    }
+}
+
+/// Where the writer sends the pieces: each send waits at most `timeout`, and
+/// all of them together at most until `deadline`.
+struct Sink {
+    tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
+    runtime: tokio::runtime::Handle,
+    timeout: Duration,
+    deadline: Instant,
+    /// Set when the report was not written to the end; the body then ends with
+    /// an error instead of looking complete.
+    failed: Arc<AtomicBool>,
+}
+
+impl Sink {
+    /// `false` once the client is gone or too slow; the writer stops then.
+    fn send(&self, piece: Bytes) -> bool {
+        let wait = self.deadline.saturating_duration_since(Instant::now()).min(self.timeout);
+        match self.runtime.block_on(tokio::time::timeout(wait, self.tx.send(Ok(piece)))) {
+            Ok(Ok(())) => true,
+            Ok(Err(_)) => false,
+            Err(_) => {
+                tracing::warn!("import error report: the client did not read the download in time; stopped");
+                self.fail();
+                false
+            }
+        }
+    }
+
+    fn fail(&self) {
+        self.failed.store(true, Ordering::SeqCst);
+    }
+}
 
 /// One stored problem, as the report shows it.
 struct Line {
@@ -141,6 +260,8 @@ pub async fn download(
 
     drop(conn);
 
+    // Before the audit event: a refused download was not read.
+    let permit = STREAMS.acquire(ctx_user(ctx))?;
     if job.created_by_id.is_none() || job.created_by_id != ctx_user(ctx) {
         let mut tx = pool.begin().await?;
         let entry = AuditEntry {
@@ -163,17 +284,45 @@ pub async fn download(
     let file =
         DbFile { pool: pool.clone(), job: id, len: job.file_size as u64, runtime: tokio::runtime::Handle::current() };
     let limits = Limits { max_rows: cfg.max_rows, max_columns: MAX_COLUMNS };
-    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+    let (sink, mut rx) = Sink::new(SEND_TIMEOUT, STREAM_DEADLINE);
+    let failed = sink.failed.clone();
     tokio::task::spawn_blocking({
         let (format, options) = (job.format(), job.options());
-        move || write(&file, format, &options, &limits, &layout, pending, &tx)
+        move || {
+            let _permit = permit;
+            write(&file, format, &options, &limits, &layout, pending, &sink)
+        }
     });
-    let mut rx = rx;
-    let body = axum::body::Body::from_stream(futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx)));
+    let mut ended = false;
+    let body = axum::body::Body::from_stream(futures_util::stream::poll_fn(move |cx| {
+        match rx.poll_recv(cx) {
+            // A report cut short ends with an error, so the client does not
+            // take it for the whole report.
+            Poll::Ready(None) if !ended && failed.load(Ordering::SeqCst) => {
+                ended = true;
+                Poll::Ready(Some(Err(std::io::Error::other("the error report was not written to the end"))))
+            }
+            other => other,
+        }
+    }));
     Ok(CsvDownload { file_name: report_name(&job.file_name), body })
 }
 
-/// Writes the report into `tx` piece by piece. A read failure (the file was
+impl Sink {
+    fn new(timeout: Duration, total: Duration) -> (Self, mpsc::Receiver<Result<Bytes, std::io::Error>>) {
+        let (tx, rx) = mpsc::channel(4);
+        let sink = Sink {
+            tx,
+            runtime: tokio::runtime::Handle::current(),
+            timeout,
+            deadline: Instant::now() + total,
+            failed: Arc::default(),
+        };
+        (sink, rx)
+    }
+}
+
+/// Writes the report into `sink` piece by piece. A read failure (the file was
 /// read by the dry run, so only a lost database) ends the response early.
 fn write(
     file: &DbFile,
@@ -182,14 +331,14 @@ fn write(
     limits: &Limits,
     layout: &Layout,
     mut pending: BTreeMap<u32, Vec<Line>>,
-    tx: &mpsc::Sender<Result<Bytes, std::io::Error>>,
+    sink: &Sink,
 ) {
     let mut out = String::from(csv_safe::BOM);
     layout.header_record(&mut out);
     let mut gone = false;
     let mut flush = |out: &mut String, force: bool| {
-        if (force || out.len() >= FLUSH_BYTES) && !out.is_empty() {
-            gone |= tx.blocking_send(Ok(Bytes::from(std::mem::take(out)))).is_err();
+        if !gone && (force || out.len() >= FLUSH_BYTES) && !out.is_empty() {
+            gone = !sink.send(Bytes::from(std::mem::take(out)));
         }
         !gone
     };
@@ -216,7 +365,7 @@ fn write(
     });
     if let Err(e) = result {
         tracing::warn!(job = %file.job, code = e.code, "import error report: the stored file could not be read");
-        let _ = tx.blocking_send(Err(std::io::Error::other("the stored file could not be read")));
+        sink.fail();
         return;
     }
     flush_before(&mut out, &mut pending, u32::MAX);
@@ -262,6 +411,57 @@ mod tests {
             "\"Row\";\"Severity\";\"Column\";\"Problem\";\"Code\";\"Hostname\"\r\n\
              \"2\";\"error\";\"Hostname\";\"new\";\"exists\";\"web01\"\r\n"
         );
+    }
+
+    #[test]
+    fn downloads_past_the_user_cap_or_the_server_cap_are_refused() {
+        let streams = Streams::new(2, 1);
+        let (alice, bob, carol) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let first = streams.acquire(Some(alice)).unwrap();
+        assert_eq!(streams.acquire(Some(alice)).err().map(|e| e.code), Some(ErrorCode::RateLimited));
+        let _second = streams.acquire(Some(bob)).unwrap();
+        assert_eq!(streams.acquire(Some(carol)).err().map(|e| e.code), Some(ErrorCode::ServerBusy));
+        // Carol's refusal gave her place back, and a finished download gives both back.
+        drop(first);
+        let _third = streams.acquire(Some(carol)).unwrap();
+        assert_eq!(streams.acquire(Some(alice)).err().map(|e| e.code), Some(ErrorCode::ServerBusy));
+    }
+
+    /// Sends until the sink gives up; the number of pieces sent.
+    fn fill(sink: Sink) -> usize {
+        let mut sent = 0;
+        while sink.send(Bytes::from_static(b"x")) {
+            sent += 1;
+        }
+        sent
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_download_nobody_reads_gives_its_place_back_within_the_timeout() {
+        let streams = Streams::new(1, 1);
+        let permit = streams.acquire(Some(Uuid::new_v4())).unwrap();
+        let (sink, _rx) = Sink::new(Duration::from_millis(200), Duration::from_secs(600));
+        let failed = sink.failed.clone();
+        let writer = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            fill(sink)
+        });
+        let sent = tokio::time::timeout(Duration::from_secs(10), writer).await.expect("the writer stops").unwrap();
+        assert_eq!(sent, 4, "the channel's capacity, then the timeout");
+        assert!(failed.load(Ordering::SeqCst), "the body ends with an error");
+        assert!(streams.acquire(Some(Uuid::new_v4())).is_ok(), "the place was given back");
+
+        // A client that reads, but too slowly, is cut off at the deadline.
+        let (sink, mut rx) = Sink::new(Duration::from_secs(600), Duration::from_millis(300));
+        let reader = tokio::spawn(async move {
+            while rx.recv().await.is_some() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
+        let started = Instant::now();
+        tokio::task::spawn_blocking(move || fill(sink)).await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(10));
+        reader.await.unwrap();
     }
 
     #[test]

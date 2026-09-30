@@ -22,7 +22,9 @@ An uploaded import can now be finished through the API:
 - **Error report.** `GET /api/v1/imports/{id}/error-report` downloads a CSV with one line per
   problem and the row's original values. Cells that a spreadsheet would run as a formula are
   neutralised. A download by an administrator other than the job's owner is audited as
-  `import.report_read`.
+  `import.report_read`. Each user may download 2 reports at once and the server sends 8 at most
+  (`429`/`503` past that). A download the client stops reading for 30 seconds, or that takes more
+  than 15 minutes, is cut off with an error.
 - **Audit.** Each written CI and relationship is audited as the job's owner with actor type
   `import` and request id `import:<jobId>`; unchanged rows write nothing. Each commit ends with one
   `import.commit` event, also when it fails or is cancelled.
