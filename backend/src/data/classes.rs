@@ -105,15 +105,6 @@ pub async fn class_has_items(conn: &mut PgConnection, class_id: Uuid) -> sqlx::R
     .is_some())
 }
 
-/// What the CI service needs to know about a class (None when it does not exist).
-pub struct ClassInfo {
-    pub key: String,
-}
-
-pub async fn class_info(conn: &mut PgConnection, class_id: Uuid) -> sqlx::Result<Option<ClassInfo>> {
-    sqlx::query_as!(ClassInfo, "SELECT key FROM ci_classes WHERE id = $1", class_id).fetch_optional(conn).await
-}
-
 /// Class ids plus every descendant class, so filtering by "hardware" finds servers too.
 pub async fn with_descendant_classes(conn: &mut PgConnection, class_ids: &[Uuid]) -> sqlx::Result<Vec<Uuid>> {
     let rows = sqlx::query_scalar!(
