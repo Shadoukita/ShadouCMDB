@@ -57,6 +57,9 @@ pub enum RevokeReason {
     MfaDisabled,
     /// An administrator reset the user's MFA; their sessions end (GH#280).
     MfaReset,
+    /// The user confirmed an authenticator; their other sessions that did not
+    /// prove it end (GH#292).
+    MfaEnrolled,
 }
 
 impl RevokeReason {
@@ -71,6 +74,7 @@ impl RevokeReason {
             RevokeReason::MfaNotEnforced => "mfa_not_enforced",
             RevokeReason::MfaDisabled => "mfa_disabled",
             RevokeReason::MfaReset => "mfa_reset",
+            RevokeReason::MfaEnrolled => "mfa_enrolled",
         }
     }
 }
