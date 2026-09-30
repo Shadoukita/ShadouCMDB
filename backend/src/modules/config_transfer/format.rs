@@ -258,6 +258,10 @@ pub struct DataModelSection {
 // Lookups
 // ---------------------------------------------------------------------------
 
+// The former statuses, environments, locations and owners tables. Since
+// migration 0016 their values are lookup lists; files of older releases still
+// carry them, and the import converts them (`legacy_lookups`).
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatusSpec {
@@ -397,17 +401,31 @@ pub struct LookupListSpec {
     pub values: Vec<LookupValueSpec>,
 }
 
+/// A section of files exported before this release: read on import, never written.
+fn legacy<T: ToSchema>(max: usize, table: &str, list: &str) -> Schema {
+    ArrayBuilder::new()
+        .items(T::schema())
+        .max_items(Some(max))
+        .description(Some(format!(
+            "Deprecated, read on import only: rows of the former {table} table, written by exports of \
+             0.1.0-rc.1 and earlier builds. Exports leave it out; the values are in `lists` (list \"{list}\"). On \
+             import the rows become values of the lookup list \"{list}\", as migration 0016 converts the table, \
+             unless the file's own lists already hold them; the former table is never written."
+        )))
+        .deprecated(Some(utoipa::openapi::Deprecated::True))
+        .into()
+}
 fn statuses_schema() -> Schema {
-    list::<StatusSpec>(1000)
+    legacy::<StatusSpec>(1000, "statuses", "status")
 }
 fn environments_schema() -> Schema {
-    list::<EnvironmentSpec>(1000)
+    legacy::<EnvironmentSpec>(1000, "environments", "environment")
 }
 fn locations_schema() -> Schema {
-    list::<LocationSpec>(20_000)
+    legacy::<LocationSpec>(20_000, "locations", "location")
 }
 fn owners_schema() -> Schema {
-    list::<OwnerSpec>(20_000)
+    legacy::<OwnerSpec>(20_000, "owners", "owner")
 }
 fn lists_schema() -> Schema {
     list::<LookupListSpec>(1000)
@@ -417,12 +435,16 @@ fn lists_schema() -> Schema {
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct LookupSection {
     #[schema(schema_with = statuses_schema)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub statuses: Vec<StatusSpec>,
     #[schema(schema_with = environments_schema)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub environments: Vec<EnvironmentSpec>,
     #[schema(schema_with = locations_schema)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub locations: Vec<LocationSpec>,
     #[schema(schema_with = owners_schema)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub owners: Vec<OwnerSpec>,
     #[schema(schema_with = lists_schema)]
     pub lists: Vec<LookupListSpec>,

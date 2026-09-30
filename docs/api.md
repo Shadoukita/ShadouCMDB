@@ -73,7 +73,7 @@ Every non-2xx response has this shape:
 | 409 | `IN_USE` | A hard delete of a row that is still referenced. `details[]` names each kind of reference and its count (`field` is the kind, e.g. `configurationItems`; `code` is `in_use`). Retire the row with `PATCH {"isActive": false}` instead. |
 | 409 | `VERSION_CONFLICT` | A stale `version` on a CI `PATCH`. |
 | 409 | `LAST_ADMINISTRATOR` | The change would leave no active user holding the Administrator profile. |
-| 410 | `GONE` | The operation was removed; `message` names its replacement. Today: `POST`, `PATCH` and `DELETE` on the read-only `/statuses`, `/environments`, `/locations` and `/owners` (use `/lookup-list-values`). |
+| 410 | `GONE` | The operation was removed; `message` names its replacement. Today: `POST`, `PATCH` and `DELETE` on the read-only `/statuses`, `/environments`, `/locations` and `/owners` (use `/lookup-list-values`). They need no permission: every signed-in caller gets the `410`. |
 | 422 | `INVALID_NAME` | A technical name (area, type or field `key`) is malformed, reserved (SQL keyword, `pg_` or `shadoucmdb_` prefix, system schema, registry column) or already taken. `details[]` names the field and the reason. |
 | 422 | `SCHEMA_CHANGE_REFUSED` | A data-loss guard stopped a schema change: a type change some stored values would not survive, `isRequired` while assets lack a value, removing stored enum values, or a purge that is not allowed yet (still active, wrong `confirm`, dependants). Nothing was changed. |
 | 422 | `SECRET_REQUIRED` | `PATCH /admin/identity-providers/{id}` changes `oidc.issuerUrl`, the scheme, host or port of `ldap.url`, or `ldap.bindDn` without sending the stored secret again. `details[]` names `oidc.clientSecret` or `ldap.bindPassword` with code `secret_required`. Nothing was changed. |
@@ -99,7 +99,7 @@ Every non-2xx response has this shape:
 | Schema changes | `GET /schema-changes`, `GET /schema-changes/{id}`, `POST /schema-changes/preview`, `POST /schema-changes/reconcile`, `GET /technical-names?name=&kind=` | Needs `datamodel.manage`. The history of every DDL plan (actor, time, exact statements, impact). `preview` runs any data model operation in a transaction that is rolled back and returns its DDL and impact. `reconcile` brings the catalog and reporting grants in line with the metadata. `technical-names` previews the key a display name maps to. |
 | Relationship types | `GET/POST /relationship-types`, `GET/PATCH/DELETE /relationship-types/{id}`, `GET /relationship-types/{id}/usage` | `?sourceClassId=&targetClassId=` returns only the types legal between two classes, which is what the "add relationship" picker needs. |
 | Relationship rules | `GET/POST /relationship-rules`, `GET/PATCH/DELETE /relationship-rules/{id}`, `GET /relationship-rules/{id}/usage` | Define which classes each type may connect. A rule also covers the subclasses of its classes. Deleting a rule keeps existing relationships; its usage counts them. |
-| Statuses, environments, locations, owners (deprecated, read-only) | `GET /{statuses\|environments\|locations\|owners}`, `GET /…/{id}`, `GET /…/{id}/usage` | **Deprecated since migration 0016:** CIs no longer refer to these rows; status, environment, owner and location are lookup attributes on the lists `status`, `environment`, `owner` and `location`, whose values kept the ids of these rows. Change those values through `/lookup-list-values`. `POST`, `PATCH` and `DELETE` here answer `410 GONE` (after the usual `401`/`403` checks) and change nothing; the reads stay for history until a later release. Filters include `isActive`, `isOperational` (statuses), `parentId` and `locationType` (locations), and `kind` (owners). |
+| Statuses, environments, locations, owners (deprecated, read-only) | `GET /{statuses\|environments\|locations\|owners}`, `GET /…/{id}`, `GET /…/{id}/usage` | **Deprecated since migration 0016:** CIs no longer refer to these rows; status, environment, owner and location are lookup attributes on the lists `status`, `environment`, `owner` and `location`, whose values kept the ids of these rows. Change those values through `/lookup-list-values`. `POST`, `PATCH` and `DELETE` here answer `410 GONE` to every signed-in caller (after the usual `401` and CSRF checks, with no permission required) and change nothing; the reads stay for history until a later release. Filters include `isActive`, `isOperational` (statuses), `parentId` and `locationType` (locations), and `kind` (owners). |
 | Lookup lists | `GET/POST /lookup-lists`, `GET/PATCH/DELETE /lookup-lists/{id}`, `GET/POST /lookup-list-values`, `GET/PATCH/DELETE /lookup-list-values/{id}`, `GET /…/{id}/usage` | Lists an administrator defines (e.g. "Support contract": Gold, Silver). Values have `key`, `name`, `color`, `sortOrder`, `isActive`; filter values by `listId`. A `lookup` attribute stores one value by id. A list can be deleted with its values only while no attribute uses it and no list depends on it. Dependent lists: a list's `parentListId`, each value's `parentValueId` (filter `parentValueId=<id>|none`) and a field's `parentAttributeId`; see [Dependent lookup lists](data-model.md#dependent-lookup-lists). |
 | Templates | `GET /admin/templates`, `POST /admin/templates/{key}/install` | Needs `datamodel.manage`. Lists the starter templates (today `it_infrastructure`: classes, attributes, relationship types and rules, lookup lists and their values) with what each brings, how much of it exists already and a `status` (`not_installed`, `partial`, `installed`). Install adds every missing row in one transaction and leaves existing ones alone, so it is idempotent; the response counts `created` and `existing` rows. Every created row is audited with the installing user. |
 | UI settings | `GET/PUT /ui-settings`, `GET /ui-settings/branding`, `GET /ui-settings/versions`, `GET /ui-settings/versions/{version}`, `POST /ui-settings/versions/{version}/restore`, `GET/PUT/DELETE /ui-settings/assets/{logo\|favicon}` | One settings document for every user: branding, navigation, dashboard widgets, list views and detail/form layouts per class. Any signed-in user reads it; writes need `customization.manage`. `branding` and the images are public (login page). See [Customization](#customization-and-configuration-exportimport). |
@@ -405,9 +405,13 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
 - **Delete archives** areas, types and fields (`isActive: false`): the schema, table or column and every value
   stay; nothing new is accepted and the UI hides it. `PATCH {"isActive": true}` restores it. **Purge**
   (`POST …/{id}/purge` with `{"confirm": "<key>"}`) is the only way to drop them, and only once archived.
+  Nothing blocks the archive. `GET …/{id}/usage` of a type or field answers `removal: "purge"`: its blocking
+  counts are what refuses the purge with `409 IN_USE` (subtypes and reference fields of other types for a type,
+  fields using it as their parent field for a field); the other counts (CIs, fields, relationship rules, values)
+  are removed by the purge.
 - Other data model and lookup resources are **deleted** only while nothing refers to them. `GET …/{id}/usage`
-  returns `{ inUse, data: [{ kind, label, count, withheld, blocking }] }`; a blocking count makes `DELETE` answer
-  `409 IN_USE` with the same counts in `details[]`. Deleted CIs and relationships count too: they are kept for
+  returns `{ inUse, removal: "delete", data: [{ kind, label, count, withheld, blocking }] }`; a blocking count
+  makes `DELETE` answer `409 IN_USE` with the same counts in `details[]`; non-blocking ones are deleted with it. Deleted CIs and relationships count too: they are kept for
   history. A count over CIs of a class the caller may not view is withheld (`count: null`, `withheld: true`) and
   left out of `details[]`, but still decides `inUse` and the refusal, whose message then says the row is still in
   use with the details withheld.
@@ -475,19 +479,23 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
   `url` in the settings carries a content hash (`?v=`). Uploads and removals are audited (`entity_type = ui_assets`).
 
 **Export** (`GET /api/v1/admin/config/export`) downloads one file (`format: "shadoucmdb.config"`, `formatVersion:
-3`) with `dataModel` (classes, attributes, relationship types and rules), `lookups` (statuses, environments,
-locations, owners, lookup lists with their values), `permissionProfiles` (all but the built-in Administrator; only
+3`) with `dataModel` (classes, attributes, relationship types and rules), `lookups` (lookup lists with their values), `permissionProfiles` (all but the built-in Administrator; only
 when the caller also holds `profiles.manage` or `users.manage`, the key is left out otherwise) and `uiSettings` (the
 stored document plus the images, base64). It never contains users, passwords, sessions, CIs or relationships.
 Parents come before children; every reference is a key (a lookup attribute's default is the value's key; a list's
 `parent`, a value's `parent` and an attribute's `parentAttribute` are keys too). Files of versions 1 and 2 are still
-read; they carry no parents, so rows that exist in the target keep theirs.
+read; they carry no parents, so rows that exist in the target keep theirs. Files of 0.1.0-rc.1 and earlier builds
+may also carry `lookups.statuses`, `environments`, `locations` and `owners` (the tables deprecated by migration
+0016); exports no longer write them. On import each such section becomes the lookup list `status`, `environment`,
+`location` or `owner` the same way migration 0016 converts the table (an owner's key is derived from its name; a
+location's tree and type, and a status's `isOperational`, are dropped). If the file's own lists already hold those
+values (exports made after 0016), the section is skipped. Either way `warnings[]` names the section, and the
+deprecated tables are never written.
 
 **Import** (`POST /api/v1/admin/config/import?mode=dry_run|apply`, body: such a file, up to 16 MiB; needs a
 signed-in session, API tokens get `403`):
 
-- Every section is optional. Rows are matched by key (owners by kind and name, profiles by name, both
-  case-insensitive), then created or updated field by field. **Nothing is deleted**: rows missing from the file are
+- Every section is optional. Rows are matched by key (profiles by name, case-insensitive), then created or updated field by field. **Nothing is deleted**: rows missing from the file are
   kept and counted as `notInFile`. The `uiSettings` section is the exception: it replaces the document (as a new
   version) and the images (a `null` logo removes the current one).
 - The whole file is checked first and every problem is reported in one `400 VALIDATION_ERROR` with paths into the

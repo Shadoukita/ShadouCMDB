@@ -180,7 +180,7 @@ $B --env-file shadoucmdb.env create-admin --username admin --display-name "Ops A
 ```
 
 - `seed` alone installs only system rows; the data model (CI classes, attributes, relationship
-  types, statuses) stays empty and you build it under *Administration*. `--template
+  types, lookup lists) stays empty and you build it under *Administration*. `--template
   it_infrastructure` installs a starter model: Server, Virtual machine, Network device,
   Application, Database, Service and Location, with their relationship rules. You can also
   install it later from *Administration → Templates*. `--demo` adds a small sample inventory

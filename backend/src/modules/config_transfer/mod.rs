@@ -14,6 +14,7 @@
 //! Every applied change is audited with the importing user as the actor.
 
 pub mod format;
+mod legacy;
 
 use std::collections::{HashMap, HashSet};
 
@@ -31,10 +32,7 @@ use super::classes::{
     AttributeDataType, AttributeDefinition, AttributeDefinitions, CiClass, CiClasses, RelationshipRule,
     RelationshipRules, RelationshipType, RelationshipTypes, ValidationRules,
 };
-use super::lookups::{
-    Environment, Environments, Location, Locations, LookupList, LookupListValue, LookupListValues, LookupLists, Owner,
-    Owners, Status, Statuses,
-};
+use super::lookups::{LookupList, LookupListValue, LookupListValues, LookupLists};
 use super::profiles::{self, ClassPermission};
 use super::simple_resource::{self as simple, Resource};
 use super::ui_settings::assets::{AssetKind, ImageType};
@@ -101,7 +99,7 @@ pub struct FieldChange {
 pub struct ImportChange {
     /// e.g. classes, attributes, lookupListValues, permissionProfiles, uiSettings
     pub section: String,
-    /// The row's key in the file (class.key for attributes, list.value for list values, kind:name for owners)
+    /// The row's key in the file (class.key for attributes, list.value for list values)
     pub key: String,
     #[schema(inline)]
     pub action: ChangeAction,
@@ -199,10 +197,6 @@ struct Ids {
     attributes: HashMap<(String, String), Uuid>,
     types: HashMap<String, Uuid>,
     rules: HashSet<(String, String, String)>,
-    statuses: HashMap<String, Uuid>,
-    environments: HashMap<String, Uuid>,
-    locations: HashMap<String, Uuid>,
-    owners: HashMap<String, Uuid>,
     lists: HashMap<String, Uuid>,
     values: HashMap<(String, String), Uuid>,
     /// lower(name) -> id; the built-in profile included
@@ -384,35 +378,6 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         .map(|r| (r.relationship_type.clone(), r.source_class.clone(), r.target_class.clone()))
         .collect();
 
-    let statuses: Vec<Status> = crud::select_all(conn, Statuses::TABLE, Statuses::COLUMNS, "sort_order, key").await?;
-    ids.statuses = statuses.iter().map(|s| (s.key.clone(), s.id)).collect();
-    let environments: Vec<Environment> =
-        crud::select_all(conn, Environments::TABLE, Environments::COLUMNS, "sort_order, key").await?;
-    ids.environments = environments.iter().map(|s| (s.key.clone(), s.id)).collect();
-    let locations: Vec<Location> =
-        crud::select_all(conn, Locations::TABLE, Locations::COLUMNS, "sort_order, key").await?;
-    let location_key: HashMap<Uuid, String> = locations.iter().map(|l| (l.id, l.key.clone())).collect();
-    ids.locations = locations.iter().map(|l| (l.key.clone(), l.id)).collect();
-    let location_specs: Vec<LocationSpec> = locations
-        .iter()
-        .map(|l| LocationSpec {
-            key: l.key.clone(),
-            name: l.name.clone(),
-            description: l.description.clone(),
-            parent: l.parent_id.and_then(|p| location_key.get(&p).cloned()),
-            location_type: l.location_type,
-            address: l.address.clone(),
-            sort_order: l.sort_order,
-            is_active: l.is_active,
-        })
-        .collect();
-    let (mut location_specs, cyclic) = parents_first(location_specs, |l| &l.key, |l| l.parent.as_deref());
-    location_specs.extend(cyclic);
-    let owners: Vec<Owner> = crud::select_all(conn, Owners::TABLE, Owners::COLUMNS, "kind, lower(name), id").await?;
-    for o in &owners {
-        ids.owners.entry(owner_key(o.kind, &o.name)).or_insert(o.id);
-    }
-
     let builtin_id = crate::data::auth::builtin_profile_id(conn).await?;
     let builtin_profile: String = sqlx::query_scalar("SELECT name FROM permission_profiles WHERE id = $1")
         .bind(builtin_id)
@@ -469,41 +434,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             relationship_types: type_specs,
             relationship_rules: rule_specs,
         }),
-        lookups: Some(LookupSection {
-            statuses: statuses
-                .iter()
-                .map(|s| StatusSpec {
-                    key: s.key.clone(),
-                    name: s.name.clone(),
-                    description: s.description.clone(),
-                    is_operational: s.is_operational,
-                    sort_order: s.sort_order,
-                    is_active: s.is_active,
-                })
-                .collect(),
-            environments: environments
-                .iter()
-                .map(|e| EnvironmentSpec {
-                    key: e.key.clone(),
-                    name: e.name.clone(),
-                    description: e.description.clone(),
-                    sort_order: e.sort_order,
-                    is_active: e.is_active,
-                })
-                .collect(),
-            locations: location_specs,
-            owners: owners
-                .iter()
-                .map(|o| OwnerSpec {
-                    kind: o.kind,
-                    name: o.name.clone(),
-                    email: o.email.clone(),
-                    external_ref: o.external_ref.clone(),
-                    is_active: o.is_active,
-                })
-                .collect(),
-            lists: list_specs,
-        }),
+        lookups: Some(LookupSection { lists: list_specs, ..LookupSection::default() }),
         permission_profiles: Some(profile_specs),
         ui_settings: Some(ui_section),
     };
@@ -556,8 +487,12 @@ struct Decoded {
     favicon: Option<(ImageType, Vec<u8>)>,
 }
 
-fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning>) -> Result<Decoded, AppError> {
-    let mut e = Vec::new();
+fn validate(
+    file: &ConfigFile,
+    snap: &Snapshot,
+    mut e: Vec<FieldError>,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<Decoded, AppError> {
     let empty_dm = DataModelSection::default();
     let empty_lk = LookupSection::default();
     let dm = file.data_model.as_ref().unwrap_or(&empty_dm);
@@ -567,7 +502,6 @@ fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning
     let classes = known(dm.classes.iter().map(|c| c.key.as_str()), ids.classes.keys());
     let lists = known(lk.lists.iter().map(|l| l.key.as_str()), ids.lists.keys());
     let types = known(dm.relationship_types.iter().map(|t| t.key.as_str()), ids.types.keys());
-    let locations = known(lk.locations.iter().map(|l| l.key.as_str()), ids.locations.keys());
     let mut values: HashSet<(String, String)> = ids.values.keys().cloned().collect();
     for l in &lk.lists {
         values.extend(l.values.iter().map(|v| (l.key.clone(), v.key.clone())));
@@ -584,10 +518,6 @@ fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning
         |r| format!("{} {} -> {}", r.relationship_type, r.source_class, r.target_class),
         &mut e,
     );
-    duplicates(&lk.statuses, "lookups.statuses", |s| s.key.clone(), &mut e);
-    duplicates(&lk.environments, "lookups.environments", |s| s.key.clone(), &mut e);
-    duplicates(&lk.locations, "lookups.locations", |s| s.key.clone(), &mut e);
-    duplicates(&lk.owners, "lookups.owners", |o| owner_key(o.kind, &o.name), &mut e);
     duplicates(&lk.lists, "lookups.lists", |l| l.key.clone(), &mut e);
     for (i, l) in lk.lists.iter().enumerate() {
         duplicates(&l.values, &format!("lookups.lists.{i}.values"), |v| v.key.clone(), &mut e);
@@ -697,23 +627,6 @@ fn validate(file: &ConfigFile, snap: &Snapshot, warnings: &mut Vec<ImportWarning
             "cycle",
             "The lookup lists in the file depend on each other in a cycle",
         );
-    }
-    let (_, cyclic) = parents_first(lk.locations.iter().collect(), |l| &l.key, |l| l.parent.as_deref());
-    for l in cyclic {
-        let i = lk.locations.iter().position(|x| x.key == l.key).unwrap_or_default();
-        problem(&mut e, format!("lookups.locations.{i}.parent"), "cycle", "The location tree in the file has a cycle");
-    }
-    for (i, l) in lk.locations.iter().enumerate() {
-        if let Some(p) = &l.parent
-            && !locations.contains(p)
-        {
-            problem(
-                &mut e,
-                format!("lookups.locations.{i}.parent"),
-                "not_found",
-                format!("Location \"{p}\" does not exist"),
-            );
-        }
     }
 
     // Attributes: the rules of the attribute API, references, immutable fields
@@ -1025,15 +938,14 @@ async fn run(
     // One import at a time.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('shadoucmdb:config-import'))").execute(&mut *conn).await?;
     let snap = snapshot(conn).await?;
-    let upgraded;
-    let file = if file.format_version < 3 {
-        upgraded = keep_current_parents(file, &snap.file);
-        &upgraded
-    } else {
-        file
-    };
     let mut warnings = Vec::new();
-    let decoded = validate(file, &snap, &mut warnings)?;
+    let mut file = file.clone();
+    let legacy_problems = legacy::fold(&mut file, snap.file.lookups.as_ref(), &mut warnings);
+    if file.format_version < 3 {
+        file = keep_current_parents(&file, &snap.file);
+    }
+    let file = &file;
+    let decoded = validate(file, &snap, legacy_problems, &mut warnings)?;
     let Snapshot { file: current, ids, .. } = snap;
     let cur_dm = current.data_model.unwrap_or_default();
     let cur_lk = current.lookups.unwrap_or_default();
@@ -1042,93 +954,6 @@ async fn run(
 
     // ---- lookups ----
     if let Some(lk) = &file.lookups {
-        let keys: HashSet<String> = lk.statuses.iter().map(|s| s.key.clone()).collect();
-        im.section("statuses", not_in_file(im.ids.statuses.keys(), &keys));
-        let old: HashMap<&str, &StatusSpec> = cur_lk.statuses.iter().map(|s| (s.key.as_str(), s)).collect();
-        for (i, s) in lk.statuses.iter().enumerate() {
-            let existing = old.get(s.key.as_str()).map(|o| (im.ids.statuses[&s.key], *o));
-            let mut c = ColumnSet::default();
-            c.opt("name", Some(s.name.clone()))
-                .opt("description", Some(s.description.clone()))
-                .opt("is_operational", Some(s.is_operational))
-                .opt("sort_order", Some(s.sort_order))
-                .opt("is_active", Some(s.is_active));
-            let mut create = c.clone();
-            create.opt("key", Some(s.key.clone()));
-            let id = im
-                .upsert::<Statuses, _>(
-                    "statuses",
-                    &format!("lookups.statuses.{i}"),
-                    s.key.clone(),
-                    existing,
-                    s,
-                    create,
-                    c,
-                )
-                .await?;
-            im.ids.statuses.insert(s.key.clone(), id);
-        }
-
-        let keys: HashSet<String> = lk.environments.iter().map(|s| s.key.clone()).collect();
-        im.section("environments", not_in_file(im.ids.environments.keys(), &keys));
-        let old: HashMap<&str, &EnvironmentSpec> = cur_lk.environments.iter().map(|s| (s.key.as_str(), s)).collect();
-        for (i, s) in lk.environments.iter().enumerate() {
-            let existing = old.get(s.key.as_str()).map(|o| (im.ids.environments[&s.key], *o));
-            let mut c = ColumnSet::default();
-            c.opt("name", Some(s.name.clone()))
-                .opt("description", Some(s.description.clone()))
-                .opt("sort_order", Some(s.sort_order))
-                .opt("is_active", Some(s.is_active));
-            let mut create = c.clone();
-            create.opt("key", Some(s.key.clone()));
-            let path = format!("lookups.environments.{i}");
-            let id = im.upsert::<Environments, _>("environments", &path, s.key.clone(), existing, s, create, c).await?;
-            im.ids.environments.insert(s.key.clone(), id);
-        }
-
-        let keys: HashSet<String> = lk.locations.iter().map(|s| s.key.clone()).collect();
-        im.section("locations", not_in_file(im.ids.locations.keys(), &keys));
-        let old: HashMap<&str, &LocationSpec> = cur_lk.locations.iter().map(|s| (s.key.as_str(), s)).collect();
-        let indexed: Vec<(usize, &LocationSpec)> = lk.locations.iter().enumerate().collect();
-        let (ordered, _) = parents_first(indexed, |(_, l)| &l.key, |(_, l)| l.parent.as_deref());
-        for (i, l) in ordered {
-            let existing = old.get(l.key.as_str()).map(|o| (im.ids.locations[&l.key], *o));
-            let parent_id = l.parent.as_ref().map(|p| im.ids.locations[p]);
-            let mut c = ColumnSet::default();
-            c.opt("name", Some(l.name.clone()))
-                .opt("description", Some(l.description.clone()))
-                .opt("parent_id", Some(parent_id))
-                .opt("location_type", Some(text(l.location_type.as_str())))
-                .opt("address", Some(l.address.clone()))
-                .opt("sort_order", Some(l.sort_order))
-                .opt("is_active", Some(l.is_active));
-            let mut create = c.clone();
-            create.opt("key", Some(l.key.clone()));
-            let path = format!("lookups.locations.{i}");
-            let id = im.upsert::<Locations, _>("locations", &path, l.key.clone(), existing, l, create, c).await?;
-            im.ids.locations.insert(l.key.clone(), id);
-        }
-
-        let keys: HashSet<String> = lk.owners.iter().map(|o| owner_key(o.kind, &o.name)).collect();
-        im.section("owners", not_in_file(im.ids.owners.keys(), &keys));
-        let old: HashMap<String, &OwnerSpec> = cur_lk.owners.iter().map(|o| (owner_key(o.kind, &o.name), o)).collect();
-        for (i, o) in lk.owners.iter().enumerate() {
-            let key = owner_key(o.kind, &o.name);
-            let existing = old.get(&key).and_then(|x| im.ids.owners.get(&key).map(|id| (*id, *x)));
-            let kind =
-                serde_json::to_value(o.kind).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
-            let mut c = ColumnSet::default();
-            c.opt("kind", Some(kind))
-                .opt("name", Some(o.name.clone()))
-                .opt("email", Some(o.email.clone()))
-                .opt("external_ref", Some(o.external_ref.clone()))
-                .opt("is_active", Some(o.is_active));
-            let id = im
-                .upsert::<Owners, _>("owners", &format!("lookups.owners.{i}"), key.clone(), existing, o, c.clone(), c)
-                .await?;
-            im.ids.owners.insert(key, id);
-        }
-
         let keys: HashSet<String> = lk.lists.iter().map(|l| l.key.clone()).collect();
         im.section("lookupLists", not_in_file(im.ids.lists.keys(), &keys));
         let value_keys: HashSet<String> =
@@ -1684,8 +1509,8 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Download the whole configuration as one JSON file")
             .description(
-                "Data model (classes, attributes, relationship types and rules), lookups (statuses, environments, \
-                 locations, owners, lookup lists), permission profiles (not the built-in one) and UI settings \
+                "Data model (classes, attributes, relationship types and rules), lookup lists and their values, \
+                 permission profiles (not the built-in one) and UI settings \
                  including the logo and favicon. Never contains users, passwords, sessions, CIs or relationships. \
                  Everything refers to everything else by key, so the file imports into another install. Answers \
                  with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the \
@@ -1708,8 +1533,8 @@ pub fn routes() -> Vec<Route> {
             .summary("Import a configuration file (dry run or apply)")
             .description(
                 "`mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, \
-                 returning the diff; `mode=apply` does the same and commits. Rows are matched by key (owners by kind \
-                 and name, profiles by name) and created or updated; nothing is deleted, so data missing from the file \
+                 returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by \
+                 name) and created or updated; nothing is deleted, so data missing from the file \
                  is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) \
                  and the logo and favicon. All sections are optional. Problems in the file are reported together as \
                  400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making \
@@ -1717,7 +1542,11 @@ pub fn routes() -> Vec<Route> {
                  the file path prefixed. A non-empty `dataModel` or `lookups` section also requires \
                  `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty \
                  `permissionProfiles` section `profiles.manage` (403 otherwise, dry run included). Profiles cannot \
-                 grant more than the importing user holds (403). Every applied change is audited.",
+                 grant more than the importing user holds (403). Every applied change is audited. Files of earlier \
+                 versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former \
+                 tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, \
+                 as migration 0016 converts those tables, or skipped when the file's lists already hold them; \
+                 either way a warning names the section.",
             )
             .requires(GlobalPermission::ConfigExportImport)
             .session_only()
@@ -1951,15 +1780,16 @@ mod tests {
 
     #[test]
     fn diff_lists_changed_fields_only() {
-        let a = StatusSpec {
+        let a = LookupValueSpec {
             key: "live".into(),
             name: "Live".into(),
             description: None,
-            is_operational: true,
+            color: None,
             sort_order: 0,
             is_active: true,
+            parent: None,
         };
-        let b = StatusSpec { name: "In service".into(), sort_order: 10, ..a.clone() };
+        let b = LookupValueSpec { name: "In service".into(), sort_order: 10, ..a.clone() };
         let d = diff(&a, &b);
         let fields: Vec<&str> = d.iter().map(|f| f.field.as_str()).collect();
         assert_eq!(fields, ["name", "sortOrder"]);
@@ -1992,8 +1822,8 @@ mod tests {
         let d = &e.details.unwrap()[0];
         assert_eq!(d.field, "dataModel.attributes.3.isRequired");
         assert!(e.message.starts_with("dataModel.attributes.3: "));
-        let e = at("lookups.statuses.0", AppError::conflict("Duplicate"));
-        assert_eq!(e.details.unwrap()[0].field, "lookups.statuses.0");
+        let e = at("lookups.lists.0", AppError::conflict("Duplicate"));
+        assert_eq!(e.details.unwrap()[0].field, "lookups.lists.0");
         assert_eq!(e.code, ErrorCode::Conflict);
     }
 
@@ -2204,5 +2034,102 @@ mod tests {
         assert_eq!(changed, [("lookupLists", "model")]);
         a.drop().await;
         b.drop().await;
+    }
+
+    /// SHAA-784: a file of 0.1.0-rc.1 (version 1, the former tables as
+    /// `lookups.statuses` and so on) still imports: the rows become lookup
+    /// lists, the former tables stay as they are, and the export leaves the
+    /// sections out.
+    #[tokio::test]
+    async fn an_rc1_file_imports_its_lookups_as_lists() {
+        let Some(db) = scratch::database("an_rc1_file_imports_its_lookups_as_lists").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("test", "test");
+        crate::seed::seed_system_rows(pool).await.unwrap();
+        let legacy_rows = || async {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT (SELECT count(*) FROM statuses) + (SELECT count(*) FROM environments)
+                      + (SELECT count(*) FROM locations) + (SELECT count(*) FROM owners)",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        };
+        let before = legacy_rows().await;
+        let file: ConfigFile = serde_json::from_value(serde_json::json!({
+            "format": "shadoucmdb.config",
+            "formatVersion": 1,
+            "appVersion": "0.1.0-rc.1",
+            "lookups": {
+                "statuses": [{ "key": "in_service", "name": "In service", "isOperational": true, "sortOrder": 10 }],
+                "environments": [{ "key": "production", "name": "Production" }],
+                "locations": [{ "key": "fra1", "name": "Frankfurt 1", "locationType": "site", "address": "Main St 1" }],
+                "owners": [{ "kind": "team", "name": "Ops Team", "email": "ops@example.com" }]
+            }
+        }))
+        .unwrap();
+
+        let dry = import(pool, &ctx, &file, ImportMode::DryRun).await.unwrap();
+        let paths: Vec<&str> = dry.warnings.iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(paths, ["lookups.statuses", "lookups.environments", "lookups.locations", "lookups.owners"]);
+        let created: Vec<(&str, &str)> =
+            dry.changes.iter().map(|c| (c.section.as_str(), c.key.as_str())).filter(|c| c.0 == "lookupLists").collect();
+        assert_eq!(
+            created,
+            [
+                ("lookupLists", "status"),
+                ("lookupLists", "environment"),
+                ("lookupLists", "location"),
+                ("lookupLists", "owner")
+            ]
+        );
+        assert!(
+            dry.summary
+                .iter()
+                .all(|s| !["statuses", "environments", "locations", "owners"].contains(&s.section.as_str()))
+        );
+
+        import(pool, &ctx, &file, ImportMode::Apply).await.unwrap();
+        assert_eq!(legacy_rows().await, before, "the former tables are not written");
+        let exported = export(pool, &ctx).await.unwrap();
+        let text = serde_json::to_value(&exported).unwrap();
+        let lookups = text["lookups"].as_object().unwrap();
+        assert_eq!(lookups.keys().collect::<Vec<_>>(), ["lists"], "{text}");
+        let values: Vec<(String, String, Option<String>)> = exported
+            .lookups
+            .unwrap()
+            .lists
+            .iter()
+            .flat_map(|l| l.values.iter().map(|v| (l.key.clone(), v.key.clone(), v.description.clone())))
+            .collect();
+        assert_eq!(
+            values,
+            [
+                ("environment".into(), "production".into(), None),
+                ("location".into(), "fra1".into(), Some("Main St 1".into())),
+                ("owner".into(), "ops_team".into(), Some("Team, ops@example.com".into())),
+                ("status".into(), "in_service".into(), None),
+            ]
+        );
+
+        // Importing the same old file again changes nothing: the lists already hold the values.
+        let again = import(pool, &ctx, &file, ImportMode::DryRun).await.unwrap();
+        assert!(again.changes.is_empty(), "{:?}", again.changes);
+
+        // Problems in these sections are reported with the rest of the file.
+        let broken: ConfigFile = serde_json::from_value(serde_json::json!({
+            "format": "shadoucmdb.config",
+            "formatVersion": 1,
+            "dataModel": { "attributes": [{ "class": "nope", "key": "x", "label": "X", "dataType": "text" }] },
+            "lookups": { "statuses": [{ "key": "dup", "name": "A" }, { "key": "dup", "name": "B" }] }
+        }))
+        .unwrap();
+        let err = import(pool, &ctx, &broken, ImportMode::DryRun).await.unwrap_err();
+        let fields: Vec<String> = err.details.unwrap().into_iter().map(|d| d.field).collect();
+        assert!(
+            fields.contains(&"lookups.statuses.1".into()) && fields.contains(&"dataModel.attributes.0.class".into()),
+            "{fields:?}"
+        );
+        db.drop().await;
     }
 }

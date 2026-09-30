@@ -114,8 +114,8 @@ from an empty directory to a verified install. The steps below are the same flow
 4. **Seed.** A fresh install starts bare: no CI classes, attributes, relationship types or
    lookups. You build the data model under *Administration*, or install the **IT infrastructure**
    starter template (servers, VMs, network devices, applications, databases, services and
-   locations, with their attributes, relationship rules, statuses, environments and a sample
-   location tree). Seeding is idempotent and never overwrites rows you have edited:
+   locations, with their attributes, relationship rules, and lookup lists for status, environment and
+   location). Seeding is idempotent and never overwrites rows you have edited:
 
    ```sh
    shadoucmdb seed                                # system rows only (the data model stays empty)

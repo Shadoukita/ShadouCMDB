@@ -481,13 +481,13 @@ test("export/import: download, dry run shows the diff, apply changes the app", a
   await expect(page.getByText("The file cannot be imported")).toBeVisible();
   await expect(page.getByRole("alert").locator("code").first()).toContainText("dataModel.attributes");
 
-  // A real change: another app name and a new status.
+  // A real change: another app name and a new lookup list.
   const changed = structuredClone(file);
   changed.uiSettings.settings.branding.appName = `${APP} imported`;
-  changed.lookups.statuses.push({ key: `e2e_${stamp}`, name: `E2E status ${stamp}`, isOperational: false, isActive: true, sortOrder: 999 });
+  changed.lookups.lists.push({ key: `e2e_${stamp}`, name: `E2E list ${stamp}`, isActive: true, sortOrder: 999, values: [] });
   await input.setInputFiles({ name: "changed.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(changed)) });
   await expect(page.getByRole("table", { name: "Import summary" })).toBeVisible();
-  await expect(page.locator(".import-changes").filter({ hasText: "Statuses" })).toContainText(`e2e_${stamp}`);
+  await expect(page.locator(".import-changes").filter({ hasText: "Lookup lists" })).toContainText(`e2e_${stamp}`);
   await expect(page.locator(".import-changes").filter({ hasText: "UI settings" })).toContainText(`${APP} imported`);
   await snap(page, "config-import-dry-run");
   await page.getByRole("button", { name: "Apply import" }).click();
