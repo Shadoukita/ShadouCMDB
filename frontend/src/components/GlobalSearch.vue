@@ -106,10 +106,10 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
         @mousedown.prevent="go(`/cis/${h.item.id}`)"
         @mouseenter="active = i"
       >
-        <strong>{{ h.item.label }}</strong>
-        <span class="muted">{{ h.item.class.name }}</span>
+        <strong dir="auto">{{ h.item.label }}</strong>
+        <span class="muted" dir="auto">{{ h.item.class.name }}</span>
         <span v-if="h.matches[0]" class="muted">
-          {{ h.matches[0].label }}: <span class="mono">{{ h.matches[0].value }}</span>
+          <bdi>{{ h.matches[0].label }}</bdi>: <span class="mono" dir="auto">{{ h.matches[0].value }}</span>
         </span>
       </li>
       <li

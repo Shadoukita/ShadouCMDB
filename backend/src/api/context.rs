@@ -60,15 +60,19 @@ pub enum Caller {
 }
 
 /// Where an HTTP request came from; recorded with authentication events.
-/// `ip` is evidence only: it may come from client-controlled headers (see
-/// [`crate::auth::session::client_ip`]), so never base an access decision on
-/// it. The one access decision that uses the client address, the sign-in
-/// throttle, reads `net`, which trusts forwarding headers only from
-/// `TRUSTED_PROXIES` (see [`crate::auth::session::throttle_ip`]).
+/// `ip` is the client address the server can vouch for: the TCP peer, or
+/// behind one of the `TRUSTED_PROXIES` the client it reports (GH#282, see
+/// [`crate::auth::session::throttle_ip`]). `claimed_ip` may come from
+/// client-controlled headers (see [`crate::auth::session::client_ip`]), so it
+/// is evidence only. The one access decision that uses the client address,
+/// the sign-in throttle, reads `net`, derived from the same address as `ip`.
 #[derive(Debug, Clone, Default)]
 pub struct ClientInfo {
-    /// The address the request claims (the leftmost forwarded hop), else the TCP peer.
+    /// The TCP peer, or behind a trusted proxy the client it reports: what the
+    /// audit trail, `sessions.ip_address` and `api_tokens.last_used_ip` store.
     pub ip: Option<IpAddr>,
+    /// The address the request claims (the leftmost forwarded hop), else the TCP peer.
+    pub claimed_ip: Option<IpAddr>,
     /// The TCP peer: the one hop the client cannot forge (the proxy, if there is one).
     pub peer_ip: Option<IpAddr>,
     pub user_agent: Option<String>,

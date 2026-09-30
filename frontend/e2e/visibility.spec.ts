@@ -1,5 +1,5 @@
 import type { APIRequestContext, APIResponse, Browser, Page } from "@playwright/test";
-import { apiGet, apiSend, expect, snap, test } from "./support";
+import { apiGet, apiSend, expect, expectDialogLaidOut, snap, test } from "./support";
 
 // The per-type visibility fixes of v0.1.1 (GH#261, GH#264-GH#269) as the users they protect against: an operator
 // with the data-model permission and an auditor with audit.view, who may both view only the class "Public". Nothing
@@ -174,6 +174,7 @@ test("data model: the delete dialog lists counts over hidden CIs without a numbe
   await expect(dialog.getByText("It cannot be deleted while it is in use:")).toBeVisible();
   await expect(dialog.getByRole("listitem").filter({ hasText: /relationships/i }).first()).toHaveText(withheld);
   for (const item of await dialog.getByRole("listitem").allTextContents()) expect(digitsBesidesStamp(item), item).toBe(false);
+  await expectDialogLaidOut(dialog);
   await snap(page, "vis-03-delete-dialog-withheld");
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
@@ -184,6 +185,7 @@ test("data model: the delete dialog lists counts over hidden CIs without a numbe
   dialog = page.getByRole("dialog", { name: "Delete value “Rocket”?" });
   await expect(dialog.getByText("It cannot be deleted while it is in use:")).toBeVisible();
   await expect(dialog.getByRole("listitem")).toHaveText([withheld]);
+  await expectDialogLaidOut(dialog);
   await snap(page, "vis-04-lookup-delete-withheld");
   await page.context().close();
 

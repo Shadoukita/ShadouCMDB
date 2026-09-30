@@ -16,7 +16,7 @@ Vulnerabilities reported in the product itself are handled under [SECURITY.md](.
 | CI/CD | GitHub Actions workflows and runners | Builds and publishes releases |
 | Release artefacts | GitHub Releases (archives, `SHA256SUMS`) | What customers download |
 | Container images | `ghcr.io/shadoukita/shadoucmdb` | What customers pull |
-| Signing identity | cosign keyless via GitHub OIDC (planned); any long-lived key if introduced | Proves a release is ours |
+| Signing identity | cosign keyless via GitHub OIDC (the release workflow's identity); any long-lived key if introduced | Proves a release is ours |
 | Maintainer accounts | GitHub, GHCR, email, Paperclip | Can change all of the above |
 | Tokens | GitHub PATs, `GITHUB_TOKEN`, registry tokens, AI agent credentials | Same |
 
@@ -69,8 +69,10 @@ Answer, with evidence:
 - **Was anything published?** Compare every release asset and image published in the window with
   a rebuild from the tagged source and with `SHA256SUMS`. Builds are not yet bit-for-bit
   reproducible, so a differing rebuild is a lead to investigate (diff the binaries' symbols and
-  embedded files), not proof of tampering. For images, compare digests. Once SLSA provenance and cosign signatures
-  exist, verify them against the expected workflow identity.
+  embedded files), not proof of tampering. For images, compare digests. Verify the cosign signatures and SLSA
+  provenance of every artefact against the expected workflow identity
+  ([supply chain](../supply-chain.md#verifying-a-download)): a valid signature from another
+  identity, or a missing one, is a finding.
 - **Was the source altered?** Review every commit, tag move and workflow change in the window;
   compare `main` with a trusted clone made before the window.
 - **Were secrets exposed?** Anything the compromised account or workflow could read counts as
@@ -102,12 +104,11 @@ something malicious. Include:
 - what the malicious artefact could do and what to do if they ran it: isolate the host, rotate
   the database password and the credentials of every ShadouCMDB user (an administrator's reset of
   a user's password also ends their sessions, revokes their API tokens and revokes the tokens they
-  created for other accounts; revoke the API tokens of accounts whose password you keep on the
-  **API tokens** administration page, and list what an account created with
-  `GET /api/v1/admin/api-tokens?createdBy=<user id>`; reset or list a suspect account before you
-  delete or disable it, because neither revokes the tokens it created for others and deleting it
-  clears their creator, and revoke those tokens by hand for single sign-on accounts, whose
-  password cannot be reset), review the audit log for what each suspect
+  created for other accounts; disabling or deleting a user does the same, which is how to cut off
+  single sign-on accounts, whose password cannot be reset here; revoke the API tokens of accounts
+  whose password you keep on the **API tokens** administration page; list what an account created
+  with `GET /api/v1/admin/api-tokens?createdBy=<user id>` before you delete it, because deleting it
+  clears the creator of those tokens), review the audit log for what each suspect
   account changed, including identity provider changes (`identity_providers` create and update
   rows by that actor: a provider or group mapping it added keeps signing people in), and restore
   the database from a backup older than the installation if data may have been altered;
@@ -129,12 +130,12 @@ follow-up issues with owners and dates, updates to this plan, the [SDL](sdl.md) 
 | --- | --- |
 | MFA on every maintainer, GitHub and registry account | owner action (SHAA-77) |
 | Branch protection on `main`: PR, review, status checks, no force-push | owner action (SHAA-77) |
-| Secret scanning and push protection | owner action (SHAA-77); gitleaks in CI planned |
+| Secret scanning and push protection | owner action (SHAA-77); gitleaks over the whole history in CI: in place |
 | Workflows with `contents: read` default permissions | in place |
-| Third-party actions pinned by commit SHA; Dependabot for actions | planned (workstream 1) |
+| Third-party actions pinned by commit SHA (checked in CI); Dependabot for actions | in place |
 | Release only from a tag on `main`, by the workflow | in place |
-| `SHA256SUMS`; cosign keyless signatures; SLSA provenance; SBOM | checksums in place, rest planned (workstream 1) |
-| No long-lived signing keys (keyless OIDC) | planned |
+| `SHA256SUMS`; cosign keyless signatures; SLSA provenance; SBOM | in place ([supply chain](../supply-chain.md)) |
+| No long-lived signing keys (keyless OIDC) | in place |
 | AI agents without release, admin or production access | policy ([SDL](sdl.md#3-code-review-policy)) |
 | Evidence-grade audit logs exported regularly | `TODO(owner)` |
 | Yearly exercise of this plan | `TODO(owner)` |
