@@ -1,6 +1,8 @@
 //! The schema change history, previews, technical-name suggestions and the
 //! purge confirmation shared by areas, types and fields.
 
+use std::collections::HashMap;
+
 use axum::http::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -151,6 +153,26 @@ pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &SchemaChangeList) -> 
     .await?;
     let data = rows.into_iter().map(|r| r.visible_to(visible.as_deref())).collect();
     Ok(Page { data, page: q.page_meta(total) })
+}
+
+/// The recorded changes with these ids as a reader who may view `visible` sees
+/// them, for the audit log's schema change entries, which hold the writer's
+/// record (GH#261). An id with no record is left out.
+pub async fn visible_changes(
+    pool: &PgPool,
+    ids: &[Uuid],
+    visible: &[Uuid],
+) -> Result<HashMap<Uuid, SchemaChange>, AppError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<StoredChange> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {CHANGE_COLUMNS} FROM cmdb.schema_changes WHERE id = ANY($1)"
+    )))
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.visible_to(Some(visible))).map(|c| (c.id, c)).collect())
 }
 
 pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<SchemaChange, AppError> {
