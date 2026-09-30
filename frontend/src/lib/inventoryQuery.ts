@@ -21,19 +21,22 @@ export type QueryContext = "inventory" | "search";
 
 /** URL parameters that make up a list's state (not the page: `offset`). Any of them means "the URL says". */
 export const STATE_KEYS = {
-  inventory: ["q", "classId", "lookupValueId", "active", "deleted", "ipWithin", "sort", "limit", "columns"],
-  search: ["q", "classId", "lookupValueId", "active", "deleted", "ipWithin", "limit"],
+  inventory: ["q", "classId", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "sort", "limit", "columns"],
+  search: ["q", "classId", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "limit"],
 } as const satisfies Record<QueryContext, readonly string[]>;
 
 /** Filters, which "Clear filters" removes (sort, page size and columns stay). */
-export const FILTER_KEYS = ["q", "classId", "lookupValueId", "active", "deleted", "ipWithin"] as const;
+export const FILTER_KEYS = ["q", "classId", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin"] as const;
 
 export const DEFAULT_LIMIT = 50;
 export const DEFAULT_SORT = "label";
 /** The most columns a list shows (the saved-view definition's limit). */
 export const MAX_COLUMNS = 50;
-/** A field name as list views store it (the API's FIELD_PATTERN): a built-in field or `attributes.<key>`. */
-const FIELD_PATTERN = /^(?:label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\.[a-z][a-z0-9_]{0,62})$/;
+/**
+ * A column name: a built-in field or `attributes.<key>`, as list views store them (the API's FIELD_PATTERN),
+ * plus criticality, which only the URL can name so far.
+ */
+const FIELD_PATTERN = /^(?:label|ident|class|criticality|validFrom|validUntil|active|createdAt|updatedAt|attributes\.[a-z][a-z0-9_]{0,62})$/;
 
 export type Active = "all" | "false" | undefined;
 export type Deleted = "include" | "only" | undefined;

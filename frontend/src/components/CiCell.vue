@@ -6,6 +6,7 @@ import { formatDate, formatDateTime, formatRelative } from "../lib/format";
 import { attributeKey } from "../lib/uiSettings";
 import AttributeValue from "../pages/detail/AttributeValue.vue";
 import CiStateBadge from "./CiStateBadge.vue";
+import CriticalityBadge from "./CriticalityBadge.vue";
 
 /**
  * One inventory cell: a built-in field or `attributes.<key>`, as chosen by the
@@ -27,6 +28,9 @@ const self = computed(() => ({ id: props.ci.id, name: props.ci.label }));
   <RouterLink v-else-if="field === 'label'" :to="`/cis/${ci.id}`" dir="auto">{{ ci.label }}</RouterLink>
   <span v-else-if="field === 'ident'" class="mono">{{ ci.ident }}</span>
   <bdi v-else-if="field === 'class'">{{ ci.class.name }}</bdi>
+  <template v-else-if="field === 'criticality'">
+    <CriticalityBadge v-if="ci.criticality" :value="ci.criticality" /><span v-else class="muted">—</span>
+  </template>
   <CiStateBadge v-else-if="field === 'active'" :ci="ci" show-active />
   <span v-else-if="field === 'validFrom'" :title="formatDateTime(ci.validFrom)">{{ formatDate(ci.validFrom) }}</span>
   <template v-else-if="field === 'validUntil'">

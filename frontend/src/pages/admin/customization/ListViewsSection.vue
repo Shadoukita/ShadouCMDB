@@ -32,7 +32,7 @@ const view = computed(() => (cls.value ? props.doc.listViews.find((v) => v.class
 const attrs = useClassAttributes(() => cls.value?.id);
 const attrDefs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive));
 const columnOptions = computed(() => [
-  ...BUILTIN_FIELDS.map((f) => ({ key: f.key, label: f.label })),
+  ...BUILTIN_FIELDS.filter((f) => f.storable !== false).map((f) => ({ key: f.key, label: f.label })),
   ...attrDefs.value.map((d) => ({ key: `${ATTRIBUTE_PREFIX}${d.key}`, label: `${d.label} (attribute)` })),
 ]);
 /** The built-in sorts and the class's attributes (not references: the API cannot sort by them). */

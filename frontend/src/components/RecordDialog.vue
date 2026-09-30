@@ -19,7 +19,8 @@ export interface FieldSpec {
   required?: boolean;
   /** Shown but read-only when editing (keys and settings fixed after creation). */
   createOnly?: boolean;
-  options?: { value: string; label: string; depth?: number }[];
+  /** Choices of a select; a function when they depend on the other fields (the first one is taken when the chosen one goes). */
+  options?: SelectOption[] | ((values: Record<string, Value>, record: Record<string, unknown> | null) => SelectOption[]);
   /** For "key": suggested from this field while the key has not been typed in. */
   from?: string;
   hint?: string;
@@ -28,6 +29,11 @@ export interface FieldSpec {
   text?: string;
 }
 type Value = string | boolean;
+export interface SelectOption {
+  value: string;
+  label: string;
+  depth?: number;
+}
 
 const props = defineProps<{
   open: boolean;
@@ -77,6 +83,21 @@ watch(
   () => {
     if (!isNew.value || keyTouched.value) return;
     for (const f of props.fields) if (f.type === "key" && f.from) values.value[f.name] = suggestKey(String(values.value[f.from] ?? ""));
+  },
+);
+
+function optionsOf(f: FieldSpec): SelectOption[] {
+  return typeof f.options === "function" ? f.options(values.value, props.record) : (f.options ?? []);
+}
+// Options that follow other fields: a choice they no longer offer falls back to the first one.
+watch(
+  () => props.fields.filter((f) => typeof f.options === "function").map((f) => optionsOf(f).map((o) => o.value).join("|")),
+  () => {
+    for (const f of props.fields) {
+      if (typeof f.options !== "function") continue;
+      const opts = optionsOf(f);
+      if (opts.length > 0 && !opts.some((o) => o.value === values.value[f.name])) values.value[f.name] = opts[0].value;
+    }
   },
 );
 
@@ -180,7 +201,7 @@ async function submit() {
             :aria-invalid="p.invalid || undefined"
             :aria-describedby="p.describedBy"
           >
-            <option v-for="o in f.options ?? []" :key="o.value" :value="o.value">{{ "  ".repeat(o.depth ?? 0) }}{{ o.label }}</option>
+            <option v-for="o in optionsOf(f)" :key="o.value" :value="o.value">{{ "  ".repeat(o.depth ?? 0) }}{{ o.label }}</option>
           </select>
           <div v-else-if="f.type === 'color'" class="inline-control">
             <input
