@@ -11,10 +11,10 @@ const blocks = computed(() => parseNote(props.text));
 <template>
   <div class="note-text">
     <template v-for="(b, i) in blocks" :key="i">
-      <p v-if="b.t === 'p'">
+      <p v-if="b.t === 'p'" dir="auto">
         <template v-for="(line, j) in b.lines" :key="j"><br v-if="j > 0" /><NoteInline :parts="line" /></template>
       </p>
-      <component :is="b.t" v-else>
+      <component :is="b.t" v-else dir="auto">
         <li v-for="(item, j) in b.items" :key="j"><NoteInline :parts="item" /></li>
       </component>
     </template>

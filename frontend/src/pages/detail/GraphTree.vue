@@ -55,13 +55,13 @@ const rows = computed<Row[]>(() => {
 <template>
   <div>
     <div v-if="root" style="font-weight: 600; margin-bottom: 4px">
-      {{ root.label }} <span class="muted">({{ root.class.name }})</span>
+      <bdi>{{ root.label }}</bdi> <span class="muted">(<bdi>{{ root.class.name }}</bdi>)</span>
     </div>
     <ul style="list-style: none; margin: 0; padding: 0">
       <li v-for="r in rows" :key="r.key" :style="{ padding: '3px 0', paddingLeft: `${r.level * 22}px` }">
-        <span class="muted">{{ r.label }} → </span>
+        <span class="muted"><bdi>{{ r.label }}</bdi> → </span>
         <CiLink :id="r.node.id" :from="self" :trail="trail">{{ r.node.label }}</CiLink>
-        {{ " " }}<span class="muted">{{ r.node.class.name }}</span> <CiStateBadge :ci="r.node" />
+        {{ " " }}<span class="muted" dir="auto">{{ r.node.class.name }}</span> <CiStateBadge :ci="r.node" />
         <span v-if="r.repeat" class="muted"> (shown above)</span>
       </li>
     </ul>
