@@ -9,7 +9,8 @@ name: DAST
 #   operation (injection, path traversal, SSRF, ...) with an administrator's
 #   API token, capped at 20 minutes. tools/dast/path-examples.mjs sets real
 #   object ids as the path-parameter examples, so /{id} requests reach their
-#   handlers (GH#290).
+#   handlers (GH#290); tools/dast/reached-handlers.mjs checks in serve.log after
+#   the scans that ZAP sent them and the handlers answered (GH#318).
 # - Session scan: the operations that refuse API tokens (account, MFA, users,
 #   profiles, API tokens, identity providers, configuration import) answer the
 #   token scan 403 before reading the body, so they are scanned again, actively,
@@ -109,7 +110,7 @@ jobs:
       # at a 400 before the handler (GH#290). The scanned user, profile, identity
       # provider and API token are created for the scan, never its own.
       - name: Path-parameter examples (openapi-dast.json)
-        run: node tools/dast/path-examples.mjs backend/openapi.json zap/openapi-dast.json
+        run: node tools/dast/path-examples.mjs backend/openapi.json zap/openapi-dast.json zap/path-examples.json
       - name: Session-only operations (openapi-session.json)
         run: node tools/dast/session-openapi.mjs zap/openapi-dast.json zap/openapi-session.json
 
@@ -197,6 +198,14 @@ jobs:
           echo "GET /api/v1/auth/me with the scan's session: $status"
           test "$status" = 200
 
+      # path-examples.mjs proves every path parameter has an example, not that ZAP
+      # sent it: fail when a probe (a read, a delete, an action with a body) was
+      # never requested with its example id and answered other than 400 (GH#318).
+      - name: Path parameters reached their handlers
+        id: reached
+        continue-on-error: true
+        run: node tools/dast/reached-handlers.mjs serve.log zap/path-examples.json | tee -a "$GITHUB_STEP_SUMMARY"
+
       # The active scan sends malformed input on purpose; a 5xx it provoked is
       # in the report (rule 90022), the server's side of it is in this log.
       - name: Error-level server log lines
@@ -224,6 +233,8 @@ jobs:
           API: ${{ steps.api.outcome }}
           SESSION: ${{ steps.session.outcome }}
           SESSION_ALIVE: ${{ steps.session_alive.outcome }}
+          REACHED: ${{ steps.reached.outcome }}
         run: |
-          echo "baseline: $BASELINE, API scan: $API, session scan: $SESSION, session kept: $SESSION_ALIVE"
-          test "$BASELINE" = success && test "$API" = success && test "$SESSION" = success && test "$SESSION_ALIVE" = success
+          echo "baseline: $BASELINE, API scan: $API, session scan: $SESSION, session kept: $SESSION_ALIVE, handlers reached: $REACHED"
+          test "$BASELINE" = success && test "$API" = success && test "$SESSION" = success && test "$SESSION_ALIVE" = success \
+            && test "$REACHED" = success
