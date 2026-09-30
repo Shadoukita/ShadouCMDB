@@ -1417,8 +1417,6 @@ mod tests {
             .unwrap()
     }
 
-    /// SHAA-268: dependent lists, values and fields; CI writes; retiring and
-    /// deleting parent values; a list getting another parent list.
     /// GH#265, GH#266: how many CIs store a lookup value is told only to a
     /// manager who may view every class with a field on its list; deleting or
     /// retiring is still refused on the full count.
@@ -1490,6 +1488,8 @@ mod tests {
         db.drop().await;
     }
 
+    /// SHAA-268: dependent lists, values and fields; CI writes; retiring and
+    /// deleting parent values; a list getting another parent list.
     #[tokio::test]
     async fn dependent_lookup_lists() {
         let Some(db) = scratch::database("dependent_lookup_lists").await else { return };
