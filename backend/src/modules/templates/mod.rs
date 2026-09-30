@@ -669,6 +669,83 @@ pub fn routes() -> Vec<Route> {
 mod tests {
     use super::*;
 
+    /// GH#276: installing a template adds its required fields to an existing
+    /// type of the same key. A caller who may not view that type gets the same
+    /// schema change whether or not it holds CIs; a viewer learns the difference.
+    #[tokio::test]
+    async fn install_tells_a_hidden_type_nothing_about_its_cis() {
+        use crate::auth::permissions::Permissions;
+        use crate::db::scratch;
+        use crate::modules::classes::{CiClass, CiClasses};
+        use crate::modules::items::{schemas::CreateItemBody, service as items_service};
+        use crate::modules::simple_resource as simple;
+
+        let manager = || {
+            let permissions = Permissions { global: [GlobalPermission::DatamodelManage].into(), ..Default::default() };
+            let principal = crate::auth::Principal {
+                user_id: Uuid::new_v4(),
+                username: "modeller".into(),
+                credential: crate::auth::Credential::Token,
+                permissions,
+            };
+            RequestContext::user(std::sync::Arc::new(principal), "gh276".into())
+        };
+        // The notes on hardware's fields, as the caller reads them.
+        let notes = |r: &TemplateInstallResult| {
+            r.schema_change
+                .as_ref()
+                .expect("schema change")
+                .impact
+                .iter()
+                .filter(|i| {
+                    i.kind != "add_column"
+                        && (i.message.contains(".hardware.name ") || i.message.contains(".hardware.status "))
+                })
+                .map(|i| (i.kind.clone(), i.rows, i.message.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        fn json<T: serde::de::DeserializeOwned>(v: Value) -> T {
+            serde_json::from_value(v).unwrap()
+        }
+        let mut seen = Vec::new();
+        for (with_cis, viewer) in [(false, false), (true, false), (false, true), (true, true)] {
+            let Some(db) = scratch::database(&format!("gh276_{with_cis}_{viewer}")).await else { return };
+            let pool = &db.pool;
+            let admin = RequestContext::system("gh276-test", "gh276-test");
+            let hardware: CiClass =
+                simple::create::<CiClasses>(pool, &admin, &json(json!({"name": "Hardware", "key": "hardware"})))
+                    .await
+                    .unwrap();
+            if with_cis {
+                let item: CreateItemBody = json(json!({"classId": hardware.id, "attributes": {}}));
+                items_service::create(pool, &admin, &item).await.unwrap();
+            }
+            let ctx = if viewer { admin } else { manager() };
+            let result = install_by_key(pool, &ctx, "it_infrastructure").await.unwrap();
+            let notes = notes(&result);
+            assert_eq!(notes.len(), 2, "{with_cis} {viewer}: {:?}", result.schema_change);
+            let hidden = sqlx::query_scalar::<_, bool>(
+                "SELECT bool_and(NOT d.is_required OR c.is_nullable = 'YES')
+                 FROM cmdb.ci_attribute_definitions d JOIN information_schema.columns c ON c.column_name = d.key
+                 WHERE d.class_id = $1 AND d.key IN ('name', 'status') AND c.table_name = 'hardware'",
+            )
+            .bind(hardware.id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            assert_eq!(hidden, !viewer || with_cis, "{with_cis} {viewer}: nullable");
+            seen.push(notes);
+            db.drop().await;
+        }
+        // Without view: identical, and nothing counted.
+        assert_eq!(seen[0], seen[1]);
+        assert!(seen[0].iter().all(|(kind, rows, _)| kind == "warning" && rows.is_none()), "{:?}", seen[0]);
+        // With view: required when empty, a counted warning otherwise.
+        assert!(seen[2].iter().all(|(kind, _, _)| kind == "not_null"), "{:?}", seen[2]);
+        assert!(seen[3].iter().all(|(kind, rows, _)| kind == "warning" && *rows == Some(1)), "{:?}", seen[3]);
+    }
+
     #[test]
     fn it_infrastructure_is_the_former_seed() {
         let t = find("it_infrastructure").expect("template");

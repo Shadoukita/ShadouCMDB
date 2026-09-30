@@ -633,8 +633,24 @@ impl Planner<'_> {
         let is_not_null = existing.is_some_and(|c| c.not_null);
         if f.not_null() && !is_not_null {
             // Success or refusal would tell whether any asset lacks a value (GH#267).
-            if self.catalog.has_table(table) && !self.lenient_not_null {
-                self.may_check_values(f, "isRequired")?;
+            if self.catalog.has_table(table) && !self.reveals(f) {
+                if !self.lenient_not_null {
+                    self.may_check_values(f, "isRequired")?;
+                }
+                // Lenient (template install): the field stays nullable without
+                // counting, whether or not any asset lacks a value (GH#276).
+                plan.note(
+                    None,
+                    "warning",
+                    None,
+                    format!(
+                        "{}.{} stays nullable: it may only become required by someone with the view right on its type \
+                         and every type below it",
+                        table.display(),
+                        f.key
+                    ),
+                );
+                return Ok(());
             }
             let nulls = if !self.catalog.has_table(table) {
                 0
