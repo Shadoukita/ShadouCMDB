@@ -405,6 +405,17 @@ impl Resource for CiClasses {
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
             if let Some(previous) = previous {
+                if row.is_abstract && !previous.is_abstract {
+                    // Success or refusal tells whether the type holds CIs (GH#267).
+                    if !engine::may_view_all(conn, ctx, &[row.id]).await? {
+                        return Err(engine::view_required(
+                            "isAbstract",
+                            "Making a type abstract is checked against the CIs it holds; that needs the view right on \
+                             the type. Nothing was changed."
+                                .into(),
+                        ));
+                    }
+                }
                 if row.is_abstract && !previous.is_abstract && data::class_has_items(conn, row.id).await? {
                     return Err(AppError::field(
                         "isAbstract",
@@ -450,6 +461,16 @@ async fn move_to_new_parent(
         previous.parent_id.map(|p| model.lineage(p).iter().map(|c| c.id).collect()).unwrap_or_default();
     old_lineage.push(row.id);
     let subtree = model.subtree(row.id);
+    // Success or refusal tells whether the moved CIs hold values or lack
+    // required ones, so the caller must see them all before any is read (GH#267).
+    if !engine::may_view_all(conn, ctx, &subtree).await? {
+        return Err(engine::view_required(
+            "parentId",
+            "Moving a type is checked against the CIs of the type and every type below it; that needs the view right \
+             on all of them. Nothing was changed."
+                .into(),
+        ));
+    }
     let items = items_data::ids_of_classes(conn, &subtree).await?;
     if items.is_empty() {
         return Ok(());
@@ -459,14 +480,13 @@ async fn move_to_new_parent(
         let fields: Vec<&str> = model.own_fields(*gone).map(|f| f.key.as_str()).collect();
         let used = items_data::fields_with_values(conn, &table, &fields, &items).await?;
         if !used.is_empty() {
-            // Which fields hold values is theirs to know who may view every moved CI (GH#243).
-            let reveals = ctx.class_scope(ClassOp::View).is_none_or(|v| subtree.iter().all(|id| v.contains(id)));
-            let which = if reveals { format!(": {}", used.join(", ")) } else { String::new() };
             return Err(engine::refused(
                 "parentId",
                 "attributes_outside_lineage",
                 format!(
-                    "CIs of this type hold values for fields that the new parent does not provide{which}. Clear them first."
+                    "CIs of this type hold values for fields that the new parent does not provide: {}. Clear them \
+                     first.",
+                    used.join(", ")
                 ),
             ));
         }
@@ -2180,7 +2200,8 @@ mod tests {
         }
 
         // Moving a type whose CIs hold values in a field the new parent lacks is
-        // refused either way; only a viewer of every moved CI learns which field.
+        // refused either way; a caller who may not view every moved CI is refused
+        // before any is read (GH#267), a viewer of them all learns which field.
         let holder: CiClass = simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Holder"}))).await.unwrap();
         simple::create::<AttributeDefinitions>(
             pool,
@@ -2200,12 +2221,107 @@ mod tests {
         let item = body::<CreateItemBody>(json!({"classId": sub.id, "attributes": {"pin_hint": "x"}}));
         items_service::create(pool, &ctx, &item).await.unwrap();
         let mv = json!({"parentId": null});
-        for (scope, named) in [(vec![leaf.id], false), (vec![], false), (vec![leaf.id, sub.id], true)] {
+        for scope in [vec![leaf.id], vec![]] {
             let err =
                 simple::update::<CiClasses>(pool, &manager(&scope), leaf.id, &body(mv.clone())).await.unwrap_err();
-            assert_eq!(err.code, ErrorCode::SchemaChangeRefused, "{scope:?}: {err:?}");
-            assert_eq!(err.details.as_ref().expect("details")[0].code, "attributes_outside_lineage");
-            assert_eq!(err.message.contains("pin_hint"), named, "{scope:?}: {}", err.message);
+            assert_eq!(err.code, ErrorCode::Forbidden, "{scope:?}: {err:?}");
+            assert_eq!(err.details.as_ref().expect("details")[0].code, "view_required");
+            assert!(!err.message.contains("pin_hint"), "{scope:?}: {}", err.message);
+        }
+        let err =
+            simple::update::<CiClasses>(pool, &manager(&[leaf.id, sub.id]), leaf.id, &body(mv)).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::SchemaChangeRefused, "{err:?}");
+        assert_eq!(err.details.as_ref().expect("details")[0].code, "attributes_outside_lineage");
+        assert!(err.message.contains("pin_hint"), "{}", err.message);
+        db.drop().await;
+    }
+
+    /// GH#267: making a field required, a type abstract, or moving a type
+    /// succeeds or fails on the CIs stored; a datamodel manager who may not view
+    /// them all is refused (and audited) before any is read, CIs or not.
+    #[tokio::test]
+    async fn required_abstract_and_moves_need_view_on_the_cis_they_check() {
+        use crate::auth::permissions::{ClassRights, Permissions};
+        use crate::modules::schema_changes::{self, PreviewRequest};
+        let Some(db) = scratch::database("required_abstract_and_moves_need_view_on_the_cis_they_check").await else {
+            return;
+        };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("gh267-test", "gh267-test");
+        let manager = |view: &[Uuid]| {
+            let permissions = Permissions {
+                global: [GlobalPermission::DatamodelManage].into(),
+                classes: view.iter().map(|id| (*id, ClassRights { view: true, ..Default::default() })).collect(),
+                ..Default::default()
+            };
+            let principal = crate::auth::Principal {
+                user_id: Uuid::new_v4(),
+                username: "modeller".into(),
+                credential: crate::auth::Credential::Token,
+                permissions,
+            };
+            RequestContext::user(std::sync::Arc::new(principal), "gh267".into())
+        };
+
+        let secrets: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Secrets"}))).await.unwrap();
+        let vault: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Vault Secrets", "parentId": secrets.id})))
+                .await
+                .unwrap();
+        let other: CiClass = simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Other"}))).await.unwrap();
+        let owner: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": secrets.id, "key": "owner", "label": "Owner", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        let probes = [
+            json!({"operation": "updateField", "id": owner.id, "body": {"isRequired": true}}),
+            json!({"operation": "createField",
+                   "body": {"classId": secrets.id, "key": "pin", "label": "PIN", "dataType": "text", "isRequired": true}}),
+            json!({"operation": "updateType", "id": vault.id, "body": {"isAbstract": true}}),
+            json!({"operation": "updateType", "id": secrets.id, "body": {"parentId": other.id}}),
+        ];
+        let refused = || async {
+            let n: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = 'schema_change.refused'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            n
+        };
+
+        // Viewing Secrets but not Vault Secrets, or neither: the same 403 whether
+        // or not a hidden CI (one without an owner) exists, each one audited.
+        for with_cis in [false, true] {
+            if with_cis {
+                let item = body::<CreateItemBody>(json!({"classId": vault.id, "attributes": {}}));
+                items_service::create(pool, &ctx, &item).await.unwrap();
+            }
+            for scope in [vec![secrets.id], vec![]] {
+                let caller = manager(&scope);
+                for probe in &probes {
+                    let before = refused().await;
+                    let err = schema_changes::preview(pool, &caller, &body(probe.clone())).await.unwrap_err();
+                    assert_eq!(err.code, ErrorCode::Forbidden, "{with_cis} {scope:?} {probe}: {err:?}");
+                    assert_eq!(err.details.as_ref().expect("details")[0].code, "view_required", "{probe}");
+                    assert_eq!(refused().await, before + 1, "{probe}: not audited");
+                }
+            }
+        }
+
+        // A caller who may view every type involved gets the real answer.
+        let viewer = manager(&[secrets.id, vault.id]);
+        for probe in &probes {
+            let err = schema_changes::preview(pool, &viewer, &body::<PreviewRequest>(probe.clone())).await;
+            let code = err.err().map(|e| e.details.expect("details")[0].code.clone());
+            let expected = match probe["body"].as_object().unwrap() {
+                b if b.contains_key("isRequired") => Some("values_missing"),
+                b if b.contains_key("isAbstract") => Some("class_has_items"),
+                _ => None,
+            };
+            assert_eq!(code.as_deref(), expected, "{probe}");
         }
         db.drop().await;
     }

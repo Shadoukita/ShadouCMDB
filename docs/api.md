@@ -401,12 +401,15 @@ log. Send the same body to `POST /schema-changes/preview` first to see the DDL a
   stored value would not survive (up to five are named); `isRequired: true` (a `NOT NULL` column) while any
   asset, deleted ones included, has no value; removing enum values that are stored; re-parenting a type whose CIs
   hold values in a table they would leave.
-- **Changes checked against stored values need view on them.** A field's `dataType` change and a new enum list
-  (`enumValues`, or `dataType: enum`) on an existing field are checked against every value its assets store,
-  deleted ones included. Unless the caller may view the field's type and every type below it, they answer `403
-  FORBIDDEN` (`details[].code` `view_required`) before any value is read, in `PATCH` and in the preview alike; a
-  refused preview is audited as `schema_change.refused`. For such callers an `isRequired` refusal does not say how
-  many assets lack a value, and a re-parenting refusal does not name the fields that hold values.
+- **Changes checked against stored values need view on them.** A field's `dataType` change, a new enum list
+  (`enumValues`, or `dataType: enum`) on an existing field, and `isRequired: true` (on an existing field, or a new
+  field of a type that already has a table) are checked against every value its assets store, deleted ones
+  included. Moving a type to a new `parentId` is checked against the CIs of the type and every type below it, and
+  `isAbstract: true` against the CIs of the type itself. Unless the caller may view every type checked (the field's
+  or moved type and every type below it; for `isAbstract`, the type), they answer `403 FORBIDDEN` (`details[].code`
+  `view_required`) before any CI is read, whether or not there are CIs, in `PATCH` and in the preview alike; a
+  refused preview is audited as `schema_change.refused`. Types created in the same transaction (a configuration
+  import creating a type and its required fields) hold no CIs yet and are not checked.
 - **Purge counts need view on the purged values.** A field purge counts the values it deletes, a type purge the CIs
   and relationships; both appear in the preview and in the recorded schema change. For a caller who may not view
   the type and every type below it, `impact[].rows` is `null`, the message says only that the values or rows are
