@@ -24,6 +24,8 @@ CI attributes, so a stored value does not block editing other attributes.
 
 **Upgrade:** scripts or integrations that send tabs or line breaks in names, labels or single-line text
 attributes now get a 400. Configuration files exported earlier fail to import if such a field contains
-one. Remove the character, or mark the text attribute `multiline`, and send it again.
+one. Remove the character, or mark the text attribute `multiline`, and send it again. An account
+whose password (local or in the directory) contains one of the characters refused everywhere can no
+longer sign in; an administrator resets the password.
 
 [GH#289]: https://github.com/Shadoukita/ShadouCMDB/issues/289

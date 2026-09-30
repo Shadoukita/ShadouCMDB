@@ -742,6 +742,19 @@ mod tests {
         let (status, _, _) =
             call(&app, "PUT", "/api/v1/ui-settings", &s, Some(put(json!({ "layouts": [html] })))).await;
         assert_eq!(status, 400);
+        // The deprecated v1 `panels` are write-only, not secret: their labels are one line (SHAA-765).
+        for label in ["Ops\nTeam", "\u{202E}evil"] {
+            let v1 = json!({ "classKey": "server", "panels": [{ "key": "p", "label": label, "fields": [] }] });
+            let (status, v, _) =
+                call(&app, "PUT", "/api/v1/ui-settings", &s, Some(put(json!({ "layouts": [v1] })))).await;
+            assert_eq!(status, 400, "{label:?}: {v}");
+            assert_eq!(v["error"]["details"][0]["field"], "settings.layouts.0.panels.0.label", "{v}");
+            assert_eq!(v["error"]["details"][0]["code"], "invalid_character", "{v}");
+        }
+        // Secrets stay exempt: a tab in a login password is a wrong password, not a 400.
+        let wrong = json!({ "username": "owner", "password": "correct\thorse battery" });
+        let (status, v, _) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(wrong)).await;
+        assert_eq!(status, 401, "{v}");
 
         let (status, saved, _) =
             call(&app, "PUT", "/api/v1/ui-settings", &s, Some(put(json!({ "layouts": [layout.clone()] })))).await;

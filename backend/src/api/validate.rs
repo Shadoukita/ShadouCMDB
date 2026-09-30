@@ -208,7 +208,7 @@ struct Walker<'a> {
     location: FieldLocation,
     components: Option<&'a Map<String, Value>>,
     errors: Vec<FieldError>,
-    /// Inside an `x-multiline` or `writeOnly` field: line breaks, tabs and bidi controls are allowed.
+    /// Inside an `x-multiline` field: line breaks, tabs and bidi controls are allowed.
     multiline: bool,
 }
 
@@ -233,10 +233,9 @@ impl<'a> Walker<'a> {
     }
 
     fn walk(&mut self, schema: &Value, value: &Value, path: &mut Vec<String>) {
-        // A multiline field or a secret, and everything below it, may hold
-        // line breaks, tabs and bidi controls (GH#289). Secrets are never shown.
-        let marked = ["x-multiline", "writeOnly"].iter().any(|k| schema.get(*k) == Some(&Value::Bool(true)));
-        if marked && !self.multiline {
+        // A multiline field, and everything below it, may hold line breaks,
+        // tabs and bidi controls (GH#289).
+        if schema.get("x-multiline") == Some(&Value::Bool(true)) && !self.multiline {
             self.multiline = true;
             self.walk(schema, value, path);
             self.multiline = false;
@@ -341,7 +340,8 @@ impl<'a> Walker<'a> {
 
     fn string(&mut self, schema: &Value, s: &str, path: &[String]) {
         // Typed text outside a multiline field is one line. Search terms are
-        // not stored, new passwords are never shown, and untyped (free-form)
+        // not stored, secrets (a `writeOnly` string, not a whole `writeOnly`
+        // object) and new passwords are never shown, and untyped (free-form)
         // values are checked by their own rules, e.g. the attribute definition.
         let typed = schema
             .get("type")
@@ -349,6 +349,7 @@ impl<'a> Walker<'a> {
         if typed
             && !self.multiline
             && schema.get("format").and_then(Value::as_str) != Some("password")
+            && schema.get("writeOnly") != Some(&Value::Bool(true))
             && self.location != FieldLocation::Query
             && let Some(message) = character_error(s, true)
         {
@@ -814,6 +815,25 @@ mod tests {
             "notes": {"anyOf": [{"type": "string"}, {"type": "null"}], "x-multiline": true}}});
         let got = codes(obj, json!({"name": "a\nb", "notes": "a\nb"}));
         assert_eq!(got, vec![("name".to_owned(), "invalid_character".to_owned())]);
+
+        // `writeOnly` exempts only the secret string itself, not the text inside
+        // a write-only object such as the deprecated v1 layout `panels` (SHAA-765).
+        let components = json!({"Panel": {"type": "object", "properties": {"label": {"type": "string"}}}});
+        let components = components.as_object();
+        let panels = json!({"type": "object", "properties": {
+            "panels": {"type": "array", "items": {"$ref": "#/components/schemas/Panel", "writeOnly": true}},
+            "legacy": {"type": "object", "writeOnly": true, "properties": {"label": {"type": "string"}}},
+            "password": {"type": "string", "writeOnly": true},
+            "clientSecret": {"anyOf": [{"type": "string", "writeOnly": true}, {"type": "null"}]}}});
+        for label in ["Ops\nTeam", "\u{202E}evil", "a\tb"] {
+            let body = json!({"panels": [{"label": label}], "legacy": {"label": label}});
+            let got: Vec<_> =
+                check(&panels, &body, FieldLocation::Body, components).into_iter().map(|e| (e.field, e.code)).collect();
+            let want = |f: &str| (f.to_owned(), "invalid_character".to_owned());
+            assert_eq!(got, vec![want("panels.0.label"), want("legacy.label")], "{label:?}");
+        }
+        let secrets = json!({"password": "a\tb\u{202E}", "clientSecret": "line\nbreak"});
+        assert!(check(&panels, &secrets, FieldLocation::Body, components).is_empty());
 
         // Search terms are not stored: only the characters refused everywhere.
         let params = vec![QueryParam { name: "q".into(), required: false, schema: single.clone() }];
