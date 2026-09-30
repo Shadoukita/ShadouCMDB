@@ -7,7 +7,7 @@ import { onMfaEnrolmentRequired, onSessionEnded } from "./api/client";
 import { queryClient } from "./api/queryClient";
 import App from "./App.vue";
 import { listenForLayoutUpdates } from "./lib/layoutEditor";
-import { router, TWO_FACTOR_SETUP } from "./router";
+import { loginQuery, router, TWO_FACTOR_SETUP } from "./router";
 import { useBrandingStore } from "./stores/branding";
 import { useSessionStore } from "./stores/session";
 import "./styles/app.css";
@@ -24,7 +24,7 @@ onSessionEnded(() => {
   if (session.status !== "signedIn") return;
   session.markExpired();
   const here = router.currentRoute.value;
-  router.replace({ path: "/login", query: here.meta.public ? {} : { redirect: here.fullPath } });
+  router.replace({ path: "/login", query: here.meta.public ? {} : loginQuery(here) });
 });
 
 // A profile the user holds now requires two-factor authentication (made mandatory by an
