@@ -27,10 +27,9 @@ use crate::http::error::{FieldError, FieldLocation};
 /// CI fields that are not attributes; attributes are `attributes.<key>`.
 #[cfg(test)]
 pub const BUILTIN_FIELDS: &[&str] =
-    &["label", "ident", "class", "validFrom", "validUntil", "active", "createdAt", "updatedAt"];
+    &["label", "ident", "class", "criticality", "validFrom", "validUntil", "active", "createdAt", "updatedAt"];
 
-pub const FIELD_PATTERN: &str =
-    "^(label|ident|class|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$";
+pub const FIELD_PATTERN: &str = "^(label|ident|class|criticality|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$";
 
 const ATTRIBUTE_PREFIX: &str = "attributes.";
 
@@ -74,8 +73,8 @@ fn field_list(description: &str) -> Schema {
 
 fn columns_schema() -> Schema {
     field_list(
-        "Columns in display order: built-in fields (label, ident, class, validFrom, validUntil, active, createdAt, \
-         updatedAt) or attributes.<key>",
+        "Columns in display order: built-in fields (label, ident, class, criticality, validFrom, validUntil, active, \
+         createdAt, updatedAt) or attributes.<key>",
     )
 }
 fn panel_fields_schema() -> Schema {
@@ -280,7 +279,7 @@ pub enum UiSortDirection {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiListSort {
     #[schema(
-        pattern = "^(label|ident|className|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+        pattern = "^(label|ident|className|criticality|validFrom|validUntil|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
     )]
     pub field: String,
     #[serde(default)]
@@ -1913,5 +1912,15 @@ mod tests {
         assert!(!re.is_match("attributes.Bad"));
         assert!(!re.is_match("serial"));
         assert!(!re.is_match("hostname"), "a class field since SHAA-267");
+    }
+
+    #[test]
+    fn list_sort_pattern_accepts_every_inventory_sort_field() {
+        let schema = serde_json::to_value(<UiListSort as utoipa::PartialSchema>::schema()).unwrap();
+        let re = regex::Regex::new(schema["properties"]["field"]["pattern"].as_str().unwrap()).unwrap();
+        for f in crate::data::items::SORT_FIELDS {
+            assert!(re.is_match(f), "{f}");
+        }
+        assert!(re.is_match("attributes.cpu_cores"));
     }
 }

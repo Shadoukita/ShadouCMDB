@@ -4601,7 +4601,7 @@ export interface components {
         UiListView: {
             /** @description Stable machine key, lower_snake_case */
             classKey: string;
-            /** @description Columns in display order: built-in fields (label, ident, class, validFrom, validUntil, active, createdAt, updatedAt) or attributes.<key> */
+            /** @description Columns in display order: built-in fields (label, ident, class, criticality, validFrom, validUntil, active, createdAt, updatedAt) or attributes.<key> */
             columns?: string[];
             defaultSort?: components["schemas"]["UiListSort"] | null;
             defaultFilters?: components["schemas"]["UiListFilters"];
