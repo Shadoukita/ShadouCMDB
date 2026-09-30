@@ -652,8 +652,8 @@ pub fn routes() -> Vec<Route> {
             .summary("Install a starter template (idempotent)")
             .description(
                 "Adds the template's area (a PostgreSQL schema), every class (a table in it), attribute (a column), \
-                 relationship type and rule, status, environment and location of the template whose key does not \
-                 exist yet, in one transaction. Existing rows are left unchanged, so \
+                 relationship type and rule, lookup list (such as status, environment and location) and lookup \
+                 value of the template whose key does not exist yet, in one transaction. Existing rows are left unchanged, so \
                  installing again is a no-op and renamed or archived rows stay as they are. Each created row is \
                  written to the audit log.",
             )
