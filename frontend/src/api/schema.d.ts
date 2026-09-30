@@ -218,7 +218,7 @@ export interface paths {
         post: operations["startTotpEnrolment"];
         /**
          * Turn your two-factor authentication off (or cancel an unfinished set-up)
-         * @description Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Needs the password and a current code (authenticator or recovery code; not needed to cancel an unconfirmed set-up). Deletes the recovery codes too and ends your other sessions. If a profile you hold requires MFA, your session is then limited to setting it up again. 400 (field `code`) for a wrong code; 409 when nothing is set up. `currentPassword` is the local password, or for a directory (LDAP) account the directory password, checked against the account's own directory entry. 400 when it is wrong; 409 for an account of an OIDC provider (no password here) or while the account's directory is disabled; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory cannot be reached. Wrong passwords and codes count together: after 5, each further one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). Once MFA is set up, a right password alone does not reset that count; a right password together with a right code does. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["disableTotp"];
         options?: never;
@@ -237,7 +237,7 @@ export interface paths {
         put?: never;
         /**
          * Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)
-         * @description From now on sign-in asks for a code after the password. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description From now on sign-in asks for a code after the password. This session counts as having proven the second factor; other sessions opened with the password alone stay limited to the set-up routes until they sign in again with a code. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["confirmTotpEnrolment"];
         delete?: never;
@@ -278,7 +278,7 @@ export interface paths {
         post?: never;
         /**
          * Turn a user's two-factor authentication off (lost authenticator and recovery codes)
-         * @description Requires `users.manage`. Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset) and ends every session of the user (`session.revoke`, reason mfa_reset; your own is kept when you reset yourself). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["resetUserMfa"];
         options?: never;
@@ -2827,8 +2827,11 @@ export interface components {
              */
             required: boolean;
             /**
-             * @description Required but not set up: until it is, the session only reaches sign-out,
-             *     /auth/me and the MFA set-up routes (others answer 403 MFA_ENROLMENT_REQUIRED)
+             * @description Required, and this session did not prove a second factor against a set-up
+             *     authenticator (none is set up, or the session was opened with the
+             *     password alone): until then the session only reaches sign-out, /auth/me
+             *     and the MFA set-up routes (others answer 403 MFA_ENROLMENT_REQUIRED).
+             *     With an authenticator already set up, sign in again with a code.
              */
             enrolmentRequired: boolean;
             /**

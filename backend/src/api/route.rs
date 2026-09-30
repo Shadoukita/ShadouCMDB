@@ -815,7 +815,8 @@ async fn authorise(
     if principal.mfa_enrolment_required() && !rule.before_mfa_enrolment {
         return Err(AppError::new(
             ErrorCode::MfaEnrolmentRequired,
-            "Your permission profile requires two-factor authentication: set it up first (POST /api/v1/auth/mfa/totp)",
+            "Your permission profile requires two-factor authentication: set it up first (POST /api/v1/auth/mfa/totp), \
+             or, if it is already set up, sign in again with a code",
         ));
     }
     if let Access::Permission(p) = rule.access
