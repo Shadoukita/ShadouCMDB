@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { RouterLink, useRoute } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../api/client";
 import { useAreas } from "../api/datamodel";
 import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
@@ -9,6 +9,7 @@ import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import CiStateBadge from "../components/CiStateBadge.vue";
+import CriticalityBadge from "../components/CriticalityBadge.vue";
 import LayoutEditView from "../components/layoutEdit/LayoutEditView.vue";
 import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
 import { useAppSettings } from "../lib/appSettings";
@@ -24,15 +25,22 @@ import BlockContent from "./detail/BlockContent.vue";
 import CoreFieldValue from "./detail/CoreFieldValue.vue";
 import DeleteCiButton from "./detail/DeleteCiButton.vue";
 import HistoryPanel from "./detail/HistoryPanel.vue";
+import ImpactPanel from "./detail/ImpactPanel.vue";
 import LayoutPanels from "./detail/LayoutPanels.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
 
-/** The class layout's tabs (`layout:<key>`; a single one is "overview"), then the relationship map and the history. */
+/**
+ * The class layout's tabs (`layout:<key>`; a single one is "overview"), then the relationship map, the
+ * impact analysis and the history. The Impact tab has its own URL (/cis/:id/impact, with its options
+ * in the query); the others are chosen on the page.
+ */
 type Tab = string;
 
 const route = useRoute();
+const router = useRouter();
 const id = computed(() => String(route.params.id ?? ""));
+const onImpactRoute = computed(() => /\/impact\/?$/.test(route.path));
 const trail = useTrail();
 const ci = useCi(id);
 const tab = ref<Tab>("");
@@ -40,7 +48,7 @@ const flash = useFlashStore();
 const session = useSessionStore();
 const flashText = computed(() => flash.forCi(id.value));
 useDocumentTitle(() => ci.data.value?.label);
-// Walking to another CI reuses this component; start each record on its first tab.
+// Walking to another CI reuses this component; start each record on its first tab (or Impact, on its URL).
 watch(id, () => (tab.value = ""));
 
 // A malformed id in the URL is rejected by the API as a params validation error; for the operator it is simply "not found".
@@ -93,11 +101,23 @@ const usualPlaces = computed(() => {
 const TABS = computed<[Tab, string][]>(() => [
   ...(layoutTabs.value.length > 1 ? layoutTabs.value.map((t): [Tab, string] => [`layout:${t.key}`, t.label]) : [["overview", "Overview"] as [Tab, string]]),
   ["graph", "Relationship map"],
+  // A deleted CI has no live relationships to analyse.
+  ...(c.value?.deletedAt ? [] : [["impact", "Impact"] as [Tab, string]]),
   // The history is the audit log, which needs audit.view.
   ...(session.can("audit.view") && !placed.value.has("history") ? [["history", "History"] as [Tab, string]] : []),
 ]);
-/** The tab shown: the chosen one while it exists (a layout can change under the page), else the first. */
-const current = computed<Tab>(() => (TABS.value.some(([k]) => k === tab.value) ? tab.value : TABS.value[0][0]));
+/** The tab shown: Impact on its URL, else the chosen one while it exists (a layout can change under the page), else the first. */
+const current = computed<Tab>(() => {
+  if (onImpactRoute.value && TABS.value.some(([k]) => k === "impact")) return "impact";
+  const chosen = tab.value === "impact" ? "" : tab.value;
+  return TABS.value.some(([k]) => k === chosen) ? chosen : TABS.value[0][0];
+});
+/** Shows a tab: Impact by its URL, the others on the CI's own URL. */
+function selectTab(key: Tab) {
+  tab.value = key;
+  if (key === "impact" && !onImpactRoute.value) void router.push(`/cis/${id.value}/impact`);
+  else if (key !== "impact" && onImpactRoute.value) void router.push(`/cis/${id.value}`);
+}
 /** Which layout tab is shown (they come first in TABS), or -1. */
 const layoutIndex = computed(() => (current.value === "overview" || current.value.startsWith("layout:") ? TABS.value.findIndex(([k]) => k === current.value) : -1));
 /** Arrow keys, Home and End move between the tabs. */
@@ -107,8 +127,9 @@ function onTabKey(e: KeyboardEvent) {
   const to = { ArrowRight: at + 1, ArrowLeft: at - 1 + keys.length, Home: 0, End: keys.length - 1 }[e.key];
   if (to === undefined) return;
   e.preventDefault();
-  tab.value = keys[to % keys.length];
-  void nextTick(() => document.getElementById(`tab-${tabId(tab.value)}`)?.focus());
+  const next = keys[to % keys.length];
+  selectTab(next);
+  void nextTick(() => document.getElementById(`tab-${tabId(next)}`)?.focus());
 }
 const tabId = (k: Tab) => k.replace(":", "-");
 const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.label } : undefined));
@@ -150,9 +171,11 @@ const crumbs = computed<Crumb[]>(() => {
         <RouterLink :to="`/cis?classId=${c.classId}`" class="badge" dir="auto">{{ c.class.name }}</RouterLink>
         <span v-if="c.deletedAt" class="badge danger">Deleted {{ formatDateTime(c.deletedAt) }}</span>
         <CiStateBadge v-else :ci="c" />
+        <CriticalityBadge :value="c.criticality" />
       </div>
       <div v-if="!c.deletedAt" class="actions">
         <EditLayoutButton v-if="editor.allowed && !editor.active" :editor="editor" />
+        <RouterLink v-if="!onImpactRoute" class="btn" :to="`/cis/${c.id}/impact`">Impact analysis</RouterLink>
         <RouterLink v-if="session.canOnClass(c.classId, 'edit')" class="btn" :to="`/cis/${c.id}/edit`">Edit</RouterLink>
         <DeleteCiButton v-if="session.canOnClass(c.classId, 'delete')" :ci="c" />
       </div>
@@ -188,7 +211,7 @@ const crumbs = computed<Crumb[]>(() => {
         :aria-selected="current === key"
         :aria-controls="`panel-${tabId(key)}`"
         :tabindex="current === key ? 0 : -1"
-        @click="tab = key"
+        @click="selectTab(key)"
         @keydown="onTabKey"
       >
         {{ label }}
@@ -219,6 +242,7 @@ const crumbs = computed<Crumb[]>(() => {
         </template>
       </template>
       <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="trail" />
+      <ImpactPanel v-else-if="current === 'impact'" :ci="c" :self="self" :trail="trail" />
       <HistoryPanel v-else :ci="c" />
     </div>
   </template>

@@ -174,6 +174,9 @@ function clearFilters() {
           <tbody>
             <tr v-for="ci in rows" :key="ci.id" :class="{ deleted: ci.deletedAt }">
               <td v-for="c in columns" :key="c"><CiCell :ci="ci" :field="c" :defs="attrDefs" /></td>
+              <td class="row-actions">
+                <RouterLink v-if="!ci.deletedAt" class="btn btn-sm" :to="`/cis/${ci.id}/impact`" :title="`Impact analysis of ${ci.label}`">Impact</RouterLink>
+              </td>
             </tr>
           </tbody>
         </table>

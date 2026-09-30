@@ -22,6 +22,8 @@ export type Environment = Schemas["Environment"];
 export type Location = Schemas["Location"];
 export type Owner = Schemas["Owner"];
 export type SearchResults = Schemas["SearchResults"];
+export type ImpactSettings = Schemas["ImpactSettings"];
+export type ImpactParams = NonNullable<paths["/api/v1/configuration-items/{id}/impact"]["get"]["parameters"]["query"]>;
 
 export type CiListQuery = NonNullable<paths["/api/v1/configuration-items"]["get"]["parameters"]["query"]>;
 export type SearchQuery = paths["/api/v1/search"]["get"]["parameters"]["query"];
@@ -38,6 +40,9 @@ export const keys = {
   ciCount: (q: CiListQuery) => ["cis", "count", q] as const,
   ci: (id: string) => ["cis", "detail", id] as const,
   graph: (id: string, depth: number, direction: string) => ["cis", "graph", id, depth, direction] as const,
+  impact: (id: string, params: ImpactParams) => ["cis", "impact", id, params] as const,
+  impactSettings: ["impact-settings"] as const,
+  criticality: ["lookup-list-values", "criticality"] as const,
   search: (q: string, limit: number, offset: number, filters: SearchFilters = {}) => ["cis", "search", q, limit, offset, filters] as const,
   relationships: (ciId: string) => ["relationships", ciId] as const,
   audit: (entityId: string) => ["audit", entityId] as const,
@@ -214,6 +219,7 @@ export function useCreateRelationship() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["relationships"] });
       qc.invalidateQueries({ queryKey: ["cis", "graph"] });
+      qc.invalidateQueries({ queryKey: ["cis", "impact"] });
       qc.invalidateQueries({ queryKey: ["audit"] });
     },
   });
@@ -226,7 +232,77 @@ export function useDeleteRelationship() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["relationships"] });
       qc.invalidateQueries({ queryKey: ["cis", "graph"] });
+      qc.invalidateQueries({ queryKey: ["cis", "impact"] });
       qc.invalidateQueries({ queryKey: ["audit"] });
+    },
+  });
+}
+
+// ---------- Impact analysis ----------
+
+/** The bounds and defaults of an analysis, and whether any relationship type propagates impact. */
+export function useImpactSettings() {
+  return useQuery({
+    queryKey: keys.impactSettings,
+    staleTime: 60_000,
+    queryFn: ({ signal }) => unwrap(api.GET("/api/v1/settings/impact", { signal })),
+  });
+}
+
+/**
+ * GET /configuration-items/{id}/impact. Never retried: a refusal (busy server, bad parameter) is
+ * shown at once, and the operator's Retry is the retry. The previous result stays on screen while
+ * a changed control re-runs the analysis.
+ */
+export function useImpact(id: MaybeRefOrGetter<string>, params: MaybeRefOrGetter<ImpactParams>, enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery(() => {
+    const ciId = toValue(id);
+    const p = toValue(params);
+    return {
+      queryKey: keys.impact(ciId, p),
+      enabled: !!ciId && toValue(enabled),
+      retry: false,
+      placeholderData: keepPreviousData,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/configuration-items/{id}/impact", { params: { path: { id: ciId }, query: p }, signal })),
+    };
+  });
+}
+
+/**
+ * The analysis as CSV from GET …/impact/export (built, neutralised against spreadsheet formulas and
+ * audited by the server), saved under the file name the server gives (or `fallbackName`).
+ */
+export async function downloadImpactCsv(id: string, params: ImpactParams, fallbackName: string): Promise<void> {
+  const { data, error, response } = await api.GET("/api/v1/configuration-items/{id}/impact/export", {
+    params: { path: { id }, query: params },
+    parseAs: "blob",
+  });
+  if (!response.ok) await unwrap(Promise.resolve({ data: undefined, error, response }));
+  // The header is unreadable when the API is on another origin and does not expose it.
+  const name = /filename="?([^";]+)"?/.exec(response.headers.get("Content-Disposition") ?? "")?.[1] ?? fallbackName;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(data as Blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/** The values of the system lookup list `criticality`, most critical first (the CI form, filters and badges). */
+export function useCriticalityValues() {
+  return useQuery({
+    queryKey: keys.criticality,
+    staleTime: 60_000,
+    queryFn: async ({ signal }) => {
+      const lists = await unwrap(api.GET("/api/v1/lookup-lists", { params: { query: { systemRole: "criticality", limit: 1 } }, signal }));
+      const list = lists.data[0];
+      if (!list) return [];
+      const values = await unwrap(
+        api.GET("/api/v1/lookup-list-values", { params: { query: { listId: list.id, limit: MAX_PAGE, sort: "sortOrder" } }, signal }),
+      );
+      return values.data;
     },
   });
 }

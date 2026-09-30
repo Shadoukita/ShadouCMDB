@@ -159,7 +159,8 @@ test("list views: a class's columns, default sort, filter and page size apply to
   await expect(page.getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Ident" })).toHaveCount(0);
   // Attribute columns show the values the list API returns with each CI.
-  await expect(page.getByRole("row").filter({ hasText: "fra1-esx-01" }).getByRole("cell").last()).toHaveText("32");
+  // (The last cell holds the row's actions.)
+  await expect(page.getByRole("row").filter({ hasText: "fra1-esx-01" }).getByRole("cell").nth(-2)).toHaveText("32");
   await expect(page.getByRole("columnheader", { name: /Updated/ })).toHaveAttribute("aria-sort", "descending");
   await expect(page.locator(".pagination select")).toHaveValue("25");
   // Clearing the filter sticks: a reload and Back show the URL as the operator left it.
@@ -370,7 +371,7 @@ test("layouts: the form designer arranges tabs, sections and widths for the form
   const ci = servers.data[0];
   await page.goto(`/cis/${ci.id}`);
   const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
-  await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "History"]);
+  await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "Impact", "History"]);
   await expect(page.locator(".layout-panels").getByText("CPU cores", { exact: true })).toHaveCount(0);
   await expect(page.locator(".layout-panels").getByText("Asset tag", { exact: true })).toHaveCount(0);
   await tabs.filter({ hasText: "Hardware" }).click();
