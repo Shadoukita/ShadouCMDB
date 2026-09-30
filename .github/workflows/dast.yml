@@ -1,7 +1,7 @@
 name: DAST
 
 # Dynamic application security testing with OWASP ZAP against the release
-# binary and PostgreSQL, set up like the e2e job in ci.yml (docs/security/sdl.md).
+# binary and PostgreSQL, set up like the e2e job in ci.yml.
 # - Baseline scan (every run): spiders the web UI and the public API without
 #   attacking it and checks the passive rules (security headers, cookies, CSP,
 #   error and information disclosure).
@@ -16,7 +16,7 @@ name: DAST
 #   with an administrator's session cookie and X-CSRF-Token (SHAA-715), capped
 #   at 10 minutes. tools/dast/session-openapi.mjs picks them from openapi.json.
 # Pass/fail per rule is in .zap/rules.tsv. The reports are kept for 90 days as
-# release evidence (docs/security/pentest-v0.1.0.md).
+# release evidence.
 
 on:
   push:

@@ -4,7 +4,7 @@ import { sectionPlaces } from "./layoutDesign";
 import { GRID_COLUMNS, SECTION_GRID, sectionKind } from "./uiSettings";
 
 /**
- * Free tabs (`placement: "free"`, docs/data-model.md › Free tabs): every section
+ * Free tabs (`placement: "free"`): every section
  * is a window with a `frame` (x and w as fractions of the tab's width, y and h in
  * px, z the stacking order) and windows may overlap. The rules here mirror the
  * API's (backend ui_settings/document.rs `grid_frames`, `convert_to_grid`), so

@@ -4,7 +4,7 @@ The server now sends `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy: same-
 `Permissions-Policy` that switches off camera, microphone, geolocation, payment, USB, serial and other
 device features, on every response ([GH#192]). Until now clickjacking protection came only from the
 CSP's `frame-ancestors`, which HTML documents carry but API responses, assets and uploaded logos do
-not. The full list of headers is in [deployment.md](docs/deployment.md#https-and-session-cookies).
+not.
 
 The layout editor and the API documentation now state that a layout's hidden and read-only fields
 change what the web UI shows, not who can read or change the data: the API still returns hidden

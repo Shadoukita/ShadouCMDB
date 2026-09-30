@@ -323,7 +323,7 @@ jobs:
           docker run --rm --network host $E shadoucmdb:amd64 migrate
           docker run --rm --network host $E shadoucmdb:amd64 seed --demo
           docker run --rm --network host --platform linux/arm64 $E shadoucmdb:arm64 verify
-          # docs/deployment.md: the key as a mounted file owned by the image's nonroot user (65532).
+          # The key as a mounted file owned by the image's nonroot user (65532).
           openssl rand -base64 32 > encryption.key && chmod 600 encryption.key && sudo chown 65532:65532 encryption.key
           K="-v $PWD/encryption.key:/run/secrets/encryption_key:ro -e ENCRYPTION_KEY_FILE=/run/secrets/encryption_key"
           docker run -d --name cmdb --network host $E $K shadoucmdb:amd64

@@ -22,7 +22,6 @@
 --      roles with -v owner_role=... and -v maintenance_role=... if you like.
 --   3. Set MIGRATION_DATABASE_URL (owner) and MAINTENANCE_DATABASE_URL
 --      (maintenance); DATABASE_URL stays on the API role. Start the server.
--- See docs/deployment.md, "Database roles".
 
 \set ON_ERROR_STOP on
 \if :{?owner_role}

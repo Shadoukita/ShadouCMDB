@@ -4,7 +4,7 @@ import { apiGet, apiSend, at, classIdByName, expect, test } from "./support";
 
 // Accessibility (WCAG 2.1 A and AA) of the main screens, checked with axe-core. A critical or serious
 // violation fails the test; moderate and minor ones are listed in the output and attached to the report.
-// Rules turned off for a screen are listed in docs/accessibility.md with the reason.
+// No rule is turned off; one may only be turned off for a single screen, with a comment saying why.
 
 const stamp = Date.now().toString(36);
 const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];

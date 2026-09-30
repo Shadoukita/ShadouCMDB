@@ -10,7 +10,6 @@ tokens"). Accounts that sign in through an OIDC provider or LDAP/AD directory se
 provider instead of the form.
 
 **Upgrade:** nothing to do. No API or database change. Wrong current passwords count towards the same
-per-user lock as sign-in ([login backoff]).
+per-user lock as sign-in.
 
 [GH#128]: https://github.com/Shadoukita/ShadouCMDB/issues/128
-[login backoff]: docs/api.md#authentication-and-permissions
