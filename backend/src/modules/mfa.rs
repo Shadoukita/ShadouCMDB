@@ -13,7 +13,7 @@ use utoipa::ToSchema;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use uuid::Uuid;
 
-use super::auth::{confirm_current_password, confirm_current_password_attempt, login_field_schema};
+use super::auth::{confirm_current_password, confirm_current_password_attempt, password_field_schema};
 use super::users;
 use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
@@ -106,7 +106,7 @@ fn totp_code_schema() -> Schema {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasswordConfirmation {
-    #[schema(schema_with = login_field_schema)]
+    #[schema(schema_with = password_field_schema)]
     current_password: Secret,
 }
 impl Check for PasswordConfirmation {}
@@ -123,7 +123,7 @@ impl Check for TotpConfirmation {}
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MfaReauthentication {
-    #[schema(schema_with = login_field_schema)]
+    #[schema(schema_with = password_field_schema)]
     current_password: Secret,
     #[schema(schema_with = code_schema)]
     code: String,

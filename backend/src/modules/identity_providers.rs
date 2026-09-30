@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool};
 use utoipa::ToSchema;
-use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
+use utoipa::openapi::schema::{AnyOfBuilder, ArrayBuilder, ObjectBuilder, Schema, Type};
 use uuid::Uuid;
 
 use super::sso::{self, LDAP, OIDC};
@@ -222,7 +222,10 @@ fn url_schema() -> Schema {
 }
 
 fn secret_schema() -> Schema {
-    schemas::nullable_string_schema(4096)
+    AnyOfBuilder::new()
+        .item(schemas::secret_builder().max_length(Some(4096)))
+        .item(ObjectBuilder::new().schema_type(Type::Null))
+        .into()
 }
 
 fn claim_schema() -> Schema {
@@ -243,7 +246,7 @@ fn scopes_schema() -> Schema {
 }
 
 fn pem_schema() -> Schema {
-    schemas::nullable_string_schema(65536)
+    schemas::multiline_text_schema(65536)
 }
 
 fn mappings_schema() -> Schema {
