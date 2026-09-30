@@ -729,7 +729,7 @@ async function main() {
     let job: Json;
     for (let i = 0; i < 100; i++) {
       job = (await call('GET', `/api/v1/imports/${id}`, undefined, 200, {}, { cover: i === 0 })).json;
-      if (job.status !== 'queued' && job.status !== 'analysing') return job;
+      if (!['queued', 'analysing', 'validating', 'committing'].includes(job.status)) return job;
       await new Promise((r) => setTimeout(r, 100));
     }
     return job;
@@ -740,13 +740,63 @@ async function main() {
   await call('PATCH', `/api/v1/imports/${uploaded.id}/file-options`, { hasHeaderRow: false }, 202);
   analysed = await settled(uploaded.id);
   check(analysed.status === 'ready' && analysed.file.rowCount === 2, 'changing the file options analyses it again');
+  check((await call('POST', `/api/v1/imports/${uploaded.id}/cancel`, undefined, 202)).json.status === 'cancelled', 'an import can be cancelled');
+  await call('POST', `/api/v1/imports/${uploaded.id}/cancel`, undefined, 409);
   await call('DELETE', `/api/v1/imports/${uploaded.id}`, undefined, 204);
   const second = (await call('POST', '/api/v1/imports', importCsv, 202, { ...importHeaders, 'idempotency-key': `smoke-2-${RUN}` })).json;
   await settled(second.id);
-  check((await call('POST', `/api/v1/imports/${second.id}/cancel`, undefined, 202)).json.status === 'cancelled', 'an import can be cancelled');
-  await call('POST', `/api/v1/imports/${second.id}/cancel`, undefined, 409);
+  await call('POST', `/api/v1/imports/${second.id}/dry-run`, undefined, 409);
+  await call('POST', `/api/v1/imports/${second.id}/commit`, { skipErrorRows: false }, 409);
+  const serverMapping = { classKey: 'server', mode: 'create_only', columns: [
+    { index: 0, target: { kind: 'attribute', key: 'name' } }, { index: 1, target: { kind: 'attribute', key: 'status' } }] };
+  await call('PUT', `/api/v1/imports/${second.id}/mapping`, { ...serverMapping, columns: [{ index: 0, target: { kind: 'attribute', key: 'nope' } }] }, 400);
+  check((await call('PUT', `/api/v1/imports/${second.id}/mapping`, serverMapping, 200)).json.mapping?.classKey === 'server', 'the mapping is checked and saved');
+  await call('POST', `/api/v1/imports/${second.id}/dry-run`, undefined, 202);
+  const validated = await settled(second.id);
+  check(validated.status === 'validated' && validated.summary?.create === 1 && validated.summary?.errorRows === 0, 'the dry run plans the row without writing it');
+  check((await get(`/api/v1/imports/${second.id}/issues?severity=error`)).json.page.total === 0, 'the dry run found no problems');
+  await get(`/api/v1/imports/${second.id}/error-report`, 404);
+  const suggestUrl = `/api/v1/imports/${second.id}/mapping-suggestion?classKey=server`;
+  const suggested = (await get(suggestUrl)).json;
+  check(suggested.matchedBy.map((m: Json) => m.via).join(',') === 'key,key' && suggested.mapping.columns[1]?.target?.key === 'status'
+    && suggested.savedMapping === null, 'the suggestion maps the columns by attribute key');
+  await get(`/api/v1/imports/${second.id}/mapping-suggestion?classKey=doesnotexist`, 400);
+  const savedDefinition = { mode: 'create_only', columns: [
+    { header: 'Name', target: { kind: 'attribute', key: 'name' } }, { header: 'Status', target: { kind: 'attribute', key: 'status' } }] };
+  const saved = (await post('/api/v1/import-mappings', { name: `Smoke ${RUN}`, classKey: 'server', definition: savedDefinition }, 201)).json;
+  check(saved.version === 1 && saved.createdBy?.name === ADMIN_USERNAME, 'a mapping is saved');
+  await post('/api/v1/import-mappings', { name: `smoke ${RUN}`, classKey: 'server', definition: savedDefinition }, 409);
+  await post('/api/v1/import-mappings', { name: 'x', classKey: 'doesnotexist', definition: savedDefinition }, 400);
+  check((await get('/api/v1/import-mappings?classKey=server')).json.data.some((m: Json) => m.id === saved.id), 'the saved mapping is listed');
+  await get(`/api/v1/import-mappings/${saved.id}`);
+  check((await patch(`/api/v1/import-mappings/${saved.id}`, { version: 1, description: 'Smoke layout' })).json.version === 2, 'the saved mapping is changed');
+  await patch(`/api/v1/import-mappings/${saved.id}`, { version: 1, name: 'stale' }, 409);
+  check((await get(suggestUrl)).json.savedMapping?.id === saved.id, 'a saved mapping with the same headers is suggested');
+  await del(`/api/v1/import-mappings/${saved.id}?version=1`, 409);
+  await del(`/api/v1/import-mappings/${saved.id}?version=2`);
+  await get(`/api/v1/import-mappings/${saved.id}`, 404);
+  await call('POST', `/api/v1/imports/${second.id}/commit`, { skipErrorRows: 'yes' }, 400);
+  const commitHeaders = { 'idempotency-key': `smoke-commit-${RUN}` };
+  check((await call('POST', `/api/v1/imports/${second.id}/commit`, { skipErrorRows: false }, 202, commitHeaders)).json.phase === 'commit', 'the commit is queued');
+  const committed = await settled(second.id);
+  check(committed.status === 'completed' && committed.summary?.committed?.created === 1, 'the commit writes the row');
+  const importedCi = (await get(`/api/v1/configuration-items?q=smoke-import-01`)).json.data;
+  check(importedCi.length === 1, 'the imported CI is in the inventory');
+  check((await call('POST', `/api/v1/imports/${second.id}/commit`, { skipErrorRows: false }, 202, commitHeaders)).json.status === 'completed', 'the same Idempotency-Key does not commit twice');
+  await call('POST', `/api/v1/imports/${second.id}/commit`, { skipErrorRows: false }, 409);
+  await call('DELETE', `/api/v1/configuration-items/${importedCi[0].id}`, undefined, 204);
   await call('DELETE', `/api/v1/imports/${second.id}`, undefined, 204);
   await get(`/api/v1/imports/${second.id}`, 404);
+  const bad = (await call('POST', '/api/v1/imports', 'Name;Status\r\n=smoke-bad;no-such-status\r\n', 202, { ...importHeaders, 'idempotency-key': `smoke-3-${RUN}` })).json;
+  await settled(bad.id);
+  await call('PUT', `/api/v1/imports/${bad.id}/mapping`, serverMapping, 200);
+  await call('POST', `/api/v1/imports/${bad.id}/dry-run`, undefined, 202);
+  check((await settled(bad.id)).summary?.errorRows === 1, 'the dry run finds the bad row');
+  const report = await get(`/api/v1/imports/${bad.id}/error-report`, 200);
+  const reportText = new TextDecoder('utf-8', { ignoreBOM: true }).decode(report.bytes);
+  check(reportText.startsWith('\ufeff"Row";"Severity";"Column";"Problem";"Code";"Name";"Status"\r\n"2";"error";') && reportText.includes('"\'=smoke-bad"')
+    && report.headers.get('cache-control') === 'no-store', 'the error report lists the row, neutralised');
+  await call('DELETE', `/api/v1/imports/${bad.id}`, undefined, 204);
   await call('PUT', '/api/v1/imports/settings', { enabled: false }, 200);
 
   // --- HTTP-level errors ---------------------------------------------------------
@@ -1542,7 +1592,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 4 && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 4 && Array.isArray(file.importMappings) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -1592,6 +1642,18 @@ async function customization(x: Json) {
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
   await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 5 }, 400);
+  // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
+  const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
+  const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };
+  const mappingDry = (await post('/api/v1/admin/config/import?mode=dry_run', mappingFile, 200)).json;
+  check(mappingDry.summary.some((s: Json) => s.section === 'importMappings' && s.created === 1) && !mappingDry.applied, 'a dry run reports the saved mapping it would create');
+  await post('/api/v1/admin/config/import?mode=apply', mappingFile, 200);
+  const mappingAgain = (await post('/api/v1/admin/config/import?mode=apply', { ...mappingFile, importMappings: [{ ...cfgMapping, name: cfgMapping.name.toUpperCase() }] }, 200)).json;
+  check(mappingAgain.summary.some((s: Json) => s.section === 'importMappings' && s.unchanged === 1 && s.created === 0), 'saved mappings are matched by class and name, ignoring case');
+  const cfgSaved = (await get('/api/v1/import-mappings?classKey=server')).json.data.find((m: Json) => m.name === cfgMapping.name);
+  check(cfgSaved?.definition?.columns?.length === 2, 'the imported mapping is a saved mapping');
+  check((await get('/api/v1/admin/config/export')).json.importMappings.some((m: Json) => m.name === cfgMapping.name && m.classKey === 'server'), 'the export carries the saved mapping');
+  if (cfgSaved) await del(`/api/v1/import-mappings/${cfgSaved.id}?version=${cfgSaved.version}`, 204);
   await post('/api/v1/admin/config/import', file, 400); // mode is required
   await post('/api/v1/admin/config/import?mode=later', file, 400);
 

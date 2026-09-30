@@ -212,6 +212,12 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
 }
 
 /// Connection-level failures: the database is unreachable or went away.
+/// A deadlock or serialization failure: the transaction lost a race with
+/// another one and can simply be run again.
+pub fn is_retryable(err: &sqlx::Error) -> bool {
+    pg_error(err).is_some_and(|pg| matches!(pg.code(), "40P01" | "40001"))
+}
+
 pub fn is_connection_error(err: &sqlx::Error) -> bool {
     match err {
         sqlx::Error::Io(_) | sqlx::Error::Tls(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => true,

@@ -11,10 +11,10 @@ use uuid::Uuid;
 
 use super::analyse::{FileFormat, FileInfo, FileOptions};
 use super::schemas::{
-    DryRunInfo, ImportFile, ImportJob, ImportJobSummary, ImportMapping, ImportSummary, JobError, JobOwner, JobStatus,
-    ListImportsQuery, Phase, PlannedRow, Progress, StaleReason,
+    DryRunInfo, ImportFile, ImportIssue, ImportJob, ImportJobSummary, ImportMapping, ImportSummary, IssueSeverity,
+    JobError, JobOwner, JobStatus, ListImportIssuesQuery, ListImportsQuery, Phase, PlannedRow, Progress, StaleReason,
 };
-use super::{coded, settings};
+use super::{coded, mapping, settings};
 use crate::api::context::RequestContext;
 use crate::api::schemas::{Page, Paged};
 use crate::config::ImportConfig;
@@ -22,7 +22,7 @@ use crate::http::error::{AppError, ErrorCode};
 
 /// A job row as stored.
 #[derive(Debug, Clone, sqlx::FromRow)]
-// The fingerprint, cursor and lease are read by the dry run and the commit (part 4 of SHAA-799).
+// The lease columns are read only by the workers' own queries.
 #[allow(dead_code)]
 pub struct JobRow {
     pub id: Uuid,
@@ -121,6 +121,11 @@ impl JobRow {
     }
 
     pub fn dto(&self, queue_position: Option<i64>) -> ImportJob {
+        self.dto_with(queue_position, false)
+    }
+
+    /// The job as callers see it; `model_changed` marks its dry run stale (T14).
+    pub fn dto_with(&self, queue_position: Option<i64>, model_changed: bool) -> ImportJob {
         let info = self.info();
         let options = self.options();
         let file = ImportFile {
@@ -152,7 +157,7 @@ impl JobRow {
             progress: self.progress(queue_position),
             summary: self.summary(),
             preview,
-            dry_run: self.dry_run(false),
+            dry_run: self.dry_run(model_changed),
             error: self.error(),
             created_at: self.created_at,
             created_by: self.owner(),
@@ -244,7 +249,11 @@ pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Import
     let mut conn = pool.acquire().await?;
     let job = check_owner(ctx, fetch(&mut conn, id).await?, id)?;
     let position = queue_position(&mut conn, &job).await?;
-    Ok(job.dto(position))
+    // A validated job's dry run goes stale when the data model changes: the
+    // fingerprint takes milliseconds, so the poll can say so (T14).
+    let model_changed = job.status == JobStatus::Validated
+        && job.model_fingerprint.as_deref() != Some(super::dry_run::model_fingerprint(&mut conn).await?.as_str());
+    Ok(job.dto_with(position, model_changed))
 }
 
 pub async fn list(
@@ -280,7 +289,7 @@ pub async fn list(
     Ok(Page { data: rows.iter().map(JobRow::summary_dto).collect(), page: q.page_meta(total) })
 }
 
-fn invalid_state(message: &str) -> AppError {
+pub(crate) fn invalid_state(message: &str) -> AppError {
     coded(ErrorCode::Conflict, message, "invalid_state")
 }
 
@@ -305,6 +314,9 @@ pub async fn cancel(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Imp
     .bind(id)
     .fetch_one(&mut *tx)
     .await?;
+    if job.status == JobStatus::Queued && job.phase == Some(Phase::Commit) {
+        super::commit::record_queued_cancel(&mut tx, &row).await?;
+    }
     tx.commit().await?;
     Ok(row.dto(None))
 }
@@ -385,4 +397,136 @@ pub async fn update_file_options(
     let position = queue_position(&mut tx, &row).await?;
     tx.commit().await?;
     Ok(row.dto(position))
+}
+
+/// Sets the mapping after checking it against the file's columns and the
+/// data model (`PUT /imports/{id}/mapping`). Any dry run is dropped and the
+/// job is `ready` again. In `ready` or `validated`; `409` while a phase runs.
+pub async fn set_mapping(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    cfg: &ImportConfig,
+    id: Uuid,
+    mapping: &ImportMapping,
+) -> Result<ImportJob, AppError> {
+    let mut tx = pool.begin().await?;
+    require_enabled(&mut tx, cfg).await?;
+    let job = check_owner(ctx, fetch_for_update(&mut tx, id).await?, id)?;
+    if !matches!(job.status, JobStatus::Ready | JobStatus::Validated) {
+        return Err(invalid_state("The mapping can be set only after the file was analysed and while no step runs."));
+    }
+    let headers: Vec<String> =
+        job.info().map(|i| i.columns.into_iter().map(|c| c.header).collect()).unwrap_or_default();
+    mapping::resolve(&mut tx, ctx, mapping, &headers).await?;
+    let row: JobRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "UPDATE cmdb.import_jobs SET status = 'ready', phase = NULL, class_key = $2, mapping = $3, summary = NULL,
+           preview = NULL, model_fingerprint = NULL, dry_run_finished_at = NULL, error = NULL,
+           expires_at = now() + interval '24 hours'
+         WHERE id = $1 RETURNING {COLUMNS}"
+    )))
+    .bind(id)
+    .bind(&mapping.class_key)
+    .bind(sqlx::types::Json(mapping))
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM cmdb.import_job_issues WHERE job_id = $1").bind(id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(row.dto(None))
+}
+
+/// Queues the dry run (`POST /imports/{id}/dry-run`): `409` without a mapping
+/// or while a phase runs, `429 import_busy` while another job of the user
+/// runs (T19). The mapping is checked again, since the model may have changed.
+pub async fn start_dry_run(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    cfg: &ImportConfig,
+    id: Uuid,
+) -> Result<ImportJob, AppError> {
+    let mut tx = pool.begin().await?;
+    require_enabled(&mut tx, cfg).await?;
+    let job = check_owner(ctx, fetch_for_update(&mut tx, id).await?, id)?;
+    if !matches!(job.status, JobStatus::Ready | JobStatus::Validated) {
+        return Err(invalid_state("A dry run can start only after the file was analysed and while no step runs."));
+    }
+    let Some(mapping) = job.mapping() else {
+        return Err(coded(ErrorCode::Conflict, "Set the mapping before the dry run.", "mapping_required"));
+    };
+    let owner = job.created_by_id.ok_or_else(AppError::internal)?;
+    super::upload::lock_user(&mut tx, owner).await?;
+    let headers: Vec<String> =
+        job.info().map(|i| i.columns.into_iter().map(|c| c.header).collect()).unwrap_or_default();
+    mapping::resolve(&mut tx, ctx, &mapping, &headers).await?;
+    let row: JobRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "UPDATE cmdb.import_jobs SET status = 'queued', phase = 'validate', summary = NULL, preview = NULL,
+           model_fingerprint = NULL, dry_run_finished_at = NULL, error = NULL, attempts = 0, progress_done = 0,
+           progress_total = coalesce((file_info->>'rowCount')::int, 0), queued_at = now(),
+           expires_at = now() + interval '24 hours'
+         WHERE id = $1 RETURNING {COLUMNS}"
+    )))
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM cmdb.import_job_issues WHERE job_id = $1").bind(id).execute(&mut *tx).await?;
+    let position = queue_position(&mut tx, &row).await?;
+    tx.commit().await?;
+    Ok(row.dto(position))
+}
+
+/// The problems of the last dry run and of the commit, in row order
+/// (`GET /imports/{id}/issues`). Empty once the file expired (T17).
+pub async fn issues(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    cfg: &ImportConfig,
+    id: Uuid,
+    q: &ListImportIssuesQuery,
+) -> Result<Page<ImportIssue>, AppError> {
+    let mut conn = pool.acquire().await?;
+    require_enabled(&mut conn, cfg).await?;
+    let job = check_owner(ctx, fetch(&mut conn, id).await?, id)?;
+    let headers: Vec<String> =
+        job.info().map(|i| i.columns.into_iter().map(|c| c.header).collect()).unwrap_or_default();
+    let filter = "job_id = $1 AND ($2::text IS NULL OR severity = $2) AND ($3::text IS NULL OR code = $3)
+                  AND ($4::int IS NULL OR col_index = $4)";
+    let severity = q.severity.map(|s| match s {
+        IssueSeverity::Error => "error",
+        IssueSeverity::Warning => "warning",
+    });
+    let column = q.column.map(|c| c as i32);
+    let total: i64 =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM cmdb.import_job_issues WHERE {filter}")))
+            .bind(id)
+            .bind(severity)
+            .bind(&q.code)
+            .bind(column)
+            .fetch_one(&mut *conn)
+            .await?;
+    type IssueRow = (i32, Option<i32>, Option<String>, Option<String>, String, String, String);
+    let rows: Vec<IssueRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT row_no, col_index, field, value, severity, code, message FROM cmdb.import_job_issues
+         WHERE {filter} ORDER BY row_no, seq LIMIT $5 OFFSET $6"
+    )))
+    .bind(id)
+    .bind(severity)
+    .bind(&q.code)
+    .bind(column)
+    .bind(q.limit)
+    .bind(q.offset)
+    .fetch_all(&mut *conn)
+    .await?;
+    let data = rows
+        .into_iter()
+        .map(|(row, col, field, value, severity, code, message)| ImportIssue {
+            row: row as u32,
+            column: col.map(|c| c as u32),
+            header: col.and_then(|c| headers.get(c as usize).cloned()),
+            field,
+            value,
+            severity: if severity == "warning" { IssueSeverity::Warning } else { IssueSeverity::Error },
+            code,
+            message,
+        })
+        .collect();
+    Ok(Page { data, page: q.page_meta(total) })
 }

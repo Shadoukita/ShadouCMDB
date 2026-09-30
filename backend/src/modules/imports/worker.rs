@@ -110,8 +110,12 @@ pub async fn claim(pool: &PgPool, owner: &str) -> sqlx::Result<Option<Lease>> {
     Ok(row.map(|(job, phase, epoch, attempts)| Lease { job, owner: owner.to_owned(), epoch, phase, attempts }))
 }
 
-/// Ends the job with a job-level error, if this worker still holds it.
+/// Ends the job with a job-level error, if this worker still holds it. A
+/// commit also records its `import.commit` event (§4.3).
 pub async fn fail(pool: &PgPool, lease: &Lease, code: &str, message: &str) -> sqlx::Result<bool> {
+    if lease.phase == Phase::Commit {
+        return super::commit::fail(pool, lease, code, message).await;
+    }
     let n = sqlx::query(
         "UPDATE cmdb.import_jobs SET status = 'failed', error = $4, finished_at = now(),
            expires_at = now() + interval '24 hours', lease_owner = NULL, lease_until = NULL
@@ -218,10 +222,8 @@ pub async fn work(pool: &PgPool, cfg: &Arc<ImportConfig>, lease: Lease, stop: &m
 async fn run_phase(pool: PgPool, cfg: Arc<ImportConfig>, lease: Lease, lost: Arc<AtomicBool>) {
     match lease.phase {
         Phase::Analyse => analyse_phase(&pool, &cfg, &lease, &lost).await,
-        // The dry run and the commit arrive with the mapping (SHAA-799 part 4).
-        Phase::Validate | Phase::Commit => {
-            let _ = fail(&pool, &lease, "internal_error", "This server cannot run this step of the import.").await;
-        }
+        Phase::Validate => super::dry_run::run(&pool, &cfg, &lease, &lost).await,
+        Phase::Commit => super::commit::run(&pool, &cfg, &lease, &lost).await,
     }
 }
 
