@@ -303,10 +303,11 @@ test.describe("administrators: required two-factor authentication and reset", ()
     await page.context().close();
 
     // The second browser proved no code, so confirming the authenticator ended its session (GH#292): its
-    // next request answers 401 and it is sent to sign-in, where it now needs a code.
+    // next request answers 401 and it is sent to sign-in, where it now needs a code. The set-up screen
+    // was only a stop on the way, so sign-in leads on to where the user was going.
     await other.locator("#mfa-currentPassword").fill(PASSWORD);
     await other.getByRole("button", { name: "Set up authenticator app" }).click();
-    await expect(other).toHaveURL((url) => url.pathname === "/login");
+    await expect(other).toHaveURL(at("/login", "?redirect=/cis"));
     await expect(other.getByText("Your session has ended.")).toBeVisible();
     await other.getByLabel("Username").fill(USERNAME);
     await other.getByLabel("Password").fill(PASSWORD);
@@ -314,7 +315,8 @@ test.describe("administrators: required two-factor authentication and reset", ()
     await expect(other.getByLabel("Authentication code")).toBeFocused(ARGON2);
     await other.getByLabel("Authentication code").fill(await app.next());
     await other.getByRole("button", { name: "Verify" }).click();
-    await expect(other.getByRole("navigation", { name: "Main" })).toBeVisible(ARGON2);
+    await expect(other).toHaveURL(at("/cis"), ARGON2);
+    await expect(other.getByRole("navigation", { name: "Main" })).toBeVisible();
     await other.context().close();
   });
 
