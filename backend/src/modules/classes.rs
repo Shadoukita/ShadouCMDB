@@ -2531,7 +2531,12 @@ mod tests {
         relationships::create(pool, &ctx, &body::<RelationshipCreate>(edge)).await.unwrap();
 
         let restricted = datamodel_manager(&[servers.id]);
-        let viewer = datamodel_manager(&[servers.id, secrets.id]);
+        // Viewing every class includes the built-in business service type (migration 0033).
+        let services: Uuid = sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role = 'business_service'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let viewer = datamodel_manager(&[servers.id, secrets.id, services]);
 
         // The hidden class: its CI counts are withheld, the data-model counts are not.
         let report = simple::usage::<CiClasses>(pool, &restricted, secrets.id).await.unwrap();

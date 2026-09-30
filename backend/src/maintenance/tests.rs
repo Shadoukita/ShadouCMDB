@@ -354,6 +354,9 @@ async fn a_backup_from_an_older_schema_is_upgraded_on_restore() {
     let mut ca = a.pool.acquire().await.unwrap();
     reset::decommission(&mut ca).await.unwrap();
     MIGRATOR.run_to(latest - 1, &mut *ca).await.unwrap();
+    // As `shadoucmdb migrate` leaves it: types a migration added have their tables.
+    let ctx = crate::api::context::RequestContext::system("test", "test");
+    crate::schema::reconcile(&mut ca, &ctx, "Reconcile after migrate").await.map_err(|e| e.message).unwrap();
     let (buf, header) = take_backup(&mut ca).await;
     assert_eq!(header.migration_level(), Some(latest - 1));
 
@@ -404,9 +407,10 @@ async fn factory_reset_returns_to_first_run_and_decommission_leaves_nothing() {
     let mut c = a.pool.acquire().await.unwrap();
 
     reset::factory_reset(&mut c).await.unwrap();
+    // As on a first install, only the built-in business service type is left (migration 0033).
     let (users, cis, classes, audit): (i64, i64, i64, i64) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM configuration_items),
-                (SELECT count(*) FROM ci_classes), (SELECT count(*) FROM audit_log)",
+                (SELECT count(*) FROM ci_classes WHERE system_role IS NULL), (SELECT count(*) FROM audit_log)",
     )
     .fetch_one(&mut *c)
     .await
