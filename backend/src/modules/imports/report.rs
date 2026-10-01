@@ -23,21 +23,20 @@ use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
-use serde_json::json;
 use sqlx::PgPool;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use uuid::Uuid;
 
 use super::MAX_COLUMNS;
 use super::analyse::{self, FileFormat, FileOptions, REPORT_HEADERS};
-use super::jobs::{JobRow, check_owner, ctx_user, fetch};
+use super::jobs::{JobRow, check_owner, ctx_user, fetch, foreign_read_entry};
 use super::parse::{Limits, Row};
 use super::schemas::JobStatus;
 use super::storage::DbFile;
 use crate::api::context::RequestContext;
 use crate::api::route::CsvDownload;
 use crate::config::ImportConfig;
-use crate::data::crud::{self, AuditAction, AuditEntry};
+use crate::data::crud;
 use crate::http::error::{AppError, ErrorCode};
 use crate::modules::csv_safe;
 
@@ -265,19 +264,7 @@ pub async fn download(
     let permit = STREAMS.acquire(ctx_user(ctx))?;
     if job.created_by_id.is_none() || job.created_by_id != ctx_user(ctx) {
         let mut tx = pool.begin().await?;
-        let entry = AuditEntry {
-            action: AuditAction::ImportReportRead,
-            entity_type: "import_jobs",
-            entity_id: id,
-            old_value: None,
-            new_value: Some(json!({
-                "fileName": job.file_name,
-                "classKey": job.class_key,
-                "ownerId": job.created_by_id,
-                "ownerName": job.created_by_name,
-            })),
-        };
-        crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+        crud::write_audit(&mut tx, ctx, vec![foreign_read_entry(&job, "report")]).await?;
         tx.commit().await?;
     }
 

@@ -1012,6 +1012,118 @@ async fn a_commit_writes_the_valid_rows_and_audits_them() {
     assert_eq!(per_ci, 0);
 }
 
+/// The audit entries `actor` wrote about `job` with `action`: new value, else old value.
+async fn events_by(pool: &PgPool, actor: &str, action: &str, job: &str) -> Vec<Value> {
+    sqlx::query_scalar(
+        "SELECT coalesce(new_value, old_value) FROM audit_log
+         WHERE actor_name = $1 AND action = $2 AND entity_type = 'import_jobs' AND entity_id = $3 ORDER BY id",
+    )
+    .bind(actor)
+    .bind(action)
+    .bind(Uuid::parse_str(job).unwrap())
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// GH#389: an administrator may read, cancel and delete another user's job but
+/// never change or commit it, since the commit writes in the owner's name; the
+/// reads, the cancel and the delete are audited in the administrator's name.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_administrator_only_reads_cancels_or_deletes_another_users_import_and_is_audited() {
+    let Some(db) = scratch::database("import_foreign_admin").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let id = validated(&e, &alice, "Hostname;Cores\nweb01;8\ndb01;many\n").await;
+    let path = format!("/api/v1/imports/{id}");
+
+    // Every step towards writing CIs is the owner's alone.
+    let (status, v) = commit(&e, &e.admin, &id, true, None).await;
+    assert_eq!((status, detail(&v)), (403, "not_owner"), "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("alice"), "{v}");
+    let steps = [
+        ("PUT", format!("{path}/mapping"), Some(server_mapping())),
+        ("POST", format!("{path}/dry-run"), None),
+        ("PATCH", format!("{path}/file-options"), Some(json!({ "hasHeaderRow": true }))),
+    ];
+    for (m, p, body) in steps {
+        let (status, v, _) = call(&e.app, m, &p, &e.admin, body).await;
+        assert_eq!((status, detail(&v)), (403, "not_owner"), "{m} {p}: {v}");
+    }
+    drain(&e.pool).await;
+    assert_eq!(job(&e, &alice, &id).await["status"], "validated", "nothing changed");
+    let cis: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(cis, 0);
+
+    // The owner's reads are not audited; the administrator's are, once per view while polling.
+    job(&e, &alice, &id).await;
+    assert_eq!(call(&e.app, "GET", &format!("{path}/issues"), &alice, None).await.0, 200);
+    assert!(events_by(&e.pool, "alice", "import.report_read", &id).await.is_empty());
+    for _ in 0..3 {
+        job(&e, &e.admin, &id).await;
+        let (status, issues, _) = call(&e.app, "GET", &format!("{path}/issues"), &e.admin, None).await;
+        assert_eq!((status, issues["data"][0]["value"].as_str()), (200, Some("many")), "{issues}");
+    }
+    let reads = events_by(&e.pool, "admin", "import.report_read", &id).await;
+    let views: Vec<&str> = reads.iter().map(|r| r["view"].as_str().unwrap()).collect();
+    assert_eq!(views, ["job", "issues"], "{reads:?}");
+    assert_eq!((reads[0]["ownerName"].as_str(), reads[0]["fileName"].as_str()), (Some("alice"), Some("srv.csv")));
+
+    // The owner commits; the administrator stops it while queued. The commit's
+    // event names the owner, the cancel the administrator.
+    let (status, v) = commit(&e, &alice, &id, true, None).await;
+    assert_eq!(status, 202, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("{path}/cancel"), &e.admin, None).await;
+    assert_eq!((status, v["status"].as_str()), (202, Some("cancelled")), "{v}");
+    let commits = events_by(&e.pool, "alice", "import.commit", &id).await;
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0]["outcome"], "cancelled");
+    let stops: Vec<(Value, Value)> = sqlx::query_as(
+        "SELECT old_value, new_value FROM audit_log
+         WHERE actor_name = 'admin' AND action = 'update' AND entity_type = 'import_jobs' AND entity_id = $1",
+    )
+    .bind(Uuid::parse_str(&id).unwrap())
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(stops.len(), 1, "{stops:?}");
+    let (before, after) = &stops[0];
+    assert_eq!(
+        (before["status"].as_str(), before["phase"].as_str(), after["status"].as_str(), after["ownerName"].as_str()),
+        (Some("queued"), Some("commit"), Some("cancelled"), Some("alice")),
+        "{stops:?}"
+    );
+
+    // The administrator deletes it: audited with what was deleted.
+    assert_eq!(call(&e.app, "DELETE", &path, &e.admin, None).await.0, 204);
+    let deletes = events_by(&e.pool, "admin", "delete", &id).await;
+    assert_eq!(deletes.len(), 1);
+    assert_eq!((deletes[0]["fileName"].as_str(), deletes[0]["ownerName"].as_str()), (Some("srv.csv"), Some("alice")));
+    db.drop().await;
+}
+
+/// The owner's own cancel and delete add nothing to the audit log but the commit event.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_owners_cancel_and_delete_are_not_audited_as_foreign() {
+    let Some(db) = scratch::database("import_owner_stop").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let id = validated(&e, &alice, "Hostname;Cores\nweb01;8\n").await;
+    let path = format!("/api/v1/imports/{id}");
+    assert_eq!(call(&e.app, "POST", &format!("{path}/cancel"), &alice, None).await.0, 202);
+    assert_eq!(call(&e.app, "DELETE", &path, &alice, None).await.0, 204);
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE entity_type = 'import_jobs' AND entity_id = $1")
+            .bind(Uuid::parse_str(&id).unwrap())
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(n, 0);
+    db.drop().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_commit_needs_a_current_dry_run() {
     let Some(db) = scratch::database("import_commit_stale").await else { return };
@@ -1558,7 +1670,11 @@ async fn the_error_report_lists_each_problem_with_its_row_and_audits_other_reade
         .fetch_one(&e.pool)
         .await
         .unwrap();
-    assert_eq!((event["fileName"].as_str(), event["ownerName"].as_str()), (Some("srv.csv"), Some("alice")), "{event}");
+    assert_eq!(
+        (event["view"].as_str(), event["fileName"].as_str(), event["ownerName"].as_str()),
+        (Some("report"), Some("srv.csv"), Some("alice")),
+        "{event}"
+    );
 
     // Uploaded again, the report reads as the original cells.
     let (status, v, _) = upload(&e.app, &alice, CSV_TYPE, Some("srv-errors.csv"), &[], body.into_bytes()).await;
