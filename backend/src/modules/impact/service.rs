@@ -9,7 +9,7 @@ use sqlx::PgPool;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use super::engine::{self, Options, Reached, Traversal, Truncation, Way};
+use super::engine::{self, Options, Reached, Traversal, Truncation, Way, bound, db_error};
 use super::schemas::{
     AnalysisDirection, ClassCount, CriticalityCount, HopCount, ImpactAnalysis, ImpactCriticality, ImpactItem,
     ImpactLimits, ImpactParameters, ImpactQuery, ImpactRelationshipType, ImpactRoot, ImpactSettings, ImpactStatus,
@@ -21,7 +21,7 @@ use crate::auth::permissions::ClassOp;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::impact as data;
 use crate::data::items::{self as items_data, SummaryRow};
-use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
+use crate::http::error::{AppError, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
 use crate::modules::csv_safe;
 use crate::schema::model::Model;
@@ -111,40 +111,21 @@ fn criticality(r: &SummaryRow) -> Option<ImpactCriticality> {
     }
 }
 
-/// The analysis could not assemble its result within the allowance after its
-/// deadline (a very slow database): answered rather than holding the
-/// connection and the concurrency places until the request times out (GH#393).
-fn out_of_time() -> AppError {
-    let mut err = AppError::new(
-        ErrorCode::ServerBusy,
-        "The impact analysis could not be completed in time because the database is responding slowly; retry \
-         shortly, or lower depth or maxNodes",
-    );
-    err.retry_after = Some(1);
-    err
-}
-
-/// A statement's error, with one cancelled by the deadline as [`out_of_time`].
-fn db_error(e: sqlx::Error) -> AppError {
-    if engine::is_query_canceled(&e) { out_of_time() } else { e.into() }
-}
-
-/// Bounds the next statements on `conn` by `until`.
-async fn bound(conn: &mut sqlx::PgConnection, until: Instant) -> Result<(), AppError> {
-    let ms = engine::remaining_ms(until).ok_or_else(out_of_time)?;
-    data::set_statement_timeout(conn, ms).await?;
-    Ok(())
-}
-
 /// The value of each CI's lookup attribute keyed `status`, when its class has
-/// one. Every statement ends by `until`.
+/// one. Every statement ends by `until`: `statement_timeout` limits each
+/// statement, so it is set again before each one.
 async fn statuses(
     conn: &mut sqlx::PgConnection,
     items: &[(Uuid, Uuid)],
     until: Instant,
 ) -> Result<HashMap<Uuid, ImpactStatus>, AppError> {
     bound(conn, until).await?;
-    let model = Model::load(conn).await.map_err(db_error)?;
+    let areas = Model::load_areas(conn).await.map_err(db_error)?;
+    bound(conn, until).await?;
+    let classes = Model::load_classes(conn).await.map_err(db_error)?;
+    bound(conn, until).await?;
+    let fields = Model::load_fields(conn).await.map_err(db_error)?;
+    let model = Model { areas, classes, fields };
     // CIs grouped by the status field their class has (own or inherited).
     let mut by_field: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
     let mut field_of_class: HashMap<Uuid, Option<Uuid>> = HashMap::new();
@@ -286,6 +267,7 @@ async fn run(
     ctx.require_class_visible(root.class_id, "Configuration item", root_id)?;
 
     // Every named type must exist (the list is read again in the walk's snapshot).
+    bound(&mut tx, assembly).await?;
     let all_types = data::types(&mut tx).await.map_err(db_error)?;
     if let Some(ids) = &p.types
         && let Some(unknown) = ids.iter().find(|id| !all_types.iter().any(|t| t.id == **id))

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use super::ImpactDirection;
 use crate::data::impact::{self as data, HopEdge, HopTypes, Reach, TypeRow};
-use crate::http::error::AppError;
+use crate::http::error::{AppError, ErrorCode};
 
 /// Relationship rows one analysis may read per `maxNodes`, over all hops
 /// (the same budget as the relationship graph, GH#185).
@@ -160,6 +160,32 @@ pub(crate) fn remaining_ms(deadline: Instant) -> Option<u64> {
     (ms > 0).then_some(ms)
 }
 
+/// The analysis could not assemble its result within the allowance after its
+/// deadline (a very slow database): answered rather than holding the
+/// connection and the concurrency places until the request times out (GH#393).
+pub(crate) fn out_of_time() -> AppError {
+    let mut err = AppError::new(
+        ErrorCode::ServerBusy,
+        "The impact analysis could not be completed in time because the database is responding slowly; retry \
+         shortly, or lower depth or maxNodes",
+    );
+    err.retry_after = Some(1);
+    err
+}
+
+/// A statement's error, with one cancelled by the deadline as [`out_of_time`].
+pub(crate) fn db_error(e: sqlx::Error) -> AppError {
+    if is_query_canceled(&e) { out_of_time() } else { e.into() }
+}
+
+/// Bounds the next statement on `conn` by `until`. `statement_timeout` limits
+/// each statement on its own, so this runs again before every statement.
+pub(crate) async fn bound(conn: &mut PgConnection, until: Instant) -> Result<(), AppError> {
+    let ms = remaining_ms(until).ok_or_else(out_of_time)?;
+    data::set_statement_timeout(conn, ms).await?;
+    Ok(())
+}
+
 /// One hop's query under the deadline, in a savepoint so a cancelled
 /// statement leaves the snapshot usable. `Ok(None)`: the deadline hit.
 async fn timed_hop(
@@ -276,7 +302,8 @@ async fn walk(
 /// Runs the walks from `roots` (live CIs the caller may view, checked by the
 /// caller) on `conn`, which should be in a REPEATABLE READ transaction.
 pub async fn traverse(conn: &mut PgConnection, roots: &[Uuid], opts: &Options<'_>) -> Result<Traversal, AppError> {
-    let types = data::types(conn).await?;
+    bound(conn, assembly_deadline(opts.deadline)).await?;
+    let types = data::types(conn).await.map_err(db_error)?;
     let counts_deadline = opts.deadline + ASSEMBLY_ALLOWANCE / 2;
     let mut budget = Budget {
         deadline: opts.deadline,

@@ -432,9 +432,31 @@ async fn a_slow_assembly_ends_within_the_allowance() {
     blocker.rollback().await.unwrap();
     assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
     assert!(elapsed < timeout + engine::ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
+    engine::SLOW_COUNTS.lock().unwrap().retain(|r| *r != root);
+
+    // statement_timeout limits each statement, not the analysis: two
+    // statements that each wait for most of the allowance must still end
+    // within it (before: about 4 s, review of SHAA-1110).
+    let mut first = f.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE cmdb.areas IN ACCESS EXCLUSIVE MODE").execute(&mut *first).await.unwrap();
+    let mut second = f.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE cmdb.ci_attribute_definitions IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *second)
+        .await
+        .unwrap();
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(1900)).await;
+        first.rollback().await.unwrap();
+    });
+    let started = std::time::Instant::now();
+    let err = service::analyse(&f.pool, &ctx, &state, root, &both).await.err().unwrap();
+    let elapsed = started.elapsed();
+    release.await.unwrap();
+    second.rollback().await.unwrap();
+    assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
+    assert!(elapsed < timeout + engine::ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
 
     // Without the injected delays the counts are exact again.
-    engine::SLOW_COUNTS.lock().unwrap().retain(|r| *r != root);
     let r = run(&f, &ctx, root, &both).await;
     assert_eq!((r.truncated, r.items.len()), (false, 2));
     db.drop().await;

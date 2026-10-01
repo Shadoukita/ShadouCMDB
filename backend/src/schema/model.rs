@@ -104,24 +104,36 @@ impl TableName {
 
 impl Model {
     pub async fn load(conn: &mut PgConnection) -> sqlx::Result<Model> {
-        let areas = sqlx::query_as::<_, Area>("SELECT id, key FROM cmdb.areas ORDER BY sort_order, key")
-            .fetch_all(&mut *conn)
-            .await?;
-        let classes =
-            // Through to_jsonb: a restore builds type tables at older migration levels (before 0016).
-            sqlx::query_as::<_, Class>(
-                "SELECT id, key, area_id, parent_id, (to_jsonb(c) ->> 'title_attribute_id')::uuid AS title_attribute_id
-                 FROM cmdb.ci_classes c ORDER BY key",
-            )
-                .fetch_all(&mut *conn)
-                .await?;
-        let fields = sqlx::query_as::<_, Field>(
+        let areas = Self::load_areas(conn).await?;
+        let classes = Self::load_classes(conn).await?;
+        let fields = Self::load_fields(conn).await?;
+        Ok(Model { areas, classes, fields })
+    }
+
+    // The statements of `load` one by one, for a caller that limits each
+    // statement's time (impact analysis, GH#393).
+
+    pub async fn load_areas(conn: &mut PgConnection) -> sqlx::Result<Vec<Area>> {
+        sqlx::query_as::<_, Area>("SELECT id, key FROM cmdb.areas ORDER BY sort_order, key").fetch_all(&mut *conn).await
+    }
+
+    pub async fn load_classes(conn: &mut PgConnection) -> sqlx::Result<Vec<Class>> {
+        // Through to_jsonb: a restore builds type tables at older migration levels (before 0016).
+        sqlx::query_as::<_, Class>(
+            "SELECT id, key, area_id, parent_id, (to_jsonb(c) ->> 'title_attribute_id')::uuid AS title_attribute_id
+             FROM cmdb.ci_classes c ORDER BY key",
+        )
+        .fetch_all(&mut *conn)
+        .await
+    }
+
+    pub async fn load_fields(conn: &mut PgConnection) -> sqlx::Result<Vec<Field>> {
+        sqlx::query_as::<_, Field>(
             "SELECT id, class_id, key, label, data_type, enum_values, is_required, is_active, sort_order, lookup_list_id
              FROM cmdb.ci_attribute_definitions ORDER BY sort_order, key",
         )
         .fetch_all(&mut *conn)
-        .await?;
-        Ok(Model { areas, classes, fields })
+        .await
     }
 
     pub fn area(&self, id: Uuid) -> Option<&Area> {
