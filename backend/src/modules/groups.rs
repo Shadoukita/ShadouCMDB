@@ -629,7 +629,9 @@ mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery",
+        // Random per test run, so no hard-coded credential reaches the hasher or verifier.
+        let password = format!("test passphrase {}", Uuid::new_v4());
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": password,
             "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
@@ -673,8 +675,7 @@ mod tests {
         // Members: replaced as a whole, with the version; unknown users are named by index.
         let mut users = Vec::new();
         for name in ["alice", "bob"] {
-            let body =
-                json!({ "username": name, "displayName": name.to_uppercase(), "password": "a long enough password" });
+            let body = json!({ "username": name, "displayName": name.to_uppercase(), "password": password });
             let (status, u, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
             assert_eq!(status, 201, "{u}");
             users.push(u["id"].as_str().unwrap().to_owned());
@@ -769,11 +770,11 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
-        let body = json!({ "username": "carol", "displayName": "Carol", "password": "a long enough password",
+        let body = json!({ "username": "carol", "displayName": "Carol", "password": password,
             "profileIds": [managers] });
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
         assert_eq!(status, 201, "{v}");
-        let carol = login(&app, "carol", "a long enough password").await;
+        let carol = login(&app, "carol", &password).await;
         let (status, v, _) = call(&app, "GET", &by_id, &carol, None).await;
         assert_eq!(status, 200, "{v}");
         assert!(v["ownedServiceCount"].is_null(), "{v}");

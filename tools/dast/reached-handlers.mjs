@@ -35,7 +35,7 @@ import { fileURLToPath } from "node:url";
  */
 export const PROBES = [
   { method: "GET", path: "/api/v1/configuration-items/{id}", resource: "configuration-items", statuses: [200, 404] },
-  { method: "DELETE", path: "/api/v1/admin/users/{id}", resource: "admin/users", statuses: [204, 404, 409] },
+  { method: "DELETE", path: "/api/v1/admin/users/{id}", resource: "admin/users", statuses: [200, 404, 409] },
   {
     method: "POST",
     path: "/api/v1/admin/identity-providers/{id}/test",

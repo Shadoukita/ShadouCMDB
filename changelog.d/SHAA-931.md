@@ -21,5 +21,5 @@
   the dry run lists the match as a "Matched by role" warning. An import never gives a type a role
   or removes one. Files of versions 1 to 4 still import as before.
 
-**Upgrade:** Migration 0035 adds a version column to the (new, empty) user group table. No
+**Upgrade:** Migration 0037 adds a version column to the (new, empty) user group table. No
 existing data changes.
