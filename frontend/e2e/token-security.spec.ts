@@ -73,7 +73,7 @@ test.beforeAll(async ({ request }) => {
 // Deleted users take their tokens with them; the Users list stays as short as the other specs expect.
 test.afterAll(async ({ request }) => {
   const headers = { "X-CSRF-Token": await csrf(request) };
-  for (const id of users.splice(0)) expect((await request.delete(`/api/v1/admin/users/${id}`, { headers })).status()).toBe(204);
+  for (const id of users.splice(0)) expect((await request.delete(`/api/v1/admin/users/${id}`, { headers })).status()).toBe(200);
   for (const id of profiles.splice(0)) expect((await request.delete(`/api/v1/admin/profiles/${id}`, { headers })).status()).toBe(204);
 });
 

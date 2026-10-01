@@ -6,6 +6,7 @@ pub mod audit;
 pub mod auth;
 pub mod classes;
 pub mod config_transfer;
+pub mod groups;
 pub mod health;
 pub mod identity_providers;
 pub mod impact;

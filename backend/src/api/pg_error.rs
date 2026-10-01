@@ -68,6 +68,9 @@ const CONSTRAINT_FIELDS: &[(&str, &str)] = &[
     ("configuration_items_criticality_value_id_fkey", "criticalityValueId"),
     ("relationship_types_impact_direction_valid", "impactDirection"),
     ("relationship_types_impact_nondirectional", "impactDirection"),
+    ("user_groups_name_uq", "name"),
+    ("user_groups_name_not_blank", "name"),
+    ("user_group_members_user_id_fkey", "userIds"),
 ];
 
 fn snake_to_camel(s: &str) -> String {
@@ -113,6 +116,9 @@ fn unique_message(pg: &PgDatabaseError, field: &str) -> String {
     match pg.detail() {
         Some(d) if d.starts_with("Key (") => match pg.constraint() {
             Some("ci_relationships_live_edge_uq") => "This relationship already exists between these CIs".to_owned(),
+            Some("user_groups_name_uq") => {
+                "Another group already has this name (names are compared regardless of case)".to_owned()
+            }
             _ if field == "(root)" => "A record with the same values already exists".to_owned(),
             _ => format!("Another record already has this {field}"),
         },

@@ -1180,7 +1180,7 @@ pub(crate) mod tests {
         let alice = sign_in("alice third password").await;
         let again = mint(alice, bob_id.clone(), "minted before deletion").await;
         let (status, v, _) = call(&app, "DELETE", &format!("/api/v1/admin/users/{alice_id}"), &admin, None).await;
-        assert_eq!(status, 204, "{v}");
+        assert_eq!(status, 200, "{v}");
         let (status, v, _) = works(again).await;
         assert_eq!((status, v["error"]["message"].as_str()), (401, Some("This API token has been revoked")));
         assert_eq!(works(admins_for_bob).await.0, 200);
