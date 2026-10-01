@@ -900,7 +900,10 @@ pub(crate) mod tests {
         assert_eq!(status, 429, "the password routes share the lock");
         let rows = mfa_rows(pool).await;
         assert_eq!(rows.len(), crate::auth::throttle::FREE_FAILURES as usize);
-        assert!(rows.iter().all(|(a, v)| a == "mfa.failure" && v["stage"] == "enrol_confirm"), "{rows:?}");
+        assert!(
+            rows.iter().all(|(a, v)| a == "mfa.failure" && v["stage"] == "enrol_confirm"),
+            "every wrong code is an enrol_confirm failure"
+        );
         assert_eq!(rows.last().unwrap().1["lockedForSeconds"], json!(1));
 
         // Once the lock has passed the right code confirms and clears the count.
