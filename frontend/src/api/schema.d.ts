@@ -676,7 +676,7 @@ export interface paths {
         };
         /**
          * The problems the dry run and the commit found, by row
-         * @description Requires `cis.import`. In row order. `value` is the cell, cut to 200 characters. At most 10,000 problems are stored per job; `summary.issuesTotal` counts them all. Empty once the file was deleted (24 h after the last activity). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `cis.import`. In row order. `value` is the cell, cut to 200 characters. At most 10,000 problems are stored per job; `summary.issuesTotal` counts them all. Empty once the file was deleted (24 h after the last activity). Also while bulk import is off. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["listImportIssues"];
         put?: never;
@@ -696,7 +696,7 @@ export interface paths {
         };
         /**
          * The problems as a CSV to fix and upload again
-         * @description Requires `cis.import`. Columns `Row`, `Severity`, `Column`, `Problem`, `Code`, then every original column of the row under its original header; one line per problem, in row order. UTF-8 with a byte order mark, CRLF, the file's delimiter (`,` for workbooks). Every field is quoted, and a field a spreadsheet could read as a formula (starting with `=` `+` `-` `@`, a tab or a line break) or starting with `'` gets a leading `'`; a file uploaded again is recognised as a report by its first five headers and the `'` is taken off. At most the 10,000 stored problems. `404` when the job has no problems or its file expired. A download by anyone other than the job's owner is audited as `import.report_read`. `429` when the caller already downloads 2 reports, `503` when the server sends 8; a client that reads nothing for 30 s, or takes more than 15 minutes, is cut off. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `cis.import`. Columns `Row`, `Severity`, `Column`, `Problem`, `Code`, then every original column of the row under its original header; one line per problem, in row order. UTF-8 with a byte order mark, CRLF, the file's delimiter (`,` for workbooks). Every field is quoted, and a field a spreadsheet could read as a formula (starting with `=` `+` `-` `@`, a tab or a line break) or starting with `'` gets a leading `'`; a file uploaded again is recognised as a report by its first five headers and the `'` is taken off. At most the 10,000 stored problems. `404` when the job has no problems or its file expired. A download by anyone other than the job's owner is audited as `import.report_read`. `429` when the caller already downloads 2 reports, `503` when the server sends 8; a client that reads nothing for 30 s, or takes more than 15 minutes, is cut off. Also while bulk import is off, so the report can be kept before the job is deleted. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["downloadImportErrorReport"];
         put?: never;
