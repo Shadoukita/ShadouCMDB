@@ -4,7 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import BrandMark from "../../components/BrandMark.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import { useDocumentTitle } from "../../lib/composables";
-import { safeRedirect } from "../../router";
+import { safeRedirect } from "../../lib/signIn";
 import { useSessionStore } from "../../stores/session";
 import TwoFactorSettings from "./TwoFactorSettings.vue";
 
