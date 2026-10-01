@@ -314,6 +314,9 @@ pub async fn report(conn: &mut PgConnection, cfg: &EncryptionConfig) -> anyhow::
     if let Some(message) = configured.and_then(|(a, p)| sealed::refusal(&counts, a, p)) {
         println!("  WARNING: {message}");
     }
+    if let Some(message) = sealed::unencrypted_warning(&unencrypted) {
+        println!("  WARNING: {message}");
+    }
     Ok(())
 }
 

@@ -1882,7 +1882,11 @@ mod tests {
         let oidc_settings = crate::modules::sso::oidc_settings(&row, &ring).unwrap();
         assert_eq!(oidc_settings.client_secret.as_deref(), Some(OIDC_SECRET));
         hidden(format!("{oidc_settings:?}"));
-        let ldap_settings = crate::modules::sso::ldap_settings(&row, &ring).unwrap();
+        // GH#416: an unencrypted secret is refused until start-up encrypts it.
+        assert!(crate::modules::sso::ldap_settings(&row, &ring).is_err());
+        let mut sealed_row = row.clone();
+        sealed_row.secrets.bind_password = Some(sealed_as(ProviderSecret::BindPassword, LDAP_SECRET));
+        let ldap_settings = crate::modules::sso::ldap_settings(&sealed_row, &ring).unwrap();
         assert_eq!(ldap_settings.bind_password.as_deref(), Some(LDAP_SECRET));
         hidden(format!("{ldap_settings:?}"));
         // Under another key, or with a flipped byte, the settings are not built at all.
