@@ -590,6 +590,14 @@ async fn cleanup_expires_files_and_removes_stale_uploads() {
     let (_, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("a.csv"), &[], CSV.to_vec()).await;
     let id: Uuid = v["id"].as_str().unwrap().parse().unwrap();
     drain(&e.pool).await;
+    sqlx::query("UPDATE cmdb.import_jobs SET preview = '[{\"row\": 2}]' WHERE id = $1")
+        .bind(id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let j = job(&e, &e.admin, &id.to_string()).await;
+    assert_eq!(j["file"]["previewRows"].as_array().map(Vec::len), Some(3));
+    assert_eq!(j["columns"][0]["samples"], json!(["web01", "web02", "db01"]));
     sqlx::query(
         "INSERT INTO cmdb.import_job_issues (job_id, seq, row_no, severity, code, message, phase, value)
          VALUES ($1, 0, 2, 'error', 'required', 'Name is required', 'validate', 'web01')",
@@ -614,6 +622,20 @@ async fn cleanup_expires_files_and_removes_stale_uploads() {
     assert_eq!((c.files_of_jobs, c.expired_jobs), (1, 1));
     let j = job(&e, &e.admin, &id.to_string()).await;
     assert_eq!((j["status"].as_str(), j["file"]["rowCount"].as_u64()), (Some("expired"), Some(3)));
+    // No cell value outlives the file (GH#390): only the column names stay.
+    assert_eq!(j["file"]["previewRows"], json!([]));
+    assert_eq!((&j["preview"], &j["columns"][0]["samples"]), (&json!([]), &json!([])));
+    let (info, preview): (Value, Option<Value>) =
+        sqlx::query_as("SELECT file_info, preview FROM cmdb.import_jobs WHERE id = $1")
+            .bind(id)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(info["columns"][0], json!({ "index": 0, "header": "Hostname", "samples": [] }));
+    assert!(!info.to_string().contains("web01") && preview.is_none(), "{info}");
+    // A later run finds nothing left to scrub.
+    let c = worker::cleanup(&e.pool, chrono::Duration::hours(26)).await.unwrap();
+    assert_eq!(c.expired_jobs, 0);
     let issues: i64 =
         sqlx::query_scalar("SELECT count(*) FROM cmdb.import_job_issues").fetch_one(&e.pool).await.unwrap();
     assert_eq!(issues, 0);
