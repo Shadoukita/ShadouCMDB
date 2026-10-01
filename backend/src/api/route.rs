@@ -54,6 +54,8 @@ pub struct Api {
     pub impact: Arc<crate::modules::impact::ImpactState>,
     /// Bulk import limits (`IMPORT_*`).
     pub imports: Arc<crate::config::ImportConfig>,
+    /// Business service limits (`BUSINESS_SERVICE_*`).
+    pub business_services: crate::config::BusinessServiceConfig,
 }
 
 /// Who may call a route.
@@ -880,6 +882,7 @@ impl RouteBuilder {
                         readiness: state.readiness,
                         impact: state.impact,
                         imports: state.imports,
+                        business_services: state.business_services,
                     };
                     let res = match f(api, input).await {
                         Ok(out) => out.respond(status),

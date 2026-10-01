@@ -29,6 +29,7 @@ const PREFIX = "/api/v1/";
 /** Resources whose id is the first row of their list endpoint (demo data). */
 export const LISTED = [
   "configuration-items",
+  "business-services",
   "relationships",
   "areas",
   "ci-classes",
@@ -54,7 +55,11 @@ export const LEGACY = ["statuses", "environments", "locations", "owners"];
 export const OPTIONAL = ["schema-changes", ...LEGACY, "ui-settings/versions", "admin/templates"];
 
 /** Paths whose parameter names an object of another resource. */
-export const ALIASES = { "auth/oidc": "admin/identity-providers" };
+export const ALIASES = {
+  "auth/oidc": "admin/identity-providers",
+  // DELETE /business-services/{id}/members/{ciId}: a CI.
+  "business-services/{id}/members": "configuration-items",
+};
 
 /** The resource a path parameter names: the path between /api/v1/ and the parameter. */
 export function resourceOf(path, name) {

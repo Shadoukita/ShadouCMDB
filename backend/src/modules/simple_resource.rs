@@ -178,6 +178,12 @@ pub trait Resource: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Refuses an update (`columns`: what it sets) or a removal (`None`) of
+    /// this row before anything is written, e.g. of a built-in row.
+    fn before_change(_row: &Self::Dto, _columns: Option<&ColumnSet>) -> Result<(), AppError> {
+        Ok(())
+    }
+
     /// Runs first in every write transaction (e.g. to take a lock).
     fn before_write(_conn: &mut PgConnection) -> BoxFuture<'_, Result<(), AppError>> {
         Box::pin(async { Ok(()) })
@@ -317,6 +323,7 @@ pub async fn update_in<R: Resource>(
     let before: R::Dto = crud::select_by_id(conn, R::TABLE, R::COLUMNS, id, true)
         .await?
         .ok_or_else(|| AppError::missing(R::LABEL, id))?;
+    R::before_change(&before, Some(&columns))?;
     let row: R::Dto = crud::update_row(conn, R::TABLE, R::COLUMNS, id, columns).await?;
     R::after_write(conn, ctx, &row, Some(&before)).await?;
     let entry = AuditEntry {
@@ -444,6 +451,7 @@ pub async fn remove_in<R: Resource>(tx: &mut PgConnection, ctx: &RequestContext,
     R::before_write(tx).await?;
     let before: R::Dto =
         crud::select_by_id(tx, R::TABLE, R::COLUMNS, id, true).await?.ok_or_else(|| AppError::missing(R::LABEL, id))?;
+    R::before_change(&before, None)?;
     refuse_if_used(R::LABEL, &usage_counts::<R>(tx, ctx, id).await?)?;
     crud::delete_row(tx, R::TABLE, id).await?;
     let entry = AuditEntry {

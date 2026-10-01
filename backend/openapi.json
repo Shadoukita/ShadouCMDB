@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ShadouCMDB API",
-    "description": "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.\n\n- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes`, `listTemplates` and `listImportMappings` (`{ data }` with every item) and the `.../usage` operations (`{ inUse, data }`).\n- `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.\n- Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.\n- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Without a live session every operation answers 401 `UNAUTHENTICATED`, except these public ones: `GET /healthz` (getLiveness), `GET /api/v1/version` (getVersion), `GET /readyz` (getReadiness), `GET /api/v1/setup` (getSetupStatus), `POST /api/v1/setup` (completeSetup), `POST /api/v1/auth/login` (login), `POST /api/v1/auth/login/mfa` (loginSecondFactor), `GET /api/v1/auth/providers` (getSignInOptions), `GET /api/v1/auth/oidc/{id}/start` (startOidcSignIn), `GET /api/v1/auth/oidc/callback` (completeOidcSignIn), `GET /api/v1/ui-settings/branding` (getPublicBranding), `GET /api/v1/ui-settings/assets/{kind}` (getUiAsset).\n- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie, `__Host-shadoucmdb_csrf` behind HTTPS); without it: 403 `CSRF_TOKEN_INVALID`.\n- Scripts and services use an API token instead (`Authorization: Bearer scmdb_...`, created under `/api/v1/admin/api-tokens`). With that header the cookies are ignored and no CSRF token is needed; an invalid, expired or revoked token is 401. A token may do what both its owner and its permission profile allow. Operations that need a signed-in session say so in their description and answer 403 `FORBIDDEN` to a token. Every request made with a token is recorded in the audit log.\n- Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.\n- Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.\n- Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.\n- Request bodies are limited to 1 MiB (64 KiB on public operations; configuration import allows more): 413 `PAYLOAD_TOO_LARGE`. A request not answered within `HTTP_REQUEST_TIMEOUT_SECS` answers 408 `REQUEST_TIMEOUT`.",
+    "description": "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.\n\n- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes`, `listTemplates` and `listImportMappings` (`{ data }` with every item), `searchPrincipals` (`{ data }`, at most 20 matches), `listConfigurationItemServices` (`{ data, truncated, visibility }`, at most 200 services) and the `.../usage` operations (`{ inUse, data }`).\n- `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.\n- Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.\n- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Without a live session every operation answers 401 `UNAUTHENTICATED`, except these public ones: `GET /healthz` (getLiveness), `GET /api/v1/version` (getVersion), `GET /readyz` (getReadiness), `GET /api/v1/setup` (getSetupStatus), `POST /api/v1/setup` (completeSetup), `POST /api/v1/auth/login` (login), `POST /api/v1/auth/login/mfa` (loginSecondFactor), `GET /api/v1/auth/providers` (getSignInOptions), `GET /api/v1/auth/oidc/{id}/start` (startOidcSignIn), `GET /api/v1/auth/oidc/callback` (completeOidcSignIn), `GET /api/v1/ui-settings/branding` (getPublicBranding), `GET /api/v1/ui-settings/assets/{kind}` (getUiAsset).\n- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie, `__Host-shadoucmdb_csrf` behind HTTPS); without it: 403 `CSRF_TOKEN_INVALID`.\n- Scripts and services use an API token instead (`Authorization: Bearer scmdb_...`, created under `/api/v1/admin/api-tokens`). With that header the cookies are ignored and no CSRF token is needed; an invalid, expired or revoked token is 401. A token may do what both its owner and its permission profile allow. Operations that need a signed-in session say so in their description and answer 403 `FORBIDDEN` to a token. Every request made with a token is recorded in the audit log.\n- Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.\n- Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.\n- Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.\n- Request bodies are limited to 1 MiB (64 KiB on public operations; configuration import allows more): 413 `PAYLOAD_TOO_LARGE`. A request not answered within `HTTP_REQUEST_TIMEOUT_SECS` answers 408 `REQUEST_TIMEOUT`.",
     "version": "0.1.0-rc.1"
   },
   "servers": [
@@ -3638,6 +3638,1686 @@
         ]
       }
     },
+    "/api/v1/business-services": {
+      "get": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "List business services with criticality, owners and member counts",
+        "description": "Live business services (CIs of the built-in business service class; create, edit and delete them with the CI endpoints). `memberCount` counts the direct members the caller may view, `serviceMemberCount` those of them that are business services. Owners are shown by display name only. Needs view on the business service class (403 otherwise). Members of classes the caller may not view are neither listed nor counted, and an id of such a CI answers exactly like an id that does not exist; `visibility` says `restricted` whenever the caller's profile limits the classes they may view, whether or not anything is left out.",
+        "operationId": "listBusinessServices",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "criticalityValueId",
+            "in": "query",
+            "description": "Criticality values (ids of the criticality list's values), comma-separated, at most 50; `none` selects services whose criticality is not set",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ownerId",
+            "in": "query",
+            "description": "Services owned by any of these users or groups (ids, comma-separated, at most 50), in any role unless ownerRole narrows it. A user id does not match through the user's groups",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ownerRole",
+            "in": "query",
+            "description": "Narrows ownerId and mine to one owner role",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "technical",
+                "business"
+              ]
+            }
+          },
+          {
+            "name": "mine",
+            "in": "query",
+            "description": "true: only services the caller owns, directly or through one of their groups",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "false",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "ownerState",
+            "in": "query",
+            "description": "none: services without any owner; disabled: services with a disabled user as an owner",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "none",
+                "disabled"
+              ]
+            }
+          },
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "description": "false: only services inside their validity period",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending: name, criticality (most critical first; not set last), memberCount (visible members), updatedAt. Ties by name. Default: criticality",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "criticality",
+              "enum": [
+                "name",
+                "-name",
+                "criticality",
+                "-criticality",
+                "memberCount",
+                "-memberCount",
+                "updatedAt",
+                "-updatedAt"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessServiceList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/business-services/{id}": {
+      "get": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "One business service with its owners, member counts and limits",
+        "description": "The service's fields (attributes, validity) come from GET /api/v1/configuration-items/{id}. 404 for a CI that is missing, deleted or not a business service, alike. Needs view on the business service class (403 otherwise).",
+        "operationId": "getBusinessService",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessService"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/business-services/{id}/members": {
+      "get": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "The members of a business service (paginated)",
+        "description": "`ciId` answers \"which of these are members\" (the member picker). A `classId` that does not exist or that the caller may not view is refused with 400 VALIDATION_ERROR, the same for both. Members of classes the caller may not view are neither listed nor counted, and an id of such a CI answers exactly like an id that does not exist; `visibility` says `restricted` whenever the caller's profile limits the classes they may view, whether or not anything is left out.",
+        "operationId": "listBusinessServiceMembers",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "classId",
+            "in": "query",
+            "description": "Members of these classes (ids, comma-separated, at most 50). A class that does not exist or that the caller may not view is refused with 400 VALIDATION_ERROR, the same for both",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "service: only members that are business services (nested); ci: only the others",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ci",
+                "service"
+              ]
+            }
+          },
+          {
+            "name": "ciId",
+            "in": "query",
+            "description": "Which of these CIs are members (ids, comma-separated, at most 200). CIs the caller may not view are absent, exactly like CIs that are not members",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: name, class, criticality, addedAt",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "name",
+              "enum": [
+                "name",
+                "-name",
+                "class",
+                "-class",
+                "criticality",
+                "-criticality",
+                "addedAt",
+                "-addedAt"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessServiceMemberList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "Add members to a business service (all or nothing)",
+        "description": "Adds up to 500 CIs of any class. Any invalid id fails the whole request with 400 VALIDATION_ERROR and one detail per bad entry (`memberIds[<index>]`): `not_found` (missing, deleted or hidden CI, identical text), `membership_self`, `membership_cycle` (the CI is a business service that already includes this one, directly or nested), `membership_nesting_depth` (the chain of services including services would exceed BUSINESS_SERVICE_MAX_NESTING); and once on `memberIds`, `member_limit` (the members the caller may view plus the new ones exceed BUSINESS_SERVICE_MAX_MEMBERS). CIs that already are members are reported in `alreadyMembers`, not as an error. Recorded in the audit log as one relationship `create` per member plus one `update` on the service. Needs edit on the business service class and view on each member's class. Members of classes the caller may not view are neither listed nor counted, and an id of such a CI answers exactly like an id that does not exist; `visibility` says `restricted` whenever the caller's profile limits the classes they may view, whether or not anything is left out.",
+        "operationId": "addBusinessServiceMembers",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "memberIds"
+                ],
+                "properties": {
+                  "memberIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "CI ids, at most 500",
+                    "maxItems": 500,
+                    "minItems": 1,
+                    "uniqueItems": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessServiceMembersAdded"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/business-services/{id}/members/remove": {
+      "post": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "Remove members from a business service (all or nothing)",
+        "description": "Up to 500 CIs; an id that is not a member the caller may view fails the whole request with 400 `not_found` on `memberIds[<index>]`. The CIs themselves are not changed. A POST because a DELETE with a body is poorly supported by proxies. Needs edit on the business service class.",
+        "operationId": "removeBusinessServiceMembers",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "memberIds"
+                ],
+                "properties": {
+                  "memberIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "CI ids, at most 500",
+                    "maxItems": 500,
+                    "minItems": 1,
+                    "uniqueItems": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/business-services/{id}/members/{ciId}": {
+      "delete": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "Remove one member from a business service",
+        "description": "404 when the CI is not a member, does not exist or is in a class the caller may not view, alike. Needs edit on the business service class.",
+        "operationId": "removeBusinessServiceMember",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "ciId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/business-services/{id}/members/export": {
+      "get": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "The members of a business service as CSV",
+        "description": "The member list's filters and sort without paging, at most BUSINESS_SERVICE_MAX_MEMBERS rows, as a CSV file (`Content-Disposition: attachment`). Every field is quoted; a value starting with =, +, -, @, a tab or a line break is prefixed with ' so spreadsheets do not run it as a formula. The first row is a comment with the service, the filters and the visibility note; then the columns ci_id, ident, name, class, criticality, is_service, active, added_at. Each export is recorded in the audit log (action `export` on the service, with the row count, never the rows). Needs view on the business service class. Members of classes the caller may not view are neither listed nor counted, and an id of such a CI answers exactly like an id that does not exist; `visibility` says `restricted` whenever the caller's profile limits the classes they may view, whether or not anything is left out.",
+        "operationId": "exportBusinessServiceMembers",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "classId",
+            "in": "query",
+            "description": "Members of these classes (ids, comma-separated, at most 50). A class that does not exist or that the caller may not view is refused with 400 VALIDATION_ERROR, the same for both",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "service: only members that are business services (nested); ci: only the others",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ci",
+                "service"
+              ]
+            }
+          },
+          {
+            "name": "ciId",
+            "in": "query",
+            "description": "Which of these CIs are members (ids, comma-separated, at most 200). CIs the caller may not view are absent, exactly like CIs that are not members",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: name, class, criticality, addedAt",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "name",
+              "enum": [
+                "name",
+                "-name",
+                "class",
+                "-class",
+                "criticality",
+                "-criticality",
+                "addedAt",
+                "-addedAt"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/business-services/{id}/owners": {
+      "put": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "Replace the owners of a business service",
+        "description": "Replaces both roles at once; the order in each array is the display order. Owners are users or user groups, at most 10 per role. A duplicate within a role is refused with 400 `duplicate`, an unknown or deleted user or group with 400 `not_found` (`technical[<index>]` / `business[<index>]`); a disabled user is accepted. `version` must be the service's current version (409 VERSION_CONFLICT otherwise); the change bumps it and is recorded as one `update` on the service. Needs edit on the business service class.",
+        "operationId": "replaceBusinessServiceOwners",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "technical",
+                  "business"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The service's current version (BusinessService.version); another one answers 409 VERSION_CONFLICT"
+                  },
+                  "technical": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "A user or group to assign as owner.",
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/PrincipalKind"
+                        },
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "description": "In display order, at most 10",
+                    "maxItems": 10
+                  },
+                  "business": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "A user or group to assign as owner.",
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/PrincipalKind"
+                        },
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "description": "In display order, at most 10",
+                    "maxItems": 10
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceOwners"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/configuration-items/{id}/business-services": {
+      "get": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "The business services a CI is part of, directly or through nested services",
+        "description": "Walks membership only (the member relationship type), from the CI out to the services that include it and the services that include those, up to BUSINESS_SERVICE_MAX_NESTING + 1 levels. At most 200 services (`truncated` beyond, or when the walk stops at an impact analysis bound); not paginated. 404 when the CI is missing, deleted or in a class the caller may not view. A caller without view on the business service class gets `data: []`. Runs under the impact analysis limits: 429 RATE_LIMITED or 503 SERVER_BUSY as getConfigurationItemImpact.",
+        "operationId": "listConfigurationItemServices",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigurationItemServiceList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/principals": {
+      "get": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "Look up users and groups to assign as owners",
+        "description": "At most 20 users (by display name or username) and groups (by name) matching `q`, best matches first; a lookup, not a directory, so there is no paging. Users come with their username, so people with the same name can be told apart. Needs edit on the business service class or users.manage.",
+        "operationId": "searchPrincipals",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Matched (case-insensitive substring) against users' display names and usernames and group names",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "minLength": 2
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Only users or only groups; both when left out",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "user",
+                "group"
+              ]
+            }
+          },
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "description": "true: disabled user accounts are included",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "false",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrincipalList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/settings/business-services": {
+      "get": {
+        "tags": [
+          "Business services"
+        ],
+        "summary": "The business service class and member type, the caller's rights on them, and the limits",
+        "description": "For any signed-in user. `classId` is the built-in business service class (also in the class list), `memberRelationshipTypeId` the built-in member type.",
+        "operationId": "getBusinessServiceSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessServiceSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
     "/api/v1/imports/settings": {
       "get": {
         "tags": [
@@ -6579,7 +8259,7 @@
           "Relationships"
         ],
         "summary": "Create a typed, directional relationship between two CIs",
-        "description": "Rejected with 400 when the type does not allow these CI classes, when source equals target, or when a CI is deleted; 409 when the same live edge (or, for symmetric types, its reverse) exists. Needs edit on the source CI's class and view on the target's.",
+        "description": "Rejected with 400 when the type does not allow these CI classes, when source equals target, or when a CI is deleted; 409 when the same live edge (or, for symmetric types, its reverse) exists. Needs edit on the source CI's class and view on the target's. The built-in business service member type (`systemRole` business_service_member) is refused with 400 VALIDATION_ERROR (`system_relationship_type` on relationshipTypeId): members are added on the service (POST /api/v1/business-services/{id}/members).",
         "operationId": "createRelationship",
         "parameters": [],
         "requestBody": {
@@ -6853,7 +8533,7 @@
           "Relationships"
         ],
         "summary": "Remove a relationship (soft delete; the same edge can be created again later)",
-        "description": "Needs edit on the source CI's class and view on the target's.",
+        "description": "Needs edit on the source CI's class and view on the target's. A business service membership is refused with 400 VALIDATION_ERROR (`system_relationship_type` on relationshipTypeId): remove it on the service (DELETE /api/v1/business-services/{id}/members/{ciId}).",
         "operationId": "deleteRelationship",
         "parameters": [
           {
@@ -6956,7 +8636,7 @@
           "Relationships"
         ],
         "summary": "Update notes or type of a relationship (endpoints are immutable)",
-        "description": "Needs edit on the source CI's class and view on the target's.",
+        "description": "Needs edit on the source CI's class and view on the target's. A business service membership cannot be changed here, nor can a relationship take the member type (400 VALIDATION_ERROR, `system_relationship_type`).",
         "operationId": "updateRelationship",
         "parameters": [
           {
@@ -19026,7 +20706,7 @@
           "Audit log"
         ],
         "summary": "Change history (read-only, paginated, newest first by default)",
-        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export (today the impact analysis CSV) is an `export` row on what was exported (`entityType` configuration_items, the analysed CI), `newValue` holding `kind`, `format`, the `parameters`, `rowCount`, `truncated` and `visibility`, never the rows. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do). In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
+        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`) and a business service's member CSV (`kind` business_service_members, on the service). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{\"members\": {\"added\": [ids], \"removed\": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{\"owners\": {\"technical\": [...], \"business\": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
         "operationId": "listAuditLog",
         "parameters": [
           {
@@ -24885,6 +26565,314 @@
         },
         "additionalProperties": false
       },
+      "BusinessService": {
+        "type": "object",
+        "description": "A business service with its class, the visibility note and the limits.",
+        "required": [
+          "id",
+          "ident",
+          "name",
+          "criticality",
+          "active",
+          "owners",
+          "memberCount",
+          "serviceMemberCount",
+          "updatedAt",
+          "version",
+          "classId",
+          "visibility",
+          "limits"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ident": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "criticality": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CriticalityRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "owners": {
+            "$ref": "#/components/schemas/ServiceOwners"
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Direct members the caller may view"
+          },
+          "serviceMemberCount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of memberCount, how many are business services"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "classId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "all_classes",
+              "restricted"
+            ]
+          },
+          "limits": {
+            "$ref": "#/components/schemas/BusinessServiceLimits"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BusinessServiceLimits": {
+        "type": "object",
+        "description": "The configured bounds (BUSINESS_SERVICE_* and the fixed ones).",
+        "required": [
+          "maxMembers",
+          "maxBatch",
+          "maxNesting",
+          "maxOwnersPerRole"
+        ],
+        "properties": {
+          "maxMembers": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Direct members of one service, counted over the members the caller may view (BUSINESS_SERVICE_MAX_MEMBERS)"
+          },
+          "maxBatch": {
+            "type": "integer",
+            "format": "int64",
+            "description": "CIs one add or remove request may name"
+          },
+          "maxNesting": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Longest chain of services including services (BUSINESS_SERVICE_MAX_NESTING)"
+          },
+          "maxOwnersPerRole": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Owners per role"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BusinessServiceList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page",
+          "visibility"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BusinessServiceSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          },
+          "visibility": {
+            "allOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "all_classes",
+                  "restricted"
+                ]
+              },
+              {
+                "type": "object",
+                "description": "restricted: the caller's profile limits the classes they may view, so member counts leave CIs out. Derived\nfrom the permissions only, never from the data"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BusinessServiceMemberList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page",
+          "visibility"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          },
+          "visibility": {
+            "allOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "all_classes",
+                  "restricted"
+                ]
+              },
+              {
+                "type": "object",
+                "description": "restricted: members of classes the caller may not view are neither listed nor counted. Derived from the\npermissions only, never from the data"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BusinessServiceMembersAdded": {
+        "type": "object",
+        "required": [
+          "added",
+          "alreadyMembers"
+        ],
+        "properties": {
+          "added": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            },
+            "description": "The new members, by name"
+          },
+          "alreadyMembers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Requested CIs that were already members (not an error)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BusinessServiceSettings": {
+        "type": "object",
+        "required": [
+          "classId",
+          "memberRelationshipTypeId",
+          "canView",
+          "canEdit",
+          "limits"
+        ],
+        "properties": {
+          "classId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The built-in business service class (`systemRole` business_service)"
+          },
+          "memberRelationshipTypeId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The built-in member relationship type (`systemRole` business_service_member)"
+          },
+          "canView": {
+            "type": "boolean",
+            "description": "The caller may view business services"
+          },
+          "canEdit": {
+            "type": "boolean",
+            "description": "The caller may edit business services: their members and owners"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/BusinessServiceLimits"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BusinessServiceSummary": {
+        "type": "object",
+        "description": "A business service in lists.",
+        "required": [
+          "id",
+          "ident",
+          "name",
+          "criticality",
+          "active",
+          "owners",
+          "memberCount",
+          "serviceMemberCount",
+          "updatedAt",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ident": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The service's label (display name)"
+          },
+          "criticality": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CriticalityRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Inside its validity period"
+          },
+          "owners": {
+            "$ref": "#/components/schemas/ServiceOwners"
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Direct members the caller may view"
+          },
+          "serviceMemberCount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of memberCount, how many are business services"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The CI's optimistic-locking version (send it to PUT .../owners)"
+          }
+        },
+        "additionalProperties": false
+      },
       "CiClass": {
         "type": "object",
         "required": [
@@ -24902,6 +26890,7 @@
           "sortOrder",
           "isActive",
           "titleAttributeId",
+          "systemRole",
           "createdAt",
           "updatedAt"
         ],
@@ -24978,6 +26967,21 @@
             "format": "uuid",
             "description": "The attribute (of this class or an ancestor) whose value labels its CIs in lists, references, the graph\nand search; null labels them by their ident"
           },
+          "systemRole": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "What a built-in CI type is for (`ci_classes.system_role`).",
+                "enum": [
+                  "business_service"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on the built-in type the application itself uses: `business_service` (the business services). It can be\nrenamed and given fields, but not deleted, archived, purged, made abstract, given a parent or subtypes"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -25004,6 +27008,54 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CiRef": {
+        "type": "object",
+        "description": "A CI as a member list shows it.",
+        "required": [
+          "id",
+          "ident",
+          "name",
+          "classId",
+          "className",
+          "criticality",
+          "active"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ident": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The CI's label (display name)"
+          },
+          "classId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "className": {
+            "type": "string"
+          },
+          "criticality": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CriticalityRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Inside its validity period"
           }
         },
         "additionalProperties": false
@@ -25433,6 +27485,61 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConfigurationItemService": {
+        "type": "object",
+        "required": [
+          "service",
+          "direct",
+          "viaServiceIds"
+        ],
+        "properties": {
+          "service": {
+            "$ref": "#/components/schemas/BusinessServiceSummary"
+          },
+          "direct": {
+            "type": "boolean",
+            "description": "The service includes the CI itself"
+          },
+          "viaServiceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "For a nested membership, the services between the CI and this one, starting with the one that includes the\nCI: the CI is part of viaServiceIds[0], which is part of viaServiceIds[1], …, which is part of `service`.\nEmpty when direct"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConfigurationItemServiceList": {
+        "type": "object",
+        "required": [
+          "data",
+          "truncated",
+          "visibility"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigurationItemService"
+            },
+            "description": "Direct first, then by nesting depth, then by name; at most 200"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "The CI is part of more than 200 services, or the walk stopped at a bound of the impact analysis"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "all_classes",
+              "restricted"
+            ]
           }
         },
         "additionalProperties": false
@@ -29662,6 +31769,35 @@
         },
         "additionalProperties": false
       },
+      "Member": {
+        "type": "object",
+        "description": "A member of a business service.",
+        "required": [
+          "membershipId",
+          "ci",
+          "isService",
+          "addedAt"
+        ],
+        "properties": {
+          "membershipId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The membership relationship's id (ci_relationships)"
+          },
+          "ci": {
+            "$ref": "#/components/schemas/CiRef"
+          },
+          "isService": {
+            "type": "boolean",
+            "description": "The member is itself a business service (nested)"
+          },
+          "addedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
       "MfaStatus": {
         "type": "object",
         "description": "The user's two-factor state.",
@@ -29957,6 +32093,90 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Principal": {
+        "type": "object",
+        "description": "A user or group found by the owner picker.",
+        "required": [
+          "kind",
+          "id",
+          "displayName",
+          "active"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/PrincipalKind"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Users only, to tell people with the same name apart"
+          },
+          "active": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PrincipalKind": {
+        "type": "string",
+        "enum": [
+          "user",
+          "group"
+        ]
+      },
+      "PrincipalList": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Principal"
+            },
+            "description": "At most 20, best matches first (a name or username starting with q), then by name"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PrincipalRef": {
+        "type": "object",
+        "description": "An owner of a business service: a user or a user group, by display name only.",
+        "required": [
+          "kind",
+          "id",
+          "displayName",
+          "active"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/PrincipalKind"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string",
+            "description": "The user's display name, or the group's name"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "false for a disabled user account; always true for a group"
           }
         },
         "additionalProperties": false
@@ -30537,6 +32757,7 @@
           "impactDirection",
           "sortOrder",
           "isActive",
+          "systemRole",
           "createdAt",
           "updatedAt"
         ],
@@ -30585,6 +32806,21 @@
           },
           "isActive": {
             "type": "boolean"
+          },
+          "systemRole": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "What a built-in relationship type is for (`relationship_types.system_role`).",
+                "enum": [
+                  "business_service_member"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on the built-in type the application itself uses: `business_service_member` (a business service includes\na CI). Its name and labels can change; its key, direction, impact direction and active flag cannot, it cannot\nbe deleted, and its relationships are managed on the business service (`/api/v1/business-services`)"
           },
           "createdAt": {
             "type": "string",
@@ -30905,6 +33141,31 @@
             "type": "integer",
             "format": "int64",
             "description": "Rows of this kind that exist here but are not in the file (kept as they are)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServiceOwners": {
+        "type": "object",
+        "description": "The owners of a service per role, in the order they were assigned.",
+        "required": [
+          "technical",
+          "business"
+        ],
+        "properties": {
+          "technical": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrincipalRef"
+            },
+            "maxItems": 10
+          },
+          "business": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrincipalRef"
+            },
+            "maxItems": 10
           }
         },
         "additionalProperties": false
@@ -32940,6 +35201,10 @@
     {
       "name": "Impact analysis",
       "description": "Which CIs are affected if a CI fails (downstream) and which it depends on (upstream), along the relationship types that propagate impact. Bounded, and limited to the CIs the caller may view."
+    },
+    {
+      "name": "Business services",
+      "description": "Business services: CIs of the built-in business service class, with members (CIs of any class, including other services), technical and business owners (users and groups) and a criticality. Members of classes the caller may not view are neither listed nor counted."
     },
     {
       "name": "Bulk import",

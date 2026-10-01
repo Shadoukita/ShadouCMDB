@@ -250,6 +250,27 @@ impl Default for ImpactConfig {
     }
 }
 
+/// Bounds of business services (`BUSINESS_SERVICE_*`, SHAA-927 §1.3); see
+/// [`crate::modules::business_services`]. Each has a compile-time ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BusinessServiceConfig {
+    /// Direct members of one service, counted over the members the caller may view.
+    pub max_members: i64,
+    /// Longest chain of services including services.
+    pub max_nesting: i32,
+}
+
+impl Default for BusinessServiceConfig {
+    fn default() -> Self {
+        BusinessServiceConfig { max_members: 5_000, max_nesting: 5 }
+    }
+}
+
+/// Hard ceilings of the `BUSINESS_SERVICE_*` settings (the nesting ceiling is
+/// also the database trigger's, migration 0033).
+pub const BUSINESS_SERVICE_MAX_MEMBERS_CEILING: i64 = 50_000;
+pub const BUSINESS_SERVICE_MAX_NESTING_CEILING: i32 = 8;
+
 /// Hard ceilings of the `IMPACT_*` settings.
 pub const IMPACT_MAX_DEPTH_CEILING: i32 = 20;
 pub const IMPACT_MAX_NODES_CEILING: i32 = 10_000;
@@ -281,6 +302,7 @@ pub struct Config {
     pub encryption: EncryptionConfig,
     pub impact: ImpactConfig,
     pub imports: ImportConfig,
+    pub business_services: BusinessServiceConfig,
 }
 
 /// The env file the variables were read from (`--env-file`, or the `.env` found).
@@ -347,6 +369,7 @@ impl std::fmt::Debug for Config {
             encryption,
             impact,
             imports,
+            business_services,
         } = self;
         f.debug_struct("Config")
             .field("api_host", api_host)
@@ -363,6 +386,7 @@ impl std::fmt::Debug for Config {
             .field("encryption", encryption)
             .field("impact", impact)
             .field("imports", imports)
+            .field("business_services", business_services)
             .finish()
     }
 }
@@ -726,6 +750,16 @@ impl Config {
                 .unwrap_or(impact_defaults.max_concurrent_per_user),
         };
 
+        let service_defaults = BusinessServiceConfig::default();
+        let business_services = BusinessServiceConfig {
+            max_members: r
+                .int::<i64>("BUSINESS_SERVICE_MAX_MEMBERS", 1, BUSINESS_SERVICE_MAX_MEMBERS_CEILING)
+                .unwrap_or(service_defaults.max_members),
+            max_nesting: r
+                .int::<i32>("BUSINESS_SERVICE_MAX_NESTING", 1, BUSINESS_SERVICE_MAX_NESTING_CEILING)
+                .unwrap_or(service_defaults.max_nesting),
+        };
+
         let encryption = EncryptionConfig {
             key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
             previous_key_file: r.raw("ENCRYPTION_KEY_PREVIOUS_FILE").map(PathBuf::from),
@@ -795,6 +829,7 @@ impl Config {
             encryption,
             impact,
             imports,
+            business_services,
         })
     }
 }
@@ -949,6 +984,24 @@ mod tests {
         }
         let err = load_with(&[("IMPACT_TIMEOUT_MS", "3000"), ("HTTP_REQUEST_TIMEOUT_SECS", "3")]).unwrap_err();
         assert!(err.to_string().contains("IMPACT_TIMEOUT_MS"), "{err}");
+    }
+
+    #[test]
+    fn business_service_limits_have_ceilings() {
+        let cfg = load_with(&[]).unwrap();
+        assert_eq!(cfg.business_services, BusinessServiceConfig { max_members: 5_000, max_nesting: 5 });
+        let ok = load_with(&[("BUSINESS_SERVICE_MAX_MEMBERS", "50000"), ("BUSINESS_SERVICE_MAX_NESTING", "8")]);
+        assert_eq!(ok.unwrap().business_services, BusinessServiceConfig { max_members: 50_000, max_nesting: 8 });
+        // Out of range stops the server; nothing is lowered to the ceiling.
+        for (key, bad) in [
+            ("BUSINESS_SERVICE_MAX_MEMBERS", "50001"),
+            ("BUSINESS_SERVICE_MAX_MEMBERS", "0"),
+            ("BUSINESS_SERVICE_MAX_NESTING", "9"),
+            ("BUSINESS_SERVICE_MAX_NESTING", "0"),
+        ] {
+            let err = load_with(&[(key, bad)]).unwrap_err().to_string();
+            assert!(err.contains(key), "{err}");
+        }
     }
 
     #[test]
