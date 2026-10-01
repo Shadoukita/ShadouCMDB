@@ -288,8 +288,10 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Stop an import")
             .description(
-                "Analysis and dry run stop at once; a commit stops after its current batch of at most 500 rows, \
-                 and the rows committed so far stay. `409` once the job has ended. Also while bulk import is off.",
+                "Analysis, dry run and a queued commit stop at once. A running commit stops after its current \
+                 batch of at most 500 rows, and the rows committed so far stay: the job stays `committing` with \
+                 `cancelRequestedAt` set until that batch is written, then ends as `cancelled` with its final \
+                 counts. `409` once the job has ended. Also while bulk import is off.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()

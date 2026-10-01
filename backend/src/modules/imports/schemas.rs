@@ -265,6 +265,10 @@ pub struct ImportJob {
     /// When the file is deleted (24 h after the last activity or the end of the job)
     pub expires_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+    /// When a stop of the running commit was requested. The job stays
+    /// `committing` until the current chunk is written, then ends as
+    /// `cancelled` with its final counts.
+    pub cancel_requested_at: Option<DateTime<Utc>>,
 }
 
 /// A job in lists: without columns, mapping and preview.

@@ -56,12 +56,13 @@ pub struct JobRow {
     pub updated_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
     pub expires_at: DateTime<Utc>,
+    pub cancel_requested_at: Option<DateTime<Utc>>,
 }
 
 pub const COLUMNS: &str = "id, created_by_id, created_by_name, status, phase, file_name, file_format, file_size, \
     file_sha256, file_options, file_info, class_key, mapping, mapping_id, summary, preview, model_fingerprint, \
     dry_run_finished_at, committed_through_row, attempts, progress_done, progress_total, error, queued_at, \
-    lease_owner, lease_until, lease_epoch, created_at, updated_at, finished_at, expires_at";
+    lease_owner, lease_until, lease_epoch, created_at, updated_at, finished_at, expires_at, cancel_requested_at";
 
 /// SQL list of the statuses in which nothing happens any more.
 pub const FINAL_STATUSES: &str = "('completed', 'completed_with_errors', 'failed', 'cancelled', 'expired')";
@@ -163,6 +164,7 @@ impl JobRow {
             created_by: self.owner(),
             expires_at: self.expires_at,
             finished_at: self.finished_at,
+            cancel_requested_at: self.cancel_requested_at,
         }
     }
 
@@ -293,9 +295,12 @@ pub(crate) fn invalid_state(message: &str) -> AppError {
     coded(ErrorCode::Conflict, message, "invalid_state")
 }
 
-/// Stops a job: analysis and dry run at once, a commit after its current
-/// chunk (the worker sees the status at the chunk boundary). Allowed while the
-/// switch is off, so running jobs can be stopped (W3).
+/// Stops a job: analysis, dry run and a queued commit at once. A running
+/// commit only records the request (`cancelRequestedAt`) and stays
+/// `committing`: the worker ends it as `cancelled` after its current chunk, in
+/// the transaction that writes the final counts, so a `cancelled` job's counts
+/// are final (GH#359). Allowed while the switch is off, so running jobs can be
+/// stopped (W3).
 pub async fn cancel(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<ImportJob, AppError> {
     let mut tx = pool.begin().await?;
     let job = check_owner(ctx, fetch_for_update(&mut tx, id).await?, id)?;
@@ -305,15 +310,19 @@ pub async fn cancel(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Imp
     if job.status == JobStatus::Uploading {
         return Err(invalid_state("The file is still uploading; stop the upload instead."));
     }
-    let row: JobRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "UPDATE cmdb.import_jobs SET status = 'cancelled', finished_at = now(), expires_at = now() + interval '24 hours',
-           lease_owner = CASE WHEN status = 'committing' THEN lease_owner END,
-           lease_until = CASE WHEN status = 'committing' THEN lease_until END
-         WHERE id = $1 RETURNING {COLUMNS}"
-    )))
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let sql = if job.status == JobStatus::Committing {
+        format!(
+            "UPDATE cmdb.import_jobs SET cancel_requested_at = coalesce(cancel_requested_at, now())
+             WHERE id = $1 RETURNING {COLUMNS}"
+        )
+    } else {
+        format!(
+            "UPDATE cmdb.import_jobs SET status = 'cancelled', finished_at = now(),
+               expires_at = now() + interval '24 hours', lease_owner = NULL, lease_until = NULL
+             WHERE id = $1 RETURNING {COLUMNS}"
+        )
+    };
+    let row: JobRow = sqlx::query_as(sqlx::AssertSqlSafe(sql)).bind(id).fetch_one(&mut *tx).await?;
     if job.status == JobStatus::Queued && job.phase == Some(Phase::Commit) {
         super::commit::record_queued_cancel(&mut tx, &row).await?;
     }

@@ -17,6 +17,9 @@
 //!   is written twice.
 //! - **Rows with dry-run errors** are never attempted (`skipped`).
 //! - **Cancel** stops after the current chunk; the rows written so far stay.
+//!   The cancel only requests the stop (`cancel_requested_at`); the job stays
+//!   `committing` until [`finish`] ends it as `cancelled` with its final
+//!   counts, so a `cancelled` job never changes again (GH#359).
 //! - **Audit (§4.3).** Per-CI and per-relationship entries in the chunk's
 //!   transaction, as the owner with `actor_type = import` and
 //!   `request_id = import:<jobId>`; nothing for unchanged rows; one
@@ -277,8 +280,8 @@ async fn commit(
         data,
     };
 
-    // The reader stops on its own flag: a cancel also ends the lease renewal
-    // (`lost`), and the commit still finishes its current chunk then.
+    // The reader stops on its own flag; the commit sees a cancel at the next
+    // chunk boundary.
     let reading = Arc::new(AtomicBool::new(false));
     let file = DbFile {
         pool: pool.clone(),
@@ -301,16 +304,18 @@ async fn commit(
         // The owner's rights as they are now, at every chunk (§3.6, T22).
         let ctx = {
             let mut conn = pool.acquire().await.map_err(|_| internal())?;
-            match status_of(&mut conn, lease).await.map_err(|_| internal())? {
+            match cancel_requested(&mut conn, lease).await.map_err(|_| internal())? {
                 None => return end(Ok(None)),
-                Some(JobStatus::Cancelled) => return end(Ok(Some("cancelled"))),
-                Some(_) => {}
+                Some(true) => return end(Ok(Some("cancelled"))),
+                Some(false) => {}
             }
             match owner_context(&mut conn, cfg, s.job.created_by_id, s.job.id).await {
                 Ok(ctx) => ctx,
                 Err(stop) => return end(Err(stop)),
             }
         };
+        #[cfg(test)]
+        test_hooks::pause(s.job.id).await;
         match chunk(pool, &mut s, &ctx, lease, &rows).await {
             Ok(Written::Ok) => {}
             Ok(Written::Lost) => return end(Ok(None)),
@@ -329,10 +334,10 @@ async fn commit(
         }
     })?;
     let mut conn = pool.acquire().await.map_err(|_| internal())?;
-    let status = match status_of(&mut conn, lease).await.map_err(|_| internal())? {
+    let status = match cancel_requested(&mut conn, lease).await.map_err(|_| internal())? {
         None => return Ok(None),
-        Some(JobStatus::Cancelled) => "cancelled",
-        Some(_) => {
+        Some(true) => "cancelled",
+        Some(false) => {
             let c = s.counts();
             if c.failed > 0 || c.skipped > 0 { "completed_with_errors" } else { "completed" }
         }
@@ -346,11 +351,11 @@ async fn commit(
     Ok(Some(status))
 }
 
-/// The job's status if this worker still holds it.
-async fn status_of(conn: &mut PgConnection, lease: &Lease) -> sqlx::Result<Option<JobStatus>> {
+/// Whether a stop was requested, if this worker still holds the job.
+async fn cancel_requested(conn: &mut PgConnection, lease: &Lease) -> sqlx::Result<Option<bool>> {
     sqlx::query_scalar(
-        "SELECT status FROM cmdb.import_jobs WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3
-           AND status IN ('committing', 'cancelled')",
+        "SELECT cancel_requested_at IS NOT NULL FROM cmdb.import_jobs
+         WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3 AND status = 'committing'",
     )
     .bind(lease.job)
     .bind(&lease.owner)
@@ -621,7 +626,7 @@ async fn record(
     let n = sqlx::query(
         "UPDATE cmdb.import_jobs SET committed_through_row = $4, progress_done = least($5, progress_total),
            summary = $6, attempts = 0, expires_at = now() + interval '24 hours'
-         WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3 AND status IN ('committing', 'cancelled')",
+         WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3 AND status = 'committing'",
     )
     .bind(lease.job)
     .bind(&lease.owner)
@@ -666,17 +671,19 @@ async fn record(
 }
 
 /// Ends the commit with `status` and writes its `import.commit` event, in one
-/// transaction fenced by the lease. A job that was cancelled stays
-/// `cancelled`.
+/// transaction fenced by the lease: the job reaches its final status with
+/// the counts of the last committed chunk. A commit that fails after a stop
+/// was requested (a worker that kept dying, say) ends `cancelled`: nothing more
+/// is written either way, and the stop is what the owner asked for.
 async fn finish(pool: &PgPool, lease: &Lease, status: &str, error: Option<Value>) -> sqlx::Result<bool> {
     let mut tx = pool.begin().await?;
     let row: Option<JobRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "UPDATE cmdb.import_jobs SET
-           status = CASE WHEN status = 'cancelled' THEN 'cancelled' ELSE $4 END,
-           error = CASE WHEN status = 'cancelled' THEN error ELSE $5 END,
-           finished_at = coalesce(finished_at, now()), expires_at = now() + interval '24 hours',
+           status = CASE WHEN cancel_requested_at IS NOT NULL AND $4::text = 'failed' THEN 'cancelled' ELSE $4 END,
+           error = CASE WHEN cancel_requested_at IS NOT NULL AND $4::text = 'failed' THEN NULL ELSE $5 END,
+           finished_at = now(), expires_at = now() + interval '24 hours',
            lease_owner = NULL, lease_until = NULL
-         WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3 AND status IN ('committing', 'cancelled')
+         WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3 AND status = 'committing'
          RETURNING {COLUMNS}"
     )))
     .bind(lease.job)
@@ -748,16 +755,48 @@ fn audit_context(job: &JobRow) -> RequestContext {
     ctx
 }
 
-/// Lets a test stop a commit as if its process died after a number of chunks:
-/// nothing more is written and the lease stays until it runs out.
+/// Lets a test stop a commit as if its process died after a number of chunks
+/// (nothing more is written and the lease stays until it runs out), or hold it
+/// inside a chunk.
 #[cfg(test)]
 pub mod test_hooks {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
+    use tokio::sync::oneshot;
     use uuid::Uuid;
 
     static DIE_AFTER: Mutex<Option<HashMap<Uuid, usize>>> = Mutex::new(None);
+
+    type Pause = (usize, oneshot::Sender<()>, oneshot::Receiver<()>);
+    static PAUSES: Mutex<Option<HashMap<Uuid, Pause>>> = Mutex::new(None);
+
+    /// Holds the commit of `job` when its chunk number `chunk` (from 1) has
+    /// passed the cancel check and is about to be written. The first receiver
+    /// fires when it is held; sending on the second lets it go on.
+    pub fn pause_at(job: Uuid, chunk: usize) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (reached_tx, reached_rx) = oneshot::channel();
+        let (go_tx, go_rx) = oneshot::channel();
+        PAUSES.lock().unwrap().get_or_insert_with(HashMap::new).insert(job, (chunk, reached_tx, go_rx));
+        (reached_rx, go_tx)
+    }
+
+    pub(super) async fn pause(job: Uuid) {
+        let held = {
+            let mut guard = PAUSES.lock().unwrap();
+            let Some(map) = guard.as_mut() else { return };
+            let Some((left, _, _)) = map.get_mut(&job) else { return };
+            *left -= 1;
+            if *left > 0 {
+                return;
+            }
+            map.remove(&job)
+        };
+        if let Some((_, reached, go)) = held {
+            let _ = reached.send(());
+            let _ = go.await;
+        }
+    }
 
     pub fn die_after(job: Uuid, chunks: usize) {
         DIE_AFTER.lock().unwrap().get_or_insert_with(HashMap::new).insert(job, chunks);
