@@ -10,6 +10,8 @@
 //! `elapsedMs` are blanked. Everything else must be byte-identical.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Body as HttpBody;
@@ -19,10 +21,14 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use super::service;
 use crate::api::context::RequestContext;
-use crate::config::BusinessServiceConfig;
+use crate::config::{BusinessServiceConfig, ImpactConfig};
 use crate::db::scratch;
+use crate::http::error::ErrorCode;
 use crate::modules::api_tokens::tests::{Creds, app_with_business_services, call, session_of};
+use crate::modules::impact::ImpactState;
+use crate::modules::impact::engine::ASSEMBLY_ALLOWANCE;
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -1246,6 +1252,44 @@ async fn impact_follows_membership_and_part_of_lists_nesting() {
     .unwrap();
     let (_, part) = w.get(&admin, &format!("/api/v1/configuration-items/{web}/business-services")).await;
     assert_eq!((part["data"].as_array().unwrap().len(), part["truncated"].as_bool()), (200, Some(true)));
+}
+
+/// SHAA-1112: the statements after the walk share the impact analysis's
+/// allowance. Another session's lock makes reading the owners wait, as on a
+/// very slow database: the view ends at the end of the allowance with 503
+/// SERVER_BUSY instead of holding the connection until the request times out.
+#[tokio::test]
+async fn a_slow_part_of_ends_within_the_allowance() {
+    let Some(db) = scratch::database("business_services_part_of_allowance").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig::default()).await;
+    let admin = w.admin.clone();
+    w.ci("business_service", "S", "Shop").await;
+    let db01 = w.ci("server", "db-01", "db-01").await;
+    w.add(&admin, "S", &["db-01"]).await;
+    let ctx = RequestContext::system("test", "test");
+    let timeout = Duration::from_millis(100);
+    let impact = Arc::new(ImpactState::new(ImpactConfig { timeout, ..ImpactConfig::default() }));
+    let cfg = BusinessServiceConfig::default();
+    let slack = Duration::from_millis(500);
+
+    let mut blocker = w.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE cmdb.business_service_owners IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let started = Instant::now();
+    let err = service::part_of(&w.pool, &ctx, &impact, cfg, db01).await.err().unwrap();
+    let elapsed = started.elapsed();
+    blocker.rollback().await.unwrap();
+    assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
+    assert!(elapsed < timeout + ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
+
+    // Without the lock the view is answered, and the analysis place was given back.
+    let r = service::part_of(&w.pool, &ctx, &impact, cfg, db01).await.unwrap();
+    assert_eq!(r.data.iter().map(|s| s.service.ident.as_str()).collect::<Vec<_>>(), ["S"]);
+    let (status, headers, _) =
+        raw(&w.app, "GET", &format!("/api/v1/configuration-items/{db01}/business-services"), &admin, None).await;
+    assert_eq!((status, headers.get(header::RETRY_AFTER)), (200, None));
 }
 
 // ---------------------------------------------------------------------------
