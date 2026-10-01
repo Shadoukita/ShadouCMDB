@@ -1605,11 +1605,10 @@ pub(crate) mod tests {
         let (log, _guard) = crate::auth::setup_token::capture::warnings();
 
         let typed = "Tr0ub4dor&3-not-a-name";
-        login(pool, &auth, &headers, &from("198.51.100.9"), login_body(typed, "x")).await.err().expect("refused");
-        login(pool, &auth, &headers, &from("198.51.100.9"), login_body("OWNER", "wrong password"))
-            .await
-            .err()
-            .expect("refused");
+        // Generated, so no fixed value reaches the password check.
+        let wrong = Uuid::new_v4().to_string();
+        login(pool, &auth, &headers, &from("198.51.100.9"), login_body(typed, &wrong)).await.err().expect("refused");
+        login(pool, &auth, &headers, &from("198.51.100.9"), login_body("OWNER", &wrong)).await.err().expect("refused");
 
         let failed: Vec<String> = log.lines().into_iter().filter(|l| l.contains("sign-in failed")).collect();
         assert_eq!(failed.len(), 2, "{failed:?}");
