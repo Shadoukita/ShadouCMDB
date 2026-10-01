@@ -4,6 +4,7 @@ import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { useLookupLists, useLookupListValues } from "../api/datamodel";
 import { ciCountQuery, useCiClasses, useCiList } from "../api/queries";
+import { dataModelEmpty } from "../lib/dataModel";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -32,8 +33,8 @@ const total = useQuery(ciCountQuery({}));
 const recent = useCiList({ sort: "-updatedAt", limit: 12 });
 
 const classes = useCiClasses();
-/** A fresh install: no classes yet, so the first step is the data model, not a CI. */
-const noClasses = computed(() => classes.data.value?.length === 0);
+/** A fresh install: no classes but the built-in ones yet, so the first step is the data model, not a CI. */
+const noClasses = computed(() => !!classes.data.value && dataModelEmpty(classes.data.value));
 // Only classes the user may view: the API leaves the others out of every count, which would read as 0.
 const concrete = computed(() => (classes.data.value ?? []).filter((c) => !c.isAbstract && session.canOnClass(c.id, "view")));
 const classCounts = useQueries({ queries: computed(() => concrete.value.map((c) => ciCountQuery({ classId: c.id }))) });

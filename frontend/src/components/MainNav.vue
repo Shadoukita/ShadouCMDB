@@ -4,6 +4,7 @@ import { computed, ref, watch } from "vue";
 import { RouterLink, type RouteLocationNormalizedLoaded } from "vue-router";
 import { useAreas } from "../api/datamodel";
 import { ciCountQuery, useCiClasses } from "../api/queries";
+import { dataModelEmpty } from "../lib/dataModel";
 import type { UiPage } from "../api/uiSettings";
 import { useAppSettings, useNavPreviewStore } from "../lib/appSettings";
 import { viewableClasses } from "../lib/permissions";
@@ -121,7 +122,8 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
     </template>
   </template>
   <p v-if="classes.isError.value" class="nav-note">Classes unavailable</p>
-  <p v-else-if="classes.data.value && classes.data.value.length === 0" class="nav-note">
+  <!-- The built-in classes (Business service) do not count: until a class of its own exists, the data model is empty. -->
+  <p v-else-if="classes.data.value && dataModelEmpty(classes.data.value)" class="nav-note">
     No classes yet.
     <RouterLink v-if="session.can('datamodel.manage')" to="/admin/templates">Set up the data model</RouterLink>
   </p>
