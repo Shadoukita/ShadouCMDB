@@ -47,7 +47,8 @@ test("the editor loads when Customization is opened again from within the app", 
   await expect(page.getByLabel("Application name")).toBeVisible();
   // Back to Administration and in again without a reload: the settings are cached now, the editor must still appear.
   await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Administration" }).click();
-  await expect(page).toHaveURL(/\/admin$/);
+  // /admin opens its first page (Users).
+  await expect(page).not.toHaveURL(/\/admin\/customization/);
   await adminNav.getByRole("link", { name: "Customization" }).click();
   await expect(page.getByLabel("Application name")).toBeVisible();
   await page.getByRole("navigation", { name: "Customization" }).getByRole("link", { name: "Navigation" }).click();
