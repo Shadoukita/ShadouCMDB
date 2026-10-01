@@ -13,6 +13,7 @@ const PROFILE = `E2E importers ${stamp}`;
 const NO_IMPORT_PROFILE = `E2E no import ${stamp}`;
 const IMPORTER = `e2e-importer-${stamp}`;
 const PLAIN = `e2e-plain-${stamp}`;
+const OTHER_IMPORTER = `e2e-other-importer-${stamp}`;
 const PASSWORD = "importer-password-123";
 const FAILING = new Set(["critical", "serious"]);
 
@@ -57,6 +58,7 @@ test.beforeAll(async ({ request }) => {
   });
   await apiSend(request, "POST", "/admin/users", { username: IMPORTER, displayName: `E2E Importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
   await apiSend(request, "POST", "/admin/users", { username: PLAIN, displayName: `E2E Plain ${stamp}`, password: PASSWORD, profileIds: [plain.id] });
+  await apiSend(request, "POST", "/admin/users", { username: OTHER_IMPORTER, displayName: `E2E Other importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
   await setImport(request, false);
 });
 
@@ -187,9 +189,7 @@ test("while import is off, the user still sees and deletes their import", async 
   // The job page says so too, and offers no step action the server would refuse.
   await row.getByRole("link", { name: `servers-${stamp}.csv` }).click();
   await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText("Bulk import is turned off for this instance.");
-  await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText(
-    "error report can be read again once an administrator turns bulk import back on",
-  );
+  await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).not.toContainText("read-only");
   await expect(page.getByRole("button", { name: "Next: Map columns" })).toHaveCount(0);
   await page.getByRole("status").getByRole("link", { name: "Imports" }).click();
   await row.getByRole("button", { name: /Delete import of/ }).click();
@@ -388,7 +388,7 @@ test("saved mapping and update: the same headers apply the mapping; 2 changed ce
   await page.context().close();
 });
 
-test("errors and report: per-row problems, the neutralised report, a corrected file, and skipping the rest", async ({ browser }, testInfo) => {
+test("errors and report: per-row problems, the neutralised report, a corrected file, and skipping the rest", async ({ browser, request }, testInfo) => {
   const page = await signInUi(browser, IMPORTER);
   const bad = [
     appRow(21, "=cmd|' /C calc'!A0", "Nope"), // unknown lookup value; the formula lands in the report, neutralised
@@ -455,6 +455,71 @@ test("errors and report: per-row problems, the neutralised report, a corrected f
   await expect(result(page)).toContainText("Import finished: 4 created, 0 updated, 0 unchanged, 1 skipped", { timeout: 30_000 });
   const [skipped] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download error report" }).click()]);
   expect(await readFile(await skipped.path(), "utf-8")).toContain(APP(25));
+
+  // Import off (#362): the owner still reads the check's row problems and downloads its report, but no step action
+  // is offered; the finished import keeps its report too.
+  await setImport(request, false);
+  try {
+    await page.goto(`/imports/${firstId}`);
+    const notice = page.getByRole("status").filter({ hasText: "This import cannot continue" });
+    await expect(notice).toContainText("Bulk import is turned off for this instance.");
+    await expect(notice).toContainText("The result below is read-only.");
+    await expect(counts(page)).not.toContainText("Errors 0 rows");
+    await expect(problems.getByRole("row", { name: /^7 / })).toContainText("Primary database");
+    const [offReport] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download error report" }).click()]);
+    expect(await readFile(await offReport.path(), "utf-8")).toContain(`"'=cmd|' /C calc'!A0"`);
+    for (const name of [/^Import \d+ valid rows? and skip/, /^Import \d+ rows?$/, /^Check again$/]) {
+      await expect(page.getByRole("button", { name })).toHaveCount(0);
+    }
+    for (const name of ["Back to mapping", "Upload a corrected file"]) await expect(page.getByRole("link", { name })).toHaveCount(0);
+    await checkA11y(page, testInfo, "import-check-off");
+
+    await page.goBack();
+    await expect(result(page)).toContainText("1 skipped");
+    await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText("The result below is read-only.");
+    await expect(page.getByRole("button", { name: "Download error report" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Import another file" })).toHaveCount(0);
+  } finally {
+    await setImport(request, true);
+  }
+  await page.context().close();
+});
+
+test("import off: another importer cannot open the job, and the owner's earlier steps offer no action", async ({ browser, request }) => {
+  const page = await signInUi(browser, IMPORTER);
+  const id = await newImport(page, { name: `apps-${stamp}-off.csv`, mimeType: "text/csv", buffer: appsCsv([appRow(31, "1.0", "Nope"), appRow(32)]) }, "?classKey=application");
+  await mappingReady(page, 5);
+  await checkFile(page);
+  await expect(counts(page)).not.toContainText("Errors 0 rows");
+
+  // SHAA-1031: the reads kept while import is off (#376) are the owner's only. Another importer gets the
+  // not-found page, no row problems and no report, and the API answers 404 to each read.
+  await setImport(request, false);
+  try {
+    const other = await signInUi(browser, OTHER_IMPORTER);
+    await other.goto(`/imports/${id}`);
+    await expect(other.getByText("This import does not exist or belongs to another user.")).toBeVisible();
+    await expect(other.getByRole("table", { name: "Row problems" })).toHaveCount(0);
+    await expect(other.getByRole("button", { name: "Download error report" })).toHaveCount(0);
+    for (const path of [`/imports/${id}`, `/imports/${id}/issues`, `/imports/${id}/error-report`]) {
+      expect((await other.request.get(`/api/v1${path}`)).status(), path).toBe(404);
+    }
+    await other.context().close();
+
+    // The owner's earlier steps, opened from the step list, show the notice and nothing to act on.
+    await page.goto(`/imports/${id}`);
+    const notice = page.getByRole("status").filter({ hasText: "This import cannot continue" });
+    await expect(notice).toContainText("The result below is read-only.");
+    for (const step of [/^Upload/, /^Map columns/]) {
+      await page.getByRole("link", { name: step }).click();
+      await expect(notice).toContainText("Bulk import is turned off for this instance.");
+      await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
+      await expect(page.getByLabel(/Spreadsheet file \(CSV or XLSX/)).toHaveCount(0);
+      await page.goto(`/imports/${id}`);
+    }
+  } finally {
+    await setImport(request, true);
+  }
   await page.context().close();
 });
 

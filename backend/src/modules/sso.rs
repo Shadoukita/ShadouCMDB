@@ -349,6 +349,8 @@ pub enum DirectoryAnswer {
     NoMatch,
     /// A directory that might know the name could not be asked.
     Unavailable,
+    /// The name found an entry whose sign-ins are locked: its password was not checked.
+    NotAdmitted,
 }
 
 fn directory_identity(user: ldap::DirectoryUser) -> ExternalIdentity {
@@ -365,6 +367,9 @@ fn directory_identity(user: ldap::DirectoryUser) -> ExternalIdentity {
 /// already belongs to; otherwise the enabled directories are asked in order
 /// and the first that knows the name decides (a wrong password there does not
 /// fall through to the next, which might hold a different person of that name).
+/// `admit`: given the directory and the stable id of the entry the name found,
+/// whether its password may be checked (GH#406: the directory decides which
+/// names find the same entry, so its sign-ins are throttled per entry too).
 pub async fn directory_sign_in(
     pool: &PgPool,
     keyring: &Keyring,
@@ -372,6 +377,7 @@ pub async fn directory_sign_in(
     username: &str,
     password: &str,
     linked: Option<Uuid>,
+    admit: &mut (dyn FnMut(Uuid, &str) -> bool + Send),
 ) -> Result<DirectoryAnswer, AppError> {
     let mut conn = pool.acquire().await?;
     let directories: Vec<ProviderRow> = match linked {
@@ -387,9 +393,11 @@ pub async fn directory_sign_in(
             unavailable = true;
             continue;
         };
-        let outcome = ldap::authenticate(&settings, username, password).await;
+        let outcome =
+            ldap::authenticate(&settings, username, password, |user| admit(provider.id, &user.external_id)).await;
         match outcome {
             Ok(ldap::Outcome::NotFound) => continue,
+            Ok(ldap::Outcome::NotAdmitted) => return Ok(DirectoryAnswer::NotAdmitted),
             Ok(ldap::Outcome::WrongPassword) => return Ok(DirectoryAnswer::NoMatch),
             Ok(ldap::Outcome::Ambiguous(n)) => {
                 tracing::warn!(provider = %provider.name, entries = n, "LDAP user filter matched several entries; sign-in refused");
@@ -447,7 +455,7 @@ pub async fn directory_reauthenticate(
             tracing::warn!(provider = %provider.name, entries = n, "LDAP user filter matched several entries; password confirmation refused");
             Ok(Reauth::Wrong)
         }
-        Ok(ldap::Outcome::NotFound | ldap::Outcome::WrongPassword) => Ok(Reauth::Wrong),
+        Ok(ldap::Outcome::NotFound | ldap::Outcome::WrongPassword | ldap::Outcome::NotAdmitted) => Ok(Reauth::Wrong),
         Err(e) => {
             tracing::error!(provider = %provider.name, error = %e, "LDAP directory unavailable");
             Ok(Reauth::Unavailable)
@@ -679,13 +687,14 @@ pub async fn verified_sign_in(
     let purged = auth_data::purge_sessions(pool, auth.config.session_idle).await?;
     let method = LoginMethod::Oidc(evidence);
     // Already recorded as `login.failure` (`account_changed`, `provider_disabled`).
-    let (_, cookies) =
-        match super::auth::try_open_session(pool, auth, headers, ctx, user_id, &username, method, None).await? {
-            Ok(opened) => opened,
-            // MfaEnrolled refuses password sign-ins only.
-            Err(Changed::Account | Changed::MfaEnrolled) => return Ok(Err(Refusal::AccountDisabled)),
-            Err(Changed::Provider) => return Ok(Err(Refusal::ProviderDisabled)),
-        };
+    let (_, cookies) = match super::auth::try_open_session(pool, auth, headers, ctx, user_id, &username, method, None)
+        .await?
+    {
+        Ok(opened) => opened,
+        // MfaEnrolled refuses password sign-ins only, MfaRemoved second-factor ones.
+        Err(Changed::Account | Changed::MfaEnrolled | Changed::MfaRemoved) => return Ok(Err(Refusal::AccountDisabled)),
+        Err(Changed::Provider) => return Ok(Err(Refusal::ProviderDisabled)),
+    };
     tracing::info!(user = %username, provider = %provider.name, ip = ?ctx.client.ip, purged_sessions = purged, provider_mfa = evidence.as_str(), "signed in through OIDC");
     Ok(Ok(cookies))
 }

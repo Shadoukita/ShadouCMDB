@@ -23,6 +23,7 @@ use crate::data::impact as data;
 use crate::data::items::{self as items_data, SummaryRow};
 use crate::http::error::{AppError, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
+use crate::modules::csv_safe;
 use crate::schema::model::Model;
 
 /// Defaults of `depth` and `maxNodes` (lowered to the configured limits).
@@ -423,20 +424,11 @@ fn summary(items: &[ImpactItem]) -> ImpactSummary {
 // CSV export
 // ---------------------------------------------------------------------------
 
-/// A CSV cell: always quoted, and a value a spreadsheet would run as a
-/// formula (starting with = + - @, a tab or a line break) is prefixed with `'`
+/// A CSV record through [`csv_safe`]: every cell quoted, formulas neutralised
 /// (feature requirement I8).
-fn cell(value: &str) -> String {
-    let neutral = match value.chars().next() {
-        Some('=' | '+' | '-' | '@' | '\t' | '\r' | '\n') => format!("'{value}"),
-        _ => value.to_owned(),
-    };
-    format!("\"{}\"", neutral.replace('"', "\"\""))
-}
-
 fn row(cells: &[&str]) -> String {
-    let mut line = cells.iter().map(|c| cell(c)).collect::<Vec<_>>().join(",");
-    line.push_str("\r\n");
+    let mut line = String::new();
+    csv_safe::write_record(&mut line, ',', cells.iter().copied());
     line
 }
 
@@ -526,7 +518,7 @@ pub fn csv(a: &Analysis) -> String {
         out.push_str(&row(&[
             &i.id.to_string(),
             &i.ident,
-            &one_line(&i.name),
+            &i.name,
             &i.class_name,
             i.criticality.as_ref().map(|c| c.label.as_str()).unwrap_or(""),
             &directions.join(";"),
@@ -613,14 +605,31 @@ pub async fn csv_of(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Impa
 mod tests {
     use super::*;
 
+    /// GH#388: the shared csv_safe rule, not a weaker local one.
+    const FORMULAS: [&str; 14] = [
+        "+1",
+        "-1",
+        "-2+3",
+        "@SUM(A1)",
+        " =1",
+        "\u{a0}=1",
+        "\u{3000}+1",
+        "＝1",
+        "＋1",
+        "－1",
+        "＠SUM(A1)",
+        "\tx",
+        "\rx",
+        "\nx",
+    ];
+
     #[test]
     fn cells_are_quoted_and_formulas_neutralised() {
-        assert_eq!(cell("web-01"), "\"web-01\"");
-        assert_eq!(cell("=HYPERLINK(\"x\")"), "\"'=HYPERLINK(\"\"x\"\")\"");
-        for bad in ["+1", "-1", "@SUM(A1)", "\tx", "\rx", "\nx"] {
-            assert!(cell(bad).starts_with("\"'"), "{bad:?}");
+        assert_eq!(row(&["web-01", "=HYPERLINK(\"x\")", ""]), "\"web-01\",\"'=HYPERLINK(\"\"x\"\")\",\"\"\r\n");
+        for bad in FORMULAS {
+            assert_eq!(row(&[bad]), format!("\"'{bad}\"\r\n"), "{bad:?}");
         }
-        assert_eq!(cell(""), "\"\"");
-        assert_eq!(row(&["a", "b"]), "\"a\",\"b\"\r\n");
+        // A line break inside a value stays inside its quoted cell.
+        assert_eq!(row(&["Rack A\nSlot 4", "x"]), "\"Rack A\nSlot 4\",\"x\"\r\n");
     }
 }

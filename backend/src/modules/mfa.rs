@@ -886,6 +886,45 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
+    /// GH#405: a clone of the built-in profile spells out every permission but
+    /// is not `administrator`, so its holder cannot change requireMfa on the
+    /// built-in profile; an administrator can.
+    #[tokio::test]
+    async fn only_an_administrator_changes_the_builtin_require_mfa() {
+        let Some(db) = scratch::database("only_an_administrator_changes_the_builtin_require_mfa").await else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let (session, me) = setup(&app).await;
+        let admin_profile = me["user"]["profiles"][0]["id"].as_str().unwrap().to_owned();
+        let path = format!("/api/v1/admin/profiles/{admin_profile}");
+        let clone = json!({ "name": "Delegated admin" });
+        let (status, v, _) = call(&app, "POST", &format!("{path}/clone"), &session, Some(clone)).await;
+        assert_eq!(status, 201, "{v}");
+        let body = json!({ "username": "delegate", "displayName": "Delegate", "password": PASSWORD,
+            "profileIds": [v["id"]] });
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+        let body = json!({ "username": "delegate", "password": PASSWORD });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(body)).await;
+        assert_eq!(status, 200, "{me}");
+        let delegate = session_of(&me, &headers);
+
+        for require in [true, false] {
+            let body = Some(json!({ "requireMfa": require }));
+            let (status, v, _) = call(&app, "PATCH", &path, &delegate, body).await;
+            assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+        }
+        let (status, v, _) = call(&app, "GET", &path, &session, None).await;
+        assert_eq!((status, &v["requireMfa"]), (200, &json!(false)), "unchanged: {v}");
+        let (status, v, _) = call(&app, "DELETE", &path, &delegate, None).await;
+        assert_eq!(status, 409, "{v}");
+
+        let (status, v, _) = call(&app, "PATCH", &path, &session, Some(json!({ "requireMfa": true }))).await;
+        assert_eq!((status, &v["requireMfa"]), (200, &json!(true)), "{v}");
+        db.drop().await;
+    }
+
     /// GH#303: a password sign-in and the confirming of an authenticator
     /// serialize on the user's row, so no password-only session outlives the
     /// confirm, whichever of the two takes the row first.

@@ -590,6 +590,14 @@ async fn cleanup_expires_files_and_removes_stale_uploads() {
     let (_, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("a.csv"), &[], CSV.to_vec()).await;
     let id: Uuid = v["id"].as_str().unwrap().parse().unwrap();
     drain(&e.pool).await;
+    sqlx::query("UPDATE cmdb.import_jobs SET preview = '[{\"row\": 2}]' WHERE id = $1")
+        .bind(id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let j = job(&e, &e.admin, &id.to_string()).await;
+    assert_eq!(j["file"]["previewRows"].as_array().map(Vec::len), Some(3));
+    assert_eq!(j["columns"][0]["samples"], json!(["web01", "web02", "db01"]));
     sqlx::query(
         "INSERT INTO cmdb.import_job_issues (job_id, seq, row_no, severity, code, message, phase, value)
          VALUES ($1, 0, 2, 'error', 'required', 'Name is required', 'validate', 'web01')",
@@ -614,6 +622,20 @@ async fn cleanup_expires_files_and_removes_stale_uploads() {
     assert_eq!((c.files_of_jobs, c.expired_jobs), (1, 1));
     let j = job(&e, &e.admin, &id.to_string()).await;
     assert_eq!((j["status"].as_str(), j["file"]["rowCount"].as_u64()), (Some("expired"), Some(3)));
+    // No cell value outlives the file (GH#390): only the column names stay.
+    assert_eq!(j["file"]["previewRows"], json!([]));
+    assert_eq!((&j["preview"], &j["columns"][0]["samples"]), (&json!([]), &json!([])));
+    let (info, preview): (Value, Option<Value>) =
+        sqlx::query_as("SELECT file_info, preview FROM cmdb.import_jobs WHERE id = $1")
+            .bind(id)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(info["columns"][0], json!({ "index": 0, "header": "Hostname", "samples": [] }));
+    assert!(!info.to_string().contains("web01") && preview.is_none(), "{info}");
+    // A later run finds nothing left to scrub.
+    let c = worker::cleanup(&e.pool, chrono::Duration::hours(26)).await.unwrap();
+    assert_eq!(c.expired_jobs, 0);
     let issues: i64 =
         sqlx::query_scalar("SELECT count(*) FROM cmdb.import_job_issues").fetch_one(&e.pool).await.unwrap();
     assert_eq!(issues, 0);
@@ -988,6 +1010,118 @@ async fn a_commit_writes_the_valid_rows_and_audits_them() {
     )
     .await;
     assert_eq!(per_ci, 0);
+}
+
+/// The audit entries `actor` wrote about `job` with `action`: new value, else old value.
+async fn events_by(pool: &PgPool, actor: &str, action: &str, job: &str) -> Vec<Value> {
+    sqlx::query_scalar(
+        "SELECT coalesce(new_value, old_value) FROM audit_log
+         WHERE actor_name = $1 AND action = $2 AND entity_type = 'import_jobs' AND entity_id = $3 ORDER BY id",
+    )
+    .bind(actor)
+    .bind(action)
+    .bind(Uuid::parse_str(job).unwrap())
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// GH#389: an administrator may read, cancel and delete another user's job but
+/// never change or commit it, since the commit writes in the owner's name; the
+/// reads, the cancel and the delete are audited in the administrator's name.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_administrator_only_reads_cancels_or_deletes_another_users_import_and_is_audited() {
+    let Some(db) = scratch::database("import_foreign_admin").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let id = validated(&e, &alice, "Hostname;Cores\nweb01;8\ndb01;many\n").await;
+    let path = format!("/api/v1/imports/{id}");
+
+    // Every step towards writing CIs is the owner's alone.
+    let (status, v) = commit(&e, &e.admin, &id, true, None).await;
+    assert_eq!((status, detail(&v)), (403, "not_owner"), "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("alice"), "{v}");
+    let steps = [
+        ("PUT", format!("{path}/mapping"), Some(server_mapping())),
+        ("POST", format!("{path}/dry-run"), None),
+        ("PATCH", format!("{path}/file-options"), Some(json!({ "hasHeaderRow": true }))),
+    ];
+    for (m, p, body) in steps {
+        let (status, v, _) = call(&e.app, m, &p, &e.admin, body).await;
+        assert_eq!((status, detail(&v)), (403, "not_owner"), "{m} {p}: {v}");
+    }
+    drain(&e.pool).await;
+    assert_eq!(job(&e, &alice, &id).await["status"], "validated", "nothing changed");
+    let cis: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(cis, 0);
+
+    // The owner's reads are not audited; the administrator's are, once per view while polling.
+    job(&e, &alice, &id).await;
+    assert_eq!(call(&e.app, "GET", &format!("{path}/issues"), &alice, None).await.0, 200);
+    assert!(events_by(&e.pool, "alice", "import.report_read", &id).await.is_empty());
+    for _ in 0..3 {
+        job(&e, &e.admin, &id).await;
+        let (status, issues, _) = call(&e.app, "GET", &format!("{path}/issues"), &e.admin, None).await;
+        assert_eq!((status, issues["data"][0]["value"].as_str()), (200, Some("many")), "{issues}");
+    }
+    let reads = events_by(&e.pool, "admin", "import.report_read", &id).await;
+    let views: Vec<&str> = reads.iter().map(|r| r["view"].as_str().unwrap()).collect();
+    assert_eq!(views, ["job", "issues"], "{reads:?}");
+    assert_eq!((reads[0]["ownerName"].as_str(), reads[0]["fileName"].as_str()), (Some("alice"), Some("srv.csv")));
+
+    // The owner commits; the administrator stops it while queued. The commit's
+    // event names the owner, the cancel the administrator.
+    let (status, v) = commit(&e, &alice, &id, true, None).await;
+    assert_eq!(status, 202, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("{path}/cancel"), &e.admin, None).await;
+    assert_eq!((status, v["status"].as_str()), (202, Some("cancelled")), "{v}");
+    let commits = events_by(&e.pool, "alice", "import.commit", &id).await;
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0]["outcome"], "cancelled");
+    let stops: Vec<(Value, Value)> = sqlx::query_as(
+        "SELECT old_value, new_value FROM audit_log
+         WHERE actor_name = 'admin' AND action = 'update' AND entity_type = 'import_jobs' AND entity_id = $1",
+    )
+    .bind(Uuid::parse_str(&id).unwrap())
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(stops.len(), 1, "{stops:?}");
+    let (before, after) = &stops[0];
+    assert_eq!(
+        (before["status"].as_str(), before["phase"].as_str(), after["status"].as_str(), after["ownerName"].as_str()),
+        (Some("queued"), Some("commit"), Some("cancelled"), Some("alice")),
+        "{stops:?}"
+    );
+
+    // The administrator deletes it: audited with what was deleted.
+    assert_eq!(call(&e.app, "DELETE", &path, &e.admin, None).await.0, 204);
+    let deletes = events_by(&e.pool, "admin", "delete", &id).await;
+    assert_eq!(deletes.len(), 1);
+    assert_eq!((deletes[0]["fileName"].as_str(), deletes[0]["ownerName"].as_str()), (Some("srv.csv"), Some("alice")));
+    db.drop().await;
+}
+
+/// The owner's own cancel and delete add nothing to the audit log but the commit event.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_owners_cancel_and_delete_are_not_audited_as_foreign() {
+    let Some(db) = scratch::database("import_owner_stop").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let id = validated(&e, &alice, "Hostname;Cores\nweb01;8\n").await;
+    let path = format!("/api/v1/imports/{id}");
+    assert_eq!(call(&e.app, "POST", &format!("{path}/cancel"), &alice, None).await.0, 202);
+    assert_eq!(call(&e.app, "DELETE", &path, &alice, None).await.0, 204);
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE entity_type = 'import_jobs' AND entity_id = $1")
+            .bind(Uuid::parse_str(&id).unwrap())
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(n, 0);
+    db.drop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1475,6 +1609,120 @@ async fn references_reach_cis_of_earlier_rows_and_relationships_are_only_added()
     assert_eq!((committed(&j), &j["summary"]["committed"]["relationshipsAdded"]), ((0, 0, 1, 0, 0), &json!(0)), "{j}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_stops_linking_to_a_class_whose_view_right_is_revoked() {
+    let Some(db) = scratch::database("import_commit_target_view_revoked").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let srv = server_class(&e).await;
+    let (status, v, _) =
+        call(&e.app, "POST", "/api/v1/ci-classes", &e.admin, Some(json!({ "key": "rack", "name": "Rack" }))).await;
+    assert_eq!(status, 201, "{v}");
+    let rack = v["id"].as_str().unwrap().to_owned();
+    let body = json!({ "classId": rack, "key": "name", "label": "Name", "dataType": "text" });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let body =
+        json!({ "classId": srv, "key": "rack", "label": "Rack", "dataType": "reference", "referenceClassId": rack });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let (status, v, _) = call(
+        &e.app,
+        "POST",
+        "/api/v1/configuration-items",
+        &e.admin,
+        Some(json!({ "classId": rack, "attributes": { "name": "r1" } })),
+    )
+    .await;
+    assert_eq!(status, 201, "{v}");
+    let located: Uuid = sqlx::query_scalar(
+        "INSERT INTO relationship_types (key, name, forward_label, reverse_label)
+         VALUES ('located_in', 'Located in', 'located in', 'houses') RETURNING id",
+    )
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id) VALUES ($1, $2, $3)",
+    )
+    .bind(located)
+    .bind(srv.parse::<Uuid>().unwrap())
+    .bind(rack.parse::<Uuid>().unwrap())
+    .execute(&e.pool)
+    .await
+    .unwrap();
+
+    let alice = user_in(&e, "alice", &["cis.import"], Some(&[srv.as_str(), rack.as_str()])).await;
+    let mut file = String::from("Hostname;Rack;Located in\n");
+    for i in 0..1_000 {
+        file.push_str(&format!("host-{i:05};r1;r1\n"));
+    }
+    let (status, v, _) = upload(&e.app, &alice, CSV_TYPE, Some("racked.csv"), &[], file.into_bytes()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    let job_id = Uuid::parse_str(&id).unwrap();
+    drain(&e.pool).await;
+    let by_name = json!({ "by": "attribute", "attributeKey": "name" });
+    let mapping = json!({
+        "classKey": "srv",
+        "mode": "create_or_update",
+        "key": { "field": "attributes.hostname" },
+        "columns": [
+            { "index": 0, "target": { "kind": "attribute", "key": "hostname" } },
+            { "index": 1, "target": { "kind": "attribute", "key": "rack", "match": by_name } },
+            { "index": 2, "target": {
+                "kind": "relationship", "typeKey": "located_in", "direction": "outgoing", "match": by_name
+            } }
+        ]
+    });
+    let (status, v, _) = call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &alice, Some(mapping)).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/dry-run"), &alice, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &alice, &id).await;
+    assert_eq!((j["status"].as_str(), j["summary"]["create"].as_u64()), (Some("validated"), Some(1_000)), "{j}");
+
+    // The first chunk holds the rights it started with; the admin takes
+    // alice's View on racks away before the second one (GH#411).
+    let (status, v) = commit(&e, &alice, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    let (reached, go) = super::commit::test_hooks::pause_at(job_id, 1);
+    let pool = e.pool.clone();
+    let worker = tokio::spawn(async move { drain(&pool).await });
+    reached.await.unwrap();
+    sqlx::query(
+        "DELETE FROM permission_profile_class_permissions
+          WHERE class_id = $1 AND profile_id = (SELECT id FROM permission_profiles WHERE name = 'alice profile')",
+    )
+    .bind(rack.parse::<Uuid>().unwrap())
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    go.send(()).unwrap();
+    worker.await.unwrap();
+
+    let j = job(&e, &alice, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed_with_errors"), (500, 0, 0, 0, 500)), "{j}");
+    assert_eq!(j["summary"]["committed"]["relationshipsAdded"], 500, "{j}");
+    let (_, v, _) =
+        call(&e.app, "GET", &format!("/api/v1/imports/{id}/issues?severity=error&limit=200"), &alice, None).await;
+    let issues = v["data"].as_array().unwrap();
+    assert!(!issues.is_empty(), "{v}");
+    for i in issues {
+        assert!(i["row"].as_u64().unwrap() > 501, "{i}");
+        assert_eq!(i["code"], "not_found", "{i}");
+    }
+    let linked: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM configuration_items WHERE label LIKE 'host-%'),
+                (SELECT count(*) FROM ci_relationships WHERE relationship_type_id = $1)",
+    )
+    .bind(located)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(linked, (500, 500), "rows of the second chunk write neither the CI, its reference nor its edge");
+}
+
 // ---------------------------------------------------------------------------
 // Error report (SHAA-799 part 4, §3.4, §5.1)
 // ---------------------------------------------------------------------------
@@ -1536,7 +1784,11 @@ async fn the_error_report_lists_each_problem_with_its_row_and_audits_other_reade
         .fetch_one(&e.pool)
         .await
         .unwrap();
-    assert_eq!((event["fileName"].as_str(), event["ownerName"].as_str()), (Some("srv.csv"), Some("alice")), "{event}");
+    assert_eq!(
+        (event["view"].as_str(), event["fileName"].as_str(), event["ownerName"].as_str()),
+        (Some("report"), Some("srv.csv"), Some("alice")),
+        "{event}"
+    );
 
     // Uploaded again, the report reads as the original cells.
     let (status, v, _) = upload(&e.app, &alice, CSV_TYPE, Some("srv-errors.csv"), &[], body.into_bytes()).await;

@@ -4,6 +4,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
 import { toValue, type MaybeRefOrGetter } from "vue";
 import { api, unwrap, type JsonBody as Body, type Schemas } from "./client";
+import { groupKeys } from "./groups";
 import { MAX_PAGE } from "./queries";
 import type { paths } from "./schema";
 
@@ -104,6 +105,7 @@ export function useUpdateUser() {
     onSuccess: (user) => {
       qc.invalidateQueries({ queryKey: adminKeys.users });
       qc.invalidateQueries({ queryKey: adminKeys.profiles });
+      qc.invalidateQueries({ queryKey: groupKeys.all }); // members show the user's name and status
       qc.setQueryData(adminKeys.user(user.id), user);
     },
   });
@@ -125,6 +127,7 @@ export function useDeleteUser() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: adminKeys.users });
       qc.invalidateQueries({ queryKey: adminKeys.profiles });
+      qc.invalidateQueries({ queryKey: groupKeys.all }); // memberCount
     },
   });
 }

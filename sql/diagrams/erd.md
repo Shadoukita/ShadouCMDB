@@ -420,4 +420,4 @@ and the log is append-only (UPDATE and DELETE are rejected by a trigger). `actor
 user's id as text, without a foreign key, so deleting a user never touches history. Since 0018 every row
 is also hash-chained: a trigger sets `chain_seq`, `prev_hash` (the previous row's `row_hash`) and `row_hash`,
 and the one row of `audit_log_chain_head` holds the last sequence number and hash, so inserts are serialised
-on it. `server_keys` has no relationships: it holds the keys the server generates for itself.
+on it. Only that trigger writes the head; the API role may read it (0038), so `shadoucmdb backup` can copy it. `server_keys` has no relationships: it holds the keys the server generates for itself.

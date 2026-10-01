@@ -7,7 +7,6 @@
 pub mod analyse;
 pub mod commit;
 pub mod convert;
-pub mod csv_safe;
 pub mod dry_run;
 pub mod jobs;
 pub mod mapping;
@@ -159,7 +158,9 @@ pub fn routes() -> Vec<Route> {
             .summary("An import job, for polling")
             .description(
                 "The caller's job, or any job for an administrator; `404` otherwise, the same as for a job that \
-                 does not exist. Poll every 1 s for the first 10 s, then every 2 s, then every 5 s after a minute.",
+                 does not exist. An administrator's read of another user's job is audited as `import.report_read` \
+                 (once per 15 minutes). Poll every 1 s for the first 10 s, then every 2 s, then every 5 s after a \
+                 minute.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
@@ -172,12 +173,13 @@ pub fn routes() -> Vec<Route> {
             .summary("Change how the file is read (sheet, encoding, delimiter, header row)")
             .description(
                 "The analysis runs again and the mapping and any dry run are dropped. In `ready`, or after an \
-                 analysis that failed. `sheet` is for workbooks, `encoding` and `delimiter` for CSV files.",
+                 analysis that failed. `sheet` is for workbooks, `encoding` and `delimiter` for CSV files. Only the \
+                 job's owner: `403 not_owner` for an administrator.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
             .status(StatusCode::ACCEPTED)
-            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .errors(&[ErrorCode::NotFound, ErrorCode::Forbidden, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<UpdateFileOptions>>| async move {
                 Ok(Json(jobs::update_file_options(&api.pool, &api.ctx, &api.imports, id, &b).await?))
             }),
@@ -206,11 +208,12 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "Checked against the file's columns and the data model; every problem is reported at once in \
                  `details`, with `field` such as `columns[3].target.key`. Any dry run is dropped and the job is \
-                 `ready`. In `ready` or `validated`; `409` while a step runs.",
+                 `ready`. In `ready` or `validated`; `409` while a step runs. Only the job's owner: `403 not_owner` \
+                 for an administrator.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
-            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .errors(&[ErrorCode::NotFound, ErrorCode::Forbidden, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<schemas::ImportMapping>>| async move {
                 Ok(Json(jobs::set_mapping(&api.pool, &api.ctx, &api.imports, id, &b).await?))
             }),
@@ -220,12 +223,13 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "Runs the rows through the same validation as the CI API and records what each would do, and every \
                  problem. `409` without a mapping (`mapping_required`) or while a step runs (`invalid_state`); \
-                 `429 import_busy` while another import of the job's owner runs.",
+                 `429 import_busy` while another import of the job's owner runs. Only the job's owner: \
+                 `403 not_owner` for an administrator.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
             .status(StatusCode::ACCEPTED)
-            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::RateLimited])
+            .errors(&[ErrorCode::NotFound, ErrorCode::Forbidden, ErrorCode::Conflict, ErrorCode::RateLimited])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 Ok(Json(jobs::start_dry_run(&api.pool, &api.ctx, &api.imports, id).await?))
             }),
@@ -235,7 +239,8 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "In row order. `value` is the cell, cut to 200 characters. At most 10,000 problems are stored per \
                  job; `summary.issuesTotal` counts them all. Empty once the file was deleted (24 h after the last \
-                 activity). Also while bulk import is off.",
+                 activity). Also while bulk import is off. An administrator's read of another user's job is audited \
+                 as `import.report_read` (once per 15 minutes).",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
@@ -276,12 +281,14 @@ pub fn routes() -> Vec<Route> {
                  `details[0].code`: `dry_run_required`, `dry_run_stale` (the data model changed, or the dry run is \
                  older than 24 hours), `has_error_rows` (send `skipErrorRows: true` to import the other rows) or \
                  `invalid_state`. `429 import_busy` while another import of the job's owner runs. An optional \
-                 `Idempotency-Key` returns the job as it is now instead of starting a second commit.",
+                 `Idempotency-Key` returns the job as it is now instead of starting a second commit. Only the job's \
+                 owner may commit, since the rows are written with the owner's rights and in the owner's name: \
+                 `403 not_owner` for an administrator.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
             .status(StatusCode::ACCEPTED)
-            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::RateLimited, ErrorCode::IdempotencyKeyReused])
+            .errors(&[ErrorCode::NotFound, ErrorCode::Forbidden, ErrorCode::Conflict, ErrorCode::RateLimited, ErrorCode::IdempotencyKeyReused])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<schemas::CommitImport>>| async move {
                 Ok(Json(commit::start(&api.pool, &api.ctx, &api.imports, &api.headers, id, &b).await?))
             }),
@@ -292,7 +299,8 @@ pub fn routes() -> Vec<Route> {
                 "Analysis, dry run and a queued commit stop at once. A running commit stops after its current \
                  batch of at most 500 rows, and the rows committed so far stay: the job stays `committing` with \
                  `cancelRequestedAt` set until that batch is written, then ends as `cancelled` with its final \
-                 counts. `409` once the job has ended. Also while bulk import is off.",
+                 counts. `409` once the job has ended. Also while bulk import is off. An administrator's cancel of \
+                 another user's job is audited as an `update` of `import_jobs`.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
@@ -306,7 +314,8 @@ pub fn routes() -> Vec<Route> {
             .summary("Delete an import, its file and its row problems")
             .description(
                 "Never touches CIs. `409` while the job is running (cancel it first). Also while bulk import is off, \
-                 so uploaded files can be removed.",
+                 so uploaded files can be removed. An administrator's delete of another user's job is audited as a \
+                 `delete` of `import_jobs`.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()

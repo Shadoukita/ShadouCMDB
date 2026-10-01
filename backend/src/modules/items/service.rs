@@ -463,7 +463,8 @@ pub async fn update(
     let needs = Needs::for_update(&defs, input.attributes.as_ref(), &before.attributes);
     let resolver = DbResolver::load(&mut tx, visible.as_deref(), &needs).await?;
     let current_criticality = before.summary.criticality.as_ref().map(|c| c.id);
-    let plan = plan::plan_update(ctx, &model, &defs, before, input, &resolver)?;
+    let service_class = crate::data::business_services::roles(&mut tx).await?.map(|r| r.service_class);
+    let plan = plan::plan_update(ctx, &model, &defs, before, input, &resolver, service_class)?;
     check_criticality(&mut tx, input.criticality_value_id.flatten(), current_criticality).await?;
     plan::apply(&mut tx, &model, &plan).await?;
 

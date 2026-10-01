@@ -389,8 +389,9 @@ pub struct Cleaned {
 /// `shift` (tests move the clock forward):
 /// - an upload that received nothing for 1 h is removed (CR7);
 /// - 24 h after a job's last activity or end, its file and row problems are
-///   deleted (T17); a job that had not ended becomes `expired`, an ended job
-///   keeps its status and counts;
+///   deleted (T17), and so are the cell values on the job record (preview
+///   rows, column samples, planned changes); a job that had not ended becomes
+///   `expired`, an ended job keeps its status and counts;
 /// - job records go 90 days after the job ended;
 /// - idempotency keys go after 24 h (T15).
 pub async fn cleanup(pool: &PgPool, shift: chrono::Duration) -> sqlx::Result<Cleaned> {
@@ -417,6 +418,21 @@ pub async fn cleanup(pool: &PgPool, shift: chrono::Duration) -> sqlx::Result<Cle
         .bind(shift)
         .execute(&mut *tx)
         .await?;
+    // The record that stays holds no cell values: the preview rows, the column
+    // samples and the planned changes (with old CI values) go with the file.
+    sqlx::query(sqlx::AssertSqlSafe(at(&format!(
+        "UPDATE cmdb.import_jobs SET preview = NULL,
+           file_info = CASE WHEN file_info IS NULL THEN NULL ELSE jsonb_set(
+             jsonb_set(file_info, '{{previewRows}}', '[]'), '{{columns}}',
+             (SELECT coalesce(jsonb_agg(c || '{{\"samples\": []}}' ORDER BY n), '[]')
+                FROM jsonb_array_elements(coalesce(file_info->'columns', '[]')) WITH ORDINALITY AS t(c, n))) END
+         WHERE id IN ({expiring})
+           AND (preview IS NOT NULL OR jsonb_path_exists(file_info, '$.previewRows[*]')
+                OR jsonb_path_exists(file_info, '$.columns[*].samples[*]'))"
+    ))))
+    .bind(shift)
+    .execute(&mut *tx)
+    .await?;
     let expired_jobs = sqlx::query(sqlx::AssertSqlSafe(at(&format!(
         "UPDATE cmdb.import_jobs SET status = 'expired', phase = NULL, finished_at = coalesce(finished_at, NOW),
            lease_owner = NULL, lease_until = NULL

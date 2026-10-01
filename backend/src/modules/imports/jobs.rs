@@ -5,7 +5,7 @@
 //! the same `404` as for a job that does not exist (§3 guard 4).
 
 use chrono::{DateTime, Utc};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
@@ -18,6 +18,7 @@ use super::{coded, mapping, settings};
 use crate::api::context::RequestContext;
 use crate::api::schemas::{Page, Paged};
 use crate::config::ImportConfig;
+use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::http::error::{AppError, ErrorCode};
 
 /// A job row as stored.
@@ -211,16 +212,107 @@ fn is_administrator(ctx: &RequestContext) -> bool {
     ctx.principal().is_some_and(|p| p.permissions.administrator)
 }
 
+fn is_owner(ctx: &RequestContext, job: &JobRow) -> bool {
+    job.created_by_id.is_some() && job.created_by_id == ctx_user(ctx)
+}
+
 /// The caller's own job, or any job for an administrator; `404` otherwise.
+/// For reading, cancelling and deleting; an administrator's use of another
+/// user's job is audited ([`audit_foreign_read`], [`cancel`], [`delete`]).
 pub fn check_owner(ctx: &RequestContext, job: Option<JobRow>, id: Uuid) -> Result<JobRow, AppError> {
     match job {
-        Some(j) if is_administrator(ctx) || (j.created_by_id.is_some() && j.created_by_id == ctx_user(ctx)) => Ok(j),
+        Some(j) if is_administrator(ctx) || is_owner(ctx, &j) => Ok(j),
         _ => Err(not_found(id)),
     }
 }
 
+/// The caller's own job, for the steps that lead to writing CIs (file
+/// options, mapping, dry run, commit). The commit writes with the owner's
+/// rights and in the owner's name, so nobody else may start it or shape what
+/// it writes (GH#389): an administrator gets `403 not_owner`, anyone else
+/// `404` as in [`check_owner`].
+pub fn check_own_job(ctx: &RequestContext, job: Option<JobRow>, id: Uuid) -> Result<JobRow, AppError> {
+    let job = check_owner(ctx, job, id)?;
+    if is_owner(ctx, &job) {
+        return Ok(job);
+    }
+    Err(coded(
+        ErrorCode::Forbidden,
+        &format!(
+            "Only {} can change or commit this import. Administrators can view, cancel or delete it.",
+            job.created_by_name
+        ),
+        "not_owner",
+    ))
+}
+
 pub fn ctx_user(ctx: &RequestContext) -> Option<Uuid> {
     ctx.principal().map(|p| p.user_id)
+}
+
+/// How long one reader's reads of one job (or of its problems) count as one
+/// `import.report_read` event: the wizard polls the job every few seconds.
+const READ_AUDIT_MINUTES: i32 = 15;
+
+/// The `import.report_read` event of a read of another user's job (W7).
+/// `view` is what was read: `job`, `issues` or `report`.
+pub fn foreign_read_entry(job: &JobRow, view: &str) -> AuditEntry {
+    AuditEntry {
+        action: AuditAction::ImportReportRead,
+        entity_type: "import_jobs",
+        entity_id: job.id,
+        old_value: None,
+        new_value: Some(json!({
+            "view": view,
+            "fileName": job.file_name,
+            "classKey": job.class_key,
+            "ownerId": job.created_by_id,
+            "ownerName": job.created_by_name,
+        })),
+    }
+}
+
+/// Audits an administrator's read of another user's job or its problems
+/// (GH#389): both carry the file's cells. Nothing for the owner. At most one
+/// event per reader, job and view in [`READ_AUDIT_MINUTES`].
+async fn audit_foreign_read(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    job: &JobRow,
+    view: &str,
+) -> Result<(), AppError> {
+    if is_owner(ctx, job) {
+        return Ok(());
+    }
+    let recent: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM audit_log
+           WHERE entity_type = 'import_jobs' AND entity_id = $1 AND action = 'import.report_read'
+             AND actor_id = $2 AND new_value->>'view' = $3 AND occurred_at > now() - make_interval(mins => $4))",
+    )
+    .bind(job.id)
+    .bind(&ctx.actor.id)
+    .bind(view)
+    .bind(READ_AUDIT_MINUTES)
+    .fetch_one(&mut *conn)
+    .await?;
+    if !recent {
+        crud::write_audit(conn, ctx, vec![foreign_read_entry(job, view)]).await?;
+    }
+    Ok(())
+}
+
+/// What an audit entry says about another user's job that an administrator
+/// cancelled or deleted.
+fn foreign_job_value(job: &JobRow) -> Value {
+    json!({
+        "fileName": job.file_name,
+        "classKey": job.class_key,
+        "status": job.status.as_str(),
+        "phase": job.phase,
+        "ownerId": job.created_by_id,
+        "ownerName": job.created_by_name,
+        "cancelRequestedAt": job.cancel_requested_at,
+    })
 }
 
 /// `403 import_disabled` unless the switch is on and the server allows import.
@@ -250,6 +342,7 @@ pub async fn queue_position(conn: &mut PgConnection, job: &JobRow) -> sqlx::Resu
 pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<ImportJob, AppError> {
     let mut conn = pool.acquire().await?;
     let job = check_owner(ctx, fetch(&mut conn, id).await?, id)?;
+    audit_foreign_read(&mut conn, ctx, &job, "job").await?;
     let position = queue_position(&mut conn, &job).await?;
     // A validated job's dry run goes stale when the data model changes: the
     // fingerprint takes milliseconds, so the poll can say so (T14).
@@ -326,6 +419,17 @@ pub async fn cancel(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Imp
     if job.status == JobStatus::Queued && job.phase == Some(Phase::Commit) {
         super::commit::record_queued_cancel(&mut tx, &row).await?;
     }
+    // The commit's own event names the owner; this one names who stopped it.
+    if !is_owner(ctx, &job) {
+        let entry = AuditEntry {
+            action: AuditAction::Update,
+            entity_type: "import_jobs",
+            entity_id: id,
+            old_value: Some(foreign_job_value(&job)),
+            new_value: Some(foreign_job_value(&row)),
+        };
+        crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    }
     tx.commit().await?;
     Ok(row.dto(None))
 }
@@ -339,6 +443,16 @@ pub async fn delete(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
         return Err(invalid_state("This import is still running. Cancel it first."));
     }
     sqlx::query("DELETE FROM cmdb.import_jobs WHERE id = $1").bind(id).execute(&mut *tx).await?;
+    if !is_owner(ctx, &job) {
+        let entry = AuditEntry {
+            action: AuditAction::Delete,
+            entity_type: "import_jobs",
+            entity_id: id,
+            old_value: Some(foreign_job_value(&job)),
+            new_value: None,
+        };
+        crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -355,7 +469,7 @@ pub async fn update_file_options(
 ) -> Result<ImportJob, AppError> {
     let mut tx = pool.begin().await?;
     require_enabled(&mut tx, cfg).await?;
-    let job = check_owner(ctx, fetch_for_update(&mut tx, id).await?, id)?;
+    let job = check_own_job(ctx, fetch_for_update(&mut tx, id).await?, id)?;
     let analysis_failed = job.status == JobStatus::Failed && job.phase == Some(Phase::Analyse);
     if job.status != JobStatus::Ready && !analysis_failed {
         return Err(invalid_state("The file options can be changed only after the file was analysed."));
@@ -420,7 +534,7 @@ pub async fn set_mapping(
 ) -> Result<ImportJob, AppError> {
     let mut tx = pool.begin().await?;
     require_enabled(&mut tx, cfg).await?;
-    let job = check_owner(ctx, fetch_for_update(&mut tx, id).await?, id)?;
+    let job = check_own_job(ctx, fetch_for_update(&mut tx, id).await?, id)?;
     if !matches!(job.status, JobStatus::Ready | JobStatus::Validated) {
         return Err(invalid_state("The mapping can be set only after the file was analysed and while no step runs."));
     }
@@ -454,7 +568,7 @@ pub async fn start_dry_run(
 ) -> Result<ImportJob, AppError> {
     let mut tx = pool.begin().await?;
     require_enabled(&mut tx, cfg).await?;
-    let job = check_owner(ctx, fetch_for_update(&mut tx, id).await?, id)?;
+    let job = check_own_job(ctx, fetch_for_update(&mut tx, id).await?, id)?;
     if !matches!(job.status, JobStatus::Ready | JobStatus::Validated) {
         return Err(invalid_state("A dry run can start only after the file was analysed and while no step runs."));
     }
@@ -493,6 +607,7 @@ pub async fn issues(
 ) -> Result<Page<ImportIssue>, AppError> {
     let mut conn = pool.acquire().await?;
     let job = check_owner(ctx, fetch(&mut conn, id).await?, id)?;
+    audit_foreign_read(&mut conn, ctx, &job, "issues").await?;
     let headers: Vec<String> =
         job.info().map(|i| i.columns.into_iter().map(|c| c.header).collect()).unwrap_or_default();
     let filter = "job_id = $1 AND ($2::text IS NULL OR severity = $2) AND ($3::text IS NULL OR code = $3)

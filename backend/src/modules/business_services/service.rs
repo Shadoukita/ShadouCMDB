@@ -33,6 +33,7 @@ use crate::data::business_services::{
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::items::{self as items_data, ActiveFilter, ItemFilters, SummaryRow};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
+use crate::modules::csv_safe;
 use crate::modules::impact::ImpactState;
 use crate::modules::impact::engine::{self, Options, Way};
 use crate::modules::impact::schemas::Visibility;
@@ -402,7 +403,11 @@ pub async fn add_members(
                 Some((false, depth)) if above + 1 + depth > cfg.max_nesting => errors.push(entry_error(
                     "memberIds",
                     *i,
-                    &format!("Business services can be nested at most {} levels deep", cfg.max_nesting),
+                    &format!(
+                        "Business services can be nested at most {} {} deep",
+                        cfg.max_nesting,
+                        if cfg.max_nesting == 1 { "level" } else { "levels" }
+                    ),
                     "membership_nesting_depth",
                 )),
                 _ => {}
@@ -516,19 +521,11 @@ pub async fn remove_member(pool: &PgPool, ctx: &RequestContext, id: Uuid, ci: Uu
 // CSV export
 // ---------------------------------------------------------------------------
 
-/// A CSV cell: always quoted; a value a spreadsheet would run as a formula
-/// is prefixed with `'` (the impact export's rule).
-fn cell(value: &str) -> String {
-    let neutral = match value.chars().next() {
-        Some('=' | '+' | '-' | '@' | '\t' | '\r' | '\n') => format!("'{value}"),
-        _ => value.to_owned(),
-    };
-    format!("\"{}\"", neutral.replace('"', "\"\""))
-}
-
+/// A CSV record through [`csv_safe`]: every cell quoted, formulas neutralised
+/// (the impact export's rule).
 fn row(cells: &[&str]) -> String {
-    let mut line = cells.iter().map(|c| cell(c)).collect::<Vec<_>>().join(",");
-    line.push_str("\r\n");
+    let mut line = String::new();
+    csv_safe::write_record(&mut line, ',', cells.iter().copied());
     line
 }
 
@@ -591,7 +588,7 @@ pub async fn export(
         body.push_str(&row(&[
             &r.ci.id.to_string(),
             &r.ci.ident,
-            &one_line(&r.ci.label),
+            &r.ci.label,
             &r.ci.class_name,
             r.ci.criticality_name.as_deref().unwrap_or(""),
             if r.ci.class_id == roles.service_class { "true" } else { "false" },
@@ -854,12 +851,31 @@ pub async fn settings(
 mod tests {
     use super::*;
 
+    /// GH#388: the shared csv_safe rule, not a weaker local one.
+    const FORMULAS: [&str; 14] = [
+        "+1",
+        "-1",
+        "-2+3",
+        "@SUM(A1)",
+        " =1",
+        "\u{a0}=1",
+        "\u{3000}+1",
+        "＝1",
+        "＋1",
+        "－1",
+        "＠SUM(A1)",
+        "\tx",
+        "\rx",
+        "\nx",
+    ];
+
     #[test]
     fn cells_are_quoted_and_formulas_neutralised() {
-        assert_eq!(cell("web-01"), "\"web-01\"");
-        assert_eq!(cell("=HYPERLINK(\"x\")"), "\"'=HYPERLINK(\"\"x\"\")\"");
-        for bad in ["+1", "-1", "@SUM(A1)", "\tx", "\rx", "\nx"] {
-            assert!(cell(bad).starts_with("\"'"), "{bad:?}");
+        assert_eq!(row(&["web-01", "=HYPERLINK(\"x\")", ""]), "\"web-01\",\"'=HYPERLINK(\"\"x\"\")\",\"\"\r\n");
+        for bad in FORMULAS {
+            assert_eq!(row(&[bad]), format!("\"'{bad}\"\r\n"), "{bad:?}");
         }
+        // A line break inside a value stays inside its quoted cell.
+        assert_eq!(row(&["Rack A\nSlot 4", "x"]), "\"Rack A\nSlot 4\",\"x\"\r\n");
     }
 }

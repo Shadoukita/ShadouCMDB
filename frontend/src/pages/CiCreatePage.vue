@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useAreas } from "../api/datamodel";
 import { useCiClasses, useClassAttributes } from "../api/queries";
 import { t } from "../i18n";
+import { dataModelEmpty } from "../lib/dataModel";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
@@ -65,7 +66,8 @@ function pickClass(e: Event) {
       <EditLayoutButton :editor="editor" />
     </div>
   </div>
-  <section v-if="classes.data.value?.length === 0" class="panel callout">
+  <!-- Without a class picked: a link straight to a built-in class (Business service) still opens its form. -->
+  <section v-if="!classId && classes.data.value && dataModelEmpty(classes.data.value)" class="panel callout">
     <DataModelEmpty />
   </section>
   <section v-else class="panel">

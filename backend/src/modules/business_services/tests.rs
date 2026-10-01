@@ -555,9 +555,62 @@ async fn restricted_user_oracles() {
     );
     assert!(!edges.contains("db-01"), "{edges}");
 
+    // 10. Audit ids (GH#378), compared raw rather than normalised: the rows R sees
+    // from the first add (web-01 with db-01, or alone) are consecutive in the
+    // stored sequence only in the control world, and R must not be able to tell.
+    let mut consecutive = Vec::new();
+    for o in [&a, &b] {
+        let (_, log) =
+            o.w.get(&o.r, &format!("/api/v1/audit-log?entityId={}&action=update&sort=occurredAt", s(o))).await;
+        let request = log["data"][0]["requestId"].as_str().unwrap().to_owned();
+        let path = format!("/api/v1/audit-log?requestId={request}&sort=occurredAt");
+        let ids =
+            |v: &Value| v["data"].as_array().unwrap().iter().map(|e| e["id"].as_i64().unwrap()).collect::<Vec<_>>();
+        let (_, shown) = o.w.get(&o.r, &path).await;
+        let (_, stored) = o.w.get(&o.w.admin, &path).await;
+        let (shown, stored) = (ids(&shown), ids(&stored));
+        assert_eq!(shown.len(), 2, "the service update and the web-01 edge");
+        assert!(shown.iter().all(|id| !stored.contains(id)), "R gets no stored sequence number: {shown:?} {stored:?}");
+        consecutive.push((stored.len(), shown.iter().max().unwrap() - shown.iter().min().unwrap() == 1));
+    }
+    assert_eq!(consecutive[0].0, consecutive[1].0 + 1, "{consecutive:?}: db-01's edge is a stored row of its own");
+    assert_eq!(consecutive[0].1, consecutive[1].1, "oracle 10: R's ids say nothing about the gap");
+
     // 11. A grant on datastore gives nothing on database: db-01 stays hidden (all of the above).
     let (status, v) = a.w.get(&a.r, &format!("/api/v1/configuration-items/{}", a.db01())).await;
     assert_eq!((status, code(&v)), (404, "NOT_FOUND"));
+
+    // 12. Changing S's class (GH#409), with create on the target class: refused the
+    // same way with or without db-01, and validUntil = validFrom fails in the API,
+    // so neither the type trigger nor the validity constraint is reached.
+    for o in [&a, &b] {
+        sqlx::query(
+            "UPDATE permission_profile_class_permissions SET can_create = true
+             WHERE class_id = $1 AND profile_id = (SELECT id FROM permission_profiles WHERE name = 'profile r')",
+        )
+        .bind(o.w.classes["server"])
+        .execute(&o.w.pool)
+        .await
+        .unwrap();
+    }
+    let item = |o: &Oracle| format!("/api/v1/configuration-items/{}", s(o));
+    let (from_a, from_b) = (a.w.get(&a.w.admin, &item(&a)).await.1, b.w.get(&b.w.admin, &item(&b)).await.1);
+    let valid_from = |o: &Oracle| if std::ptr::eq(o, &a) { &from_a } else { &from_b }["validFrom"].clone();
+    let retype = same!("12 retype", r, "PATCH", item, |o: &Oracle| Some(
+        json!({ "classId": o.w.classes["server"], "attributes": {} })
+    ));
+    assert!(retype.starts_with("400 ") && retype.contains("\"business_service_class\""), "{retype}");
+    let probe = same!("12 retype with an empty period", r, "PATCH", item, |o: &Oracle| Some(
+        json!({ "classId": o.w.classes["server"], "validUntil": valid_from(o), "attributes": {} })
+    ));
+    assert!(probe.starts_with("400 ") && !probe.contains("configuration_items_"), "{probe}");
+    let empty = same!("12 empty period", r, "PATCH", item, |o: &Oracle| Some(json!({ "validUntil": valid_from(o) })));
+    assert!(empty.starts_with("400 ") && empty.contains("\"validUntil\"") && !empty.contains("configuration_items_"));
+    let (_, after) = a.w.get(&a.w.admin, &item(&a)).await;
+    assert_eq!(
+        (&after["classId"], &after["validUntil"], &after["version"]),
+        (&json!(a.w.service_class), &Value::Null, &from_a["version"])
+    );
 
     // 5. The limit (3) counts visible members: R can add one more on both worlds, then no more.
     let add_one = same!(
@@ -793,6 +846,17 @@ async fn the_service_class_and_member_type_are_protected_by_the_api() {
     )
     .await;
     assert_eq!((status, details(&v)), (400, vec![("parentId".to_owned(), "system_class".to_owned())]));
+
+    // No CI leaves or enters the class, not even an empty service (GH#409).
+    let mut w = w;
+    let service = w.ci("business_service", "S", "Empty service").await;
+    let server = w.ci("server", "web-01", "web-01").await;
+    let admin = &w.admin;
+    for (id, class) in [(service, w.classes["server"]), (server, w.service_class)] {
+        let path = format!("/api/v1/configuration-items/{id}");
+        let (status, v, _) = call(&w.app, "PATCH", &path, admin, Some(json!({ "classId": class }))).await;
+        assert_eq!((status, details(&v)), (400, vec![("classId".to_owned(), "business_service_class".to_owned())]));
+    }
 
     let rt = format!("/api/v1/relationship-types/{}", w.member_type);
     let (_, t) = w.get(admin, &rt).await;
@@ -1250,6 +1314,41 @@ async fn membership_changes_and_exports_are_audited() {
         log["data"][0]["newValue"],
         json!({ "kind": "business_service_members", "format": "csv", "rowCount": 1, "visibility": "all_classes" })
     );
+}
+
+/// The member export neutralises what the shared csv_safe rule does and keeps
+/// a line break inside its quoted cell (GH#388). The labels are written
+/// directly, as older rows or imports can hold them.
+#[tokio::test]
+async fn member_export_uses_the_shared_csv_safe_rule() {
+    let Some(db) = scratch::database("business_services_export_csv_safe").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig::default()).await;
+    let admin = w.admin.clone();
+    let s = w.ci("business_service", "SHOP-1", "Shop").await;
+    let labels = [" =1+1", "\u{3000}=1+1", "＝1+1", "＋1", "－1", "＠SUM(A1)", "\t=1", "\r=1", "Rack A\nSlot 4"];
+    let mut idents = Vec::new();
+    for (i, label) in labels.iter().enumerate() {
+        let ident = format!("web-{i:02}");
+        let id = w.ci("server", &ident, "placeholder").await;
+        sqlx::query("UPDATE cmdb.configuration_items SET label = $1 WHERE id = $2")
+            .bind(label)
+            .bind(id)
+            .execute(&w.pool)
+            .await
+            .unwrap();
+        idents.push(ident);
+    }
+    let members: Vec<&str> = idents.iter().map(String::as_str).collect();
+    assert_eq!(w.add(&admin, "SHOP-1", &members).await.0, 200);
+
+    let (status, _, csv) =
+        raw(&w.app, "GET", &format!("/api/v1/business-services/{s}/members/export"), &admin, None).await;
+    assert_eq!(status, 200, "{csv}");
+    for label in &labels[..8] {
+        assert!(csv.contains(&format!(",\"'{label}\",")), "{label:?} in {csv:?}");
+    }
+    assert!(csv.contains(",\"Rack A\nSlot 4\","), "{csv:?}");
+    assert!(!csv.contains("Rack A Slot 4"), "{csv:?}");
 }
 
 // ---------------------------------------------------------------------------

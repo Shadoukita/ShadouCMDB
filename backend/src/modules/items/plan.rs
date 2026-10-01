@@ -554,6 +554,8 @@ pub fn plan_create<'d>(
 /// read under a row lock). `defs` are the effective attribute definitions of
 /// the class it has after the write. Needs view and edit on its class, create
 /// on the class it moves to, and the Administrator profile to change the ident.
+/// `service_class` is the business service class, which no CI enters or leaves
+/// (None where the caller never changes a CI's class).
 pub fn plan_update<'d>(
     ctx: &RequestContext,
     model: &Model,
@@ -561,6 +563,7 @@ pub fn plan_update<'d>(
     before: ConfigurationItem,
     input: &UpdateItemBody,
     resolver: &dyn Resolver,
+    service_class: Option<Uuid>,
 ) -> Result<Plan<'d>, AppError> {
     let id = before.summary.id;
     let old_class_id = before.summary.class_id;
@@ -573,6 +576,33 @@ pub fn plan_update<'d>(
     }
     if before.summary.deleted_at.is_some() {
         return Err(AppError::conflict("This configuration item is deleted and cannot be modified"));
+    }
+    // A business service keeps its type, and no CI becomes one, whatever its
+    // members and owners: the same refusal for every service, so it never tells
+    // whether one has members the caller may not view (§3.2). The database
+    // trigger configuration_items_keep_service stays as the backstop.
+    if let (Some(new_class), Some(service)) = (new_class_id, service_class)
+        && (old_class_id == service || new_class == service)
+    {
+        return Err(AppError::field(
+            "classId",
+            "A business service cannot change its class, and a configuration item cannot become a business service. \
+             Create a new item of the class you need instead.",
+            "business_service_class",
+        ));
+    }
+    // The validity period is checked against the stored dates the request leaves
+    // unchanged, so the order is never left to a database constraint.
+    let valid_from = input.valid_from.unwrap_or(before.summary.valid_from);
+    let valid_until = input.valid_until.unwrap_or(before.summary.valid_until);
+    if (input.valid_from.is_some() || input.valid_until.is_some())
+        && valid_until.is_some_and(|until| until <= valid_from)
+    {
+        let (field, message) = match input.valid_until {
+            Some(_) => ("validUntil", "Must be after validFrom"),
+            None => ("validFrom", "Must be before validUntil"),
+        };
+        return Err(AppError::field(field, message, "custom"));
     }
     // Resending the current ident (a form saving every field) is no change.
     let new_ident = input.ident.as_deref().filter(|i| *i != before.summary.ident);

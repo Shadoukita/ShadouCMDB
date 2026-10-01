@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../api/client";
 import { useCi, useCiClasses, useClassAttributes } from "../../api/queries";
-import { useService } from "../../api/services";
+import { useService, useServiceSettings } from "../../api/services";
 import Breadcrumbs, { type Crumb } from "../../components/Breadcrumbs.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
 import EmptyState from "../../components/EmptyState.vue";
@@ -59,6 +59,8 @@ function retry() {
 }
 
 const canEdit = computed(() => !!s.value && session.canOnClass(s.value.classId, "edit"));
+// The member limits, when the service view does not carry them.
+const serviceSettings = useServiceSettings();
 const canDelete = computed(() => !!s.value && session.canOnClass(s.value.classId, "delete"));
 
 // The class layout's sections, all on the Overview (a service's tabs are fixed): from Customization if the
@@ -77,7 +79,7 @@ const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, 
 
 const TABS = computed<[Tab, string][]>(() => [
   ["overview", t("services.tab.overview")],
-  ["members", t("services.tab.members", { n: s.value?.memberCount ?? 0 })],
+  ["members", t("services.tab.members", { n: (s.value?.memberCount ?? 0).toLocaleString() })],
   ["impact", t("services.tab.impact")],
   ["graph", t("services.tab.graph")],
   ...(session.can("audit.view") ? [["history", t("services.tab.history")] as [Tab, string]] : []),
@@ -176,7 +178,14 @@ watch(
         <ServiceError v-else-if="attrs.isError.value" :error="attrs.error.value" :on-retry="() => attrs.refetch()" />
         <LayoutPanels v-else :ci="c" :sections="sections" :defs="defs" :self="self" :trail="[]" orphans />
       </template>
-      <ServiceMembersPanel v-else-if="current === 'members'" :service="s" />
+      <ServiceMembersPanel
+        v-else-if="current === 'members'"
+        :service="s"
+        :can-edit="canEdit"
+        :limits="s.limits ?? serviceSettings.data.value?.limits"
+        :self="self"
+        :trail="[]"
+      />
       <ImpactPanel v-else-if="current === 'impact'" :ci="c" :self="self" :trail="[]" default-direction="upstream" />
       <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="[]" />
       <HistoryPanel v-else :ci="c" />

@@ -81,6 +81,10 @@ pub struct AuthState {
     pub config: AuthConfig,
     /// Login, keyed by username.
     pub throttle: LoginThrottle,
+    /// Directory sign-in, keyed by the entry the name found (GH#406), on top
+    /// of `throttle`: every name the directory resolves to one entry shares
+    /// its budget. Per key only: `throttle` holds the server-wide budget.
+    pub directory_throttle: LoginThrottle,
     /// Changing one's own password, keyed by user id.
     pub password_throttle: LoginThrottle,
     /// Wrong setup tokens on first-run setup, one key for all requests (GH#230).
@@ -104,6 +108,7 @@ impl AuthState {
             setup: setup_token::SetupGate::new(config.setup_token.clone(), config.setup_token_file.clone()),
             config,
             throttle: LoginThrottle::default(),
+            directory_throttle: LoginThrottle::per_key(),
             password_throttle: LoginThrottle::per_key(),
             setup_throttle: LoginThrottle::per_key(),
             oidc_state_key: tokio::sync::OnceCell::new(),

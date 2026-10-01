@@ -65,12 +65,16 @@ test.describe("a bare install", () => {
     // The one class and the one relationship type are the built-in business service type and its member type (migration 0033).
     expect((await apiGet<Page_<{ key: string }>>(request, "/ci-classes")).data.map((c) => c.key)).toEqual(["business_service"]);
     expect((await apiGet<Page_<{ key: string }>>(request, "/relationship-types")).data.map((t) => t.key)).toEqual(["business_service_member"]);
-    // The dashboard's data-model guide leaves out the built-in class once class reads carry systemRole (SHAA-927 §4); until then it
-    // offers the first CI, so the templates page is opened directly.
+    // The built-in class does not count as a data model: the dashboard guides to the starter template, not to a first CI.
     await page.goto("/");
-    await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /^Business service/ })).toBeVisible();
+    const nav = page.getByRole("navigation", { name: "Main" });
+    await expect(page.getByRole("heading", { name: "No CI classes are defined yet" })).toBeVisible();
+    await expect(nav.getByText("No classes yet.")).toBeVisible();
+    await expect(nav.getByRole("link", { name: /^Business service/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: "+ New CI" })).toHaveCount(0);
     await snap(page, "50-bare-install");
-    await page.goto("/admin/templates");
+    await page.getByRole("link", { name: "Install a starter template" }).click();
+    await expect(page).toHaveURL(/\/admin\/templates$/);
     await expect(page.getByRole("heading", { name: "Your CMDB is empty" })).toBeVisible();
 
     const panel = page.getByRole("region", { name: "IT infrastructure" });

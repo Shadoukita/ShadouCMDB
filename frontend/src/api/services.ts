@@ -1,7 +1,7 @@
 // Business services (spec SHAA-927 §4): a service is a CI of the built-in business service class, so its own
 // fields go through the CI endpoints (queries.ts); this module covers the service views, owners and lookups.
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
-import { toValue, type MaybeRefOrGetter } from "vue";
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/vue-query";
+import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { api, unwrap, type JsonBody, type ListQuery, type Schemas } from "./client";
 import { keys as ciKeys } from "./queries";
 
@@ -104,5 +104,95 @@ export function useReplaceOwners(id: MaybeRefOrGetter<string>) {
       qc.invalidateQueries({ queryKey: ciKeys.ci(serviceId) });
       qc.invalidateQueries({ queryKey: ciKeys.audit(serviceId) });
     },
+  });
+}
+
+/** Which of `ciIds` are already members (the picker's "Already a member"): one call per result page. */
+export function useMembershipOf(serviceId: MaybeRefOrGetter<string>, ciIds: MaybeRefOrGetter<string[]>) {
+  return useQuery(() => {
+    const id = toValue(serviceId);
+    const ids = toValue(ciIds);
+    return {
+      queryKey: [...serviceKeys.members(id, { ciId: ids.join(",") }), "membership"] as const,
+      enabled: !!id && ids.length > 0,
+      queryFn: async ({ signal }: { signal: AbortSignal }) => {
+        const res = await unwrap(
+          api.GET("/api/v1/business-services/{id}/members", {
+            params: { path: { id }, query: { ciId: ids.join(","), limit: Math.max(1, ids.length) } },
+            signal,
+          }),
+        );
+        return new Set(res.data.map((m) => m.ci.id));
+      },
+    };
+  });
+}
+
+/** After a member change: the member lists, the counts on the service and the CI's history. */
+function invalidateMembers(qc: ReturnType<typeof useQueryClient>, serviceId: string) {
+  qc.invalidateQueries({ queryKey: serviceKeys.all });
+  qc.invalidateQueries({ queryKey: ciKeys.ci(serviceId) });
+  qc.invalidateQueries({ queryKey: ciKeys.audit(serviceId) });
+  // A membership is a relationship of the member too, and an impact path.
+  qc.invalidateQueries({ queryKey: ["relationships"] });
+  qc.invalidateQueries({ queryKey: [...ciKeys.cis, "impact"] });
+}
+
+/** Adds members (all or nothing): `alreadyMembers` are not an error. */
+export function useAddMembers(serviceId: MaybeRefOrGetter<string>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (memberIds: string[]) =>
+      unwrap(api.POST("/api/v1/business-services/{id}/members", { params: { path: { id: toValue(serviceId) } }, body: { memberIds } })),
+    onSuccess: () => invalidateMembers(qc, toValue(serviceId)),
+  });
+}
+
+/** Removes members: one id through the single-member route, several through the batch (all or nothing). */
+export function useRemoveMembers(serviceId: MaybeRefOrGetter<string>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (memberIds: string[]) => {
+      const id = toValue(serviceId);
+      if (memberIds.length === 1) {
+        await unwrap(api.DELETE("/api/v1/business-services/{id}/members/{ciId}", { params: { path: { id, ciId: memberIds[0] } } }));
+      } else {
+        await unwrap(api.POST("/api/v1/business-services/{id}/members/remove", { params: { path: { id } }, body: { memberIds } }));
+      }
+    },
+    onSettled: () => invalidateMembers(qc, toValue(serviceId)),
+  });
+}
+
+/** Downloads the member CSV (the list's filters, no paging; recorded in the audit log). */
+export async function downloadMembersCsv(serviceId: string, query: Omit<ServiceMemberQuery, "limit" | "offset">, fallbackName: string): Promise<void> {
+  const { data, error, response } = await api.GET("/api/v1/business-services/{id}/members/export", {
+    params: { path: { id: serviceId }, query },
+    parseAs: "blob",
+  });
+  if (!response.ok) await unwrap(Promise.resolve({ data: undefined, error, response }));
+  // The header is unreadable when the API is on another origin and does not expose it.
+  const name = /filename="?([^";]+)"?/.exec(response.headers.get("Content-Disposition") ?? "")?.[1] ?? fallbackName;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(data as Blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/** Several services by id (the owners of the Impact tab's pinned services); a failed one is just left out. */
+export function useServicesById(ids: MaybeRefOrGetter<string[]>) {
+  return useQueries({
+    queries: computed(() =>
+      toValue(ids).map((id) => ({
+        queryKey: serviceKeys.detail(id),
+        queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/business-services/{id}", { params: { path: { id } }, signal })),
+        staleTime: 60_000,
+        retry: false,
+      })),
+    ),
+    combine: (results) => new Map(results.flatMap((r) => (r.data ? [[r.data.id, r.data] as const] : []))),
   });
 }

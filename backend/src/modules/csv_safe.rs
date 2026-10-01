@@ -1,6 +1,7 @@
 //! The one CSV writer for files people open in a spreadsheet program: the
-//! import error report, the import template, and later the inventory export
-//! (SHAA-714 §5.1, requirement I8).
+//! import error report, the import template, the impact analysis export, the
+//! business-service member export, and later the inventory export (SHAA-714
+//! §5.1, requirement I8). No module writes CSV cells of its own (GH#388).
 //!
 //! - Every field is quoted (RFC 4180), an embedded `"` doubled.
 //! - A field a spreadsheet could take for a formula gets a leading `'`: its

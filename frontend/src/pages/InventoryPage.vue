@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { useAllLookupListValues, useAreas, useLookupLists } from "../api/datamodel";
 import { useCiClasses, useCiList, useClassAttributes, type CiListQuery } from "../api/queries";
+import { dataModelEmpty } from "../lib/dataModel";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import CiCell from "../components/CiCell.vue";
 import ColumnsPopover from "../components/ColumnsPopover.vue";
@@ -150,7 +151,7 @@ function clearFilters() {
       None of your permission profiles allows viewing {{ currentClass?.name }} configuration items, so none are listed here.
       <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
     </EmptyState>
-    <DataModelEmpty v-else-if="list.data.value && total === 0 && activeFilters.length === 0 && classes.data.value?.length === 0" />
+    <DataModelEmpty v-else-if="list.data.value && total === 0 && activeFilters.length === 0 && classes.data.value && dataModelEmpty(classes.data.value)" />
     <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length === 0" title="The inventory is empty">
       Configuration items are the servers, VMs, applications, databases, network devices and locations you track. Create
       one, then relate it to others from its detail page.

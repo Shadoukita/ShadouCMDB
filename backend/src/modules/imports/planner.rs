@@ -738,11 +738,13 @@ pub async fn plan_chunk<'j>(
         if raws.is_empty() {
             continue;
         }
+        // The candidates were the classes visible when the mapping was
+        // resolved; a commit sees only those still visible now (GH#411).
+        let candidates = visible_classes(lookup.candidates.clone());
         for dim in dims(lookup) {
             let canon = canonical(conn, &dim, &raws).await?;
             let found =
-                find(conn, model, &dim, &canon.values().cloned().collect::<Vec<_>>(), &lookup.candidates, false)
-                    .await?;
+                find(conn, model, &dim, &canon.values().cloned().collect::<Vec<_>>(), &candidates, false).await?;
             let mut by_canon: HashMap<String, Vec<(Uuid, Uuid)>> = HashMap::new();
             for (cv, id, class) in found {
                 by_canon.entry(cv).or_default().push((id, class));
@@ -1196,7 +1198,7 @@ fn plan_row(
                 }
                 p.outcome = RowOutcome::Unchanged;
             } else {
-                match plan::plan_update(c.ctx, model, class_defs, before.clone(), &body, &*resolver) {
+                match plan::plan_update(c.ctx, model, class_defs, before.clone(), &body, &*resolver, None) {
                     Ok(planned) => {
                         p.changes = changes(&planned, &before);
                         if !planned.clear.is_empty() {

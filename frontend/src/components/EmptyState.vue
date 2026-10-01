@@ -1,10 +1,10 @@
 <script setup lang="ts">
-defineProps<{ title: string }>();
+defineProps<{ title?: string }>();
 </script>
 
 <template>
   <div class="state">
-    <h2>{{ title }}</h2>
+    <h2 v-if="title">{{ title }}</h2>
     <div v-if="$slots.default"><slot /></div>
     <div v-if="$slots.actions" class="actions"><slot name="actions" /></div>
   </div>

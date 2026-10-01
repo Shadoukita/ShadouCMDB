@@ -28,7 +28,8 @@ a:hover {
 }
 /* A link inside running text is told apart by more than its colour (WCAG 1.4.1). */
 p a:not(.btn),
-.hint a:not(.btn) {
+.hint a:not(.btn),
+.alert a:not(.btn) {
   text-decoration: underline;
 }
 :focus-visible {
@@ -2491,4 +2492,162 @@ fieldset.owner-role {
   align-items: center;
   gap: var(--sp-2);
   min-height: var(--control-h);
+}
+
+/* ---------- Business services: members, member picker, "part of", impact pin (SHAA-934) ---------- */
+table.data th.select-col,
+table.data td.select-col {
+  width: 36px;
+  padding-right: 0;
+}
+table.data .select-col input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 3px;
+}
+.service-members-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.service-members-notes {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.service-members-notes > * {
+  margin-top: var(--sp-3);
+}
+.service-members-notes > .service-members-live:empty,
+.service-members-notes > .service-members-live:not(:has(*)) {
+  margin-top: 0;
+}
+.row-menu {
+  display: inline-block;
+}
+.row-menu > button {
+  min-width: 28px;
+  min-height: 24px;
+}
+/* Under <body> at the button's place (a table cell would clip it). */
+.row-menu-list {
+  position: fixed;
+  z-index: 40;
+  min-width: 200px;
+  margin: 0;
+  padding: var(--sp-1) 0;
+  list-style: none;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+.row-menu-list [role="menuitem"] {
+  all: unset;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: var(--sp-1) var(--sp-4);
+  color: var(--c-text);
+  cursor: pointer;
+}
+.row-menu-list [role="menuitem"]:hover,
+.row-menu-list [role="menuitem"]:focus-visible {
+  background: var(--c-row-hover);
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.row-menu-list [role="menuitem"].danger {
+  color: var(--c-danger-text);
+}
+dialog.member-picker {
+  width: min(960px, 96vw);
+}
+dialog.member-picker .body {
+  max-height: 72vh;
+}
+dialog.member-picker .picker-toolbar {
+  padding: 0 0 var(--sp-3);
+  border-bottom: 0;
+}
+dialog.member-picker .picker-summary {
+  margin-bottom: var(--sp-3);
+}
+dialog.member-picker .picker-summary:focus {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+dialog.member-picker .table-wrap {
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--c-border);
+}
+dialog.member-picker .pagination {
+  padding-left: 0;
+  padding-right: 0;
+}
+dialog.member-picker td .badge {
+  margin-left: var(--sp-2);
+}
+.picker-tray {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--c-border);
+}
+.picker-tray h3 {
+  margin: 0 0 var(--sp-2);
+}
+.picker-tray ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 22vh;
+  overflow-y: auto;
+}
+.picker-tray li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 2px var(--sp-2);
+  border-bottom: 1px solid var(--c-border);
+}
+.picker-tray li > button {
+  min-width: 24px;
+  min-height: 24px;
+}
+.picker-tray li.invalid {
+  box-shadow: inset 3px 0 0 var(--c-danger);
+}
+.picker-tray li:focus {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.picker-tray .error {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--c-danger-text);
+}
+.part-of-services {
+  margin-top: var(--sp-4);
+}
+.part-of-services > .hint {
+  margin: 0;
+  padding-bottom: 0;
+}
+.impact-services {
+  border-bottom: 2px solid var(--c-border-strong);
+}
+.impact-services-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4) var(--sp-2);
+  font-size: var(--fs-md);
+}
+.impact-services-caveat {
+  font-weight: normal;
+  font-size: var(--fs-sm);
 }

@@ -194,6 +194,9 @@ For a PostgreSQL running on the Docker host itself, set `PGHOST=host.docker.inte
 an installation to first-run setup, and `decommission` removes all ShadouCMDB data and settings from
 the database before you retire it.
 
+With separate database roles, `backup` connects as the API role (`DATABASE_URL`) and `restore` as the
+schema owner (`MIGRATION_DATABASE_URL`). Keep the owner's credentials out of scheduled backup jobs.
+
 ## Changing the schema
 
 Every schema change is a migration. No hand-applied DDL.

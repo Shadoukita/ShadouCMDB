@@ -180,7 +180,9 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, session_id: Uuid, csrf_token:
 /// deleted since, gets no session but a 401 (GH#209), as does an account
 /// whose identity provider was disabled or deleted since (GH#250), and a
 /// password-only sign-in (`Password`, `Ldap`) to an account whose
-/// authenticator was confirmed since (GH#303).
+/// authenticator was confirmed since (GH#303), and a second-factor sign-in
+/// (`Totp`, `RecoveryCode`) to an account whose authenticator was reset or
+/// turned off since (GH#341).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_session(
     pool: &PgPool,
@@ -215,13 +217,21 @@ pub(crate) async fn try_open_session(
     // First, so the row is locked before anything the reset or disable also takes.
     let stamp = data::record_login(&mut tx, user_id).await?;
     let mut changed = changed_since(&mut tx, stamp, verified).await?;
-    // A password alone was enough when checked; an authenticator confirmed
-    // since (under the lock on the row) asks for its code (GH#303).
-    if changed.is_none()
-        && matches!(method, LoginMethod::Password | LoginMethod::Ldap)
-        && mfa_data::get_totp(&mut tx, user_id, false).await?.is_some_and(|t| t.confirmed)
-    {
-        changed = Some(Changed::MfaEnrolled);
+    // The authenticator as it is now, locked so that a disable (which locks
+    // it first) waits for this transaction and then ends its session, or this
+    // waits for the disable and finds it gone.
+    let second_factor = matches!(method, LoginMethod::Totp | LoginMethod::RecoveryCode);
+    if changed.is_none() && (second_factor || matches!(method, LoginMethod::Password | LoginMethod::Ldap)) {
+        let confirmed = mfa_data::get_totp(&mut tx, user_id, true).await?.is_some_and(|t| t.confirmed);
+        changed = match (second_factor, confirmed) {
+            // A password alone was enough when checked; an authenticator
+            // confirmed since asks for its code (GH#303).
+            (false, true) => Some(Changed::MfaEnrolled),
+            // The code proved an authenticator reset or turned off since,
+            // whose sessions have already ended (GH#341).
+            (true, false) => Some(Changed::MfaRemoved),
+            _ => None,
+        };
     }
     if let Some(changed) = changed {
         drop(tx);
@@ -259,6 +269,9 @@ pub(crate) enum Changed {
     /// An authenticator was set up for the account after the password was
     /// checked; password sign-ins only (GH#303).
     MfaEnrolled,
+    /// The authenticator was reset or turned off after its code was checked;
+    /// second-factor sign-ins only (GH#341).
+    MfaRemoved,
 }
 
 impl Changed {
@@ -268,6 +281,7 @@ impl Changed {
             Changed::Account => "account_changed",
             Changed::Provider => "provider_disabled",
             Changed::MfaEnrolled => "mfa_enrolled",
+            Changed::MfaRemoved => "mfa_removed",
         }
     }
 }
@@ -278,6 +292,9 @@ impl From<Changed> for AppError {
             Changed::Account => "The account was changed during the sign-in; enter your username and password again",
             Changed::MfaEnrolled => {
                 "Two-factor authentication was set up for this account during the sign-in; sign in again and enter the code from your authenticator app"
+            }
+            Changed::MfaRemoved => {
+                "Two-factor authentication was reset or turned off for this account during the sign-in; enter your username and password again"
             }
             Changed::Provider => {
                 "The identity provider of this account was disabled during the sign-in; ask an administrator"
@@ -304,7 +321,7 @@ async fn changed_since(
 }
 
 /// A sign-in refused because the account, its provider or its second factor
-/// changed while it was checked (GH#209, GH#250, GH#303): logged and audited.
+/// changed while it was checked (GH#209, GH#250, GH#303, GH#341): logged and audited.
 async fn refused(pool: &PgPool, ctx: &RequestContext, username: &str, changed: Changed) -> Result<Changed, AppError> {
     tracing::warn!(user = %username, ip = ?ctx.client.ip, reason = changed.reason(), "sign-in refused: the account, its identity provider or its second factor changed while it was checked");
     record_failure(pool, ctx, username, Some(changed.reason()), None).await?;
@@ -439,6 +456,56 @@ async fn throttle_gate<'a>(
     }
 }
 
+/// The throttle reservations of one sign-in: the name typed and, once a
+/// directory resolved it, the directory entry it found (GH#406). Counted
+/// together: a failure for both, a success for both.
+struct Reservation<'a> {
+    name: Attempt<'a>,
+    entry: Option<Attempt<'a>>,
+}
+
+impl<'a> From<Attempt<'a>> for Reservation<'a> {
+    fn from(name: Attempt<'a>) -> Self {
+        Reservation { name, entry: None }
+    }
+}
+
+impl Reservation<'_> {
+    /// Records the failure; returns the longer lock it triggered, if any.
+    fn failure(self) -> Option<Duration> {
+        let name = self.name.failure();
+        self.entry.and_then(Attempt::failure).max(name)
+    }
+
+    fn success(self) {
+        self.name.success();
+        if let Some(entry) = self.entry {
+            entry.success();
+        }
+    }
+}
+
+/// The key a directory entry's sign-ins are throttled under: the directory
+/// and the entry's stable id, whatever name found it.
+fn entry_key(provider: Uuid, external_id: &str) -> String {
+    format!("{provider} {external_id}")
+}
+
+/// Reserves an attempt for the entry `external_id` of directory `provider`;
+/// `None` while the entry is locked (or all its free failures are in flight).
+fn admit_entry<'a>(throttle: &'a LoginThrottle, net: Net, provider: Uuid, external_id: &str) -> Option<Attempt<'a>> {
+    throttle.begin(&entry_key(provider, external_id), net, false).ok()
+}
+
+/// Whether a name may be looked up in a directory: one a ShadouCMDB account
+/// could have (`USERNAME_PATTERN`, so no control, format or non-ASCII
+/// characters). Other spellings a directory might match to an entry (GH#406)
+/// are refused like an unknown name, before any search.
+fn directory_name(typed: &str) -> Option<&str> {
+    let name = typed.trim();
+    crate::api::validate::cached_regex(schemas::USERNAME_PATTERN).filter(|re| re.is_match(name)).map(|_| name)
+}
+
 fn invalid_credentials() -> AppError {
     AppError::new(ErrorCode::Unauthenticated, "Invalid username or password")
 }
@@ -519,7 +586,7 @@ async fn check_login(
     }
     // An OIDC account has no password: verify() then checks a dummy hash, so it takes as long.
     if !password::verify(&b.password, row.as_ref().and_then(|r| r.password_hash.as_deref())).await? {
-        return Err(wrong_credentials(pool, attempt, ctx, &b.username).await?);
+        return Err(wrong_credentials(pool, attempt.into(), ctx, &b.username, None).await?);
     }
     let Some(user) = row else { return Err(invalid_credentials()) };
     if !user.is_active {
@@ -532,12 +599,13 @@ async fn check_login(
         return Err(AppError::new(ErrorCode::Unauthenticated, "This account is disabled"));
     }
     let verified = Some(user.password_changed_at);
+    let attempt = attempt.into();
     password_accepted(pool, auth, headers, ctx, attempt, user.id, &user.username, LoginMethod::Password, verified).await
 }
 
 /// After a right password, local or directory: the second-factor challenge
 /// when the user has set up MFA (401 MFA_REQUIRED and the `shadoucmdb_mfa`
-/// cookie), otherwise the session. `attempt`: the throttle reservation for
+/// cookie), otherwise the session. `attempt`: the throttle reservations for
 /// the name signed in with, counted a success only once the sign-in is complete.
 /// `verified`: as for [`open_session`]; the challenge is refused alike.
 #[allow(clippy::too_many_arguments)]
@@ -546,7 +614,7 @@ async fn password_accepted(
     auth: &AuthState,
     headers: &HeaderMap,
     ctx: &RequestContext,
-    attempt: Attempt<'_>,
+    attempt: Reservation<'_>,
     user_id: Uuid,
     username: &str,
     method: LoginMethod,
@@ -583,21 +651,28 @@ async fn password_accepted(
     Ok(Either::Left(session))
 }
 
-/// A wrong password (or unknown name): counted, logged and audited; returns the 401.
+/// A wrong password (or unknown name): counted, logged and audited (with
+/// `reason` when the password was not checked); returns the 401.
 async fn wrong_credentials(
     pool: &PgPool,
-    attempt: Attempt<'_>,
+    attempt: Reservation<'_>,
     ctx: &RequestContext,
     username: &str,
+    reason: Option<&str>,
 ) -> Result<AppError, AppError> {
     let locked = attempt.failure();
-    tracing::warn!(username = %username.chars().take(64).collect::<String>(), ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in failed");
-    record_failure(pool, ctx, username, None, locked).await?;
+    tracing::warn!(username = %username.chars().take(64).collect::<String>(), ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), reason, "sign-in failed");
+    record_failure(pool, ctx, username, reason, locked).await?;
     Ok(invalid_credentials())
 }
 
 /// Sign-in with a directory password, under the same throttle as local
-/// passwords, and with the second factor when the user has set one up.
+/// passwords, and with the second factor when the user has set one up. Also
+/// throttled per directory entry (GH#406): a directory may resolve many
+/// spellings of a name to one entry, and each spelling would otherwise get
+/// its own budget. A locked entry's password is not checked; the answer is
+/// the one a wrong password gets, so it does not tell which spellings find
+/// an entry.
 async fn directory_login(
     pool: &PgPool,
     auth: &AuthState,
@@ -607,7 +682,32 @@ async fn directory_login(
     b: &LoginBody,
     linked: Option<Uuid>,
 ) -> Result<LoginAnswer, AppError> {
-    match sso::directory_sign_in(pool, &auth.keyring, ctx, &b.username, &b.password, linked).await? {
+    let mut entry = None;
+    let answer = match directory_name(&b.username) {
+        Some(name) => {
+            let mut admit = |provider: Uuid, external_id: &str| {
+                entry = admit_entry(&auth.directory_throttle, ctx.client.net, provider, external_id);
+                entry.is_some()
+            };
+            sso::directory_sign_in(pool, &auth.keyring, ctx, name, &b.password, linked, &mut admit).await?
+        }
+        None => sso::DirectoryAnswer::NoMatch,
+    };
+    let attempt = Reservation { name: attempt, entry };
+    directory_answer(pool, auth, headers, ctx, attempt, b, answer).await
+}
+
+/// What the directory's answer makes of the sign-in.
+async fn directory_answer(
+    pool: &PgPool,
+    auth: &AuthState,
+    headers: &HeaderMap,
+    ctx: &RequestContext,
+    attempt: Reservation<'_>,
+    b: &LoginBody,
+    answer: sso::DirectoryAnswer,
+) -> Result<LoginAnswer, AppError> {
+    match answer {
         sso::DirectoryAnswer::SignedIn { user_id, username } => {
             password_accepted(pool, auth, headers, ctx, attempt, user_id, &username, LoginMethod::Ldap, None).await
         }
@@ -615,7 +715,11 @@ async fn directory_login(
             // A local account's wrong password costs an argon2 verify; so does
             // this answer, or its speed would tell the names apart (GH#190).
             password::verify(&b.password, None).await?;
-            Err(wrong_credentials(pool, attempt, ctx, &b.username).await?)
+            Err(wrong_credentials(pool, attempt, ctx, &b.username, None).await?)
+        }
+        sso::DirectoryAnswer::NotAdmitted => {
+            password::verify(&b.password, None).await?;
+            Err(wrong_credentials(pool, attempt, ctx, &b.username, Some(DIRECTORY_ENTRY_LOCKED)).await?)
         }
         // A right password that is still refused counts like a disabled account's.
         sso::DirectoryAnswer::Refused(refusal) => {
@@ -629,6 +733,10 @@ async fn directory_login(
         )),
     }
 }
+
+/// `login.failure` reason: the name found a directory entry whose sign-ins
+/// are locked, so the password was not checked (GH#406).
+const DIRECTORY_ENTRY_LOCKED: &str = "directory_entry_locked";
 
 fn sign_in_expired() -> AppError {
     AppError::new(ErrorCode::Unauthenticated, "The sign-in has expired; enter your username and password again")
@@ -685,6 +793,7 @@ async fn login_mfa(
     tx.commit().await?;
     let purged = data::purge_sessions(pool, auth.config.session_idle).await?;
     let verified = Some(verified.password_changed_at);
+    // A reset or disable committed from here on is caught when the session opens (GH#341).
     let WithCookies(session, mut cookies) =
         start_session(pool, auth, headers, ctx, user_id, username, method, verified).await?;
     attempt.success();
@@ -1447,6 +1556,88 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
+    /// GH#406: only names an account could have are looked up in a directory;
+    /// spellings a normalising directory would match to the same entry
+    /// (full-width, zero-width, soft hyphen, control characters) are not.
+    #[test]
+    fn only_account_names_reach_the_directory() {
+        assert_eq!(directory_name(" Bob\t"), Some("Bob"));
+        assert_eq!(directory_name("bob@corp.example"), Some("bob@corp.example"));
+        for name in ["ｂｏｂ", "bob\u{200b}", "bo\u{ad}b", "b\u{0}ob", "bob\nbob", "bob smith", "", "j\u{fc}rgen"] {
+            assert_eq!(directory_name(name), None, "{name:?}");
+        }
+    }
+
+    /// The entry a stub directory finds for both `bob` and `bob@corp.example`
+    /// (a filter that also matches `mail`), as `directory_login` handles it.
+    async fn stub_directory_login(
+        pool: &PgPool,
+        auth: &AuthState,
+        ctx: &RequestContext,
+        bob: (Uuid, Uuid),
+        name: &str,
+        password: &str,
+    ) -> Result<LoginAnswer, AppError> {
+        const RIGHT: &str = "bobs-directory-password";
+        let (provider, user_id) = bob;
+        let attempt = throttle_gate(&auth.throttle, name, ctx.client.net, "sign-ins for this username").await?;
+        let mut entry = None;
+        let answer = match directory_name(name).map(str::to_lowercase).as_deref() {
+            Some("bob" | "bob@corp.example") => {
+                entry = admit_entry(&auth.directory_throttle, ctx.client.net, provider, "entryUUID:b0b");
+                match entry {
+                    None => sso::DirectoryAnswer::NotAdmitted,
+                    Some(_) if password == RIGHT => sso::DirectoryAnswer::SignedIn { user_id, username: "bob".into() },
+                    Some(_) => sso::DirectoryAnswer::NoMatch,
+                }
+            }
+            _ => sso::DirectoryAnswer::NoMatch,
+        };
+        let attempt = Reservation { name: attempt, entry };
+        directory_answer(pool, auth, &HeaderMap::new(), ctx, attempt, &login_body(name, password), answer).await
+    }
+
+    /// GH#406: failures split over two names the directory resolves to one
+    /// entry lock it after the same total as one name, and while it is locked
+    /// its password is not checked: the right one gets the wrong one's 401.
+    #[tokio::test]
+    async fn names_for_one_directory_entry_share_its_lock() {
+        let Some(db) = scratch::database("names_for_one_directory_entry_share_its_lock").await else { return };
+        let (pool, auth) = (&db.pool, auth_state());
+        let ldap = crate::modules::mfa::tests::provider(pool, "ldap", true, "ldaps://dc.example.test").await;
+        let mut tx = pool.begin().await.unwrap();
+        let linked = crate::data::identity_providers::NewLinkedUser {
+            provider_id: ldap,
+            external_id: "entryUUID:b0b",
+            username: "bob",
+            display_name: "bob",
+            email: None,
+        };
+        let bob = (ldap, crate::data::identity_providers::insert_linked(&mut tx, &linked).await.unwrap());
+        tx.commit().await.unwrap();
+        auth.throttle.freeze();
+        auth.directory_throttle.freeze();
+        let (guesser, owner) = (from("198.51.100.7"), from("203.0.113.5"));
+        let spellings = ["bob", "bob@corp.example"];
+        for i in 0..crate::auth::throttle::FREE_FAILURES as usize {
+            let e = stub_directory_login(pool, &auth, &guesser, bob, spellings[i % 2], "guess").await.err();
+            assert_eq!(e.map(|e| e.code), Some(ErrorCode::Unauthenticated), "guess {i}");
+        }
+        // Neither name has used up its own free failures; the entry has.
+        let e = stub_directory_login(pool, &auth, &guesser, bob, "BOB", "bobs-directory-password").await.err();
+        assert_eq!(e.as_ref().map(|e| e.code), Some(ErrorCode::Unauthenticated), "the entry is locked");
+        assert_eq!(e.unwrap().message, invalid_credentials().message, "the answer a wrong password gets");
+        let failures = auth_rows(pool, "login.failure").await;
+        assert_eq!(failures.len(), crate::auth::throttle::FREE_FAILURES as usize + 1);
+        assert_eq!(failures.last().unwrap().3["reason"], DIRECTORY_ENTRY_LOCKED, "audited as not checked");
+        assert_eq!(failures[0].3.get("reason"), None);
+        // Per network, as the name's lock is (GH#187): the owner still signs in.
+        let answer =
+            stub_directory_login(pool, &auth, &owner, bob, "bob@corp.example", "bobs-directory-password").await;
+        assert!(matches!(answer, Ok(Either::Left(_))), "the owner's network is not locked");
+        db.drop().await;
+    }
+
     /// GH#120: after the directory accepted the password, a user with an
     /// authenticator gets the second-factor challenge, not a session, and the
     /// name's failure count is kept until the code is right. Without an
@@ -1482,10 +1673,19 @@ pub(crate) mod tests {
         for _ in 1..crate::auth::throttle::FREE_FAILURES {
             auth.throttle.failure("Dirk", Net::default());
         }
-        let answer =
-            password_accepted(pool, &auth, &headers, &anon(), attempt("Dirk"), dirk, "dirk", LoginMethod::Ldap, None)
-                .await
-                .unwrap();
+        let answer = password_accepted(
+            pool,
+            &auth,
+            &headers,
+            &anon(),
+            attempt("Dirk").into(),
+            dirk,
+            "dirk",
+            LoginMethod::Ldap,
+            None,
+        )
+        .await
+        .unwrap();
         let Either::Right(ErrorWithCookies(err, cookies)) = answer else { panic!("a session was opened") };
         assert_eq!(err.code, ErrorCode::MfaRequired);
         assert!(session::cookie_value(&cookies[0], session::MFA_COOKIE).is_some_and(|t| !t.is_empty()));
@@ -1505,10 +1705,19 @@ pub(crate) mod tests {
         assert_eq!(last_login, None, "not recorded as a sign-in yet");
         assert!(auth.throttle.failure("Dirk", Net::default()).is_some(), "the failure count was not cleared");
 
-        let answer =
-            password_accepted(pool, &auth, &headers, &anon(), attempt("dora"), dora, "dora", LoginMethod::Ldap, None)
-                .await
-                .unwrap();
+        let answer = password_accepted(
+            pool,
+            &auth,
+            &headers,
+            &anon(),
+            attempt("dora").into(),
+            dora,
+            "dora",
+            LoginMethod::Ldap,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(matches!(answer, Either::Left(_)), "no authenticator: signed in");
         assert_eq!(sessions(dora).await.unwrap(), 1);
         db.drop().await;
@@ -1703,6 +1912,71 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
+    /// An administrator's reset or the user's own disable of the authenticator,
+    /// as `mfa::reset` and `mfa::disable` make it (the authenticator locked
+    /// first), not committed yet.
+    async fn removing_mfa(pool: &PgPool, user: Uuid) -> sqlx::PgTransaction<'_> {
+        let mut tx = pool.begin().await.unwrap();
+        mfa_data::get_totp(&mut tx, user, true).await.unwrap().expect("an authenticator");
+        tx
+    }
+
+    async fn remove_mfa_under(mut tx: sqlx::PgTransaction<'_>, user: Uuid) {
+        assert!(mfa_data::delete_mfa(&mut tx, user).await.unwrap(), "a confirmed authenticator");
+        data::delete_user_sessions(&mut tx, user, None).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    /// A code checked just before the authenticator is reset or turned off
+    /// gets no session that outlives it, whether the reset commits between
+    /// the code's check and the session's start or while the session is
+    /// being opened (GH#341).
+    #[tokio::test]
+    async fn a_second_factor_checked_before_a_reset_or_disable_gets_no_session() {
+        let Some(db) = scratch::database("a_second_factor_checked_before_a_reset_or_disable_gets_no_session").await
+        else {
+            return;
+        };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &anon(), body("owner")).await.unwrap();
+        let secret = crate::auth::totp::new_secret();
+        for (name, method) in [("totp", LoginMethod::Totp), ("recovery", LoginMethod::RecoveryCode)] {
+            let (user, _) = account(pool, name, Some(&secret)).await;
+            let checked = data::get_user(&mut pool.acquire().await.unwrap(), user, false).await.unwrap().unwrap();
+            let verified = Some(checked.password_changed_at);
+
+            // Committed after the code's transaction, before the session's.
+            remove_mfa_under(removing_mfa(pool, user).await, user).await;
+            let e = open_session(pool, &auth, &headers, &anon(), user, name, method, verified)
+                .await
+                .expect_err("a session for a removed authenticator");
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "{name}: {}", e.message);
+            assert_eq!(rows_of(pool, "sessions", user).await, 0, "{name}: no session");
+
+            // Committed while the session is being opened: the sign-in waits
+            // for the authenticator's lock and then finds it gone.
+            let late = format!("{name}-late");
+            let (user, _) = account(pool, &late, Some(&secret)).await;
+            let checked = data::get_user(&mut pool.acquire().await.unwrap(), user, false).await.unwrap().unwrap();
+            let verified = Some(checked.password_changed_at);
+            let tx = removing_mfa(pool, user).await;
+            let ctx = anon();
+            let removed = async {
+                assert!(a_lock_is_awaited(pool).await, "{name}: the sign-in waits for the authenticator's lock");
+                remove_mfa_under(tx, user).await;
+            };
+            let (answer, ()) =
+                tokio::join!(open_session(pool, &auth, &headers, &ctx, user, &late, method, verified), removed);
+            let e = answer.err().unwrap_or_else(|| panic!("{name}: signed in"));
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "{name}: {}", e.message);
+            assert_eq!(rows_of(pool, "sessions", user).await, 0, "{name}: no session");
+        }
+        let refused = auth_rows(pool, "login.failure").await;
+        assert_eq!(refused.len(), 4);
+        assert!(refused.iter().all(|r| r.3["reason"] == "mfa_removed"), "{refused:?}");
+        db.drop().await;
+    }
+
     /// A directory password checked just before the directory is disabled
     /// gets neither a session nor a second-factor step (GH#250).
     #[tokio::test]
@@ -1743,7 +2017,7 @@ pub(crate) mod tests {
             let tx = locked_provider(pool, ldap).await;
             let ctx = anon();
             let (answer, ()) = tokio::join!(
-                password_accepted(pool, &auth, &headers, &ctx, attempt, user, name, LoginMethod::Ldap, None),
+                password_accepted(pool, &auth, &headers, &ctx, attempt.into(), user, name, LoginMethod::Ldap, None),
                 disable_provider_under(pool, tx, ldap)
             );
             let e = answer.err().unwrap_or_else(|| panic!("{name}: signed in"));

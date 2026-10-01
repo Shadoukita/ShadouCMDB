@@ -28,6 +28,7 @@ import DeleteCiButton from "./detail/DeleteCiButton.vue";
 import HistoryPanel from "./detail/HistoryPanel.vue";
 import ImpactPanel from "./detail/ImpactPanel.vue";
 import LayoutPanels from "./detail/LayoutPanels.vue";
+import PartOfServicesPanel from "./detail/PartOfServicesPanel.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
 
@@ -255,6 +256,7 @@ const crumbs = computed<Crumb[]>(() => {
           :trail="trail"
           :orphans="layoutIndex === 0"
         />
+        <PartOfServicesPanel v-if="layoutIndex === 0" :ci="c" :self="self" :trail="trail" />
         <template v-if="layoutIndex === 0 && !placed.has('relations')">
           <div style="height: var(--sp-4)" />
           <RelationshipsPanel :ci="c" :self="self" :trail="trail" />

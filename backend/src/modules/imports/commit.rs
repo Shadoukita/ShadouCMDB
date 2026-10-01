@@ -24,6 +24,8 @@
 //!   transaction, as the owner with `actor_type = import` and
 //!   `request_id = import:<jobId>`; nothing for unchanged rows; one
 //!   `import.commit` event when the commit ends, with the job's final status.
+//!   Only the owner can start a commit ([`jobs::check_own_job`]), so the
+//!   owner the entries name is who asked for it (GH#389).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -36,7 +38,7 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use super::dry_run::{MAX_STORED_ISSUES, model_fingerprint, owner_context, stream_rows};
-use super::jobs::{self, COLUMNS, JobRow, check_owner, fetch_for_update, require_enabled};
+use super::jobs::{self, COLUMNS, JobRow, check_own_job, fetch_for_update, require_enabled};
 use super::parse::{Limits, Row};
 use super::planner::{self, Context, Issue, JobData, Matches, Pending, Severity};
 use super::schemas::{CommitCounts, CommitImport, ImportJob, ImportSummary, JobStatus, RowOutcome};
@@ -91,7 +93,7 @@ pub async fn start(
     }
     let mut tx = pool.begin().await?;
     require_enabled(&mut tx, cfg).await?;
-    let job = check_owner(ctx, fetch_for_update(&mut tx, id).await?, id)?;
+    let job = check_own_job(ctx, fetch_for_update(&mut tx, id).await?, id)?;
     match job.status {
         JobStatus::Validated => {}
         JobStatus::Ready if job.mapping.is_some() => {
@@ -538,7 +540,7 @@ async fn write_rows(
                 let (before, body) = p.update.as_ref().ok_or_else(AppError::internal)?;
                 let class = before.summary.class_id;
                 let defs = planned.defs.get(&class).map(Vec::as_slice).unwrap_or_default();
-                let plan = plan::plan_update(ctx, model, defs, before.clone(), body, &planned.resolver)?;
+                let plan = plan::plan_update(ctx, model, defs, before.clone(), body, &planned.resolver, None)?;
                 let id = plan::apply_rows(conn, model, &plan).await?;
                 written.push((id, class, Some(crud::json(before))));
                 delta.updated += 1;

@@ -10,7 +10,9 @@
  * users, ideally with the old release's demo inventory (`seed --demo`):
  * `seed` completes first-run setup as "upgrade-admin" with UPGRADE_PASSWORD,
  * creates "upgrade-viewer" with UPGRADE_VIEWER_PASSWORD, and uses only API
- * operations that exist since v0.1.0-rc.1, so it works against every tag in
+ * operations that exist since v0.1.0-rc.1 (or, from migration 0016 on, their
+ * successors: lookup list values and class attributes for the former fixed CI
+ * fields), so it works against every tag in
  * the CI matrix (.github/workflows/upgrade.yml).
  *
  * `seed` prints the snapshot to stdout (progress goes to stderr): the ids it created, the full GET response of
@@ -116,7 +118,7 @@ async function viewerView(ids: Json): Promise<ViewerView> {
   for (const id of Object.values(ids.cis) as string[]) getStatus[id] = (await call('GET', `/api/v1/configuration-items/${id}`)).status;
   // The body must be valid for the release being asked, or its 400 would hide the 403:
   // the fixed fields (name, statusId) became class attributes in migration 0016.
-  const body = MODE === 'seed' ? { classId: ids.classes.server, name: 'upg-viewer-denied', statusId: ids.status } : { classId: ids.classes.server };
+  const body = MODE === 'seed' && !ids.coreModel ? { classId: ids.classes.server, name: 'upg-viewer-denied', statusId: ids.status } : { classId: ids.classes.server };
   const createStatus = (await call('POST', '/api/v1/configuration-items', body)).status;
   const auditStatus = (await call('GET', '/api/v1/audit-log?limit=1')).status;
   me = null;
@@ -134,10 +136,24 @@ async function seed() {
   const area = hasAreas ? await ok('POST', '/api/v1/areas', { key: 'upg_area', name: 'Upgrade area' }) : null;
   const inArea = area ? { areaId: area.id } : {};
 
-  const status = await ok('POST', '/api/v1/statuses', { key: 'upg_live', name: 'Live (upgrade)' });
-  const environment = await ok('POST', '/api/v1/environments', { key: 'upg_prod', name: 'Production (upgrade)' });
-  const location = await ok('POST', '/api/v1/locations', { key: 'upg_dc1', name: 'Data centre 1 (upgrade)', locationType: 'site' });
-  const owner = await ok('POST', '/api/v1/owners', { kind: 'team', name: 'Operations (upgrade)' });
+  // Releases from migration 0016 on (v0.2.x) hold status, environment, location and owner as values of the
+  // lookup lists of the same keys, and the former fixed CI fields as class attributes; /statuses answers 410 there.
+  const firstStatus = await call('POST', '/api/v1/statuses', { key: 'upg_live', name: 'Live (upgrade)' });
+  const coreModel = firstStatus.status === 410;
+  if (!coreModel && firstStatus.status >= 400) throw new Error(`POST /api/v1/statuses: ${firstStatus.status} ${JSON.stringify(firstStatus.json).slice(0, 600)}`);
+  // The template brings these lists; an empty data model does not have them yet.
+  const lists = coreModel ? await all('/api/v1/lookup-lists') : [];
+  const listId = async (key: string): Promise<string> => {
+    if (!lists.some((l) => l.key === key)) lists.push(await ok('POST', '/api/v1/lookup-lists', { key, name: `${key[0]!.toUpperCase()}${key.slice(1)}` }));
+    return lists.find((l) => l.key === key).id;
+  };
+  const coreValue = async (list: string, key: string, name: string) => ok('POST', '/api/v1/lookup-list-values', { listId: await listId(list), key, name });
+  const status = coreModel ? await coreValue('status', 'upg_live', 'Live (upgrade)') : firstStatus.json;
+  const environment = coreModel ? await coreValue('environment', 'upg_prod', 'Production (upgrade)')
+    : await ok('POST', '/api/v1/environments', { key: 'upg_prod', name: 'Production (upgrade)' });
+  const location = coreModel ? await coreValue('location', 'upg_dc1', 'Data centre 1 (upgrade)')
+    : await ok('POST', '/api/v1/locations', { key: 'upg_dc1', name: 'Data centre 1 (upgrade)', locationType: 'site' });
+  const owner = coreModel ? await coreValue('owner', 'upg_ops', 'Operations (upgrade)') : await ok('POST', '/api/v1/owners', { kind: 'team', name: 'Operations (upgrade)' });
   const list = await ok('POST', '/api/v1/lookup-lists', { key: 'upg_tier', name: 'Tier (upgrade)' });
   const gold = await ok('POST', '/api/v1/lookup-list-values', { listId: list.id, key: 'gold', name: 'Gold' });
 
@@ -165,39 +181,68 @@ async function seed() {
     attributes[key] = await ok('POST', '/api/v1/attribute-definitions', { classId: cls.server.id, key, dataType, label: key.replace('_', ' '), ...extra });
   }
   attributes.version = await ok('POST', '/api/v1/attribute-definitions', { classId: cls.application.id, key: 'app_version', dataType: 'text', label: 'Version', isRequired: true });
+  if (coreModel) {
+    // The former fixed fields, as migration 0016 gives them to a class whose CIs held values.
+    const core: Array<[string, string, Json]> = [
+      ['name', 'text', { isRequired: true }],
+      ['status', 'lookup', { lookupListId: await listId('status') }],
+      ['environment', 'lookup', { lookupListId: await listId('environment') }],
+      ['owner', 'lookup', { lookupListId: await listId('owner') }],
+      ['location', 'lookup', { lookupListId: await listId('location') }],
+      ['hostname', 'text', {}], ['ip_address', 'ip', {}], ['serial_number', 'text', {}], ['notes', 'text', { validation: { multiline: true } }],
+    ];
+    for (const c of [cls.server, cls.application]) {
+      for (const [key, dataType, extra] of core) {
+        attributes[`${c === cls.server ? 'server' : 'application'}_${key}`] = await ok('POST', '/api/v1/attribute-definitions', { classId: c.id, key, dataType, label: key.replace('_', ' '), ...extra });
+      }
+    }
+  }
+  // A CI body in the shape of the release: fixed fields before 0016, class attributes from it on.
+  const ciBody = (classId: string, fields: Json, attrs: Json = {}): Json => {
+    if (!coreModel) return { classId, ...fields, attributes: attrs };
+    const moved: Json = { name: 'name', statusId: 'status', environmentId: 'environment', ownerId: 'owner', locationId: 'location', hostname: 'hostname', ipAddress: 'ip_address', serialNumber: 'serial_number', notes: 'notes' };
+    return { classId, attributes: { ...Object.fromEntries(Object.entries(fields).map(([k, v]) => [moved[k], v])), ...attrs } };
+  };
+  const ciPatch = (fields: Json, attrs: Json): Json => {
+    const { classId: _, ...body } = ciBody('', fields, attrs);
+    return body;
+  };
 
-  const app = await ok('POST', '/api/v1/configuration-items', {
-    classId: cls.application.id, name: 'upg-app-01', statusId: status.id, ownerId: owner.id, attributes: { app_version: '4.2.1' },
-  });
-  const server = await ok('POST', '/api/v1/configuration-items', {
-    classId: cls.server.id, name: 'upg-srv-01', statusId: status.id, environmentId: environment.id, locationId: location.id, ownerId: owner.id,
+  const app = await ok('POST', '/api/v1/configuration-items', ciBody(cls.application.id, { name: 'upg-app-01', statusId: status.id, ownerId: owner.id }, { app_version: '4.2.1' }));
+  const server = await ok('POST', '/api/v1/configuration-items', ciBody(cls.server.id, {
+    name: 'upg-srv-01', statusId: status.id, environmentId: environment.id, locationId: location.id, ownerId: owner.id,
     hostname: 'upg-srv-01.example.internal', ipAddress: '10.20.30.40', serialNumber: 'SN-UPG-0001', notes: 'Seeded by the upgrade check.\nSecond line, ümlauts.',
-    attributes: {
-      serial_text: 'ABC-123', cpu_count: 16, ram_gb: 62.5, is_virtual: false, os_family: 'linux', purchased_on: '2024-02-29',
-      patched_at: '2026-01-15T08:30:00.000Z', mgmt_ip: '2001:db8::10', subnet: '10.20.30.0/24', tier: gold.id, primary_app: app.id,
-    },
-  });
-  const server2 = await ok('POST', '/api/v1/configuration-items', {
-    classId: cls.server.id, name: 'upg-srv-02', statusId: status.id, ipAddress: '10.20.30.41', attributes: { cpu_count: 2, is_virtual: true },
-  });
+  }, {
+    serial_text: 'ABC-123', cpu_count: 16, ram_gb: 62.5, is_virtual: false, os_family: 'linux', purchased_on: '2024-02-29',
+    patched_at: '2026-01-15T08:30:00.000Z', mgmt_ip: '2001:db8::10', subnet: '10.20.30.0/24', tier: gold.id, primary_app: app.id,
+  }));
+  const server2 = await ok('POST', '/api/v1/configuration-items', ciBody(cls.server.id, { name: 'upg-srv-02', statusId: status.id, ipAddress: '10.20.30.41' }, { cpu_count: 2, is_virtual: true }));
   // An edit and a delete, so the audit log has update and delete rows too.
-  await ok('PATCH', `/api/v1/configuration-items/${server2.id}`, { notes: 'edited before the upgrade', attributes: { ram_gb: 8 } });
-  const gone = await ok('POST', '/api/v1/configuration-items', { classId: cls.server.id, name: 'upg-srv-deleted', statusId: status.id });
+  await ok('PATCH', `/api/v1/configuration-items/${server2.id}`, ciPatch({ notes: 'edited before the upgrade' }, { ram_gb: 8 }));
+  const gone = await ok('POST', '/api/v1/configuration-items', ciBody(cls.server.id, { name: 'upg-srv-deleted', statusId: status.id }));
   await ok('DELETE', `/api/v1/configuration-items/${gone.id}`);
 
   const relType = await ok('POST', '/api/v1/relationship-types', { key: 'upg_runs_on', name: 'Runs on (upgrade)', forwardLabel: 'runs on', reverseLabel: 'hosts' });
   const rule = await ok('POST', '/api/v1/relationship-rules', { relationshipTypeId: relType.id, sourceClassId: cls.application.id, targetClassId: cls.server.id });
   const rel = await ok('POST', '/api/v1/relationships', { relationshipTypeId: relType.id, sourceCiId: app.id, targetCiId: server.id, notes: 'seeded' });
 
-  // A restricted profile: sees servers only, may not create them, no audit.view.
+  // The starter class "service" of the IT infrastructure template (`seed --demo`), if this instance has it.
+  // Migration 0033 adopts it as the business service class; without it, 0033 creates a new, empty one.
+  const serviceClass = (await all('/api/v1/ci-classes')).find((c) => c.key === 'service') ?? null;
+  const serviceCis = serviceClass ? (await all('/api/v1/configuration-items')).filter((c) => c.classId === serviceClass.id).map((c) => c.id).sort() : [];
+
+  // A restricted profile: sees servers (and services, when there are any) only, may not create them, no audit.view.
   const profile = await ok('POST', '/api/v1/admin/profiles', {
     name: 'Upgrade viewers', description: 'Server read-only (upgrade check)',
-    classPermissions: [{ classId: cls.server.id, view: true, create: false, edit: false, delete: false }],
+    classPermissions: [
+      { classId: cls.server.id, view: true, create: false, edit: false, delete: false },
+      ...(serviceClass ? [{ classId: serviceClass.id, view: true, create: false, edit: false, delete: false }] : []),
+    ],
   });
   const viewer = await ok('POST', '/api/v1/admin/users', { username: VIEWER, displayName: 'Upgrade Viewer', password: VIEWER_PASSWORD, profileIds: [profile.id] });
 
   const ids = {
-    area: area?.id ?? null,
+    area: area?.id ?? null, coreModel,
     status: status.id, environment: environment.id, location: location.id, owner: owner.id, lookupList: list.id, lookupValue: gold.id,
     classes: { server: cls.server.id, application: cls.application.id },
     attributes: Object.fromEntries(Object.entries(attributes).map(([k, v]) => [k, v.id])),
@@ -205,6 +250,7 @@ async function seed() {
     deletedCi: gone.id,
     relationshipType: relType.id, relationshipRule: rule.id, relationship: rel.id,
     profile: profile.id, viewer: viewer.id,
+    serviceClass: serviceClass?.id ?? null, serviceCis,
   };
 
   // The restricted user signs in once before the upgrade (a login.success row
@@ -228,7 +274,9 @@ async function readObjects(ids: Json): Promise<Record<string, Json>> {
   ];
   const urls = [
     ids.area && `/api/v1/areas/${ids.area}`,
-    `/api/v1/statuses/${ids.status}`, `/api/v1/environments/${ids.environment}`, `/api/v1/locations/${ids.location}`, `/api/v1/owners/${ids.owner}`,
+    ...(ids.coreModel
+      ? [ids.status, ids.environment, ids.location, ids.owner].map((id) => `/api/v1/lookup-list-values/${id}`)
+      : [`/api/v1/statuses/${ids.status}`, `/api/v1/environments/${ids.environment}`, `/api/v1/locations/${ids.location}`, `/api/v1/owners/${ids.owner}`]),
     `/api/v1/lookup-lists/${ids.lookupList}`, `/api/v1/lookup-list-values/${ids.lookupValue}`,
     ...Object.values(ids.classes).flatMap((id) => [`/api/v1/ci-classes/${id}`, `/api/v1/ci-classes/${id}/attributes`]),
     ...Object.values(ids.attributes).map((id) => `/api/v1/attribute-definitions/${id}`),
@@ -352,6 +400,59 @@ function compare(label: string, url: string, before: Json, after: Json) {
 
 let sourceMigrations = 0;
 
+/**
+ * The business service class after migration 0033 (spec SHAA-927 §6.2).
+ * With the starter class "service": the same class id becomes the business service class, its CIs are listed
+ * as services with no members, and the restricted profile's grant on it still shows them.
+ * Without it: a new, empty class "Business service"; the restricted profile (individual class grants) does not
+ * see it until it is granted, and sees it once it is. The grant is taken back afterwards.
+ */
+async function businessServices(snap: Json) {
+  const { ids } = snap;
+  const found: string[] = [];
+  me = await login(ADMIN, ADMIN_PASSWORD);
+  const system = (await all('/api/v1/ci-classes')).filter((c) => c.systemRole === 'business_service');
+  if (system.length !== 1) {
+    failures.push(`business services: ${system.length} classes with systemRole business_service, expected 1`);
+    return;
+  }
+  const cls = system[0];
+  const services = await all('/api/v1/business-services?includeInactive=true');
+  const listed = services.map((s) => s.id).sort();
+  const withMembers = services.filter((s) => s.memberCount !== 0 || s.serviceMemberCount !== 0).map((s) => s.name);
+  if (withMembers.length) found.push(`services with members right after the upgrade: ${withMembers.join(', ')}`);
+
+  if (ids.serviceClass) {
+    if (cls.id !== ids.serviceClass) found.push(`the starter class "service" ${ids.serviceClass} was not adopted: the business service class is ${cls.key} ${cls.id}`);
+    diff(ids.serviceCis, listed, 'business services listed', found);
+    if (ids.serviceCis.length === 0) found.push('the snapshot has no CIs of the class "service": the adoption case is not exercised');
+    me = await login(VIEWER, VIEWER_PASSWORD);
+    const seen = await call('GET', '/api/v1/business-services?includeInactive=true&limit=100');
+    if (seen.status !== 200) found.push(`restricted user with a grant on "service": GET /api/v1/business-services ${seen.status}, expected 200`);
+    else diff(ids.serviceCis, seen.json.data.map((s: Json) => s.id).sort(), 'business services the restricted user sees', found);
+    console.error(`${found.length ? 'FAIL' : 'ok  '} business services: "service" adopted as ${cls.id}, ${listed.length} services with no members, restricted user sees ${seen.json?.data?.length ?? 0}`);
+  } else {
+    if (Object.keys(snap.objects).includes(`/api/v1/ci-classes/${cls.id}`)) found.push(`the business service class ${cls.key} ${cls.id} existed before the upgrade`);
+    if (cls.key !== 'business_service' || cls.name !== 'Business service') found.push(`new business service class is ${cls.key} "${cls.name}", expected business_service "Business service"`);
+    if (listed.length) found.push(`the new business service class has ${listed.length} services, expected none`);
+    me = await login(VIEWER, VIEWER_PASSWORD);
+    const before = (await call('GET', '/api/v1/business-services')).status;
+    if (before !== 403) found.push(`restricted user without a grant: GET /api/v1/business-services ${before}, expected 403`);
+    me = await login(ADMIN, ADMIN_PASSWORD);
+    const profile = await ok('GET', `/api/v1/admin/profiles/${ids.profile}`);
+    const grants = profile.classPermissions.map(({ classId, view, create, edit, delete: del }: Json) => ({ classId, view, create, edit, delete: del }));
+    await ok('PATCH', `/api/v1/admin/profiles/${ids.profile}`, { classPermissions: [...grants, { classId: cls.id, view: true, create: false, edit: false, delete: false }] });
+    me = await login(VIEWER, VIEWER_PASSWORD);
+    const after = await call('GET', '/api/v1/business-services');
+    if (after.status !== 200 || after.json?.page?.total !== 0) found.push(`restricted user after the grant: GET /api/v1/business-services ${after.status} total ${after.json?.page?.total}, expected 200 with 0`);
+    me = await login(ADMIN, ADMIN_PASSWORD);
+    await ok('PATCH', `/api/v1/admin/profiles/${ids.profile}`, { classPermissions: grants });
+    console.error(`${found.length ? 'FAIL' : 'ok  '} business services: new class ${cls.key} ${cls.id}, empty; restricted user ${before} without the grant, ${after.status} with it`);
+  }
+  me = null;
+  for (const f of found) failures.push(`business services: ${f}`);
+}
+
 async function check() {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
@@ -401,6 +502,9 @@ async function check() {
   diff(refused(snap.viewer), refused(view), 'restricted user', found);
   for (const f of found) failures.push(f);
   console.error(`${found.length ? 'FAIL' : 'ok  '} restricted user: sees ${view.visibleCiIds.length} CIs, GET ${JSON.stringify(Object.values(view.getStatus))}, create ${view.createStatus}, audit ${view.auditStatus}`);
+
+  // 5. Business services (migration 0033): the starter class "service" is adopted, or a new, empty class is created.
+  await businessServices(snap);
 
   if (failures.length) {
     console.error(`\n${failures.length} difference(s) after the upgrade:\n  ${failures.join('\n  ')}`);

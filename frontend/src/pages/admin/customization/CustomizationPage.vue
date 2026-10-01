@@ -53,14 +53,6 @@ const comment = ref("");
 const error = ref<unknown>(null);
 const saved = ref<string | null>(null);
 
-// (Re)start from the stored document whenever a new version is loaded and nothing is being edited.
-watch(
-  () => stored.data.value,
-  (s) => {
-    if (!s || (draft.value && dirty.value && loadedVersion.value !== null)) return;
-    reset();
-  },
-);
 function reset() {
   const s = stored.data.value;
   if (!s) return;
@@ -70,6 +62,17 @@ function reset() {
   error.value = null;
 }
 const dirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== baseline.value);
+// (Re)start from the stored document whenever a new version is loaded and nothing is being edited.
+// Immediate: when the page is opened from within the app the stored version is usually cached
+// already, so there is no later change to react to and the editor would stay empty.
+watch(
+  () => stored.data.value,
+  (s) => {
+    if (!s || (draft.value && dirty.value && loadedVersion.value !== null)) return;
+    reset();
+  },
+  { immediate: true },
+);
 const conflict = computed(() => error.value instanceof ApiError && error.value.code === "VERSION_CONFLICT");
 /** Someone saved a newer version while this editor was open. */
 const stale = computed(() => loadedVersion.value !== null && version.value !== undefined && version.value !== loadedVersion.value);

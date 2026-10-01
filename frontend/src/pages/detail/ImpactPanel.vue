@@ -29,6 +29,7 @@ import type { TrailStep } from "../../lib/trail";
 import { useSessionStore } from "../../stores/session";
 import GraphTree from "./GraphTree.vue";
 import ImpactList from "./ImpactList.vue";
+import ImpactServicesSection from "./ImpactServicesSection.vue";
 
 /**
  * The Impact tab (/cis/:id/impact): which CIs are affected if this one fails (downstream) and
@@ -376,7 +377,10 @@ async function onViewKey(e: KeyboardEvent) {
             </button>
           </div>
           <div id="impact-view-panel" role="tabpanel" :aria-labelledby="`impact-view-${state.view}`" :class="{ loading: stale }">
-            <ImpactList v-if="state.view === 'list'" :analysis="data" :group="state.group" :sort="state.sort" :self="self" :trail="trail" @sort="(s) => setState({ sort: s })" />
+            <template v-if="state.view === 'list'">
+              <ImpactServicesSection :analysis="data" :self="self" :trail="trail" />
+              <ImpactList :analysis="data" :group="state.group" :sort="state.sort" :self="self" :trail="trail" @sort="(s) => setState({ sort: s })" />
+            </template>
             <div v-else class="panel-body impact-trees">
               <div v-for="t in subtrees" :key="t.way">
                 <h3 v-if="subtrees.length > 1">{{ t.title }}</h3>

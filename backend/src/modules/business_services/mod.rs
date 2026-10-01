@@ -170,8 +170,10 @@ pub fn routes() -> Vec<Route> {
             .summary("The members of a business service as CSV")
             .description(format!(
                 "The member list's filters and sort without paging, at most BUSINESS_SERVICE_MAX_MEMBERS rows, as a \
-                 CSV file (`Content-Disposition: attachment`). Every field is quoted; a value starting with =, +, -, \
-                 @, a tab or a line break is prefixed with ' so spreadsheets do not run it as a formula. The first \
+                 CSV file (`Content-Disposition: attachment`). Every field is quoted; a value starting with a tab \
+                 or a line break, or with =, +, -, @ or their full-width forms after any leading spaces, is prefixed \
+                 with ' so spreadsheets do not run it as a formula (a value already starting with ' gets a second \
+                 one), and a line break inside a value stays in its field. The first \
                  row is a comment with the service, the filters and the visibility note; then the columns ci_id, \
                  ident, name, class, criticality, is_service, active, added_at. Each export is recorded in the audit \
                  log (action `export` on the service, with the row count, never the rows). Needs view on the \

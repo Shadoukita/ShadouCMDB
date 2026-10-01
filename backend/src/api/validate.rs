@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, LazyLock, RwLock};
 
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value};
 
 use crate::http::error::{FieldError, FieldLocation};
@@ -39,20 +39,78 @@ pub fn pattern_message(pattern: &str) -> Option<&'static str> {
     })
 }
 
-static REGEX_CACHE: LazyLock<RwLock<HashMap<String, Option<Arc<Regex>>>>> = LazyLock::new(Default::default);
+/// Upper bound on a compiled pattern (and on its lazy-DFA cache). The regex
+/// crate's default is 10 MiB, so 500 characters such as `\w{200}` used to
+/// cost about 10 MiB of memory each (GH#412). 1 MiB still fits `\w{20}`,
+/// `.{0,500}` and every built-in template pattern.
+pub const PATTERN_SIZE_LIMIT: usize = 1 << 20;
+/// Patterns that compile within this size count as light in the cache budget.
+const LIGHT_PATTERN_SIZE: usize = 64 * 1024;
+/// Memory budget of [`REGEX_CACHE`], counted in compile-size tiers.
+const REGEX_CACHE_BUDGET: usize = 64 << 20;
+const REGEX_CACHE_ENTRIES: usize = 1000;
 
-/// Compiled and cached; `None` when the pattern is not a valid regular expression.
+/// Why an attribute validation pattern is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatternError {
+    /// Not a valid regular expression.
+    Syntax,
+    /// Valid, but compiles to more than [`PATTERN_SIZE_LIMIT`].
+    TooBig,
+}
+
+fn compile_pattern(pattern: &str, size_limit: usize) -> Result<Regex, PatternError> {
+    RegexBuilder::new(pattern).size_limit(size_limit).dfa_size_limit(size_limit).build().map_err(|e| match e {
+        regex::Error::CompiledTooBig(_) => PatternError::TooBig,
+        _ => PatternError::Syntax,
+    })
+}
+
+/// Checks a pattern a request wants to store, without caching it: a rejected
+/// or rolled-back request must not leave a compiled program behind.
+pub fn check_pattern(pattern: &str) -> Result<(), PatternError> {
+    if REGEX_CACHE.read().is_ok_and(|c| matches!(c.entries.get(pattern), Some(Some(_)))) {
+        return Ok(());
+    }
+    compile_pattern(pattern, PATTERN_SIZE_LIMIT).map(drop)
+}
+
+#[derive(Default)]
+struct RegexCache {
+    entries: HashMap<String, Option<Arc<Regex>>>,
+    /// Sum of the tier sizes of the cached programs.
+    weight: usize,
+}
+
+static REGEX_CACHE: LazyLock<RwLock<RegexCache>> = LazyLock::new(Default::default);
+
+/// Compiled within [`PATTERN_SIZE_LIMIT`] and cached; `None` when the pattern is
+/// not a valid regular expression or is too big. Use it for the API's own
+/// patterns and for patterns already stored; validate new ones with
+/// [`check_pattern`].
 pub fn cached_regex(pattern: &str) -> Option<Arc<Regex>> {
-    if let Some(hit) = REGEX_CACHE.read().ok().and_then(|m| m.get(pattern).cloned()) {
+    if let Some(hit) = REGEX_CACHE.read().ok().and_then(|c| c.entries.get(pattern).cloned()) {
         return hit;
     }
-    let compiled = Regex::new(pattern).ok().map(Arc::new);
-    if let Ok(mut m) = REGEX_CACHE.write() {
-        // Attribute patterns come from user data; keep the cache bounded.
-        if m.len() > 1000 {
-            m.clear();
+    let (compiled, weight) = match compile_pattern(pattern, LIGHT_PATTERN_SIZE) {
+        Ok(re) => (Ok(re), LIGHT_PATTERN_SIZE),
+        Err(PatternError::TooBig) => (compile_pattern(pattern, PATTERN_SIZE_LIMIT), PATTERN_SIZE_LIMIT),
+        Err(e) => (Err(e), 0),
+    };
+    if matches!(compiled, Err(PatternError::TooBig)) {
+        // Stored before the limit existed: the value is no longer checked against it.
+        tracing::warn!(pattern, limit = PATTERN_SIZE_LIMIT, "validation pattern exceeds the size limit and is ignored");
+    }
+    let compiled = compiled.ok().map(Arc::new);
+    let weight = if compiled.is_some() { weight } else { 0 };
+    if let Ok(mut c) = REGEX_CACHE.write() {
+        // Attribute patterns come from user data; keep the cache bounded in count and size.
+        if c.entries.len() >= REGEX_CACHE_ENTRIES || c.weight + weight > REGEX_CACHE_BUDGET {
+            *c = RegexCache::default();
         }
-        m.insert(pattern.to_owned(), compiled.clone());
+        if c.entries.insert(pattern.to_owned(), compiled.clone()).is_none() {
+            c.weight += weight;
+        }
     }
     compiled
 }
@@ -669,6 +727,33 @@ mod tests {
 
     fn codes(schema: Value, value: Value) -> Vec<(String, String)> {
         check(&schema, &value, FieldLocation::Body, None).into_iter().map(|e| (e.field, e.code)).collect()
+    }
+
+    fn cached(pattern: &str) -> bool {
+        REGEX_CACHE.read().unwrap().entries.contains_key(pattern)
+    }
+
+    #[test]
+    fn pattern_size_limit() {
+        // GH#412: about 10 MiB each at the regex crate's default limit.
+        assert_eq!(check_pattern(r"\w{200}"), Err(PatternError::TooBig));
+        assert_eq!(check_pattern(r"\w{900}"), Err(PatternError::TooBig));
+        assert!(cached_regex(r"\w{200}y").is_none());
+        assert_eq!(check_pattern("(unclosed"), Err(PatternError::Syntax));
+        for ok in [r"\w{20}", ".{0,500}", r"^[A-Za-z0-9]([A-Za-z0-9._-]{0,252})$", r"^\S+$"] {
+            assert_eq!(check_pattern(ok), Ok(()), "{ok}");
+            assert!(cached_regex(ok).is_some_and(|re| !re.as_str().is_empty()), "{ok}");
+        }
+    }
+
+    #[test]
+    fn checking_a_pattern_does_not_cache_it() {
+        for p in [r"^gh412-fresh-[a-z]{3}$", r"\w{300}gh412", "(gh412"] {
+            let _ = check_pattern(p);
+            assert!(!cached(p), "{p}");
+        }
+        assert!(cached_regex(r"^gh412-fresh-[a-z]{3}$").is_some());
+        assert!(cached(r"^gh412-fresh-[a-z]{3}$"));
     }
 
     #[test]

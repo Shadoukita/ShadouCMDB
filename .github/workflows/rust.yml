@@ -115,7 +115,7 @@ jobs:
           if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve.log; exit 1; fi
 
       # Nothing may depend on the default role or database names (GH#42). These need quoting.
-      - name: "Three roles with custom names: bootstrap, migrate, seed, verify, prune-audit, smoke suite"
+      - name: "Three roles with custom names: bootstrap, migrate, seed, verify, prune-audit, smoke suite, backup and restore"
         env:
           ADMIN_URL: postgres://ci:ci-only-password@127.0.0.1:5432/postgres
           U: 127.0.0.1:5432/invqa-cmdb
@@ -134,9 +134,11 @@ jobs:
           $B seed --demo
           $B verify
           $B audit-verify
-          # Only the audit_log trigger may move the hash-chain head (migration 0018), whatever the API role is called.
+          # Only the audit_log trigger may move the hash-chain head (migration 0018), whatever the API role is called;
+          # the API role reads it for `backup` (migration 0038).
           test "$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc \
-            "SELECT has_table_privilege('invqa.api', 'cmdb.audit_log_chain_head', 'SELECT,INSERT,UPDATE,DELETE')")" = f
+            "SELECT has_table_privilege('invqa.api', 'cmdb.audit_log_chain_head', 'SELECT')
+                    AND NOT has_table_privilege('invqa.api', 'cmdb.audit_log_chain_head', 'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER')")" = t
           # The API reads and adds server keys but never changes or deletes them (migration 0021).
           test "$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc \
             "SELECT has_table_privilege('invqa.api', 'cmdb.server_keys', 'SELECT') AND has_table_privilege('invqa.api', 'cmdb.server_keys', 'INSERT')
@@ -150,6 +152,15 @@ jobs:
           kill -TERM $PID && wait $PID
           errors=$(grep -c '"level":"ERROR"' serve-custom.log || true)
           if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve-custom.log; exit 1; fi
+          # GH#396: backup runs as the API role (DATABASE_URL), restore as the schema owner; the audit
+          # chain verifies afterwards and ends at the same head.
+          HEAD="SELECT last_seq || ':' || encode(last_hash, 'hex') FROM cmdb.audit_log_chain_head"
+          before=$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc "$HEAD")
+          $B backup --out "$RUNNER_TEMP/three-role.jsonl.gz"
+          MIGRATION_DATABASE_URL="postgres://invqa-owner:ci-owner@$U" $B restore --replace --yes "$RUNNER_TEMP/three-role.jsonl.gz"
+          $B audit-verify
+          test "$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc "$HEAD")" = "$before"
+          $B verify
 
       # LDAP/AD sign-in against a real directory (tools/ldap-it/README.md): OpenLDAP, LDAPS only,
       # with a CA made in this step. Started here rather than as a service container, which would

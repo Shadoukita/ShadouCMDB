@@ -6,6 +6,8 @@ import { ApiError } from "../../api/client";
 import { useResetUserMfa } from "../../api/mfa";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import { t } from "../../i18n";
+import { useFlashStore } from "../../stores/flash";
 import FormField from "../form/FormField.vue";
 
 /**
@@ -59,8 +61,19 @@ function openDelete() {
   confirming.value = "delete";
 }
 
+const flash = useFlashStore();
+
+/** The users list then says how many business services lost this user as owner (§4.10). */
 function confirmDelete() {
-  del.mutate(props.user.id, { onSuccess: () => router.replace("/admin/users") });
+  const username = props.user.username;
+  del.mutate(props.user.id, {
+    onSuccess: (res) => {
+      const n = res?.affectedServices;
+      const services = typeof n === "number" ? t("users.deleted.services", { n }) : t("users.deleted.servicesWithheld");
+      flash.show("users", `${t("users.deleted", { name: username })} ${services}`);
+      router.replace("/admin/users");
+    },
+  });
 }
 
 // Reset password
@@ -219,5 +232,6 @@ function resetPassword() {
     <p v-if="user.profiles.length > 0">
       They hold: <strong>{{ user.profiles.map((p) => p.name).join(", ") }}</strong>. The profiles themselves are not deleted.
     </p>
+    <p data-testid="user-delete-services">{{ t("users.delete.services") }}</p>
   </ConfirmDialog>
 </template>
