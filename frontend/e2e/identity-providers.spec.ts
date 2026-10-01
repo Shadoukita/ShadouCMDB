@@ -119,7 +119,7 @@ test("sign-in page: one button per OIDC provider, a real link that carries the r
   await page.context().close();
 });
 
-test("sign-in page: every ssoError code has its own message; an unknown one still says what happened", async ({ browser }) => {
+test("sign-in page: every ssoError code has its own message; an unknown one still says what happened, free text is not shown", async ({ browser }) => {
   const page = await anonymousPage(browser);
   await mockProviders(page, { oidc: [], directory: false });
   for (const [code, message] of Object.entries(SSO_CODES)) {
@@ -130,6 +130,10 @@ test("sign-in page: every ssoError code has its own message; an unknown one stil
   }
   await page.goto("/login?ssoError=something_new");
   await expect(page.getByTestId("sso-error")).toContainText("(something_new)");
+  // Free text in the link is not a code and is never shown on the real sign-in page (GH#442).
+  await page.goto(`/login?ssoError=${encodeURIComponent("Your account is locked. Call IT on +1-555-0100")}`);
+  await expect(page.getByTestId("sso-error")).toHaveText(/Single sign-on failed\. Try again, or ask an administrator\./);
+  await expect(page.getByTestId("sso-error")).not.toContainText("Call IT");
   // Without providers there are no buttons and no directory hint; the password form is unchanged.
   await expect(page.getByRole("navigation", { name: "Single sign-on" })).toHaveCount(0);
   await expect(page.getByTestId("directory-hint")).toHaveCount(0);
