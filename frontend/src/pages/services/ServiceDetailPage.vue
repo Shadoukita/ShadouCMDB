@@ -112,9 +112,9 @@ watch(
   () => [owners.value, route.query.edit] as const,
   ([card, edit]) => {
     if (!card || edit !== "owners") return;
-    const query = { ...route.query };
-    delete query.edit;
-    void router.replace({ path: route.path, query });
+    // Drop `edit` and keep only the tab; other URL keys are not copied over.
+    const tab = route.query.tab;
+    void router.replace({ path: route.path, query: typeof tab === "string" ? { tab } : {} });
     if (canEdit.value) card.edit();
   },
   { immediate: true },

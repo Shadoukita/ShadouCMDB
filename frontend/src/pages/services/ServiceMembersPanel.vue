@@ -28,14 +28,17 @@ const members = useServiceMembers(() => props.service.id, query);
 const rows = computed(() => members.data.value?.data ?? []);
 const total = computed(() => members.data.value?.page.total ?? 0);
 
-function setQuery(patch: Record<string, string | undefined>) {
-  const next: Record<string, string> = {};
-  for (const [k, v] of Object.entries(route.query)) if (typeof v === "string") next[k] = v;
-  for (const [k, v] of Object.entries(patch)) {
-    if (v) next[k] = v;
-    else delete next[k];
+// The only query keys this tab keeps; anything else in the URL is dropped rather than copied over.
+const QUERY_KEYS = ["tab", "mpage", "mlimit", "msort"] as const;
+type QueryKey = (typeof QUERY_KEYS)[number];
+
+function setQuery(patch: Partial<Record<QueryKey, string | undefined>>) {
+  const next = new Map<QueryKey, string>();
+  for (const k of QUERY_KEYS) {
+    const v = k in patch ? patch[k] : one(k);
+    if (v) next.set(k, v);
   }
-  void router.push({ path: route.path, query: next });
+  void router.push({ path: route.path, query: Object.fromEntries(next) });
 }
 const toggleSort = (f: string) => setQuery({ msort: sort.value === f ? `-${f}` : f === "name" ? undefined : f, mpage: undefined });
 const ariaSort = (f: string) => (sort.value === f ? "ascending" : sort.value === `-${f}` ? "descending" : "none");
