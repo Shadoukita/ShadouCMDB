@@ -377,6 +377,27 @@ impl Oracle {
         self.db01
     }
 
+    /// An administrator's API token that may view and edit every class.
+    async fn admin_token(&self) -> Creds {
+        let profile: Uuid = sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ('token') RETURNING id")
+            .fetch_one(&self.w.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO permission_profile_class_permissions (profile_id, class_id, can_view, can_edit)
+             VALUES ($1, NULL, true, true)",
+        )
+        .bind(profile)
+        .execute(&self.w.pool)
+        .await
+        .unwrap();
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let body = json!({ "name": "script", "profileId": profile, "expiresAt": expires });
+        let (status, v, _) = call(&self.w.app, "POST", "/api/v1/admin/api-tokens", &self.w.admin, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+        Creds { bearer: v["secret"].as_str().map(str::to_owned), ..Creds::default() }
+    }
+
     /// The restricted user's answer to a request, normalised.
     async fn ask(&self, creds: &Creds, method: &str, path: &str, body: Option<Value>) -> String {
         let (status, headers, text) = raw(&self.w.app, method, path, creds, body).await;
@@ -557,6 +578,24 @@ async fn restricted_user_oracles() {
     assert!(add_more.starts_with("400 ") && add_more.contains("member_limit"), "{add_more}");
     // The detail and list agree after the change.
     same!("5 detail", r, "GET", |o: &Oracle| format!("/api/v1/business-services/{}", s(o)), none);
+
+    // 9. token.use: an administrator's token removes db-01, then web-01. The member
+    // id in the recorded path is hidden on its own, as the service id is (GH#377).
+    let mut token_use = Vec::new();
+    for o in [&a, &b] {
+        let token = o.admin_token().await;
+        for member in [o.db01(), o.w.id("web-01")] {
+            let path = format!("/api/v1/business-services/{}/members/{member}", s(o));
+            raw(&o.w.app, "DELETE", &path, &token, None).await;
+        }
+        let log = "/api/v1/audit-log?entityType=api_tokens&action=token.use&sort=occurredAt";
+        let prefix = &token.bearer.as_deref().unwrap()[..14];
+        token_use.push(o.ask(&o.r, "GET", log, None).await.replace(prefix, "<prefix>"));
+    }
+    assert_eq!(token_use[0], token_use[1], "oracle 9 token.use");
+    let paths = "/api/v1/business-services/<ci:S>/members/{hidden}\"";
+    assert!(token_use[0].contains(paths) && token_use[0].contains("/members/<ci:web-01>\""), "{}", token_use[0]);
+    assert!(!token_use[0].contains("db-01"), "{}", token_use[0]);
 }
 
 // ---------------------------------------------------------------------------
