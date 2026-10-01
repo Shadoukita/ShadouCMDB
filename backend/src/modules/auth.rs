@@ -180,7 +180,9 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, session_id: Uuid, csrf_token:
 /// deleted since, gets no session but a 401 (GH#209), as does an account
 /// whose identity provider was disabled or deleted since (GH#250), and a
 /// password-only sign-in (`Password`, `Ldap`) to an account whose
-/// authenticator was confirmed since (GH#303).
+/// authenticator was confirmed since (GH#303), and a second-factor sign-in
+/// (`Totp`, `RecoveryCode`) to an account whose authenticator was reset or
+/// turned off since (GH#341).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_session(
     pool: &PgPool,
@@ -215,13 +217,21 @@ pub(crate) async fn try_open_session(
     // First, so the row is locked before anything the reset or disable also takes.
     let stamp = data::record_login(&mut tx, user_id).await?;
     let mut changed = changed_since(&mut tx, stamp, verified).await?;
-    // A password alone was enough when checked; an authenticator confirmed
-    // since (under the lock on the row) asks for its code (GH#303).
-    if changed.is_none()
-        && matches!(method, LoginMethod::Password | LoginMethod::Ldap)
-        && mfa_data::get_totp(&mut tx, user_id, false).await?.is_some_and(|t| t.confirmed)
-    {
-        changed = Some(Changed::MfaEnrolled);
+    // The authenticator as it is now, locked so that a disable (which locks
+    // it first) waits for this transaction and then ends its session, or this
+    // waits for the disable and finds it gone.
+    let second_factor = matches!(method, LoginMethod::Totp | LoginMethod::RecoveryCode);
+    if changed.is_none() && (second_factor || matches!(method, LoginMethod::Password | LoginMethod::Ldap)) {
+        let confirmed = mfa_data::get_totp(&mut tx, user_id, true).await?.is_some_and(|t| t.confirmed);
+        changed = match (second_factor, confirmed) {
+            // A password alone was enough when checked; an authenticator
+            // confirmed since asks for its code (GH#303).
+            (false, true) => Some(Changed::MfaEnrolled),
+            // The code proved an authenticator reset or turned off since,
+            // whose sessions have already ended (GH#341).
+            (true, false) => Some(Changed::MfaRemoved),
+            _ => None,
+        };
     }
     if let Some(changed) = changed {
         drop(tx);
@@ -259,6 +269,9 @@ pub(crate) enum Changed {
     /// An authenticator was set up for the account after the password was
     /// checked; password sign-ins only (GH#303).
     MfaEnrolled,
+    /// The authenticator was reset or turned off after its code was checked;
+    /// second-factor sign-ins only (GH#341).
+    MfaRemoved,
 }
 
 impl Changed {
@@ -268,6 +281,7 @@ impl Changed {
             Changed::Account => "account_changed",
             Changed::Provider => "provider_disabled",
             Changed::MfaEnrolled => "mfa_enrolled",
+            Changed::MfaRemoved => "mfa_removed",
         }
     }
 }
@@ -278,6 +292,9 @@ impl From<Changed> for AppError {
             Changed::Account => "The account was changed during the sign-in; enter your username and password again",
             Changed::MfaEnrolled => {
                 "Two-factor authentication was set up for this account during the sign-in; sign in again and enter the code from your authenticator app"
+            }
+            Changed::MfaRemoved => {
+                "Two-factor authentication was reset or turned off for this account during the sign-in; enter your username and password again"
             }
             Changed::Provider => {
                 "The identity provider of this account was disabled during the sign-in; ask an administrator"
@@ -304,7 +321,7 @@ async fn changed_since(
 }
 
 /// A sign-in refused because the account, its provider or its second factor
-/// changed while it was checked (GH#209, GH#250, GH#303): logged and audited.
+/// changed while it was checked (GH#209, GH#250, GH#303, GH#341): logged and audited.
 async fn refused(pool: &PgPool, ctx: &RequestContext, username: &str, changed: Changed) -> Result<Changed, AppError> {
     tracing::warn!(user = %username, ip = ?ctx.client.ip, reason = changed.reason(), "sign-in refused: the account, its identity provider or its second factor changed while it was checked");
     record_failure(pool, ctx, username, Some(changed.reason()), None).await?;
@@ -685,6 +702,7 @@ async fn login_mfa(
     tx.commit().await?;
     let purged = data::purge_sessions(pool, auth.config.session_idle).await?;
     let verified = Some(verified.password_changed_at);
+    // A reset or disable committed from here on is caught when the session opens (GH#341).
     let WithCookies(session, mut cookies) =
         start_session(pool, auth, headers, ctx, user_id, username, method, verified).await?;
     attempt.success();
@@ -1700,6 +1718,71 @@ pub(crate) mod tests {
             .expect_err("a session for the old password");
         assert_eq!(e.code, ErrorCode::Unauthenticated);
         assert_eq!(rows_of(pool, "sessions", user).await, 0);
+        db.drop().await;
+    }
+
+    /// An administrator's reset or the user's own disable of the authenticator,
+    /// as `mfa::reset` and `mfa::disable` make it (the authenticator locked
+    /// first), not committed yet.
+    async fn removing_mfa(pool: &PgPool, user: Uuid) -> sqlx::PgTransaction<'_> {
+        let mut tx = pool.begin().await.unwrap();
+        mfa_data::get_totp(&mut tx, user, true).await.unwrap().expect("an authenticator");
+        tx
+    }
+
+    async fn remove_mfa_under(mut tx: sqlx::PgTransaction<'_>, user: Uuid) {
+        assert!(mfa_data::delete_mfa(&mut tx, user).await.unwrap(), "a confirmed authenticator");
+        data::delete_user_sessions(&mut tx, user, None).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    /// A code checked just before the authenticator is reset or turned off
+    /// gets no session that outlives it, whether the reset commits between
+    /// the code's check and the session's start or while the session is
+    /// being opened (GH#341).
+    #[tokio::test]
+    async fn a_second_factor_checked_before_a_reset_or_disable_gets_no_session() {
+        let Some(db) = scratch::database("a_second_factor_checked_before_a_reset_or_disable_gets_no_session").await
+        else {
+            return;
+        };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &anon(), body("owner")).await.unwrap();
+        let secret = crate::auth::totp::new_secret();
+        for (name, method) in [("totp", LoginMethod::Totp), ("recovery", LoginMethod::RecoveryCode)] {
+            let (user, _) = account(pool, name, Some(&secret)).await;
+            let checked = data::get_user(&mut *pool.acquire().await.unwrap(), user, false).await.unwrap().unwrap();
+            let verified = Some(checked.password_changed_at);
+
+            // Committed after the code's transaction, before the session's.
+            remove_mfa_under(removing_mfa(pool, user).await, user).await;
+            let e = open_session(pool, &auth, &headers, &anon(), user, name, method, verified)
+                .await
+                .expect_err("a session for a removed authenticator");
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "{name}: {}", e.message);
+            assert_eq!(rows_of(pool, "sessions", user).await, 0, "{name}: no session");
+
+            // Committed while the session is being opened: the sign-in waits
+            // for the authenticator's lock and then finds it gone.
+            let late = format!("{name}-late");
+            let (user, _) = account(pool, &late, Some(&secret)).await;
+            let checked = data::get_user(&mut *pool.acquire().await.unwrap(), user, false).await.unwrap().unwrap();
+            let verified = Some(checked.password_changed_at);
+            let tx = removing_mfa(pool, user).await;
+            let ctx = anon();
+            let removed = async {
+                assert!(a_lock_is_awaited(pool).await, "{name}: the sign-in waits for the authenticator's lock");
+                remove_mfa_under(tx, user).await;
+            };
+            let (answer, ()) =
+                tokio::join!(open_session(pool, &auth, &headers, &ctx, user, &late, method, verified), removed);
+            let e = answer.err().unwrap_or_else(|| panic!("{name}: signed in"));
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "{name}: {}", e.message);
+            assert_eq!(rows_of(pool, "sessions", user).await, 0, "{name}: no session");
+        }
+        let refused = auth_rows(pool, "login.failure").await;
+        assert_eq!(refused.len(), 4);
+        assert!(refused.iter().all(|r| r.3["reason"] == "mfa_removed"), "{refused:?}");
         db.drop().await;
     }
 

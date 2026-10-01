@@ -682,8 +682,8 @@ pub async fn verified_sign_in(
     let (_, cookies) =
         match super::auth::try_open_session(pool, auth, headers, ctx, user_id, &username, method, None).await? {
             Ok(opened) => opened,
-            // MfaEnrolled refuses password sign-ins only.
-            Err(Changed::Account | Changed::MfaEnrolled) => return Ok(Err(Refusal::AccountDisabled)),
+            // MfaEnrolled refuses password sign-ins only, MfaRemoved second-factor ones.
+            Err(Changed::Account | Changed::MfaEnrolled | Changed::MfaRemoved) => return Ok(Err(Refusal::AccountDisabled)),
             Err(Changed::Provider) => return Ok(Err(Refusal::ProviderDisabled)),
         };
     tracing::info!(user = %username, provider = %provider.name, ip = ?ctx.client.ip, purged_sessions = purged, provider_mfa = evidence.as_str(), "signed in through OIDC");
