@@ -84,8 +84,9 @@ test("new CI: General first, valid from is now, double-click fills dates in", as
   expect(ci).toMatchObject({ label: code, validUntil: null, active: true });
   expect(ci.attributes.purchased).toBe((await localNow(page)).slice(0, 10));
   const general2 = page.locator(".layout-panels > details").first();
-  await expect(general2.locator("dt")).toHaveText(["Ident", "Valid from", "Valid until", "Active", "Code"]);
+  await expect(general2.locator("dt")).toHaveText(["Ident", "Valid from", "Valid until", "Active", "Criticality", "Code"]);
   await expect(general2.locator("dt", { hasText: "Valid until" }).locator("+ dd")).toHaveText("Open-ended");
+  await expect(general2.locator("dt", { hasText: "Criticality" }).locator("+ dd")).toHaveText("Not set");
   await expect(general2.locator("dt", { hasText: "Active" }).locator("+ dd")).toHaveText("Active");
   await expect(page.locator(".layout-panels > details > summary h2")).toHaveText(["General", "Lifecycle", "Record"]);
 });

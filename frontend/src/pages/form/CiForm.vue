@@ -67,10 +67,11 @@ import FormField from "./FormField.vue";
 const props = defineProps<{ mode: "create" | "edit"; classId: string; className: string; ci?: Ci; editor?: LayoutEditor }>();
 /** One field of the form, as the form and the layout canvas show it. */
 const [DefineField, FormCell] = createReusableTemplate<{ f: string; width?: number; columns?: number }>();
-/** The Criticality field (a core field layouts cannot place yet), after the core fields of the first section. */
-const [DefineCriticality, CriticalityField] = createReusableTemplate<Record<string, never>>();
 
-/** Core CI fields (CORE_FIELDS). These belong to every CI regardless of class; class-specific fields come from the API. */
+/**
+ * Core CI fields (CORE_FIELDS, without criticality, which is a lookup value of its own). These belong to every CI
+ * regardless of class; class-specific fields come from the API.
+ */
 type CoreField = "ident" | "validFrom" | "validUntil";
 type CoreValues = Record<CoreField, string>;
 
@@ -91,8 +92,8 @@ const initialCore: CoreValues = props.ci
   ? { ident: props.ci.ident, validFrom: toFormValue(DATETIME, props.ci.validFrom), validUntil: toFormValue(DATETIME, props.ci.validUntil) }
   : { ident: "", validFrom: nowFormValue("datetime"), validUntil: "" };
 const core = ref<CoreValues>({ ...initialCore });
-// Criticality: a core field of every CI (a value of the system lookup list), shown after the core fields
-// on the first tab. Layouts cannot place it yet; empty means not set.
+// Criticality: a core field of every CI (a value of the system lookup list), placed, hidden or made read-only
+// by the layout like the others; empty means not set.
 const criticality = useCriticalityValues();
 const initialCriticality = props.ci?.criticality?.id ?? "";
 const criticalityId = ref(initialCriticality);
@@ -134,11 +135,6 @@ function sectionGroups(sections: readonly ResolvedSection[]) {
 }
 /** The first section of fields, which also shows whether the attributes loaded. */
 const firstGrid = computed(() => tabs.value[0]?.sections.find((sec) => sec.kind === "fields")?.key);
-/** Criticality follows the last core field of that section (at its end when it has none). */
-const criticalityAfter = computed(() => {
-  const fields = tabs.value[0]?.sections.find((sec) => sec.key === firstGrid.value)?.fields ?? [];
-  return [...fields].reverse().find((c) => BUILTIN.has(c.field))?.field;
-});
 const activeTab = ref(0);
 const tabIndex = computed(() => Math.min(activeTab.value, tabs.value.length - 1));
 const tabFields = (i: number) => tabs.value[i]?.sections.flatMap((sec) => sec.fields.map((c) => c.field)) ?? [];
@@ -159,7 +155,7 @@ async function focusField(field: string) {
   await nextTick();
   document.getElementById(fieldIdFor(field))?.focus();
 }
-const FIELD_IDS: Record<string, string> = { ident: "f-ident", validFrom: "f-valid-from", validUntil: "f-valid-until" };
+const FIELD_IDS: Record<string, string> = { ident: "f-ident", criticality: "f-criticality", validFrom: "f-valid-from", validUntil: "f-valid-until" };
 const defFor = (f: string) => defs.value.find((d) => d.key === attributeKey(f));
 /** A dependent lookup's parent field (Manufacturer for Model): its label and the value chosen in it. */
 function lookupParent(d: (typeof defs.value)[number]): LookupParent | null {
@@ -171,7 +167,18 @@ const coreError = (f: string) => fieldErrors.value[BUILTIN.get(f)?.form ?? f];
 const coreDisabled = (f: string) => readOnly.value.has(f) || (f === "ident" && !isAdmin.value);
 function coreHint(f: string): string | undefined {
   const create = props.mode === "create";
-  const hint = f === "ident" ? (create && isAdmin.value ? "Generated when left empty" : create ? "Generated" : "") : f === "validFrom" ? "Local time" : "Local time; empty: open-ended";
+  const hint =
+    f === "ident"
+      ? create && isAdmin.value
+        ? "Generated when left empty"
+        : create
+          ? "Generated"
+          : ""
+      : f === "criticality"
+        ? "How critical this CI is to the business; impact analysis groups by it"
+        : f === "validFrom"
+          ? "Local time"
+          : "Local time; empty: open-ended";
   return [hint, coreDisabled(f) ? "read-only" : ""].filter(Boolean).join(" · ") || undefined;
 }
 
@@ -235,7 +242,7 @@ async function onSubmit() {
       const initial = coreToApi(initialCore);
       const changed: Record<string, unknown> = {};
       // An emptied valid until clears it (open-ended); an emptied ident keeps the current one.
-      for (const k of CORE_FIELDS as CoreField[]) if (coreBody[k] !== initial[k] && !(k === "ident" && coreBody[k] === null)) changed[k] = coreBody[k];
+      for (const k of Object.keys(coreBody) as CoreField[]) if (coreBody[k] !== initial[k] && !(k === "ident" && coreBody[k] === null)) changed[k] = coreBody[k];
       if (criticalityId.value !== initialCriticality) changed.criticalityValueId = criticalityId.value || null;
       if (Object.keys(changed).length === 0 && Object.keys(attributes).length === 0) {
         await router.push(`/cis/${props.ci.id}`);
@@ -305,6 +312,18 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
           :aria-invalid="p.invalid || undefined"
           :aria-describedby="p.describedBy"
         />
+        <select
+          v-else-if="f === 'criticality'"
+          :id="p.id"
+          v-model="criticalityId"
+          :disabled="criticality.isLoading.value"
+          :aria-invalid="p.invalid || undefined"
+          :aria-describedby="p.describedBy"
+        >
+          <option value="">{{ criticality.isLoading.value ? "Loading…" : criticality.isError.value ? "Could not load the list" : "— not set —" }}</option>
+          <option v-for="v in criticalityOptions" :key="v.id" :value="v.id">{{ v.name }}{{ v.isActive ? "" : " (retired)" }}</option>
+          <option v-if="criticalityStray" :value="criticalityId">{{ ci?.criticality?.name ?? "Unknown value" }}</option>
+        </select>
         <input
           v-else-if="f === 'validFrom' || f === 'validUntil'"
           :id="p.id"
@@ -341,21 +360,6 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
       </fieldset>
     </FormField>
   </DefineField>
-  <DefineCriticality>
-    <FormField
-      id="f-criticality"
-      v-slot="p"
-      label="Criticality"
-      :error="fieldErrors.criticalityValueId"
-      hint="How critical this CI is to the business; impact analysis groups by it"
-    >
-      <select id="f-criticality" v-model="criticalityId" :disabled="criticality.isLoading.value" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
-        <option value="">{{ criticality.isLoading.value ? "Loading…" : criticality.isError.value ? "Could not load the list" : "— not set —" }}</option>
-        <option v-for="v in criticalityOptions" :key="v.id" :value="v.id">{{ v.name }}{{ v.isActive ? "" : " (retired)" }}</option>
-        <option v-if="criticalityStray" :value="criticalityId">{{ ci?.criticality?.name ?? "Unknown value" }}</option>
-      </select>
-    </FormField>
-  </DefineCriticality>
   <LayoutEditView v-if="editor?.active && classKey" :editor="editor" :class-name="className" :class-key="classKey" :attrs="activeAttrs" :attrs-error="attrs.error.value" form>
     <template #field="{ field }"><FormCell :f="field" /></template>
   </LayoutEditView>
@@ -410,11 +414,7 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
                 />
               </template>
               <div :class="gridClass(sec.columns)">
-                <template v-for="{ field: f, width } in sec.fields" :key="f">
-                  <FormCell :f="f" :width="width" :columns="sec.columns" />
-                  <CriticalityField v-if="i === 0 && sec.key === firstGrid && f === criticalityAfter" />
-                </template>
-                <CriticalityField v-if="i === 0 && sec.key === firstGrid && !criticalityAfter" />
+                <FormCell v-for="{ field: f, width } in sec.fields" :key="f" :f="f" :width="width" :columns="sec.columns" />
               </div>
             </div>
           </details>
