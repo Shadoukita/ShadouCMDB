@@ -168,7 +168,7 @@ fn is_report_header(row: &Row) -> bool {
 fn unneutralise(row: &mut Row) {
     for c in &mut row.cells {
         if let CellValue::Text(t) = c {
-            let read = super::csv_safe::read_field(t);
+            let read = crate::modules::csv_safe::read_field(t);
             if read.len() != t.len() {
                 *t = read.to_owned();
             }

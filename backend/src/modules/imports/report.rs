@@ -28,17 +28,18 @@ use sqlx::PgPool;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use uuid::Uuid;
 
+use super::MAX_COLUMNS;
 use super::analyse::{self, FileFormat, FileOptions, REPORT_HEADERS};
 use super::jobs::{JobRow, check_owner, ctx_user, fetch};
 use super::parse::{Limits, Row};
 use super::schemas::JobStatus;
 use super::storage::DbFile;
-use super::{MAX_COLUMNS, csv_safe};
 use crate::api::context::RequestContext;
 use crate::api::route::CsvDownload;
 use crate::config::ImportConfig;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::http::error::{AppError, ErrorCode};
+use crate::modules::csv_safe;
 
 /// Bytes collected before a piece of the report is sent.
 const FLUSH_BYTES: usize = 64 * 1024;
