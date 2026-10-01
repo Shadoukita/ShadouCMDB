@@ -276,6 +276,14 @@ fn add_profile(p: &mut Permissions, profile: &PermissionProfile) {
     }
 }
 
+/// What one profile grants: the built-in profile is `administrator`, which
+/// only an administrator covers (GH#405).
+fn profile_grants(profile: &PermissionProfile) -> Permissions {
+    let mut p = Permissions::default();
+    add_profile(&mut p, profile);
+    p
+}
+
 fn grants(global: &[GlobalPermission], classes: &[ClassPermission]) -> Permissions {
     let mut p = Permissions::default();
     for g in global {
@@ -448,7 +456,7 @@ pub(crate) async fn update_in(
         return Err(builtin_is_read_only());
     }
     let before = dtos(conn, vec![row]).await?.remove(0);
-    must_cover(ctx, &grants(&before.global_permissions, &before.class_permissions), "This profile")?;
+    must_cover(ctx, &profile_grants(&before), "This profile")?;
     let global = global_permissions.unwrap_or(&before.global_permissions);
     let classes = class_permissions.unwrap_or(&before.class_permissions);
     must_cover(ctx, &grants(global, classes), "The updated profile")?;
@@ -503,7 +511,7 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
         return Err(builtin_is_read_only());
     }
     let before = dtos(&mut tx, vec![row]).await?.remove(0);
-    must_cover(ctx, &grants(&before.global_permissions, &before.class_permissions), "This profile")?;
+    must_cover(ctx, &profile_grants(&before), "This profile")?;
     data::delete_profile(&mut tx, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Delete,
