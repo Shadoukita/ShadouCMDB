@@ -779,6 +779,16 @@ async fn routes_answer_with_the_standard_envelope() {
         json!({ "maxDepth": 10, "maxNodesLimit": 2000, "defaultDepth": 3, "defaultMaxNodes": 500, "timeoutMs": 5000,
                 "anyTypePropagates": true })
     );
+    sqlx::query("UPDATE relationship_types SET impact_direction = 'none' WHERE system_role IS NULL")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let (_, v, _) = call(&f.app, "GET", "/api/v1/settings/impact", &f.session, None).await;
+    assert_eq!(v["anyTypePropagates"], true, "business service membership always propagates");
+    sqlx::query("ALTER TABLE relationship_types DISABLE TRIGGER relationship_types_keep_system_update")
+        .execute(&f.pool)
+        .await
+        .unwrap();
     sqlx::query("UPDATE relationship_types SET impact_direction = 'none'").execute(&f.pool).await.unwrap();
     let (_, v, _) = call(&f.app, "GET", "/api/v1/settings/impact", &f.session, None).await;
     assert_eq!(v["anyTypePropagates"], false);
@@ -910,11 +920,12 @@ async fn the_upgrade_seeds_impact_only_for_unchanged_starter_types() {
             .unwrap();
 
     crate::db::MIGRATOR.run(&db.pool).await.unwrap();
-    let rows: Vec<(String, String, chrono::DateTime<chrono::Utc>)> =
-        sqlx::query_as("SELECT key, impact_direction, updated_at FROM relationship_types ORDER BY key")
-            .fetch_all(&db.pool)
-            .await
-            .unwrap();
+    let rows: Vec<(String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT key, impact_direction, updated_at FROM relationship_types WHERE system_role IS NULL ORDER BY key",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
     let got: Vec<(&str, &str)> = rows.iter().map(|(k, d, _)| (k.as_str(), d.as_str())).collect();
     assert_eq!(
         got,
