@@ -1284,6 +1284,17 @@ async fn a_slow_part_of_ends_within_the_allowance() {
     assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
     assert!(elapsed < timeout + ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
 
+    // The relationship types, read before the walk and by the walk itself
+    // (`data::types` in `engine::traverse`), are bounded by the same allowance.
+    let mut blocker = w.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE cmdb.relationship_types IN ACCESS EXCLUSIVE MODE").execute(&mut *blocker).await.unwrap();
+    let started = Instant::now();
+    let err = service::part_of(&w.pool, &ctx, &impact, cfg, db01).await.err().unwrap();
+    let elapsed = started.elapsed();
+    blocker.rollback().await.unwrap();
+    assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
+    assert!(elapsed < timeout + ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
+
     // Without the lock the view is answered, and the analysis place was given back.
     let r = service::part_of(&w.pool, &ctx, &impact, cfg, db01).await.unwrap();
     assert_eq!(r.data.iter().map(|s| s.service.ident.as_str()).collect::<Vec<_>>(), ["S"]);
