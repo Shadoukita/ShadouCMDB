@@ -738,7 +738,7 @@ export interface paths {
         put?: never;
         /**
          * Stop an import
-         * @description Requires `cis.import`. Analysis and dry run stop at once; a commit stops after its current batch of at most 500 rows, and the rows committed so far stay. `409` once the job has ended. Also while bulk import is off. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `cis.import`. Analysis, dry run and a queued commit stop at once. A running commit stops after its current batch of at most 500 rows, and the rows committed so far stay: the job stays `committing` with `cancelRequestedAt` set until that batch is written, then ends as `cancelled` with its final counts. `409` once the job has ended. Also while bulk import is off. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["cancelImport"];
         delete?: never;
@@ -3413,6 +3413,13 @@ export interface components {
             expiresAt: string;
             /** Format: date-time */
             finishedAt?: string | null;
+            /**
+             * Format: date-time
+             * @description When a stop of the running commit was requested. The job stays
+             *     `committing` until the current chunk is written, then ends as
+             *     `cancelled` with its final counts.
+             */
+            cancelRequestedAt?: string | null;
         };
         /** @description Why a job stopped. */
         ImportJobError: {

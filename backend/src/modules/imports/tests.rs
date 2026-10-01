@@ -1205,6 +1205,82 @@ async fn a_commit_stops_when_the_owner_loses_the_import_right_and_keeps_earlier_
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_commit_cancelled_during_a_chunk_ends_cancelled_with_its_final_counts() {
+    let Some(db) = scratch::database("import_commit_cancel_running").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let id = validated(&e, &e.admin, &hosts(1_500)).await;
+    let job_id = Uuid::parse_str(&id).unwrap();
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+
+    // The stop arrives while the second chunk is being written (GH#359).
+    let (reached, go) = super::commit::test_hooks::pause_at(job_id, 2);
+    let pool = e.pool.clone();
+    let worker = tokio::spawn(async move { drain(&pool).await });
+    reached.await.unwrap();
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/cancel"), &e.admin, None).await;
+    assert_eq!((status, v["status"].as_str()), (202, Some("committing")), "{v}");
+    assert!(v["cancelRequestedAt"].is_string() && v["finishedAt"].is_null(), "{v}");
+    // A second stop is accepted and changes nothing.
+    let (status, again, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/cancel"), &e.admin, None).await;
+    assert_eq!((status, &again["cancelRequestedAt"]), (202, &v["cancelRequestedAt"]), "{again}");
+
+    // Poll as the wizard does: the first `cancelled` it sees carries the final counts.
+    go.send(()).unwrap();
+    let first = loop {
+        let j = job(&e, &e.admin, &id).await;
+        if j["status"] != "committing" {
+            break j;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    worker.await.unwrap();
+    assert_eq!((first["status"].as_str(), committed(&first)), (Some("cancelled"), (1_000, 0, 0, 0, 0)), "{first}");
+    assert_eq!(first["progress"]["done"], 1_000, "{first}");
+    assert!(first["finishedAt"].is_string(), "{first}");
+    let last = job(&e, &e.admin, &id).await;
+    assert_eq!(
+        (&last["summary"], &last["progress"], &last["finishedAt"]),
+        (&first["summary"], &first["progress"], &first["finishedAt"])
+    );
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 1_000, "the chunk in flight is written, the third is not");
+    let events: Vec<Value> =
+        sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'import.commit' AND entity_id = $1")
+            .bind(job_id)
+            .fetch_all(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!((events[0]["outcome"].as_str(), events[0]["created"].as_u64()), (Some("cancelled"), Some(1_000)));
+    assert_eq!(events[0]["finishedAt"], first["finishedAt"]);
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/cancel"), &e.admin, None).await;
+    assert_eq!((status, code(&v)), (409, "CONFLICT"), "{v}");
+
+    // A stop requested while no worker runs the commit (it died) ends it when
+    // the next worker takes the job over, before that worker writes anything.
+    let id = validated(&e, &e.admin, &hosts(1_500).replace("host", "node")).await;
+    let job_id = Uuid::parse_str(&id).unwrap();
+    let (status, v) = commit(&e, &e.admin, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    super::commit::test_hooks::die_after(job_id, 1);
+    drain(&e.pool).await;
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/cancel"), &e.admin, None).await;
+    assert_eq!((status, v["status"].as_str()), (202, Some("committing")), "{v}");
+    sqlx::query("UPDATE import_jobs SET lease_until = now() - interval '1 second' WHERE id = $1")
+        .bind(job_id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("cancelled"), (500, 0, 0, 0, 0)), "{j}");
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(written, 1_500);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_commit_cancelled_while_queued_writes_nothing_and_is_audited_once() {
     let Some(db) = scratch::database("import_commit_cancel_queued").await else { return };
     let e = env(&db.pool, ImportConfig::default()).await;
