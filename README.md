@@ -153,7 +153,8 @@ the same flow for a source checkout.
 
 8. **Create the first administrator.** Every page and API call except the health probes needs a signed-in
    user. Open the web UI, which offers first-run setup while no user exists (it asks for the one-time setup
-   token the server writes to its log), or run:
+   token the server writes to `SETUP_TOKEN_FILE`, by default `setup-token` next to the env file; with no
+   such file the token is written to the log instead), or run:
 
    ```sh
    shadoucmdb create-admin --username admin --display-name "Jane Admin"   # prompts for the password
@@ -191,6 +192,12 @@ docker compose up api                    # http://localhost:3000/readyz
 
 For a PostgreSQL running on the Docker host itself, set `PGHOST=host.docker.internal`, not
 `localhost`: inside a container, localhost is the container.
+
+The container has no env file and no token file, so a generated first-run setup token goes to
+`docker compose logs api`, where anyone with access to the container logs (or a log shipper) can read it.
+Where that is more people than should own the instance, create the first administrator with
+`docker compose run --rm seed create-admin --username admin` instead, or set `SETUP_TOKEN` in `.env` and
+remove it once setup is done.
 
 ## Backup, restore and reset
 

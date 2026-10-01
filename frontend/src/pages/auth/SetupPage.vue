@@ -79,7 +79,7 @@ async function submit() {
           label="Setup token"
           required
           :error="fieldErrors.setupToken"
-          hint="The one-time token the server wrote to its log and to its setup token file when it started"
+          hint="The one-time token the server wrote to its setup token file when it started (or to its log, if it has no such file)"
         >
           <template #default="{ id, invalid, describedBy }">
             <input :id="id" v-model="form.setupToken" v-autofocus type="password" autocomplete="off" spellcheck="false" :aria-invalid="invalid" :aria-describedby="describedBy" />
