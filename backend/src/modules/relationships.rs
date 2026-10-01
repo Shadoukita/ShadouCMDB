@@ -13,6 +13,7 @@ use crate::api::context::RequestContext;
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{self, Deleted, Page, Paged, Sort, UuidList, description_schema, like_pattern, ts, ts_opt};
 use crate::auth::permissions::ClassOp;
+use crate::data::business_services as services_data;
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Where};
 use crate::data::relationships::{self as data, RelationshipRow};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
@@ -196,6 +197,22 @@ impl Check for RelationshipUpdate {
 // Service
 // ---------------------------------------------------------------------------
 
+/// Business service membership (the built-in member type) is written only
+/// through `/api/v1/business-services/{id}/members`, which applies the member
+/// limit, the cycle and nesting checks and the service's history (SHAA-927 §1.2).
+fn member_type_refused() -> AppError {
+    AppError::field(
+        "relationshipTypeId",
+        "Business service members are added and removed on the business service \
+         (/api/v1/business-services/{id}/members)",
+        "system_relationship_type",
+    )
+}
+
+async fn is_member_type(conn: &mut PgConnection, type_id: Uuid) -> Result<bool, AppError> {
+    Ok(services_data::roles(conn).await?.is_some_and(|r| r.member_type == type_id))
+}
+
 async fn load_row(conn: &mut PgConnection, id: Uuid) -> Result<RelationshipRow, AppError> {
     data::get(conn, id).await?.ok_or_else(|| AppError::missing("Relationship", id))
 }
@@ -262,6 +279,9 @@ pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Relati
 
 pub async fn create(pool: &PgPool, ctx: &RequestContext, input: &RelationshipCreate) -> Result<Relationship, AppError> {
     let mut tx = pool.begin().await?;
+    if is_member_type(&mut tx, input.relationship_type_id).await? {
+        return Err(member_type_refused());
+    }
     // Missing endpoints get a precise field error here; everything else
     // (duplicates, endpoint class rules, deleted CIs) is enforced by the
     // database and its errors map to field-level 400/409s.
@@ -324,6 +344,14 @@ pub async fn update(
     };
     let row = load_row(&mut tx, id).await?;
     require_endpoints(ctx, &row, ClassOp::Edit)?;
+    if is_member_type(&mut tx, row.relationship_type_id).await?
+        || match input.relationship_type_id {
+            Some(t) => is_member_type(&mut tx, t).await?,
+            None => false,
+        }
+    {
+        return Err(member_type_refused());
+    }
     if removed {
         return Err(AppError::conflict("This relationship was removed and cannot be modified"));
     }
@@ -349,6 +377,9 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     }
     let row = load_row(&mut tx, id).await?;
     require_endpoints(ctx, &row, ClassOp::Edit)?;
+    if is_member_type(&mut tx, row.relationship_type_id).await? {
+        return Err(member_type_refused());
+    }
     let before = Relationship::from(row);
     data::soft_delete(&mut tx, id).await?;
     let entry = AuditEntry {
@@ -393,7 +424,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Create a typed, directional relationship between two CIs")
             .description(
-                "Rejected with 400 when the type does not allow these CI classes, when source equals target, or when a CI is deleted; 409 when the same live edge (or, for symmetric types, its reverse) exists. Needs edit on the source CI's class and view on the target's.",
+                "Rejected with 400 when the type does not allow these CI classes, when source equals target, or when a CI is deleted; 409 when the same live edge (or, for symmetric types, its reverse) exists. Needs edit on the source CI's class and view on the target's. The built-in business service member type (`systemRole` business_service_member) is refused with 400 VALIDATION_ERROR (`system_relationship_type` on relationshipTypeId): members are added on the service (POST /api/v1/business-services/{id}/members).",
             )
             .status(StatusCode::CREATED)
             .errors(&[ErrorCode::Conflict])
@@ -404,7 +435,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::PATCH, BY_ID, "updateRelationship")
             .tag(TAG)
             .summary("Update notes or type of a relationship (endpoints are immutable)")
-            .description("Needs edit on the source CI's class and view on the target's.")
+            .description("Needs edit on the source CI's class and view on the target's. A business service membership cannot be changed here, nor can a relationship take the member type (400 VALIDATION_ERROR, `system_relationship_type`).")
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .class_checked()
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<RelationshipUpdate>>| async move {
@@ -413,7 +444,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::DELETE, BY_ID, "deleteRelationship")
             .tag(TAG)
             .summary("Remove a relationship (soft delete; the same edge can be created again later)")
-            .description("Needs edit on the source CI's class and view on the target's.")
+            .description("Needs edit on the source CI's class and view on the target's. A business service membership is refused with 400 VALIDATION_ERROR (`system_relationship_type` on relationshipTypeId): remove it on the service (DELETE /api/v1/business-services/{id}/members/{ciId}).")
             .errors(&[ErrorCode::NotFound])
             .class_checked()
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {

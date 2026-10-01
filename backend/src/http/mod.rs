@@ -61,6 +61,8 @@ pub struct AppState {
     pub impact: Arc<crate::modules::impact::ImpactState>,
     /// Bulk import limits (`IMPORT_*`).
     pub imports: Arc<crate::config::ImportConfig>,
+    /// Business service limits (`BUSINESS_SERVICE_*`).
+    pub business_services: crate::config::BusinessServiceConfig,
 }
 
 /// The start-up step for encrypted secrets ([`crate::secrets::sealed::prepare`]):
@@ -87,6 +89,7 @@ impl AppState {
             readiness: Arc::default(),
             impact: Arc::default(),
             imports: Arc::default(),
+            business_services: Default::default(),
         }
     }
 
@@ -113,6 +116,11 @@ impl AppState {
 
     pub fn limited(mut self, http: &HttpConfig) -> Self {
         self.capacity = Capacity::new(http.max_concurrent_requests, http.header_read_timeout);
+        self
+    }
+
+    pub fn with_business_services(mut self, limits: crate::config::BusinessServiceConfig) -> Self {
+        self.business_services = limits;
         self
     }
 
@@ -585,6 +593,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         .capturing(&cfg.audit)
         .limited(&cfg.http)
         .with_impact(cfg.impact)
+        .with_business_services(cfg.business_services)
         .importing(&cfg.imports);
     // Before listening: rows under a key that is not configured stop the server
     // here, and rows not encrypted yet are encrypted. An unreachable or
@@ -808,6 +817,7 @@ mod tests {
             encryption: Default::default(),
             impact: Default::default(),
             imports: Default::default(),
+            business_services: Default::default(),
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth, crate::secrets::Keyring::for_tests()), &cfg)

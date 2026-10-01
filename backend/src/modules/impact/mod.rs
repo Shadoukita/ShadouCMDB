@@ -9,7 +9,7 @@
 
 pub mod engine;
 #[cfg(test)]
-mod perf;
+pub(crate) mod perf;
 pub mod schemas;
 pub mod service;
 #[cfg(test)]
