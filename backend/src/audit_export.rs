@@ -18,6 +18,7 @@
 //! the chain (GH#179).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -26,9 +27,11 @@ use sqlx::{PgPool, Row};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::pki_types::ServerName;
 use uuid::Uuid;
 
-use crate::config::{AuditExportConfig, AuditFormat, AuditSink};
+use crate::config::{AuditExportConfig, AuditFormat, AuditSink, sink_host};
 
 const BATCH: i64 = 500;
 const APP_NAME: &str = "shadoucmdb";
@@ -153,6 +156,7 @@ enum Conn {
     File(tokio::fs::File),
     Udp(tokio::net::UdpSocket),
     Tcp(tokio::net::TcpStream),
+    Tls(Box<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>),
 }
 
 struct Sink {
@@ -160,12 +164,37 @@ struct Sink {
     format: AuditFormat,
     facility: u8,
     hostname: String,
+    /// Set for `tls://`.
+    tls: Option<TlsConnector>,
     conn: Option<Conn>,
 }
 
+/// TLS client for `tls://`: the public roots, the operating system's store and
+/// `AUDIT_EXPORT_TLS_CA_FILE`, as for the identity-provider connections.
+fn tls_connector(ca_file: Option<&PathBuf>) -> anyhow::Result<TlsConnector> {
+    let pem = match ca_file {
+        Some(path) => Some(
+            std::fs::read_to_string(path)
+                .map_err(|e| anyhow::anyhow!("AUDIT_EXPORT_TLS_CA_FILE: cannot read {}: {e}", path.display()))?,
+        ),
+        None => None,
+    };
+    let config = crate::auth::sso::tls::client_config(pem.as_deref())
+        .map_err(|e| anyhow::anyhow!("AUDIT_EXPORT_TLS_CA_FILE: {e}"))?;
+    Ok(TlsConnector::from(Arc::new(config)))
+}
+
+async fn tcp_connect(addr: &str) -> std::io::Result<tokio::net::TcpStream> {
+    let stream = tokio::time::timeout(Duration::from_secs(10), tokio::net::TcpStream::connect(addr))
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "connect timed out"))??;
+    stream.set_nodelay(true)?;
+    Ok(stream)
+}
+
 impl Sink {
-    async fn open(target: &AuditSink) -> std::io::Result<Conn> {
-        Ok(match target {
+    async fn open(&self) -> std::io::Result<Conn> {
+        Ok(match &self.target {
             AuditSink::Stdout => Conn::Stdout(tokio::io::stdout()),
             AuditSink::File(path) => Conn::File(open_append(path).await?),
             AuditSink::Udp(addr) => {
@@ -178,13 +207,16 @@ impl Sink {
                 socket.connect(peer).await?;
                 Conn::Udp(socket)
             }
-            AuditSink::Tcp(addr) => {
-                let stream =
-                    tokio::time::timeout(Duration::from_secs(10), tokio::net::TcpStream::connect(addr.as_str()))
-                        .await
-                        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "connect timed out"))??;
-                stream.set_nodelay(true)?;
-                Conn::Tcp(stream)
+            AuditSink::Tcp(addr) => Conn::Tcp(tcp_connect(addr).await?),
+            AuditSink::Tls(addr) => {
+                let connector = self.tls.as_ref().expect("built by spawn for tls://");
+                let name = ServerName::try_from(sink_host(addr).to_owned())
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+                let tcp = tcp_connect(addr).await?;
+                let tls = tokio::time::timeout(Duration::from_secs(10), connector.connect(name, tcp))
+                    .await
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timed out"))??;
+                Conn::Tls(Box::new(tls))
             }
         })
     }
@@ -212,7 +244,7 @@ impl Sink {
 
     async fn send(&mut self, e: &Event) -> std::io::Result<()> {
         if self.conn.is_none() {
-            self.conn = Some(Self::open(&self.target).await?);
+            self.conn = Some(self.open().await?);
         }
         let msg = self.message(e);
         let result = match self.conn.as_mut().expect("opened above") {
@@ -220,16 +252,8 @@ impl Sink {
             Conn::File(f) => write_line(f, &msg).await,
             // One message per datagram (RFC 5426).
             Conn::Udp(s) => s.send(msg.as_bytes()).await.map(|_| ()),
-            Conn::Tcp(s) => {
-                let framed = match self.format {
-                    // Octet counting (RFC 6587 §3.4.1): messages may contain newlines.
-                    AuditFormat::Rfc5424 => format!("{} {msg}", msg.len()),
-                    AuditFormat::Json => format!("{msg}\n"),
-                };
-                tokio::time::timeout(Duration::from_secs(10), s.write_all(framed.as_bytes()))
-                    .await
-                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timed out"))?
-            }
+            Conn::Tcp(s) => write_framed(s, self.format, &msg).await,
+            Conn::Tls(s) => write_framed(s.as_mut(), self.format, &msg).await,
         };
         if result.is_err() {
             // Reconnect (or reopen the file, e.g. after log rotation) on the next attempt.
@@ -239,8 +263,30 @@ impl Sink {
     }
 }
 
+/// One message on a stream transport, flushed (TLS buffers records).
+async fn write_framed<W: AsyncWriteExt + Unpin>(w: &mut W, format: AuditFormat, msg: &str) -> std::io::Result<()> {
+    let framed = match format {
+        // Octet counting (RFC 6587 §3.4.1, RFC 5425 §4.3): messages may contain newlines.
+        AuditFormat::Rfc5424 => format!("{} {msg}", msg.len()),
+        AuditFormat::Json => format!("{msg}\n"),
+    };
+    let write = async {
+        w.write_all(framed.as_bytes()).await?;
+        w.flush().await
+    };
+    tokio::time::timeout(Duration::from_secs(10), write)
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timed out"))?
+}
+
+/// Audit events are personal data: a new file is readable by owner and group
+/// only, whatever the umask (GH#443). An existing file keeps its mode.
 async fn open_append(path: &PathBuf) -> std::io::Result<tokio::fs::File> {
-    tokio::fs::OpenOptions::new().create(true).append(true).open(path).await
+    let mut options = tokio::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    options.mode(0o640);
+    options.open(path).await
 }
 
 async fn write_line<W: AsyncWriteExt + Unpin>(w: &mut W, msg: &str) -> std::io::Result<()> {
@@ -331,9 +377,9 @@ async fn drain(pool: &PgPool, sink: &mut Sink, mut cursor: i64, health: &mut Hea
     }
 }
 
-async fn run(pool: PgPool, cfg: AuditExportConfig, mut stop: watch::Receiver<bool>) {
+async fn run(pool: PgPool, cfg: AuditExportConfig, tls: Option<TlsConnector>, mut stop: watch::Receiver<bool>) {
     let mut sink =
-        Sink { target: cfg.sink, format: cfg.format, facility: cfg.facility, hostname: hostname(), conn: None };
+        Sink { target: cfg.sink, format: cfg.format, facility: cfg.facility, hostname: hostname(), tls, conn: None };
     let mut health = Health::default();
     let mut cursor = None;
     loop {
@@ -378,17 +424,35 @@ impl Exporter {
     }
 }
 
-pub fn spawn(pool: PgPool, cfg: AuditExportConfig) -> Exporter {
+/// Whether `host` is this machine, so cleartext to it never crosses a network.
+fn is_loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Starts the export; fails when the TLS trust anchors cannot be loaded.
+pub fn spawn(pool: PgPool, cfg: AuditExportConfig) -> anyhow::Result<Exporter> {
+    let tls = match cfg.sink {
+        AuditSink::Tls(_) => Some(tls_connector(cfg.tls_ca_file.as_ref())?),
+        _ => None,
+    };
     tracing::info!(target = ?cfg.sink, format = ?cfg.format, "audit export enabled");
     if matches!(cfg.sink, AuditSink::Udp(_)) {
         tracing::warn!(
             "AUDIT_EXPORT uses UDP: delivery is not acknowledged, so datagrams the network or the collector drops \
              are lost without notice, and a row larger than {UDP_MAX} bytes is sent without its values. \
-             Use tcp:// where the collector supports it."
+             Use tls:// (or tcp://) where the collector supports it."
+        );
+    }
+    if let AuditSink::Udp(addr) | AuditSink::Tcp(addr) = &cfg.sink
+        && !is_loopback(sink_host(addr))
+    {
+        tracing::warn!(
+            "AUDIT_EXPORT sends audit events unencrypted to {addr}: anyone on the network path can read, alter or \
+             drop them. Use tls://host:port, or a relay on this host that forwards over TLS."
         );
     }
     let (stop, rx) = watch::channel(false);
-    Exporter { stop, task: tokio::spawn(run(pool, cfg, rx)) }
+    Ok(Exporter { stop, task: tokio::spawn(run(pool, cfg, tls, rx)) })
 }
 
 #[cfg(test)]
@@ -443,7 +507,7 @@ mod tests {
     async fn udp_sink(format: AuditFormat) -> (Sink, tokio::net::UdpSocket) {
         let collector = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let target = AuditSink::Udp(collector.local_addr().unwrap().to_string());
-        (Sink { target, format, facility: 13, hostname: "h".into(), conn: None }, collector)
+        (Sink { target, format, facility: 13, hostname: "h".into(), tls: None, conn: None }, collector)
     }
 
     async fn receive(collector: &tokio::net::UdpSocket) -> Value {
@@ -475,6 +539,137 @@ mod tests {
             assert_eq!((v["chainSeq"].as_i64(), v.get("oversize")), (Some(43), None), "{v}");
             assert_eq!(v["newValue"]["name"], "web-01\nline");
         }
+    }
+
+    /// GH#443: a new export file is not readable by other users, whatever the umask.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_audit_file_is_created_owner_and_group_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("shadoucmdb-audit-{}.jsonl", Uuid::new_v4()));
+        let mut sink = Sink {
+            target: AuditSink::File(path.clone()),
+            format: AuditFormat::Json,
+            facility: 13,
+            hostname: "h".into(),
+            tls: None,
+            conn: None,
+        };
+        sink.send(&event("create")).await.unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(mode & !0o640, 0, "mode {mode:o} is 0640 or stricter");
+    }
+
+    /// A CA and a server certificate for `name`, signed by it: (CA PEM, server config).
+    fn tls_server(name: &str) -> (String, Arc<tokio_rustls::rustls::ServerConfig>) {
+        use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+        use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+        let ca_key = KeyPair::generate().unwrap();
+        let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca_pem = ca_params.self_signed(&ca_key).unwrap().pem();
+        let issuer = Issuer::new(ca_params, ca_key);
+        let key = KeyPair::generate().unwrap();
+        let cert = CertificateParams::new(vec![name.to_owned()]).unwrap().signed_by(&key, &issuer).unwrap();
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der()));
+        let provider = Arc::new(tokio_rustls::rustls::crypto::ring::default_provider());
+        let config = tokio_rustls::rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert.der().clone()], key)
+            .unwrap();
+        (ca_pem, Arc::new(config))
+    }
+
+    /// A one-connection TLS collector on localhost; yields what it received.
+    async fn tls_collector(
+        config: Arc<tokio_rustls::rustls::ServerConfig>,
+    ) -> (u16, JoinHandle<std::io::Result<String>>) {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await?;
+            let mut tls = tokio_rustls::TlsAcceptor::from(config).accept(tcp).await?;
+            // The sink drops its connection without close_notify: keep what arrived before that.
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                match tls.read(&mut chunk).await {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(e) if buf.is_empty() => return Err(e),
+                    Err(_) => break,
+                }
+            }
+            Ok(String::from_utf8(buf).unwrap())
+        });
+        (port, task)
+    }
+
+    async fn tls_sink(port: u16, ca_pem: &str) -> Sink {
+        let ca_file = std::env::temp_dir().join(format!("shadoucmdb-audit-ca-{}.pem", Uuid::new_v4()));
+        std::fs::write(&ca_file, ca_pem).unwrap();
+        let tls = tls_connector(Some(&ca_file)).unwrap();
+        std::fs::remove_file(&ca_file).unwrap();
+        Sink {
+            target: AuditSink::Tls(format!("localhost:{port}")),
+            format: AuditFormat::Rfc5424,
+            facility: 13,
+            hostname: "h".into(),
+            tls: Some(tls),
+            conn: None,
+        }
+    }
+
+    /// GH#443: `tls://` delivers octet-counted RFC 5424 messages over a verified connection.
+    #[tokio::test]
+    async fn tls_sink_delivers_to_a_trusted_collector() {
+        let (ca_pem, config) = tls_server("localhost");
+        let (port, collector) = tls_collector(config).await;
+        let mut sink = tls_sink(port, &ca_pem).await;
+        sink.send(&event("create")).await.unwrap();
+        sink.conn = None; // closes the connection, so the collector sees the end
+        let received = collector.await.unwrap().unwrap();
+        let (len, msg) = received.split_once(' ').unwrap();
+        assert_eq!(len.parse::<usize>().unwrap(), msg.len(), "octet counting: {received}");
+        assert!(msg.starts_with("<109>1 2026-09-27T08:15:30.123456Z h shadoucmdb "), "{msg}");
+    }
+
+    /// GH#443: a certificate for another host name is refused, and nothing is sent.
+    #[tokio::test]
+    async fn tls_sink_refuses_a_certificate_for_another_host() {
+        let (ca_pem, config) = tls_server("siem.example.com");
+        let (port, collector) = tls_collector(config).await;
+        let mut sink = tls_sink(port, &ca_pem).await;
+        let err = sink.send(&event("create")).await.unwrap_err();
+        assert!(err.to_string().contains("certificate"), "{err}");
+        assert!(sink.conn.is_none());
+        assert!(collector.await.unwrap().is_err(), "the handshake did not complete");
+    }
+
+    /// GH#443: without the private CA the collector's certificate is not trusted.
+    #[tokio::test]
+    async fn tls_sink_refuses_an_untrusted_certificate() {
+        let (_, config) = tls_server("localhost");
+        let (other_ca, _) = tls_server("localhost");
+        let (port, collector) = tls_collector(config).await;
+        let err = tls_sink(port, &other_ca).await.send(&event("create")).await.unwrap_err();
+        assert!(err.to_string().contains("certificate"), "{err}");
+        assert!(collector.await.unwrap().is_err());
+    }
+
+    #[test]
+    fn cleartext_warning_spares_loopback() {
+        for host in ["localhost", "127.0.0.1", "::1"] {
+            assert!(is_loopback(host), "{host}");
+        }
+        for host in ["siem.example.com", "10.0.0.5", "2001:db8::1"] {
+            assert!(!is_loopback(host), "{host}");
+        }
+        assert!(tls_connector(Some(&PathBuf::from("/nonexistent/ca.pem"))).is_err());
     }
 
     /// GH#179: `drain` moves past an oversize row instead of retrying it forever.

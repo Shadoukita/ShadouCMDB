@@ -175,6 +175,24 @@ pub enum AuditSink {
     Udp(String),
     /// Syslog over TCP (RFC 6587 octet counting).
     Tcp(String),
+    /// Syslog over TLS (RFC 5425): certificate chain and host name verified.
+    Tls(String),
+}
+
+impl AuditSink {
+    /// The `host:port` of a network sink.
+    pub fn address(&self) -> Option<&str> {
+        match self {
+            AuditSink::Udp(a) | AuditSink::Tcp(a) | AuditSink::Tls(a) => Some(a),
+            AuditSink::Stdout | AuditSink::File(_) => None,
+        }
+    }
+}
+
+/// The host of `host:port`, without the brackets of an IPv6 literal.
+pub fn sink_host(addr: &str) -> &str {
+    let host = addr.rsplit_once(':').map_or(addr, |(host, _)| host);
+    host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +210,9 @@ pub struct AuditExportConfig {
     /// Syslog facility (0-23) for RFC 5424; 13 is "log audit".
     pub facility: u8,
     pub poll_interval: Duration,
+    /// Extra trusted CA certificates (PEM) for `tls://`, added to the public
+    /// and operating-system roots.
+    pub tls_ca_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -536,9 +557,10 @@ fn parse_csp_report_uri(raw: &str) -> Result<String, String> {
     Ok(raw.to_owned())
 }
 
-/// Parses `AUDIT_EXPORT`: `stdout`, `file:<path>`, `udp://host:port` or `tcp://host:port`.
+/// Parses `AUDIT_EXPORT`: `stdout`, `file:<path>`, `udp://host:port`, `tcp://host:port` or `tls://host:port`.
 fn parse_audit_sink(raw: &str) -> Result<AuditSink, String> {
-    const EXPECTED: &str = "expected off, stdout, file:/path/to/audit.log, udp://host:port or tcp://host:port";
+    const EXPECTED: &str =
+        "expected off, stdout, file:/path/to/audit.log, udp://host:port, tcp://host:port or tls://host:port";
     if raw == "stdout" {
         return Ok(AuditSink::Stdout);
     }
@@ -559,6 +581,13 @@ fn parse_audit_sink(raw: &str) -> Result<AuditSink, String> {
     match scheme {
         "udp" => Ok(AuditSink::Udp(addr.to_owned())),
         "tcp" => Ok(AuditSink::Tcp(addr.to_owned())),
+        "tls" => {
+            // The name the certificate must carry: a DNS name or an IP address.
+            let host = sink_host(addr);
+            rustls_pki_types::ServerName::try_from(host)
+                .map_err(|_| format!("\"{host}\" is not a valid host name or IP address for TLS"))?;
+            Ok(AuditSink::Tls(addr.to_owned()))
+        }
         _ => Err(format!("scheme \"{scheme}://\" is not supported; {EXPECTED}")),
     }
 }
@@ -662,7 +691,7 @@ impl Config {
             "off" => None,
             raw => parse_audit_sink(raw).map_err(|e| r.errors.push(format!("AUDIT_EXPORT: {e}"))).ok(),
         };
-        let network_sink = matches!(sink, Some(AuditSink::Udp(_) | AuditSink::Tcp(_)));
+        let network_sink = sink.as_ref().is_some_and(|s| s.address().is_some());
         let format = match r
             .one_of("AUDIT_EXPORT_FORMAT", &["json", "rfc5424"], if network_sink { "rfc5424" } else { "json" })
             .as_str()
@@ -672,11 +701,16 @@ impl Config {
         };
         let facility = r.int::<u8>("AUDIT_SYSLOG_FACILITY", 0, 23).unwrap_or(13);
         let poll_ms = r.int::<u64>("AUDIT_EXPORT_POLL_MS", 100, 3_600_000).unwrap_or(2_000);
+        let tls_ca_file = r.raw("AUDIT_EXPORT_TLS_CA_FILE").map(PathBuf::from);
+        if tls_ca_file.is_some() && !matches!(sink, Some(AuditSink::Tls(_))) {
+            r.errors.push("AUDIT_EXPORT_TLS_CA_FILE: only used with AUDIT_EXPORT=tls://host:port".to_owned());
+        }
         let export = sink.map(|sink| AuditExportConfig {
             sink,
             format,
             facility,
             poll_interval: Duration::from_millis(poll_ms),
+            tls_ca_file,
         });
         let public_url = r
             .raw("PUBLIC_URL")
@@ -1073,7 +1107,25 @@ mod tests {
         assert_eq!(e.sink, AuditSink::File("/var/log/shadoucmdb/audit.jsonl".into()));
         assert_eq!(e.format, AuditFormat::Json);
         assert_eq!(export("stdout").unwrap().unwrap().sink, AuditSink::Stdout);
-        for bad in ["syslog", "udp://siem.example.com", "http://siem:514", "tcp://:514", "udp://h:0", "file:"] {
+        let e = export("tls://siem.example.com:6514").unwrap().unwrap();
+        assert_eq!(e.sink, AuditSink::Tls("siem.example.com:6514".into()));
+        assert_eq!((e.format, e.tls_ca_file), (AuditFormat::Rfc5424, None));
+        let e = export("tls://[2001:db8::1]:6514").unwrap().unwrap();
+        assert_eq!(e.sink.address().map(sink_host), Some("2001:db8::1"));
+        let cfg =
+            load_with(&[("AUDIT_EXPORT", "tls://siem:6514"), ("AUDIT_EXPORT_TLS_CA_FILE", "/etc/ca.pem")]).unwrap();
+        assert_eq!(cfg.audit.export.unwrap().tls_ca_file, Some("/etc/ca.pem".into()));
+        let err = load_with(&[("AUDIT_EXPORT", "tcp://siem:514"), ("AUDIT_EXPORT_TLS_CA_FILE", "/etc/ca.pem")]);
+        assert!(err.unwrap_err().to_string().contains("AUDIT_EXPORT_TLS_CA_FILE"));
+        for bad in [
+            "syslog",
+            "udp://siem.example.com",
+            "http://siem:514",
+            "tcp://:514",
+            "udp://h:0",
+            "file:",
+            "tls://bad_name!:6514",
+        ] {
             assert!(export(bad).unwrap_err().to_string().contains("AUDIT_EXPORT: "), "{bad}");
         }
         let cfg = load_with(&[("AUDIT_EXPORT", "stdout"), ("AUDIT_EXPORT_FORMAT", "rfc5424")]).unwrap();
