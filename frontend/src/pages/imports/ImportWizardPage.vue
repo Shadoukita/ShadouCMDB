@@ -81,6 +81,9 @@ const importOff = computed(() => !!settings.data.value && !available.value);
 /** While off, the check and import results stay readable: their row problems and error report are plain reads. */
 const readableWhileOff = computed(() => step.value >= 3 && !!data.value?.summary);
 
+/** An administrator looking at another user's job: they may read, cancel or delete it, never change or commit it. */
+const othersJob = computed(() => !!data.value && session.isAdministrator && data.value.createdBy.id !== session.user?.id);
+
 const committedRows = computed(() => {
   const c = data.value?.summary?.committed;
   return c ? c.created + c.updated + c.unchanged : 0;
@@ -105,11 +108,16 @@ const committedRows = computed(() => {
       <div class="title">
         <h1>{{ data ? data.file.name : "New import" }}</h1>
         <ImportStatusBadge v-if="data" :status="data.status" />
-        <span v-if="data && session.isAdministrator && data.createdBy.id !== session.user?.id" class="muted">by {{ data.createdBy.name }}</span>
+        <span v-if="othersJob" class="muted">by {{ data?.createdBy.name }}</span>
       </div>
     </div>
 
     <ImportStepper :current="step" :last="last" :link-to="linkTo" />
+
+    <div v-if="othersJob" class="alert alert-warn" role="status">
+      <strong>This import belongs to {{ data?.createdBy.name }}.</strong> You can view, cancel or delete it. Only
+      {{ data?.createdBy.name }} can change its file options or mapping, check it or import it.
+    </div>
 
     <div v-if="pollFailing" class="alert alert-warn" role="status">
       <strong>Lost connection to the server, retrying…</strong> The import keeps running on the server.
