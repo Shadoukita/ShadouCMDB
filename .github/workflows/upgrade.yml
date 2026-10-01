@@ -58,7 +58,7 @@ jobs:
           retention-days: 3
 
   upgrade:
-    name: Upgrade ${{ matrix.from }} -> this commit
+    name: Upgrade ${{ matrix.from }} (${{ matrix.template }}) -> this commit
     needs: build
     runs-on: ubuntu-24.04
     strategy:
@@ -66,6 +66,9 @@ jobs:
       matrix:
         # One line per published release customers may upgrade from.
         from: [v0.1.0-rc.1]
+        # demo: the old release's demo inventory, with the starter class "service" that migration 0033 adopts as
+        # the business service class. none: an empty data model, where 0033 creates a new, empty class (SHAA-927 §6.2).
+        template: [demo, none]
     services:
       postgres:
         image: postgres:17
@@ -79,6 +82,7 @@ jobs:
           --health-cmd "pg_isready -U pgadmin -d postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       FROM: ${{ matrix.from }}
+      TEMPLATE: ${{ matrix.template }}
       # Throwaway credentials for the CI-only PostgreSQL service container.
       ADMIN_URL: postgres://pgadmin:ci-admin-password@127.0.0.1:55432/postgres
       ADMIN_DB_URL: postgres://pgadmin:ci-admin-password@127.0.0.1:55432/shadoucmdb
@@ -127,7 +131,7 @@ jobs:
           ./shadoucmdb --version
           ../head/shadoucmdb --version
 
-      - name: "${{ matrix.from }}: bootstrap the database with its own script, migrate, seed --demo"
+      - name: "${{ matrix.from }}: bootstrap the database with its own script, migrate, seed (${{ matrix.template }})"
         run: |
           git show "$FROM:sql/bootstrap/00_create_role_and_database.sql" > bootstrap.sql
           # Older scripts create one role and ignore the other two passwords.
@@ -139,7 +143,7 @@ jobs:
           else
             "$OLD" migrate
           fi
-          "$OLD" seed --demo
+          if [ "$TEMPLATE" = demo ]; then "$OLD" seed --demo; else "$OLD" seed; fi
 
       - name: "${{ matrix.from }}: create data through its API (tools/upgrade/upgrade-check.ts seed)"
         run: |
@@ -185,10 +189,11 @@ jobs:
           # The same data through the UI: former fixed fields as class fields, labels, the edit form.
           (cd frontend && E2E_BASE_URL="$API_URL" E2E_USERNAME=upgrade-admin E2E_PASSWORD="$UPGRADE_PASSWORD" \
             E2E_UPGRADE_SNAPSHOT="$GITHUB_WORKSPACE/snapshot.json" npx playwright test e2e/core-upgrade.spec.ts)
-          # Brings the demo template up to date; the demo inventory came from the old release.
+          # Brings the demo template up to date (none: installs it); the demo inventory came from the old release.
           "$NEW" seed --demo
           "$NEW" verify
-          node tools/smoke/smoke.ts
+          # The smoke suite expects the demo inventory, which `seed --demo` loads only into an inventory without CIs.
+          if [ "$TEMPLATE" = demo ]; then node tools/smoke/smoke.ts; fi
           kill -TERM $PID && wait $PID
           grep -q "server stopped" new.log
           errors=$(grep -c '"level":"ERROR"' new.log || true)
@@ -200,7 +205,7 @@ jobs:
       - if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: upgrade-${{ matrix.from }}-playwright
+          name: upgrade-${{ matrix.from }}-${{ matrix.template }}-playwright
           path: |
             frontend/playwright-report
             frontend/test-results
