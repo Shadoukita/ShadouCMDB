@@ -679,13 +679,14 @@ pub async fn verified_sign_in(
     let purged = auth_data::purge_sessions(pool, auth.config.session_idle).await?;
     let method = LoginMethod::Oidc(evidence);
     // Already recorded as `login.failure` (`account_changed`, `provider_disabled`).
-    let (_, cookies) =
-        match super::auth::try_open_session(pool, auth, headers, ctx, user_id, &username, method, None).await? {
-            Ok(opened) => opened,
-            // MfaEnrolled refuses password sign-ins only, MfaRemoved second-factor ones.
-            Err(Changed::Account | Changed::MfaEnrolled | Changed::MfaRemoved) => return Ok(Err(Refusal::AccountDisabled)),
-            Err(Changed::Provider) => return Ok(Err(Refusal::ProviderDisabled)),
-        };
+    let (_, cookies) = match super::auth::try_open_session(pool, auth, headers, ctx, user_id, &username, method, None)
+        .await?
+    {
+        Ok(opened) => opened,
+        // MfaEnrolled refuses password sign-ins only, MfaRemoved second-factor ones.
+        Err(Changed::Account | Changed::MfaEnrolled | Changed::MfaRemoved) => return Ok(Err(Refusal::AccountDisabled)),
+        Err(Changed::Provider) => return Ok(Err(Refusal::ProviderDisabled)),
+    };
     tracing::info!(user = %username, provider = %provider.name, ip = ?ctx.client.ip, purged_sessions = purged, provider_mfa = evidence.as_str(), "signed in through OIDC");
     Ok(Ok(cookies))
 }
