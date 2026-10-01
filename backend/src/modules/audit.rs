@@ -60,6 +60,8 @@ pub enum EntityType {
     ImportSettings,
     /// Saved bulk import column mappings
     ImportMappings,
+    /// User groups (owners of business services): create, update (members too), delete
+    UserGroups,
 }
 
 impl EntityType {
@@ -90,6 +92,7 @@ impl EntityType {
             EntityType::ImportJobs => "import_jobs",
             EntityType::ImportSettings => "import_settings",
             EntityType::ImportMappings => "import_mappings",
+            EntityType::UserGroups => "user_groups",
         }
     }
 }

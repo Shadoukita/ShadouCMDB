@@ -53,7 +53,7 @@ test.beforeAll(async ({ request }) => {
 
 test.afterAll(async ({ request }) => {
   const headers = { "X-CSRF-Token": await csrf(request) };
-  for (const id of users.splice(0)) expect((await request.delete(`/api/v1/admin/users/${id}`, { headers })).status()).toBe(204);
+  for (const id of users.splice(0)) expect((await request.delete(`/api/v1/admin/users/${id}`, { headers })).status()).toBe(200);
 });
 
 test("legacy statuses, environments, locations and owners: reads work, writes answer 410 GONE and change nothing (GH#111)", async ({ request }) => {

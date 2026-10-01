@@ -40,6 +40,7 @@ pub fn routes() -> Vec<Route> {
         modules::ui_settings::routes(),
         modules::audit::routes(),
         modules::users::routes(),
+        modules::groups::routes(),
         modules::profiles::routes(),
         modules::api_tokens::routes(),
         modules::identity_providers::routes(),

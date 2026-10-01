@@ -10,4 +10,5 @@ pub mod items;
 pub mod mfa;
 pub mod relationships;
 pub mod server_keys;
+pub mod service_owners;
 pub mod ui_settings;

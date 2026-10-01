@@ -477,7 +477,7 @@ async fn deleting_a_user_removes_their_unfinished_imports() {
     let alice_id: Uuid =
         sqlx::query_scalar("SELECT id FROM users WHERE username = 'alice'").fetch_one(&e.pool).await.unwrap();
     let (status, _, _) = call(&e.app, "DELETE", &format!("/api/v1/admin/users/{alice_id}"), &e.admin, None).await;
-    assert_eq!(status, 204);
+    assert_eq!(status, 200);
     let left: Vec<(String, Option<Uuid>, String)> =
         sqlx::query_as("SELECT file_name, created_by_id, created_by_name FROM cmdb.import_jobs")
             .fetch_all(&e.pool)
