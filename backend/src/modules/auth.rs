@@ -587,12 +587,13 @@ async fn check_login(
         Some(r) => r.provider.as_ref().filter(|(_, kind)| kind == sso::LDAP).map(|(id, _)| Some(*id)),
         None => sso::any_directory(pool).await?.then_some(None),
     };
+    let account = row.as_ref().map(|r| r.username.as_str());
     if let Some(linked) = directory {
-        return directory_login(pool, auth, headers, ctx, attempt, &b, linked).await;
+        return directory_login(pool, auth, headers, ctx, attempt, &b, linked, account).await;
     }
     // An OIDC account has no password: verify() then checks a dummy hash, so it takes as long.
     if !password::verify(&b.password, row.as_ref().and_then(|r| r.password_hash.as_deref())).await? {
-        return Err(wrong_credentials(pool, attempt.into(), ctx, &b.username, None).await?);
+        return Err(wrong_credentials(pool, attempt.into(), ctx, &b.username, account, None).await?);
     }
     let Some(user) = row else { return Err(invalid_credentials()) };
     if !user.is_active {
@@ -660,15 +661,25 @@ async fn password_accepted(
 
 /// A wrong password (or unknown name): counted, logged and audited (with
 /// `reason` when the password was not checked); returns the 401.
+/// `account`: the name of the account `username` matched, if any.
+///
+/// The log line names the account only when one exists (GH#415): a name that
+/// matches none is often a password typed into the wrong field, and the
+/// server log is read more widely than the audit log, so it gets
+/// `unknown_user=true` instead. `request_id` leads to the `login.failure`
+/// audit row, which keeps the name as typed (see [`events`]).
 async fn wrong_credentials(
     pool: &PgPool,
     attempt: Reservation<'_>,
     ctx: &RequestContext,
     username: &str,
+    account: Option<&str>,
     reason: Option<&str>,
 ) -> Result<AppError, AppError> {
     let locked = attempt.failure();
-    tracing::warn!(username = %username.chars().take(64).collect::<String>(), ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), reason, "sign-in failed");
+    // One call site: a field set to `None` is left out of the line.
+    let unknown_user = account.is_none().then_some(true);
+    tracing::warn!(username = account, unknown_user, ip = ?ctx.client.ip, request_id = %ctx.request_id, locked_secs = locked.map(|d| d.as_secs()), reason, "sign-in failed");
     record_failure(pool, ctx, username, reason, locked).await?;
     Ok(invalid_credentials())
 }
@@ -679,7 +690,9 @@ async fn wrong_credentials(
 /// spellings of a name to one entry, and each spelling would otherwise get
 /// its own budget. A locked entry's password is not checked; the answer is
 /// the one a wrong password gets, so it does not tell which spellings find
-/// an entry.
+/// an entry. `account`: the name of the local account the username matched,
+/// if any.
+#[allow(clippy::too_many_arguments)]
 async fn directory_login(
     pool: &PgPool,
     auth: &AuthState,
@@ -688,6 +701,7 @@ async fn directory_login(
     attempt: Attempt<'_>,
     b: &LoginBody,
     linked: Option<Uuid>,
+    account: Option<&str>,
 ) -> Result<LoginAnswer, AppError> {
     let mut entry = None;
     let answer = match account_name(&b.username) {
@@ -701,10 +715,11 @@ async fn directory_login(
         None => sso::DirectoryAnswer::NoMatch,
     };
     let attempt = Reservation { name: attempt, entry };
-    directory_answer(pool, auth, headers, ctx, attempt, b, answer).await
+    directory_answer(pool, auth, headers, ctx, attempt, b, account, answer).await
 }
 
 /// What the directory's answer makes of the sign-in.
+#[allow(clippy::too_many_arguments)]
 async fn directory_answer(
     pool: &PgPool,
     auth: &AuthState,
@@ -712,6 +727,7 @@ async fn directory_answer(
     ctx: &RequestContext,
     attempt: Reservation<'_>,
     b: &LoginBody,
+    account: Option<&str>,
     answer: sso::DirectoryAnswer,
 ) -> Result<LoginAnswer, AppError> {
     match answer {
@@ -722,11 +738,11 @@ async fn directory_answer(
             // A local account's wrong password costs an argon2 verify; so does
             // this answer, or its speed would tell the names apart (GH#190).
             password::verify(&b.password, None).await?;
-            Err(wrong_credentials(pool, attempt, ctx, &b.username, None).await?)
+            Err(wrong_credentials(pool, attempt, ctx, &b.username, account, None).await?)
         }
         sso::DirectoryAnswer::NotAdmitted => {
             password::verify(&b.password, None).await?;
-            Err(wrong_credentials(pool, attempt, ctx, &b.username, Some(DIRECTORY_ENTRY_LOCKED)).await?)
+            Err(wrong_credentials(pool, attempt, ctx, &b.username, account, Some(DIRECTORY_ENTRY_LOCKED)).await?)
         }
         // A right password that is still refused counts like a disabled
         // account's, and gets a wrong password's answer: the refusal's own
@@ -1568,7 +1584,7 @@ pub(crate) mod tests {
             let attempt = throttle_gate(&auth.throttle, &name, ctx.client.net, "sign-ins").await.unwrap();
             let attempt = Reservation { name: attempt, entry: None };
             let answer = sso::DirectoryAnswer::Refused(refusal);
-            let e = directory_answer(pool, &auth, &headers, &ctx, attempt, &login_body(&name, &guess), answer)
+            let e = directory_answer(pool, &auth, &headers, &ctx, attempt, &login_body(&name, &guess), None, answer)
                 .await
                 .err()
                 .expect("refused");
@@ -1576,6 +1592,33 @@ pub(crate) mod tests {
             let last = auth_rows(pool, "login.failure").await.pop().unwrap();
             assert_eq!(last.3["reason"], refusal.code(), "{refusal:?} audited with the reason");
         }
+        db.drop().await;
+    }
+
+    /// GH#415: a failed sign-in logs the account's name when the username
+    /// matches one, and never a name that matches none (often a password).
+    #[tokio::test]
+    async fn a_failed_sign_in_logs_only_existing_account_names() {
+        let Some(db) = scratch::database("a_failed_sign_in_logs_only_existing_account_names").await else { return };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        let (log, _guard) = crate::auth::setup_token::capture::warnings();
+
+        let typed = "Tr0ub4dor&3-not-a-name";
+        login(pool, &auth, &headers, &from("198.51.100.9"), login_body(typed, "x")).await.err().expect("refused");
+        login(pool, &auth, &headers, &from("198.51.100.9"), login_body("OWNER", "wrong password"))
+            .await
+            .err()
+            .expect("refused");
+
+        let failed: Vec<String> = log.lines().into_iter().filter(|l| l.contains("sign-in failed")).collect();
+        assert_eq!(failed.len(), 2, "{failed:?}");
+        assert!(log.lines().iter().all(|l| !l.contains(typed)), "{:?}", log.lines());
+        assert!(failed[0].contains("unknown_user=true") && !failed[0].contains("username="), "{}", failed[0]);
+        assert!(failed[1].contains(r#"username="owner""#) && !failed[1].contains("unknown_user"), "{}", failed[1]);
+        // The audit row keeps the name as typed, so the two can be correlated.
+        let failures = auth_rows(pool, "login.failure").await;
+        assert_eq!(failures[0].3["attemptedUsername"], typed);
         db.drop().await;
     }
 
@@ -1699,7 +1742,7 @@ pub(crate) mod tests {
             _ => sso::DirectoryAnswer::NoMatch,
         };
         let attempt = Reservation { name: attempt, entry };
-        directory_answer(pool, auth, &HeaderMap::new(), ctx, attempt, &login_body(name, password), answer).await
+        directory_answer(pool, auth, &HeaderMap::new(), ctx, attempt, &login_body(name, password), None, answer).await
     }
 
     /// GH#406: failures split over two names the directory resolves to one
