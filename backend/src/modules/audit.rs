@@ -261,6 +261,7 @@ pub async fn list(
         let visible = visible.into_iter().collect();
         redact(&mut rows, &classes, &changes, &fields, &visible);
         hide_path_ids(&mut rows, &classes, &edges, &visible);
+        withhold_writer_counts(&mut rows, ctx.principal().map(|p| p.user_id.to_string()).as_deref());
         // Raw ids would show, by a gap, that a row left out sits between two shown (GH#378).
         for e in &mut rows {
             e.id = keyring.audit_row_id(e.id);
@@ -542,6 +543,41 @@ fn redact(
     }
 }
 
+// A CI export (impact, business service members) and an `import.commit` hold
+// counts taken with the writer's view: an export's rows span whatever classes
+// the writer could see, and an import's counters include CIs of subclasses and
+// relationships into other classes. Neither row says which classes, so a caller
+// whose view is limited gets these counts as null unless they wrote the entry
+// themselves (GH#440, as `Count::scoped` does for the item endpoints, GH#265).
+
+/// The keys of an entry's `newValue` that count CI data as its writer saw it.
+fn writer_counts(e: &AuditEntry) -> &'static [&'static str] {
+    match (e.action, e.entity_type.as_str()) {
+        (AuditAction::Export, "configuration_items") => &["rowCount", "truncated", "truncatedReason"],
+        (AuditAction::ImportCommit, "import_jobs") => {
+            &["created", "updated", "unchanged", "skipped", "failed", "relationshipsAdded"]
+        }
+        _ => &[],
+    }
+}
+
+/// `reader`: the caller's user id, as `actorId` records it. Only for a caller whose view is limited.
+fn withhold_writer_counts(rows: &mut [AuditEntry], reader: Option<&str>) {
+    for e in rows {
+        let keys = writer_counts(e);
+        if keys.is_empty() || reader.is_some_and(|r| e.actor_id.as_deref() == Some(r)) {
+            continue;
+        }
+        if let Some(v) = e.new_value.as_mut().and_then(Value::as_object_mut) {
+            for &k in keys {
+                if let Some(n) = v.get_mut(k) {
+                    *n = Value::Null;
+                }
+            }
+        }
+    }
+}
+
 // A `token.use` entry records the raw request path, so a request for one CI or
 // relationship carries its id: `/api/v1/configuration-items/{id}` (and the
 // paths below it), `/api/v1/business-services/{id}` (a service is a CI, and so
@@ -663,7 +699,7 @@ pub fn routes() -> Vec<Route> {
             .tag("Audit log")
             .summary("Change history (read-only, paginated, newest first by default)")
             .description(
-                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`), a business service's member CSV (`kind` business_service_members, on the service), and the configuration file (`kind` config, `entityType` config with the nil id, `newValue` holding `format`, `formatVersion`, `sections`, `profilesIncluded` and `mappingCount`, never the content). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{\"members\": {\"added\": [ids], \"removed\": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{\"owners\": {\"technical\": [...], \"business\": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
+                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`), a business service's member CSV (`kind` business_service_members, on the service), and the configuration file (`kind` config, `entityType` config with the nil id, `newValue` holding `format`, `formatVersion`, `sections`, `profilesIncluded` and `mappingCount`, never the content). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{\"members\": {\"added\": [ids], \"removed\": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{\"owners\": {\"technical\": [...], \"business\": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. Counts an entry took with its writer's view are null to them unless they wrote it: `rowCount`, `truncated` and `truncatedReason` of a CI export (impact, business service members), and `created`, `updated`, `unchanged`, `skipped`, `failed` and `relationshipsAdded` of an `import.commit`, which may span classes they may not view. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
             )
             .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<AuditQuery>, NoBody>| async move {
@@ -1197,6 +1233,85 @@ pub(crate) mod tests {
         for e in &restricted.data {
             let key = e.new_value.iter().chain(e.old_value.iter()).find_map(|v| v.get("classKey"));
             assert!(key.is_none() || key == Some(&json!("server")), "{e:?}");
+        }
+        db.drop().await;
+    }
+
+    /// GH#440: export and `import.commit` counts were taken with the writer's
+    /// view; a restricted reader gets them as null unless they wrote the entry.
+    #[tokio::test]
+    async fn writer_counts_are_withheld_from_restricted_readers_who_did_not_write_them() {
+        let Some(db) = crate::db::scratch::database("audit_writer_counts_withheld").await else { return };
+        let pool = &db.pool;
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        crate::seed::seed_demo_data(pool).await.unwrap();
+        let (srv, server): (Uuid, Uuid) =
+            sqlx::query_as("SELECT id, class_id FROM configuration_items WHERE label = 'fra1-esx-01'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let reader = viewer(&[server]);
+        let reader_id = reader.principal().unwrap().user_id.to_string();
+        let admin_id = Uuid::new_v4().to_string();
+        let insert = |actor: String, action: &'static str, entity_type: &'static str, entity: Uuid, new: Value| async move {
+            sqlx::query(
+                "INSERT INTO audit_log (actor_type, actor_id, actor_name, action, entity_type, entity_id, new_value, request_id)
+                 VALUES ('user', $1, 'someone', $2, $3, $4, $5, 'gh440')",
+            )
+            .bind(actor)
+            .bind(action)
+            .bind(entity_type)
+            .bind(entity)
+            .bind(new)
+            .execute(pool)
+            .await
+            .unwrap();
+        };
+        let members =
+            json!({ "kind": "business_service_members", "format": "csv", "rowCount": 12, "visibility": "all_classes" });
+        let impact = json!({
+            "kind": "impact", "format": "csv", "parameters": {}, "rowCount": 40,
+            "truncated": true, "truncatedReason": "node_budget", "visibility": "all_classes",
+        });
+        let commit = json!({
+            "classKey": "server", "rows": 10, "created": 3, "updated": 2, "unchanged": 1,
+            "skipped": 1, "failed": 3, "relationshipsAdded": 5, "outcome": "succeeded",
+        });
+        for actor in [admin_id.clone(), reader_id.clone()] {
+            insert(actor.clone(), "export", "configuration_items", srv, members.clone()).await;
+            insert(actor.clone(), "export", "configuration_items", srv, impact.clone()).await;
+            insert(actor, "import.commit", "import_jobs", Uuid::new_v4(), commit.clone()).await;
+        }
+        let q = query(|q| (q.request_id, q.limit) = (Some("gh440".into()), 50));
+        let read = |ctx: RequestContext| {
+            let q = &q;
+            async move { list(pool, &ctx, &Keyring::for_tests(), q).await.unwrap().data }
+        };
+        let counts = [
+            "rowCount",
+            "truncated",
+            "truncatedReason",
+            "created",
+            "updated",
+            "unchanged",
+            "skipped",
+            "failed",
+            "relationshipsAdded",
+        ];
+        let restricted = read(reader).await;
+        assert_eq!(restricted.len(), 6);
+        for e in &restricted {
+            let v = e.new_value.as_ref().unwrap();
+            let own = e.actor_id.as_deref() == Some(reader_id.as_str());
+            for k in counts.iter().filter(|k| v.get(**k).is_some()) {
+                assert_eq!(v[*k].is_null(), !own, "{k} in {e:?}");
+            }
+            assert!(v.get("kind").is_some() || v["rows"] == 10, "the rest of the entry stays: {e:?}");
+        }
+        // An unrestricted reader sees every count as written.
+        for e in read(RequestContext::system("test", "test")).await {
+            let v = e.new_value.unwrap();
+            assert!(counts.iter().all(|k| v.get(*k).is_none_or(|n| !n.is_null())), "{v}");
         }
         db.drop().await;
     }
