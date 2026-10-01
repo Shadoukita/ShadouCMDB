@@ -483,16 +483,15 @@ pub async fn start_dry_run(
 }
 
 /// The problems of the last dry run and of the commit, in row order
-/// (`GET /imports/{id}/issues`). Empty once the file expired (T17).
+/// (`GET /imports/{id}/issues`). Empty once the file expired (T17). Readable while
+/// import is off, like the job itself (W3).
 pub async fn issues(
     pool: &PgPool,
     ctx: &RequestContext,
-    cfg: &ImportConfig,
     id: Uuid,
     q: &ListImportIssuesQuery,
 ) -> Result<Page<ImportIssue>, AppError> {
     let mut conn = pool.acquire().await?;
-    require_enabled(&mut conn, cfg).await?;
     let job = check_owner(ctx, fetch(&mut conn, id).await?, id)?;
     let headers: Vec<String> =
         job.info().map(|i| i.columns.into_iter().map(|c| c.header).collect()).unwrap_or_default();

@@ -29,7 +29,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use uuid::Uuid;
 
 use super::analyse::{self, FileFormat, FileOptions, REPORT_HEADERS};
-use super::jobs::{JobRow, check_owner, ctx_user, fetch, require_enabled};
+use super::jobs::{JobRow, check_owner, ctx_user, fetch};
 use super::parse::{Limits, Row};
 use super::schemas::JobStatus;
 use super::storage::DbFile;
@@ -227,8 +227,8 @@ pub async fn download(
     cfg: &ImportConfig,
     id: Uuid,
 ) -> Result<CsvDownload, AppError> {
+    // No `require_enabled`: the owner keeps the report while import is off (W3).
     let mut conn = pool.acquire().await?;
-    require_enabled(&mut conn, cfg).await?;
     let job = check_owner(ctx, fetch(&mut conn, id).await?, id)?;
     if job.status == JobStatus::Expired {
         return Err(no_report(id));
