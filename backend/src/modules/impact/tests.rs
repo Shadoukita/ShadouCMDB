@@ -13,7 +13,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::schemas::{AnalysisDirection, ImpactAnalysis, ImpactQuery, TruncatedReason, Visibility};
-use super::{ImpactState, service};
+use super::{ImpactState, engine, service};
 use crate::api::context::RequestContext;
 use crate::api::route::{Query, QueryInput};
 use crate::api::schemas::{QueryBool, UuidList};
@@ -387,6 +387,56 @@ async fn budgets_and_the_deadline_truncate_deterministically() {
     let state = Arc::new(ImpactState::new(ImpactConfig { timeout: Duration::ZERO, ..ImpactConfig::default() }));
     let r = run_with(&f, &ctx, &state, root, &down(10)).await;
     assert_eq!((r.truncated, r.truncated_reason), (true, Some(TruncatedReason::Timeout)));
+    db.drop().await;
+}
+
+/// GH#393: the statements after the walks share one allowance instead of
+/// getting their own 2 s each. The in-edge counts are made to sleep until
+/// cancelled, and another session's lock makes reading the class model wait,
+/// as on a very slow database.
+#[tokio::test]
+async fn a_slow_assembly_ends_within_the_allowance() {
+    let Some(db) = scratch::database("a_slow_assembly_ends_within_the_allowance").await else { return };
+    let f = fixture(&db).await;
+    let ctx = admin();
+    let root = f.ci("app").await;
+    let (down_ci, up_ci) = (f.ci("db").await, f.ci("svc").await);
+    f.affects(root, down_ci).await;
+    f.affects(up_ci, root).await;
+    let timeout = Duration::from_millis(100);
+    let state = Arc::new(ImpactState::new(ImpactConfig { timeout, ..ImpactConfig::default() }));
+    let both = q(AnalysisDirection::Both, 3);
+    let slack = Duration::from_millis(500);
+    engine::SLOW_COUNTS.lock().unwrap().push(root);
+
+    // The downstream counts end at half the allowance (before: 2 s for each
+    // walk's counts) and fall back to the via edge; the upstream walk is then
+    // out of time, and the truncated result is answered.
+    let started = std::time::Instant::now();
+    let r = run_with(&f, &ctx, &state, root, &both).await;
+    let elapsed = started.elapsed();
+    assert_eq!((r.truncated_reason, r.items.len()), (Some(TruncatedReason::Timeout), 1));
+    assert!(r.items.iter().all(|i| i.reached_by_count == 1));
+    assert!(elapsed < timeout + engine::ASSEMBLY_ALLOWANCE / 2 + slack, "{elapsed:?}");
+
+    // The class model waits too: the analysis ends at the end of the allowance
+    // with 503 SERVER_BUSY (before: 2 s more, then 500).
+    let mut blocker = f.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE cmdb.ci_attribute_definitions IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let err = service::analyse(&f.pool, &ctx, &state, root, &both).await.err().unwrap();
+    let elapsed = started.elapsed();
+    blocker.rollback().await.unwrap();
+    assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
+    assert!(elapsed < timeout + engine::ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
+
+    // Without the injected delays the counts are exact again.
+    engine::SLOW_COUNTS.lock().unwrap().retain(|r| *r != root);
+    let r = run(&f, &ctx, root, &both).await;
+    assert_eq!((r.truncated, r.items.len()), (false, 2));
     db.drop().await;
 }
 

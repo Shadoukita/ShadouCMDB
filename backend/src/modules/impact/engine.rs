@@ -24,9 +24,21 @@ use crate::http::error::AppError;
 /// (the same budget as the relationship graph, GH#185).
 pub const EDGES_PER_NODE: usize = 5;
 
-/// Time the queries that assemble a result (in-edge counts) get when the
-/// deadline has passed: they are bounded by the result's size, not the graph's.
-pub const ASSEMBLY_TIMEOUT: Duration = Duration::from_secs(2);
+/// Time the queries that assemble a result get after the walks' deadline, all
+/// of them together (GH#393): they are bounded by the result's size, not the
+/// graph's. The in-edge counts, which have a fallback, may use the first half;
+/// the summaries and statuses the caller reads have until the end.
+pub const ASSEMBLY_ALLOWANCE: Duration = Duration::from_millis(crate::config::IMPACT_ASSEMBLY_ALLOWANCE_MS);
+
+/// Roots whose in-edge counts sleep until cancelled, as on a very slow
+/// database (tests of the assembly allowance).
+#[cfg(test)]
+pub static SLOW_COUNTS: std::sync::Mutex<Vec<Uuid>> = std::sync::Mutex::new(Vec::new());
+
+/// The end of the assembly allowance after the walks' `deadline`.
+pub fn assembly_deadline(deadline: Instant) -> Instant {
+    deadline + ASSEMBLY_ALLOWANCE
+}
 
 /// Which way a walk goes relative to the flow of impact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,8 +69,9 @@ pub struct Options<'a> {
     pub include_inactive: bool,
     /// CIs a result may hold, over all walks (a CI reached both ways counts once).
     pub max_nodes: usize,
-    /// Wall-clock budget of the walks, from the start of [`traverse`].
-    pub timeout: Duration,
+    /// When the walks stop; the in-edge counts may run until half of
+    /// [`ASSEMBLY_ALLOWANCE`] after it.
+    pub deadline: Instant,
     /// Classes the caller may view (`None`: every class). CIs of other classes
     /// are neither returned nor walked through.
     pub visible: Option<&'a [Uuid]>,
@@ -136,12 +149,12 @@ pub(crate) fn hop_types(types: &[TypeRow], wanted: Option<&[Uuid]>, way: Way) ->
     out
 }
 
-fn is_query_canceled(err: &sqlx::Error) -> bool {
+pub(crate) fn is_query_canceled(err: &sqlx::Error) -> bool {
     err.as_database_error().and_then(|e| e.code()).is_some_and(|c| c == "57014")
 }
 
 /// The time left, in whole milliseconds (at least 1), or `None` once it has run out.
-fn remaining_ms(deadline: Instant) -> Option<u64> {
+pub(crate) fn remaining_ms(deadline: Instant) -> Option<u64> {
     let left = deadline.checked_duration_since(Instant::now())?;
     let ms = left.as_millis() as u64;
     (ms > 0).then_some(ms)
@@ -263,10 +276,10 @@ async fn walk(
 /// Runs the walks from `roots` (live CIs the caller may view, checked by the
 /// caller) on `conn`, which should be in a REPEATABLE READ transaction.
 pub async fn traverse(conn: &mut PgConnection, roots: &[Uuid], opts: &Options<'_>) -> Result<Traversal, AppError> {
-    let start = Instant::now();
     let types = data::types(conn).await?;
+    let counts_deadline = opts.deadline + ASSEMBLY_ALLOWANCE / 2;
     let mut budget = Budget {
-        deadline: start + opts.timeout,
+        deadline: opts.deadline,
         edges: opts.max_nodes.saturating_mul(EDGES_PER_NODE),
         max_nodes: opts.max_nodes,
         returned: HashSet::new(),
@@ -278,21 +291,33 @@ pub async fn traverse(conn: &mut PgConnection, roots: &[Uuid], opts: &Options<'_
         let (mut w, visited) = walk(conn, roots, way, &hop_types, opts, &mut budget).await?;
 
         // How many propagating edges lead into each CI from the walk's CIs.
+        // Out of time or cancelled (a pathological graph or a slow database):
+        // each CI counts its own via edge only.
         let ids: Vec<Uuid> = w.nodes.iter().map(|n| n.id).collect();
-        let ms = remaining_ms(budget.deadline).unwrap_or(0).max(ASSEMBLY_TIMEOUT.as_millis() as u64);
-        let mut sp = conn.begin().await?;
-        data::set_statement_timeout(&mut sp, ms).await?;
-        // Cancelled (a pathological graph): each CI counts its own via edge only.
-        let counts: HashMap<Uuid, i64> = match data::in_edge_counts(&mut sp, &ids, &visited, &hop_types).await {
-            Ok(rows) => {
-                sp.commit().await?;
-                rows.into_iter().collect()
+        let counts: HashMap<Uuid, i64> = match remaining_ms(counts_deadline) {
+            None => HashMap::new(),
+            Some(ms) => {
+                let mut sp = conn.begin().await?;
+                data::set_statement_timeout(&mut sp, ms).await?;
+                let counted = async {
+                    #[cfg(test)]
+                    if SLOW_COUNTS.lock().unwrap().iter().any(|r| roots.contains(r)) {
+                        sqlx::query("SELECT pg_sleep(60)").execute(&mut *sp).await?;
+                    }
+                    data::in_edge_counts(&mut sp, &ids, &visited, &hop_types).await
+                };
+                match counted.await {
+                    Ok(rows) => {
+                        sp.commit().await?;
+                        rows.into_iter().collect()
+                    }
+                    Err(e) if is_query_canceled(&e) => {
+                        sp.rollback().await?;
+                        HashMap::new()
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             }
-            Err(e) if is_query_canceled(&e) => {
-                sp.rollback().await?;
-                HashMap::new()
-            }
-            Err(e) => return Err(e.into()),
         };
         for n in &mut w.nodes {
             n.reached_by = counts.get(&n.id).copied().unwrap_or(1).max(1);

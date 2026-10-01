@@ -230,7 +230,8 @@ pub struct ImpactConfig {
     pub max_depth: i32,
     /// Largest `maxNodes` a request may ask for.
     pub max_nodes: i32,
-    /// Wall-clock deadline of the traversal.
+    /// Wall-clock deadline of the walk, from the start of the request; the
+    /// result is then assembled within [`IMPACT_ASSEMBLY_ALLOWANCE_MS`].
     pub timeout: Duration,
     /// Analyses running at once in this process; more are answered 503 SERVER_BUSY.
     pub max_concurrent: usize,
@@ -275,6 +276,10 @@ pub const BUSINESS_SERVICE_MAX_NESTING_CEILING: i32 = 8;
 pub const IMPACT_MAX_DEPTH_CEILING: i32 = 20;
 pub const IMPACT_MAX_NODES_CEILING: i32 = 10_000;
 pub const IMPACT_TIMEOUT_MS_CEILING: u64 = 30_000;
+/// Time an impact analysis has after `IMPACT_TIMEOUT_MS` to assemble its
+/// result (in-edge counts, summaries, statuses), shared by all of those
+/// queries: the analysis holds its connection for at most the two together.
+pub const IMPACT_ASSEMBLY_ALLOWANCE_MS: u64 = 2_000;
 
 /// Well below `HTTP_REQUEST_TIMEOUT_SECS`, which also bounds the refused sign-in.
 const MAX_SIGN_IN_FAILURE_FLOOR_MS: u64 = 10_000;
@@ -716,11 +721,11 @@ impl Config {
         let impact_timeout_ms = r
             .int::<u64>("IMPACT_TIMEOUT_MS", 1, IMPACT_TIMEOUT_MS_CEILING)
             .unwrap_or(impact_defaults.timeout.as_millis() as u64);
-        if impact_timeout_ms >= request_timeout_secs.saturating_mul(1_000) {
+        if impact_timeout_ms + IMPACT_ASSEMBLY_ALLOWANCE_MS >= request_timeout_secs.saturating_mul(1_000) {
             r.errors.push(format!(
-                "IMPACT_TIMEOUT_MS: {impact_timeout_ms} ms is not below HTTP_REQUEST_TIMEOUT_SECS \
-                 ({request_timeout_secs} s), so a long impact analysis would time out instead of answering a \
-                 truncated result"
+                "IMPACT_TIMEOUT_MS: {impact_timeout_ms} ms plus the {IMPACT_ASSEMBLY_ALLOWANCE_MS} ms an analysis \
+                 has to assemble its result is not below HTTP_REQUEST_TIMEOUT_SECS ({request_timeout_secs} s), so \
+                 a long impact analysis would time out instead of answering a truncated result"
             ));
         }
         // Each running analysis holds a pool connection: at most half the pool,
@@ -984,6 +989,11 @@ mod tests {
         }
         let err = load_with(&[("IMPACT_TIMEOUT_MS", "3000"), ("HTTP_REQUEST_TIMEOUT_SECS", "3")]).unwrap_err();
         assert!(err.to_string().contains("IMPACT_TIMEOUT_MS"), "{err}");
+        // The assembly allowance counts too: 1 s + 2 s is not below 3 s; 1.999 s + 2 s is below 4 s.
+        let err = load_with(&[("IMPACT_TIMEOUT_MS", "1000"), ("HTTP_REQUEST_TIMEOUT_SECS", "3")]).unwrap_err();
+        assert!(err.to_string().contains("IMPACT_TIMEOUT_MS"), "{err}");
+        let ok = load_with(&[("IMPACT_TIMEOUT_MS", "1999"), ("HTTP_REQUEST_TIMEOUT_SECS", "4")]).unwrap();
+        assert_eq!(ok.impact.timeout, Duration::from_millis(1999));
     }
 
     #[test]

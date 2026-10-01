@@ -742,7 +742,7 @@ pub async fn part_of(
         types: Some(&types),
         include_inactive: true,
         max_nodes: MAX_PART_OF + 1,
-        timeout: impact.config.timeout,
+        deadline: tokio::time::Instant::now() + impact.config.timeout,
         visible: visible.as_deref(),
         result_classes: Some(&classes),
     };
