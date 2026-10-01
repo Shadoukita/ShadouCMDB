@@ -5,8 +5,9 @@ import EmptyState from "./EmptyState.vue";
 
 /**
  * Shown wherever CIs would be (dashboard, inventory, new CI) while the data model
- * has no classes: a fresh install. Administrators are sent to the starter template
- * or the class editor; everyone else is told whom to ask.
+ * has no classes but the built-in ones (dataModelEmpty): a fresh install.
+ * Administrators are sent to the starter template or the class editor; everyone
+ * else is told whom to ask.
  */
 const session = useSessionStore();
 </script>
