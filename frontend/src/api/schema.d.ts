@@ -444,7 +444,7 @@ export interface paths {
         };
         /**
          * Impact analysis: the CIs affected by this CI (downstream) or that it depends on (upstream)
-         * @description Breadth-first traversal over live relationships whose type propagates impact (`impactDirection` on the relationship type). Downstream follows impact the way it flows, upstream against it; `both` runs the two walks separately. Each CI appears once, at its shortest hop distance, with the last hop of that path (`via`); `via` chains resolve inside `items` plus the root. Bounded by `depth`, `maxNodes`, an edge budget of 5 × maxNodes and IMPACT_TIMEOUT_MS: an analysis stopped by a bound answers 200 with `truncated` and `truncatedReason`. Not paginated: the result is bounded (at most IMPACT_MAX_NODES items). Needs view on the CI's class (404 otherwise, as for a missing CI). CIs of classes the caller may not view are neither returned, counted nor traversed: a CI reachable only through one is left out, and `visibility` says `restricted` whenever the caller's profile limits the classes they may view. 429 RATE_LIMITED when the caller already runs IMPACT_MAX_CONCURRENT_PER_USER analyses, 503 SERVER_BUSY when the server runs IMPACT_MAX_CONCURRENT.
+         * @description Breadth-first traversal over live relationships whose type propagates impact (`impactDirection` on the relationship type). Downstream follows impact the way it flows, upstream against it; `both` runs the two walks separately. Each CI appears once, at its shortest hop distance, with the last hop of that path (`via`); `via` chains resolve inside `items` plus the root. Bounded by `depth`, `maxNodes`, an edge budget of 5 × maxNodes and IMPACT_TIMEOUT_MS: an analysis stopped by a bound answers 200 with `truncated` and `truncatedReason`. Not paginated: the result is bounded (at most IMPACT_MAX_NODES items). Needs view on the CI's class (404 otherwise, as for a missing CI). CIs of classes the caller may not view are neither returned, counted nor traversed: a CI reachable only through one is left out, and `visibility` says `restricted` whenever the caller's profile limits the classes they may view. 429 RATE_LIMITED when the caller already runs IMPACT_MAX_CONCURRENT_PER_USER analyses, 503 SERVER_BUSY when the server runs IMPACT_MAX_CONCURRENT, or when the database is so slow that the result could not be assembled in time. The walks stop at IMPACT_TIMEOUT_MS from the start of the request, and every query of the analysis ends within 2 s after that.
          */
         get: operations["getConfigurationItemImpact"];
         put?: never;
@@ -3584,7 +3584,7 @@ export interface components {
             defaultMaxNodes: number;
             /**
              * Format: int64
-             * @description Deadline of one analysis (IMPACT_TIMEOUT_MS)
+             * @description Deadline of the walks of one analysis (IMPACT_TIMEOUT_MS); assembling the result may take up to 2 s more
              */
             timeoutMs: number;
             /**
