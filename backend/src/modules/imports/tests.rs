@@ -1609,6 +1609,120 @@ async fn references_reach_cis_of_earlier_rows_and_relationships_are_only_added()
     assert_eq!((committed(&j), &j["summary"]["committed"]["relationshipsAdded"]), ((0, 0, 1, 0, 0), &json!(0)), "{j}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_stops_linking_to_a_class_whose_view_right_is_revoked() {
+    let Some(db) = scratch::database("import_commit_target_view_revoked").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let srv = server_class(&e).await;
+    let (status, v, _) =
+        call(&e.app, "POST", "/api/v1/ci-classes", &e.admin, Some(json!({ "key": "rack", "name": "Rack" }))).await;
+    assert_eq!(status, 201, "{v}");
+    let rack = v["id"].as_str().unwrap().to_owned();
+    let body = json!({ "classId": rack, "key": "name", "label": "Name", "dataType": "text" });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let body =
+        json!({ "classId": srv, "key": "rack", "label": "Rack", "dataType": "reference", "referenceClassId": rack });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let (status, v, _) = call(
+        &e.app,
+        "POST",
+        "/api/v1/configuration-items",
+        &e.admin,
+        Some(json!({ "classId": rack, "attributes": { "name": "r1" } })),
+    )
+    .await;
+    assert_eq!(status, 201, "{v}");
+    let located: Uuid = sqlx::query_scalar(
+        "INSERT INTO relationship_types (key, name, forward_label, reverse_label)
+         VALUES ('located_in', 'Located in', 'located in', 'houses') RETURNING id",
+    )
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id) VALUES ($1, $2, $3)",
+    )
+    .bind(located)
+    .bind(srv.parse::<Uuid>().unwrap())
+    .bind(rack.parse::<Uuid>().unwrap())
+    .execute(&e.pool)
+    .await
+    .unwrap();
+
+    let alice = user_in(&e, "alice", &["cis.import"], Some(&[srv.as_str(), rack.as_str()])).await;
+    let mut file = String::from("Hostname;Rack;Located in\n");
+    for i in 0..1_000 {
+        file.push_str(&format!("host-{i:05};r1;r1\n"));
+    }
+    let (status, v, _) = upload(&e.app, &alice, CSV_TYPE, Some("racked.csv"), &[], file.into_bytes()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    let job_id = Uuid::parse_str(&id).unwrap();
+    drain(&e.pool).await;
+    let by_name = json!({ "by": "attribute", "attributeKey": "name" });
+    let mapping = json!({
+        "classKey": "srv",
+        "mode": "create_or_update",
+        "key": { "field": "attributes.hostname" },
+        "columns": [
+            { "index": 0, "target": { "kind": "attribute", "key": "hostname" } },
+            { "index": 1, "target": { "kind": "attribute", "key": "rack", "match": by_name } },
+            { "index": 2, "target": {
+                "kind": "relationship", "typeKey": "located_in", "direction": "outgoing", "match": by_name
+            } }
+        ]
+    });
+    let (status, v, _) = call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &alice, Some(mapping)).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/dry-run"), &alice, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &alice, &id).await;
+    assert_eq!((j["status"].as_str(), j["summary"]["create"].as_u64()), (Some("validated"), Some(1_000)), "{j}");
+
+    // The first chunk holds the rights it started with; the admin takes
+    // alice's View on racks away before the second one (GH#411).
+    let (status, v) = commit(&e, &alice, &id, false, None).await;
+    assert_eq!(status, 202, "{v}");
+    let (reached, go) = super::commit::test_hooks::pause_at(job_id, 1);
+    let pool = e.pool.clone();
+    let worker = tokio::spawn(async move { drain(&pool).await });
+    reached.await.unwrap();
+    sqlx::query(
+        "DELETE FROM permission_profile_class_permissions
+          WHERE class_id = $1 AND profile_id = (SELECT id FROM permission_profiles WHERE name = 'alice profile')",
+    )
+    .bind(rack.parse::<Uuid>().unwrap())
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    go.send(()).unwrap();
+    worker.await.unwrap();
+
+    let j = job(&e, &alice, &id).await;
+    assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed_with_errors"), (500, 0, 0, 0, 500)), "{j}");
+    assert_eq!(j["summary"]["committed"]["relationshipsAdded"], 500, "{j}");
+    let (_, v, _) =
+        call(&e.app, "GET", &format!("/api/v1/imports/{id}/issues?severity=error&limit=200"), &alice, None).await;
+    let issues = v["data"].as_array().unwrap();
+    assert!(!issues.is_empty(), "{v}");
+    for i in issues {
+        assert!(i["row"].as_u64().unwrap() > 501, "{i}");
+        assert_eq!(i["code"], "not_found", "{i}");
+    }
+    let linked: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM configuration_items WHERE label LIKE 'host-%'),
+                (SELECT count(*) FROM ci_relationships WHERE relationship_type_id = $1)",
+    )
+    .bind(located)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(linked, (500, 500), "rows of the second chunk write neither the CI, its reference nor its edge");
+}
+
 // ---------------------------------------------------------------------------
 // Error report (SHAA-799 part 4, §3.4, §5.1)
 // ---------------------------------------------------------------------------
