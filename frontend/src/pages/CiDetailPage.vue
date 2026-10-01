@@ -67,8 +67,11 @@ const classes = useCiClasses();
 const areas = useAreas();
 const classKey = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId)?.key);
 const layout = computed(() => layoutFor(settings.doc.value, classKey.value));
-const attrs = useClassAttributes(() => c.value?.classId);
-const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || c.value?.attributes[d.key] != null));
+const attrs = useClassAttributes(() => c.value?.classId, { includeInactive: true });
+const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive));
+// Archived fields are kept out of the layout (one may have been superseded by a core field, GH#369);
+// their stored values are listed apart, labelled as archived.
+const archivedDefs = computed(() => (attrs.data.value ?? []).filter((d) => !d.isActive && c.value?.attributes[d.key] != null));
 // The history and the audit trail are the audit log, which needs audit.view: without it their sections are left out.
 const shownLayout = computed(() => {
   const l = layout.value ?? builtInLayout(classKey.value ?? "");
@@ -232,6 +235,7 @@ const crumbs = computed<Crumb[]>(() => {
           :ci="c"
           :sections="layoutTabs[layoutIndex]?.sections ?? []"
           :defs="defs"
+          :archived="archivedDefs"
           :self="self"
           :trail="trail"
           :orphans="layoutIndex === 0"
