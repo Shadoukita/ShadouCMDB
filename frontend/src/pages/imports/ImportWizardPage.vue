@@ -166,7 +166,8 @@ const committedRows = computed(() => {
           <template v-else>Administration › Import</template>.
         </template>
         This import cannot continue. You can still stop or delete it under
-        <RouterLink to="/imports">Imports</RouterLink>.
+        <RouterLink to="/imports">Imports</RouterLink>. Its row problems and error report can be read again once an
+        administrator turns bulk import back on.
       </div>
       <ErrorAlert v-else-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />
       <LoadingState v-else-if="!settings.data.value" label="Loading import settings…" />

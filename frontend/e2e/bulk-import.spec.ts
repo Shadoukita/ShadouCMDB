@@ -187,6 +187,9 @@ test("while import is off, the user still sees and deletes their import", async 
   // The job page says so too, and offers no step action the server would refuse.
   await row.getByRole("link", { name: `servers-${stamp}.csv` }).click();
   await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText("Bulk import is turned off for this instance.");
+  await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText(
+    "error report can be read again once an administrator turns bulk import back on",
+  );
   await expect(page.getByRole("button", { name: "Next: Map columns" })).toHaveCount(0);
   await page.getByRole("status").getByRole("link", { name: "Imports" }).click();
   await row.getByRole("button", { name: /Delete import of/ }).click();
