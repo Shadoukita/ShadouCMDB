@@ -7,6 +7,8 @@
 //! counts and owners, membership, owners, the "part of" view, the owner picker
 //! and the settings the UI needs.
 
+#[cfg(test)]
+mod perf;
 pub mod schemas;
 pub mod service;
 #[cfg(test)]

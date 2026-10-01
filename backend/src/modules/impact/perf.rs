@@ -33,15 +33,15 @@ use crate::http::error::ErrorCode;
 use crate::modules::api_tokens::tests::{Creds, app, call};
 use crate::schema::model::Model;
 
-const CIS: i64 = 100_000;
-const CLASSES: usize = 20;
-const HIDDEN_CLASSES: usize = 6;
+pub(crate) const CIS: i64 = 100_000;
+pub(crate) const CLASSES: usize = 20;
+pub(crate) const HIDDEN_CLASSES: usize = 6;
 const RANDOM_EDGES: i64 = 300_000 - 50_000 - 999 - 1_000;
 const HUB_EDGES: i64 = 50_000;
 const CHAIN: i64 = 1_000;
 const SCC: i64 = 500;
 
-fn viewer(classes: &[Uuid]) -> RequestContext {
+pub(crate) fn viewer(classes: &[Uuid]) -> RequestContext {
     let permissions = Permissions {
         classes: classes.iter().map(|id| (*id, ClassRights { view: true, ..Default::default() })).collect(),
         ..Default::default()
@@ -61,13 +61,13 @@ fn query(depth: i32, max_nodes: i32) -> ImpactQuery {
     }
 }
 
-fn p95(mut ms: Vec<f64>) -> (f64, f64, f64) {
+pub(crate) fn p95(mut ms: Vec<f64>) -> (f64, f64, f64) {
     ms.sort_by(|a, b| a.total_cmp(b));
     let at = |q: f64| ms[((ms.len() as f64 * q).ceil() as usize).clamp(1, ms.len()) - 1];
     (at(0.5), at(0.95), ms[ms.len() - 1])
 }
 
-async fn exec(pool: &PgPool, sql: &str) {
+pub(crate) async fn exec(pool: &PgPool, sql: &str) {
     sqlx::query(sqlx::AssertSqlSafe(sql.to_owned())).execute(pool).await.unwrap_or_else(|e| panic!("{e}: {sql}"));
 }
 
@@ -76,14 +76,14 @@ fn pick(seed: &str) -> String {
     format!("(1 + (('x' || substr(md5({seed}), 1, 8))::bit(32)::bigint % {CIS}))")
 }
 
-struct Seeded {
-    classes: Vec<Uuid>,
+pub(crate) struct Seeded {
+    pub classes: Vec<Uuid>,
     hub: Uuid,
     chain_start: Uuid,
     scc_member: Uuid,
 }
 
-async fn seed(pool: &PgPool) -> Seeded {
+pub(crate) async fn seed(pool: &PgPool) -> Seeded {
     let app = app(pool.clone());
     let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
     let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
@@ -391,7 +391,7 @@ async fn impact_performance() {
     assert!(failures.is_empty(), "thresholds missed: {failures:#?}");
 }
 
-fn plan_has_seq_scan(v: &Value, relation: &str) -> bool {
+pub(crate) fn plan_has_seq_scan(v: &Value, relation: &str) -> bool {
     match v {
         Value::Object(m) => {
             (m.get("Node Type").and_then(Value::as_str) == Some("Seq Scan")
@@ -403,7 +403,7 @@ fn plan_has_seq_scan(v: &Value, relation: &str) -> bool {
     }
 }
 
-fn index_names(v: &Value) -> Vec<String> {
+pub(crate) fn index_names(v: &Value) -> Vec<String> {
     let mut out = Vec::new();
     fn walk(v: &Value, out: &mut Vec<String>) {
         match v {
