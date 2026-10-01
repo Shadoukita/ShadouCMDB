@@ -1338,4 +1338,29 @@ mod tests {
 
         db.drop().await;
     }
+
+    /// GH#439: a query of thousands of distinct keys merged them in O(n²)
+    /// on a runtime worker; it is now refused once past the route's cap.
+    #[tokio::test]
+    async fn queries_with_too_many_distinct_keys_are_refused_quickly() {
+        let Some(db) = scratch::database("queries_with_too_many_distinct_keys").await else { return };
+        let app = app(db.pool.clone());
+        let session = set_up_owner(&app).await;
+
+        let keys: Vec<String> = (0..8_000).map(|i| format!("k{i:x}")).collect();
+        let path = format!("/api/v1/configuration-items?{}", keys.join("&"));
+        let started = Instant::now();
+        let (status, body, _) = call(&app, "GET", &path, &session, None).await;
+        assert!(started.elapsed() < Duration::from_secs(1), "took {:?}", started.elapsed());
+        assert_eq!((status, code(&body)), (400, "VALIDATION_ERROR"), "{body}");
+        assert_eq!(body["error"]["details"][0]["code"], "too_many_keys", "{body}");
+
+        // A few unknown keys are still listed by name.
+        let (status, body, _) = call(&app, "GET", "/api/v1/configuration-items?x=1&y=2", &session, None).await;
+        assert_eq!(status, 400);
+        assert_eq!(body["error"]["details"][0]["code"], "unrecognized_keys", "{body}");
+        assert_eq!(call(&app, "GET", "/api/v1/configuration-items?limit=5", &session, None).await.0, 200);
+
+        db.drop().await;
+    }
 }
