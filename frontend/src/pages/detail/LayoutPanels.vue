@@ -15,7 +15,8 @@ import CoreFieldValue from "./CoreFieldValue.vue";
  * the attribute groups and the record's class and timestamps. Notes and the
  * built-in panels a layout places are sections too (BlockContent). Values no current
  * definition describes (e.g. after a class change) are listed last on the first
- * tab (`orphans`), so nothing stored is hidden. On a free tab the sections with
+ * tab (`orphans`), so nothing stored is hidden; values of archived fields
+ * (`archived`) are listed there too, apart and labelled. On a free tab the sections with
  * a frame are windows where the layout puts them (lib/freeLayout), and the rest
  * follows below them on the grid.
  */
@@ -26,6 +27,8 @@ const props = defineProps<{
   self: TrailStep;
   trail: TrailStep[];
   orphans?: boolean;
+  /** Archived definitions this CI still holds a value for. */
+  archived?: EffectiveAttribute[];
 }>();
 const values = computed(() => props.ci.attributes as Record<string, unknown>);
 const refs = computed(() => props.ci.attributeReferences);
@@ -36,9 +39,10 @@ const groups = computed(() => {
   const flow = props.sections.filter((p) => !p.frame);
   return windows.length > 0 ? [{ free: true, items: windows }, { free: false, items: flow }] : [{ free: false, items: flow }];
 });
+const archivedDefs = computed(() => (props.orphans ? (props.archived ?? []) : []));
 const orphanKeys = computed(() => {
   if (!props.orphans) return [];
-  const known = new Set(props.defs.map((d) => d.key));
+  const known = new Set([...props.defs, ...(props.archived ?? [])].map((d) => d.key));
   return Object.keys(values.value).filter((k) => !known.has(k) && values.value[k] != null);
 });
 </script>
@@ -72,6 +76,18 @@ const orphanKeys = computed(() => {
           </dl>
         </div>
       </details>
+      <section v-if="!g.free && archivedDefs.length > 0" class="panel" data-section="_archived">
+        <div class="panel-header"><h2>Archived fields</h2></div>
+        <div class="panel-body">
+          <p class="muted">These fields are no longer in use. Their stored values are kept for reference and cannot be edited.</p>
+          <dl class="props">
+            <template v-for="d in archivedDefs" :key="d.key">
+              <dt>{{ d.label }} <span class="muted">(archived)</span></dt>
+              <dd><AttributeValue :def="d" :value="values[d.key]" :ref-info="refs[d.key]" :self="self" :trail="trail" /></dd>
+            </template>
+          </dl>
+        </div>
+      </section>
       <section v-if="!g.free && orphanKeys.length > 0" class="panel">
         <div class="panel-header"><h2>Not defined by this class</h2></div>
         <div class="panel-body">

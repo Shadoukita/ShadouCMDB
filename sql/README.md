@@ -94,3 +94,11 @@ own that reads those columns of `cmdb.configuration_items` blocks the migration:
 first. For an independent check, run [`checks/core_ci_upgrade_1_before.sql`](checks/core_ci_upgrade_1_before.sql)
 before the upgrade and [`checks/core_ci_upgrade_2_after.sql`](checks/core_ci_upgrade_2_after.sql) after
 it; expect `missing = 0` and `wrong_labels = 0`.
+
+## Upgrading: Application criticality (migration 0036)
+
+Migration 0036 moves the values of the IT infrastructure template's Application field `criticality`
+onto the core Criticality of each CI (where that is empty and the value matches the Criticality
+list), audits each copy, and archives the field. Nothing is deleted: the column and its values stay.
+The field's audit entry (actor `migration 0036`) counts what moved and lists the values that did
+not map. See [`changelog.d/GH-354.md`](../changelog.d/GH-354.md).

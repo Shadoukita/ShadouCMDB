@@ -188,7 +188,6 @@ fn classes() -> Vec<Class> {
                 attr("version", "Version", "text"),
                 attr("vendor", "Vendor", "text"),
                 attr("url", "URL", "text").valid(r#"{"pattern":"^https?://"}"#),
-                attr("criticality", "Criticality", "enum").values(&["low", "medium", "high", "critical"]),
                 attr("primary_database", "Primary database", "reference").refers("database"),
                 notes(),
             ],

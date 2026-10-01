@@ -787,7 +787,7 @@ mod tests {
         let c = contents(&(t.content)());
         assert_eq!(c.areas, 1);
         assert_eq!(c.classes, 8);
-        assert_eq!(c.attribute_definitions, 69);
+        assert_eq!(c.attribute_definitions, 68);
         assert_eq!(c.relationship_types, 4);
         assert_eq!(c.relationship_rules, 12);
         assert_eq!(c.lookup_lists, 4);

@@ -77,9 +77,9 @@ test.describe("a bare install", () => {
     await expect(panel.locator(".badge", { hasText: "Not installed" })).toBeVisible();
     await panel.getByRole("button", { name: "Install IT infrastructure starter" }).click();
     await expect(panel.getByRole("status")).toContainText("Installed IT infrastructure.");
-    // The area, 8 classes, 69 attributes, 4 relationship types, 12 rules, 4 lookup lists and their 17 values, less the
+    // The area, 8 classes, 68 attributes, 4 relationship types, 12 rules, 4 lookup lists and their 17 values, less the
     // service class and its name field: the built-in business service type stands in for them.
-    await expect(panel.getByRole("status")).toContainText("Added 113 rows");
+    await expect(panel.getByRole("status")).toContainText("Added 112 rows");
     await expect(panel.getByRole("status")).toContainText('CREATE SCHEMA "infrastruktur"');
     await expect(panel.locator(".badge", { hasText: "Installed" })).toBeVisible();
     await expect(panel.getByRole("button", { name: "Installed" })).toBeDisabled();

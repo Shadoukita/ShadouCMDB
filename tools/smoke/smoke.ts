@@ -360,7 +360,7 @@ async function main() {
   console.log('\n# Templates');
   const templates = (await get('/api/v1/admin/templates')).json;
   const itTemplate = templates.data.find((t: Json) => t.key === 'it_infrastructure');
-  check(itTemplate?.status === 'installed' && itTemplate.contents.classes === 8 && itTemplate.contents.attributeDefinitions === 69
+  check(itTemplate?.status === 'installed' && itTemplate.contents.classes === 8 && itTemplate.contents.attributeDefinitions === 68
     && itTemplate.contents.lookupLists === 4,
     'the IT infrastructure template is listed as installed (seed --demo installs it)');
   const reinstall = (await post('/api/v1/admin/templates/it_infrastructure/install', undefined, 200)).json;
@@ -485,12 +485,14 @@ async function main() {
   })).json;
   const app = (await post('/api/v1/configuration-items', {
     classId: appClass,
-    attributes: { name: `smoke-app-${RUN}`, status: inService, url: 'https://smoke.example.com', criticality: 'high', primary_database: database.id },
+    attributes: { name: `smoke-app-${RUN}`, status: inService, url: 'https://smoke.example.com', primary_database: database.id },
   })).json;
+  // The template's Application field "criticality" is gone (migration 0036, GH#354): the core Criticality replaces it.
+  await post('/api/v1/configuration-items', { classId: appClass, attributes: { name: `smoke-app-crit-${RUN}`, status: inService, criticality: 'high' } }, 400);
   check(app.attributeReferences?.primary_database?.name === database.label, 'reference attribute resolves to the database label');
   const listed = (await get(`/api/v1/configuration-items?classId=${appClass}&q=smoke-app-${RUN}`)).json;
   const listedApp = listed.data.find((c: Json) => c.id === app.id);
-  check(listedApp?.attributes?.criticality === 'high' && listedApp?.attributes?.primary_database === database.id
+  check(listedApp?.attributes?.url === 'https://smoke.example.com' && listedApp?.attributes?.primary_database === database.id
     && listedApp?.attributeReferences?.primary_database?.name === database.label && !('memory_gb' in listedApp.attributes),
     'list items carry attribute values and reference names');
   await post('/api/v1/configuration-items', { classId: hardware, attributes: { name: 'abstract', status: inService } }, 400);

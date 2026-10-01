@@ -78,6 +78,8 @@ struct DemoCi<'a> {
     hostname: Option<&'a str>,
     ip_address: Option<&'a str>,
     serial_number: Option<&'a str>,
+    /// Key of a value of the criticality system list (the core field)
+    criticality: Option<&'a str>,
 }
 
 enum Val<'a> {
@@ -134,6 +136,15 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
     .into_iter()
     .collect();
     let lookup = |list: &str, key: &str| must(&lookups, &format!("{list}.{key}"));
+    // The criticality list is found by its system role: its key may differ (0031).
+    let criticality: KeyMap = sqlx::query_as::<_, (String, Uuid)>(
+        "SELECT v.key, v.id FROM lookup_list_values v JOIN lookup_lists l ON l.id = v.list_id
+         WHERE l.system_role = 'criticality'",
+    )
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect();
 
     let mut created: Vec<(Uuid, Uuid)> = Vec::new();
     let mut values: Vec<(Uuid, &str, Val)> = Vec::new();
@@ -145,7 +156,7 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
             ident: None,
             valid_from: None,
             valid_until: None,
-            criticality_value_id: None,
+            criticality_value_id: ci.criticality.map(|k| must(&criticality, k)).transpose()?,
         };
         let id = items::insert(&mut tx, &new).await?;
         values.push((id, "name", Val::Text(ci.name)));
@@ -218,9 +229,15 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
         ..Default::default()
     })
     .await?;
-    let app =
-        insert(DemoCi { class: "application", name: "CRM", environment: prod, owner: platform, ..Default::default() })
-            .await?;
+    let app = insert(DemoCi {
+        class: "application",
+        name: "CRM",
+        environment: prod,
+        owner: platform,
+        criticality: Some("high"),
+        ..Default::default()
+    })
+    .await?;
     let svc = insert(DemoCi {
         class: "service",
         name: "Customer Relationship Management",
@@ -260,7 +277,6 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
         (db1, "port", Val::Number("5432")),
         (db1, "backup_enabled", Val::Bool(true)),
         (app, "version", Val::Text("4.2.0")),
-        (app, "criticality", Val::Text("high")),
         (app, "primary_database", Val::Ref(db1)),
         (svc, "service_tier", Val::Text("tier_1")),
         (svc, "sla_uptime_percent", Val::Number("99.9")),

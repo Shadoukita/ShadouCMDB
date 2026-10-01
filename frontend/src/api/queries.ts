@@ -325,16 +325,21 @@ export function useCiClasses() {
   });
 }
 
-/** Every attribute a CI of this class can carry, inherited ones included. The CI form is built from this. */
-export function useClassAttributes(classId: MaybeRefOrGetter<string | undefined>) {
+/**
+ * Every attribute a CI of this class can carry, inherited ones included. The CI form is built from this.
+ * `includeInactive` adds the archived ones (the detail page shows their stored values); it is cached
+ * under the class's attributes key, so invalidating that refreshes both.
+ */
+export function useClassAttributes(classId: MaybeRefOrGetter<string | undefined>, opts: { includeInactive?: boolean } = {}) {
   return useQuery(() => {
     const id = toValue(classId) ?? "";
+    const query = opts.includeInactive ? { includeInactive: "true" as const } : {};
     return {
-      queryKey: keys.classAttributes(id),
+      queryKey: opts.includeInactive ? ([...keys.classAttributes(id), "all"] as const) : keys.classAttributes(id),
       enabled: !!id,
       staleTime: 60_000,
       queryFn: ({ signal }: { signal: AbortSignal }) =>
-        unwrap(api.GET("/api/v1/ci-classes/{id}/attributes", { params: { path: { id } }, signal })).then((r) => r.data),
+        unwrap(api.GET("/api/v1/ci-classes/{id}/attributes", { params: { path: { id }, query }, signal })).then((r) => r.data),
     };
   });
 }
