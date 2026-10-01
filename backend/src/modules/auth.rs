@@ -456,6 +456,56 @@ async fn throttle_gate<'a>(
     }
 }
 
+/// The throttle reservations of one sign-in: the name typed and, once a
+/// directory resolved it, the directory entry it found (GH#406). Counted
+/// together: a failure for both, a success for both.
+struct Reservation<'a> {
+    name: Attempt<'a>,
+    entry: Option<Attempt<'a>>,
+}
+
+impl<'a> From<Attempt<'a>> for Reservation<'a> {
+    fn from(name: Attempt<'a>) -> Self {
+        Reservation { name, entry: None }
+    }
+}
+
+impl Reservation<'_> {
+    /// Records the failure; returns the longer lock it triggered, if any.
+    fn failure(self) -> Option<Duration> {
+        let name = self.name.failure();
+        self.entry.and_then(Attempt::failure).max(name)
+    }
+
+    fn success(self) {
+        self.name.success();
+        if let Some(entry) = self.entry {
+            entry.success();
+        }
+    }
+}
+
+/// The key a directory entry's sign-ins are throttled under: the directory
+/// and the entry's stable id, whatever name found it.
+fn entry_key(provider: Uuid, external_id: &str) -> String {
+    format!("{provider} {external_id}")
+}
+
+/// Reserves an attempt for the entry `external_id` of directory `provider`;
+/// `None` while the entry is locked (or all its free failures are in flight).
+fn admit_entry<'a>(throttle: &'a LoginThrottle, net: Net, provider: Uuid, external_id: &str) -> Option<Attempt<'a>> {
+    throttle.begin(&entry_key(provider, external_id), net, false).ok()
+}
+
+/// Whether a name may be looked up in a directory: one a ShadouCMDB account
+/// could have (`USERNAME_PATTERN`, so no control, format or non-ASCII
+/// characters). Other spellings a directory might match to an entry (GH#406)
+/// are refused like an unknown name, before any search.
+fn directory_name(typed: &str) -> Option<&str> {
+    let name = typed.trim();
+    crate::api::validate::cached_regex(schemas::USERNAME_PATTERN).filter(|re| re.is_match(name)).map(|_| name)
+}
+
 fn invalid_credentials() -> AppError {
     AppError::new(ErrorCode::Unauthenticated, "Invalid username or password")
 }
@@ -536,7 +586,7 @@ async fn check_login(
     }
     // An OIDC account has no password: verify() then checks a dummy hash, so it takes as long.
     if !password::verify(&b.password, row.as_ref().and_then(|r| r.password_hash.as_deref())).await? {
-        return Err(wrong_credentials(pool, attempt, ctx, &b.username).await?);
+        return Err(wrong_credentials(pool, attempt.into(), ctx, &b.username, None).await?);
     }
     let Some(user) = row else { return Err(invalid_credentials()) };
     if !user.is_active {
@@ -549,12 +599,13 @@ async fn check_login(
         return Err(AppError::new(ErrorCode::Unauthenticated, "This account is disabled"));
     }
     let verified = Some(user.password_changed_at);
+    let attempt = attempt.into();
     password_accepted(pool, auth, headers, ctx, attempt, user.id, &user.username, LoginMethod::Password, verified).await
 }
 
 /// After a right password, local or directory: the second-factor challenge
 /// when the user has set up MFA (401 MFA_REQUIRED and the `shadoucmdb_mfa`
-/// cookie), otherwise the session. `attempt`: the throttle reservation for
+/// cookie), otherwise the session. `attempt`: the throttle reservations for
 /// the name signed in with, counted a success only once the sign-in is complete.
 /// `verified`: as for [`open_session`]; the challenge is refused alike.
 #[allow(clippy::too_many_arguments)]
@@ -563,7 +614,7 @@ async fn password_accepted(
     auth: &AuthState,
     headers: &HeaderMap,
     ctx: &RequestContext,
-    attempt: Attempt<'_>,
+    attempt: Reservation<'_>,
     user_id: Uuid,
     username: &str,
     method: LoginMethod,
@@ -600,21 +651,28 @@ async fn password_accepted(
     Ok(Either::Left(session))
 }
 
-/// A wrong password (or unknown name): counted, logged and audited; returns the 401.
+/// A wrong password (or unknown name): counted, logged and audited (with
+/// `reason` when the password was not checked); returns the 401.
 async fn wrong_credentials(
     pool: &PgPool,
-    attempt: Attempt<'_>,
+    attempt: Reservation<'_>,
     ctx: &RequestContext,
     username: &str,
+    reason: Option<&str>,
 ) -> Result<AppError, AppError> {
     let locked = attempt.failure();
-    tracing::warn!(username = %username.chars().take(64).collect::<String>(), ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in failed");
-    record_failure(pool, ctx, username, None, locked).await?;
+    tracing::warn!(username = %username.chars().take(64).collect::<String>(), ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), reason, "sign-in failed");
+    record_failure(pool, ctx, username, reason, locked).await?;
     Ok(invalid_credentials())
 }
 
 /// Sign-in with a directory password, under the same throttle as local
-/// passwords, and with the second factor when the user has set one up.
+/// passwords, and with the second factor when the user has set one up. Also
+/// throttled per directory entry (GH#406): a directory may resolve many
+/// spellings of a name to one entry, and each spelling would otherwise get
+/// its own budget. A locked entry's password is not checked; the answer is
+/// the one a wrong password gets, so it does not tell which spellings find
+/// an entry.
 async fn directory_login(
     pool: &PgPool,
     auth: &AuthState,
@@ -624,7 +682,32 @@ async fn directory_login(
     b: &LoginBody,
     linked: Option<Uuid>,
 ) -> Result<LoginAnswer, AppError> {
-    match sso::directory_sign_in(pool, &auth.keyring, ctx, &b.username, &b.password, linked).await? {
+    let mut entry = None;
+    let answer = match directory_name(&b.username) {
+        Some(name) => {
+            let mut admit = |provider: Uuid, external_id: &str| {
+                entry = admit_entry(&auth.directory_throttle, ctx.client.net, provider, external_id);
+                entry.is_some()
+            };
+            sso::directory_sign_in(pool, &auth.keyring, ctx, name, &b.password, linked, &mut admit).await?
+        }
+        None => sso::DirectoryAnswer::NoMatch,
+    };
+    let attempt = Reservation { name: attempt, entry };
+    directory_answer(pool, auth, headers, ctx, attempt, b, answer).await
+}
+
+/// What the directory's answer makes of the sign-in.
+async fn directory_answer(
+    pool: &PgPool,
+    auth: &AuthState,
+    headers: &HeaderMap,
+    ctx: &RequestContext,
+    attempt: Reservation<'_>,
+    b: &LoginBody,
+    answer: sso::DirectoryAnswer,
+) -> Result<LoginAnswer, AppError> {
+    match answer {
         sso::DirectoryAnswer::SignedIn { user_id, username } => {
             password_accepted(pool, auth, headers, ctx, attempt, user_id, &username, LoginMethod::Ldap, None).await
         }
@@ -632,7 +715,11 @@ async fn directory_login(
             // A local account's wrong password costs an argon2 verify; so does
             // this answer, or its speed would tell the names apart (GH#190).
             password::verify(&b.password, None).await?;
-            Err(wrong_credentials(pool, attempt, ctx, &b.username).await?)
+            Err(wrong_credentials(pool, attempt, ctx, &b.username, None).await?)
+        }
+        sso::DirectoryAnswer::NotAdmitted => {
+            password::verify(&b.password, None).await?;
+            Err(wrong_credentials(pool, attempt, ctx, &b.username, Some(DIRECTORY_ENTRY_LOCKED)).await?)
         }
         // A right password that is still refused counts like a disabled account's.
         sso::DirectoryAnswer::Refused(refusal) => {
@@ -646,6 +733,10 @@ async fn directory_login(
         )),
     }
 }
+
+/// `login.failure` reason: the name found a directory entry whose sign-ins
+/// are locked, so the password was not checked (GH#406).
+const DIRECTORY_ENTRY_LOCKED: &str = "directory_entry_locked";
 
 fn sign_in_expired() -> AppError {
     AppError::new(ErrorCode::Unauthenticated, "The sign-in has expired; enter your username and password again")
@@ -1465,6 +1556,88 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
+    /// GH#406: only names an account could have are looked up in a directory;
+    /// spellings a normalising directory would match to the same entry
+    /// (full-width, zero-width, soft hyphen, control characters) are not.
+    #[test]
+    fn only_account_names_reach_the_directory() {
+        assert_eq!(directory_name(" Bob\t"), Some("Bob"));
+        assert_eq!(directory_name("bob@corp.example"), Some("bob@corp.example"));
+        for name in ["ｂｏｂ", "bob\u{200b}", "bo\u{ad}b", "b\u{0}ob", "bob\nbob", "bob smith", "", "j\u{fc}rgen"] {
+            assert_eq!(directory_name(name), None, "{name:?}");
+        }
+    }
+
+    /// The entry a stub directory finds for both `bob` and `bob@corp.example`
+    /// (a filter that also matches `mail`), as `directory_login` handles it.
+    async fn stub_directory_login(
+        pool: &PgPool,
+        auth: &AuthState,
+        ctx: &RequestContext,
+        bob: (Uuid, Uuid),
+        name: &str,
+        password: &str,
+    ) -> Result<LoginAnswer, AppError> {
+        const RIGHT: &str = "bobs-directory-password";
+        let (provider, user_id) = bob;
+        let attempt = throttle_gate(&auth.throttle, name, ctx.client.net, "sign-ins for this username").await?;
+        let mut entry = None;
+        let answer = match directory_name(name).map(str::to_lowercase).as_deref() {
+            Some("bob" | "bob@corp.example") => {
+                entry = admit_entry(&auth.directory_throttle, ctx.client.net, provider, "entryUUID:b0b");
+                match entry {
+                    None => sso::DirectoryAnswer::NotAdmitted,
+                    Some(_) if password == RIGHT => sso::DirectoryAnswer::SignedIn { user_id, username: "bob".into() },
+                    Some(_) => sso::DirectoryAnswer::NoMatch,
+                }
+            }
+            _ => sso::DirectoryAnswer::NoMatch,
+        };
+        let attempt = Reservation { name: attempt, entry };
+        directory_answer(pool, auth, &HeaderMap::new(), ctx, attempt, &login_body(name, password), answer).await
+    }
+
+    /// GH#406: failures split over two names the directory resolves to one
+    /// entry lock it after the same total as one name, and while it is locked
+    /// its password is not checked: the right one gets the wrong one's 401.
+    #[tokio::test]
+    async fn names_for_one_directory_entry_share_its_lock() {
+        let Some(db) = scratch::database("names_for_one_directory_entry_share_its_lock").await else { return };
+        let (pool, auth) = (&db.pool, auth_state());
+        let ldap = crate::modules::mfa::tests::provider(pool, "ldap", true, "ldaps://dc.example.test").await;
+        let mut tx = pool.begin().await.unwrap();
+        let linked = crate::data::identity_providers::NewLinkedUser {
+            provider_id: ldap,
+            external_id: "entryUUID:b0b",
+            username: "bob",
+            display_name: "bob",
+            email: None,
+        };
+        let bob = (ldap, crate::data::identity_providers::insert_linked(&mut tx, &linked).await.unwrap());
+        tx.commit().await.unwrap();
+        auth.throttle.freeze();
+        auth.directory_throttle.freeze();
+        let (guesser, owner) = (from("198.51.100.7"), from("203.0.113.5"));
+        let spellings = ["bob", "bob@corp.example"];
+        for i in 0..crate::auth::throttle::FREE_FAILURES as usize {
+            let e = stub_directory_login(pool, &auth, &guesser, bob, spellings[i % 2], "guess").await.err();
+            assert_eq!(e.map(|e| e.code), Some(ErrorCode::Unauthenticated), "guess {i}");
+        }
+        // Neither name has used up its own free failures; the entry has.
+        let e = stub_directory_login(pool, &auth, &guesser, bob, "BOB", "bobs-directory-password").await.err();
+        assert_eq!(e.as_ref().map(|e| e.code), Some(ErrorCode::Unauthenticated), "the entry is locked");
+        assert_eq!(e.unwrap().message, invalid_credentials().message, "the answer a wrong password gets");
+        let failures = auth_rows(pool, "login.failure").await;
+        assert_eq!(failures.len(), crate::auth::throttle::FREE_FAILURES as usize + 1);
+        assert_eq!(failures.last().unwrap().3["reason"], DIRECTORY_ENTRY_LOCKED, "audited as not checked");
+        assert_eq!(failures[0].3.get("reason"), None);
+        // Per network, as the name's lock is (GH#187): the owner still signs in.
+        let answer =
+            stub_directory_login(pool, &auth, &owner, bob, "bob@corp.example", "bobs-directory-password").await;
+        assert!(matches!(answer, Ok(Either::Left(_))), "the owner's network is not locked");
+        db.drop().await;
+    }
+
     /// GH#120: after the directory accepted the password, a user with an
     /// authenticator gets the second-factor challenge, not a session, and the
     /// name's failure count is kept until the code is right. Without an
@@ -1500,10 +1673,19 @@ pub(crate) mod tests {
         for _ in 1..crate::auth::throttle::FREE_FAILURES {
             auth.throttle.failure("Dirk", Net::default());
         }
-        let answer =
-            password_accepted(pool, &auth, &headers, &anon(), attempt("Dirk"), dirk, "dirk", LoginMethod::Ldap, None)
-                .await
-                .unwrap();
+        let answer = password_accepted(
+            pool,
+            &auth,
+            &headers,
+            &anon(),
+            attempt("Dirk").into(),
+            dirk,
+            "dirk",
+            LoginMethod::Ldap,
+            None,
+        )
+        .await
+        .unwrap();
         let Either::Right(ErrorWithCookies(err, cookies)) = answer else { panic!("a session was opened") };
         assert_eq!(err.code, ErrorCode::MfaRequired);
         assert!(session::cookie_value(&cookies[0], session::MFA_COOKIE).is_some_and(|t| !t.is_empty()));
@@ -1523,10 +1705,19 @@ pub(crate) mod tests {
         assert_eq!(last_login, None, "not recorded as a sign-in yet");
         assert!(auth.throttle.failure("Dirk", Net::default()).is_some(), "the failure count was not cleared");
 
-        let answer =
-            password_accepted(pool, &auth, &headers, &anon(), attempt("dora"), dora, "dora", LoginMethod::Ldap, None)
-                .await
-                .unwrap();
+        let answer = password_accepted(
+            pool,
+            &auth,
+            &headers,
+            &anon(),
+            attempt("dora").into(),
+            dora,
+            "dora",
+            LoginMethod::Ldap,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(matches!(answer, Either::Left(_)), "no authenticator: signed in");
         assert_eq!(sessions(dora).await.unwrap(), 1);
         db.drop().await;
@@ -1826,7 +2017,7 @@ pub(crate) mod tests {
             let tx = locked_provider(pool, ldap).await;
             let ctx = anon();
             let (answer, ()) = tokio::join!(
-                password_accepted(pool, &auth, &headers, &ctx, attempt, user, name, LoginMethod::Ldap, None),
+                password_accepted(pool, &auth, &headers, &ctx, attempt.into(), user, name, LoginMethod::Ldap, None),
                 disable_provider_under(pool, tx, ldap)
             );
             let e = answer.err().unwrap_or_else(|| panic!("{name}: signed in"));
