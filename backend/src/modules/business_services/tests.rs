@@ -555,6 +555,27 @@ async fn restricted_user_oracles() {
     );
     assert!(!edges.contains("db-01"), "{edges}");
 
+    // 10. Audit ids (GH#378), compared raw rather than normalised: the rows R sees
+    // from the first add (web-01 with db-01, or alone) are consecutive in the
+    // stored sequence only in the control world, and R must not be able to tell.
+    let mut consecutive = Vec::new();
+    for o in [&a, &b] {
+        let (_, log) =
+            o.w.get(&o.r, &format!("/api/v1/audit-log?entityId={}&action=update&sort=occurredAt", s(o))).await;
+        let request = log["data"][0]["requestId"].as_str().unwrap().to_owned();
+        let path = format!("/api/v1/audit-log?requestId={request}&sort=occurredAt");
+        let ids =
+            |v: &Value| v["data"].as_array().unwrap().iter().map(|e| e["id"].as_i64().unwrap()).collect::<Vec<_>>();
+        let (_, shown) = o.w.get(&o.r, &path).await;
+        let (_, stored) = o.w.get(&o.w.admin, &path).await;
+        let (shown, stored) = (ids(&shown), ids(&stored));
+        assert_eq!(shown.len(), 2, "the service update and the web-01 edge");
+        assert!(shown.iter().all(|id| !stored.contains(id)), "R gets no stored sequence number: {shown:?} {stored:?}");
+        consecutive.push((stored.len(), shown.iter().max().unwrap() - shown.iter().min().unwrap() == 1));
+    }
+    assert_eq!(consecutive[0].0, consecutive[1].0 + 1, "{consecutive:?}: db-01's edge is a stored row of its own");
+    assert_eq!(consecutive[0].1, consecutive[1].1, "oracle 10: R's ids say nothing about the gap");
+
     // 11. A grant on datastore gives nothing on database: db-01 stays hidden (all of the above).
     let (status, v) = a.w.get(&a.r, &format!("/api/v1/configuration-items/{}", a.db01())).await;
     assert_eq!((status, code(&v)), (404, "NOT_FOUND"));
