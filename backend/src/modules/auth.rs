@@ -56,8 +56,8 @@ pub struct SetupBody {
     email: Option<String>,
     #[schema(schema_with = password_schema)]
     password: Secret,
-    /// The one-time setup token from the server log or the setup token file
-    /// (or `SETUP_TOKEN`, when the operator set it)
+    /// The one-time setup token from the setup token file, or the server log
+    /// when there is no such file (or `SETUP_TOKEN`, when the operator set it)
     #[schema(schema_with = setup_token_schema)]
     setup_token: Secret,
 }
@@ -406,9 +406,9 @@ fn setup_done() -> AppError {
 }
 
 fn wrong_setup_token() -> AppError {
-    const MESSAGE: &str = "The setup token is missing or wrong. The server writes it to its log when it starts \
-                           without users, and to the setup token file (SETUP_TOKEN_FILE) if one is configured; \
-                           or use the SETUP_TOKEN you set";
+    const MESSAGE: &str = "The setup token is missing or wrong. The server writes it to the setup token file \
+                           (SETUP_TOKEN_FILE) when it starts without users, or to its log if there is no such \
+                           file; or use the SETUP_TOKEN you set";
     let mut err = AppError::new(ErrorCode::Forbidden, MESSAGE);
     err.details = Some(vec![FieldError {
         location: FieldLocation::Body,
@@ -972,7 +972,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Create the first administrator and sign them in (only while no users exist)")
             .description(
-                "The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to its log (and to the setup token file, `SETUP_TOKEN_FILE`) when it runs without users, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. The first 4 wrong tokens from one client network (the IPv4 /24 or IPv6 /64 of the client address) cost nothing; from the 5th on, each one locks setup for that network for 1 s, 2 s, 4 s, ... up to 15 min, and wrong tokens from several networks that add up to 15 lock it for every network; while locked the answer is 429 RATE_LIMITED with Retry-After and the token is not checked. The 409 answer is never throttled. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.",
+                "The new user holds the built-in Administrator profile. 409 once any user exists. `setupToken` must be the one-time token the server writes to the setup token file (`SETUP_TOKEN_FILE`) when it runs without users, or to its log when there is no such file, or the operator's `SETUP_TOKEN`; 403 FORBIDDEN when it is missing or wrong. The first 4 wrong tokens from one client network (the IPv4 /24 or IPv6 /64 of the client address) cost nothing; from the 5th on, each one locks setup for that network for 1 s, 2 s, 4 s, ... up to 15 min, and wrong tokens from several networks that add up to 15 lock it for every network; while locked the answer is 429 RATE_LIMITED with Retry-After and the token is not checked. The 409 answer is never throttled. The token stops working once the first administrator exists. Sets the session and CSRF cookies. `shadoucmdb create-admin` does the same from the command line and needs no token.",
             )
             .public()
             .status(StatusCode::CREATED)

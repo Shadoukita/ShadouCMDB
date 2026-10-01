@@ -74,7 +74,7 @@ Install as a systemd service
   # Optional starter data model (or install it later under Administration > Templates):
   sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env seed --template it_infrastructure
   # First administrator (or skip this and use first-run setup in the web UI, with the setup token from
-  # `sudo journalctl -u shadoucmdb` or `sudo cat /var/lib/shadoucmdb/setup-token`):
+  # `sudo cat /var/lib/shadoucmdb/setup-token`; it is in the journal only if that file cannot be written):
   sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin
   sudo install -m 0644 shadoucmdb.service /etc/systemd/system/
   sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb

@@ -2,9 +2,11 @@
 //!
 //! While no user exists, `POST /api/v1/setup` creates an administrator. Without
 //! a token, whoever reaches a fresh install first would own it. The token is
-//! required in that request, and only the operator can read it: from the server
-//! log, from the token file (`SETUP_TOKEN_FILE`, mode 0600), or because they
-//! chose it themselves (`SETUP_TOKEN`).
+//! required in that request, and only the operator can read it: from the token
+//! file (`SETUP_TOKEN_FILE`, mode 0600), from the server log when there is no
+//! token file or it cannot be written, or because they chose it themselves
+//! (`SETUP_TOKEN`). A token written to the file never goes to the log, which
+//! more people read than the service account (GH#436).
 //!
 //! The token is armed when this process first sees a database without users
 //! (at start, or on the first `/api/v1/setup` request if the database was not
@@ -114,7 +116,8 @@ impl SetupGate {
     }
 
     /// Arms the token unless it already is: takes `SETUP_TOKEN`, or generates
-    /// one and writes it to the log and the token file. Call only while no user exists.
+    /// one and writes it to the token file, or to the log when there is no
+    /// file or it cannot be written. Call only while no user exists.
     pub fn arm(&self) {
         let mut armed = self.armed.lock().expect("setup gate lock");
         if armed.is_some() {
@@ -129,19 +132,28 @@ impl SetupGate {
         }
         let token = new_token();
         *armed = Some(token_hash(&token));
-        let file = self.file.as_deref().and_then(|path| match write_token_file(path, &token) {
-            Ok(()) => Some(path.display().to_string()),
+        let written = self.file.as_deref().filter(|path| match write_token_file(path, &token) {
+            Ok(()) => true,
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "cannot write the setup token file; the token is only in this log");
-                None
+                false
             }
         });
-        tracing::warn!(
-            setup_token = %token,
-            file = file.as_deref().unwrap_or("none"),
-            "no user exists yet: complete first-run setup in the web UI with this one-time setup token. It is valid \
-             until the first administrator is created or this process stops"
-        );
+        // Whoever holds the token creates the first administrator, and log
+        // readers are many more than the service account (GH#436): the token
+        // goes to the log only when it is nowhere else.
+        match written {
+            Some(path) => tracing::warn!(
+                file = %path.display(),
+                "no user exists yet: complete first-run setup in the web UI with the one-time setup token in the setup \
+                 token file. It is valid until the first administrator is created or this process stops"
+            ),
+            None => tracing::warn!(
+                setup_token = %token,
+                "no user exists yet: complete first-run setup in the web UI with this one-time setup token. It is valid \
+                 until the first administrator is created or this process stops"
+            ),
+        }
     }
 
     /// Whether `sent` is the armed token. False while none is armed.
@@ -290,11 +302,17 @@ mod tests {
         // A stale file with wider permissions is replaced, not reused.
         std::fs::write(&path, "stale\n").unwrap();
 
+        let (log, guard) = capture::warnings();
         let gate = SetupGate::new(None, Some(path.clone()));
         assert!(!gate.matches("stale"), "nothing is armed yet");
         gate.arm();
+        drop(guard);
         let token = std::fs::read_to_string(&path).unwrap().trim().to_owned();
         assert_eq!(token.len(), 64);
+        // GH#436: the log names the file, never the token in it.
+        assert_eq!(log.count(&token), 0, "{:?}", log.lines());
+        assert_eq!(log.count("setup_token="), 0, "{:?}", log.lines());
+        assert_eq!(log.count(&format!("file={}", path.display())), 1, "{:?}", log.lines());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -312,6 +330,28 @@ mod tests {
         assert!(!gate.matches(&token), "one use: the token stops working");
         assert!(!path.exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Without a token file, or when it cannot be written, the log is the only
+    /// place the operator can read a generated token from.
+    #[test]
+    fn a_generated_token_is_logged_only_when_no_file_holds_it() {
+        let unwritable =
+            std::env::temp_dir().join(format!("shadoucmdb-missing-{}", uuid::Uuid::new_v4())).join("setup-token");
+        for file in [None, Some(unwritable.clone())] {
+            let (log, guard) = capture::warnings();
+            let gate = SetupGate::new(None, file.clone());
+            gate.arm();
+            drop(guard);
+            let line = log.lines().into_iter().find(|l| l.contains("setup_token=")).expect("token logged");
+            let token = line.split("setup_token=").nth(1).unwrap().split_whitespace().next().unwrap().to_owned();
+            assert_eq!(token.len(), 64, "{line}");
+            assert!(gate.matches(&token));
+            if file.is_some() {
+                assert_eq!(log.count("cannot write the setup token file; the token is only in this log"), 1);
+                assert!(!unwritable.exists());
+            }
+        }
     }
 
     #[test]
