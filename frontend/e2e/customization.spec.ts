@@ -40,6 +40,20 @@ test.afterAll(async ({ request }) => {
   }
 });
 
+test("the editor loads when Customization is opened again from within the app", async ({ page }) => {
+  const adminNav = page.getByRole("navigation", { name: "Administration" });
+  await page.goto("/admin");
+  await adminNav.getByRole("link", { name: "Customization" }).click();
+  await expect(page.getByLabel("Application name")).toBeVisible();
+  // Back to Administration and in again without a reload: the settings are cached now, the editor must still appear.
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Administration" }).click();
+  await expect(page).toHaveURL(/\/admin$/);
+  await adminNav.getByRole("link", { name: "Customization" }).click();
+  await expect(page.getByLabel("Application name")).toBeVisible();
+  await page.getByRole("navigation", { name: "Customization" }).getByRole("link", { name: "Navigation" }).click();
+  await expect(page.getByRole("button", { name: "Add section" })).toBeVisible();
+});
+
 test("branding: name, colour, theme and logo apply app-wide and on the sign-in page", async ({ page, browser }) => {
   await page.goto("/admin");
   await page.getByRole("navigation", { name: "Administration" }).getByRole("link", { name: "Customization" }).click();
