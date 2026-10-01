@@ -56,10 +56,9 @@ pub const MAX_RATIO: u64 = 1000;
 pub const MAX_XML_TOKEN: u64 = 4 * 1024 * 1024;
 /// Most bytes of text in one row, as the CSV reader allows for a record.
 pub const MAX_ROW_TEXT_BYTES: usize = super::csv::MAX_RECORD_BYTES;
-/// Most bytes of text in one sheet with every shared string written out. A
-/// shared string is stored once but read once per cell that refers to it, so
-/// without this a small file could hand the import more text than any file of
-/// the upload limit holds.
+/// The ceiling on [`Limits::max_text_bytes`]. A shared string is stored once
+/// but read once per cell that refers to it, so a sheet is held to the text a
+/// CSV file of the upload limit holds ([`Limits::new`]), and never more than this.
 pub const MAX_SHEET_TEXT_BYTES: usize = 256 * 1024 * 1024;
 
 const SPREADSHEET_MAIN: [&str; 2] = [
@@ -796,7 +795,7 @@ fn cell_value(v: DataRef<'_>, has_formula: bool) -> CellValue {
 /// `max_columns` stops the reading with `column_limit` before its row grows.
 /// A cell's text is checked before it is copied: over `MAX_CELL_CHARS` is
 /// `cell_too_long`, a row over [`MAX_ROW_TEXT_BYTES`] `record_too_long`, a
-/// sheet over [`MAX_SHEET_TEXT_BYTES`] `text_limit`.
+/// sheet over [`Limits::max_text_bytes`] `text_limit`.
 pub fn read_sheet<R: Read + Seek>(
     workbook: &mut Xlsx<R>,
     sheet: &str,
@@ -806,6 +805,7 @@ pub fn read_sheet<R: Read + Seek>(
     let mut cells = workbook.worksheet_cells_reader(sheet).map_err(calamine_error)?;
     let mut current: Option<Row> = None;
     let (mut text_row, mut row_bytes, mut sheet_bytes) = (0u32, 0usize, 0usize);
+    let max_text = limits.max_text_bytes.min(MAX_SHEET_TEXT_BYTES);
     loop {
         let next = cells.next_cell_with_formula_metadata().map_err(calamine_error)?;
         let Some(cell) = next else { break };
@@ -827,15 +827,8 @@ pub fn read_sheet<R: Read + Seek>(
             if row_bytes > MAX_ROW_TEXT_BYTES {
                 return Err(bad("record_too_long", "A row holds more than 1 MiB of text.").at(Some(number), None));
             }
-            if sheet_bytes > MAX_SHEET_TEXT_BYTES {
-                return Err(bad(
-                    "text_limit",
-                    format!(
-                        "The sheet holds more than {} MiB of text. Split the file and import it in parts.",
-                        group_thousands((MAX_SHEET_TEXT_BYTES / (1024 * 1024)) as u64)
-                    ),
-                )
-                .at(Some(number), None));
+            if sheet_bytes > max_text {
+                return Err(text_limit(max_text).at(Some(number), None));
             }
         }
         let value = cell_value(cell.value, cell.formula.is_some());
@@ -858,6 +851,23 @@ pub fn read_sheet<R: Read + Seek>(
     Ok(())
 }
 
+/// The sheet holds more text than the import reads from one file.
+fn text_limit(max: usize) -> ParseError {
+    const MIB: usize = 1024 * 1024;
+    let size = if max >= MIB && max.is_multiple_of(MIB) {
+        format!("{} MiB", group_thousands((max / MIB) as u64))
+    } else {
+        format!("{} bytes", group_thousands(max as u64))
+    };
+    bad(
+        "text_limit",
+        format!(
+            "The sheet holds more than {size} of text, counting each cell that refers to a shared string. \
+             Split the file and import it in parts."
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -866,7 +876,7 @@ mod tests {
     use super::super::fixtures::{C, Part, sheet_xml, with_shared_strings, workbook, workbook_parts, zip};
     use super::*;
 
-    const LIMITS: Limits = Limits { max_rows: 100_000, max_columns: 200 };
+    const LIMITS: Limits = Limits { max_rows: 100_000, max_columns: 200, max_text_bytes: MAX_SHEET_TEXT_BYTES };
 
     fn check(bytes: Vec<u8>) -> Result<(), ParseError> {
         preflight(&mut Cursor::new(bytes))
@@ -980,37 +990,63 @@ mod tests {
     }
 
     #[test]
-    fn rows_and_sheets_are_capped_in_text() {
+    fn rows_are_capped_in_text() {
         // 200 cells of 10,000 two-byte characters: each cell is allowed, the row is not.
         let wide = "é".repeat(10_000);
         let err = read(shared_row(&[&wide], 200), None).unwrap_err();
         assert_eq!((err.code, err.row), ("record_too_long", Some(2)));
         // 52 such cells (1,040,000 bytes) fit in a row.
         assert!(read(shared_row(&[&wide], 52), None).is_ok());
-        // Rows of 1 MiB each, repeated, stop at the sheet limit.
-        let per_row = 52usize;
-        let rows_needed = MAX_SHEET_TEXT_BYTES / (per_row * wide.len()) + 2;
+    }
+
+    /// A sheet of `rows` rows, each referring to one shared string of
+    /// 10,000 two-byte characters from 52 columns (1,040,000 bytes a row).
+    fn wide_rows(rows: usize) -> Vec<u8> {
+        let wide = "é".repeat(10_000);
         let mut refs = Vec::new();
-        for r in 1..=rows_needed {
-            for c in 0..per_row as u32 {
+        for r in 1..=rows {
+            for c in 0..52u32 {
                 refs.push(format!("{}{r}", super::super::column_name(c)));
             }
         }
         let sheet: Vec<(&str, C<'_>)> = refs.iter().map(|r| (r.as_str(), C::Shared(0))).collect();
         let mut parts = workbook_parts(&sheet_xml(&sheet), None, false, false);
         with_shared_strings(&mut parts, &[&wide]);
-        let limits = Limits { max_rows: 100_000, max_columns: 200 };
-        let mut c = Cursor::new(zip(&parts));
+        zip(&parts)
+    }
+
+    fn read_with(bytes: Vec<u8>, limits: &Limits) -> (Result<(), ParseError>, u32) {
+        let mut c = Cursor::new(bytes);
         preflight(&mut c).unwrap();
         let (mut wb, _) = open(c).unwrap();
         let mut seen = 0u32;
-        let err = read_sheet(&mut wb, "Servers", &limits, &mut |_| {
+        let result = read_sheet(&mut wb, "Servers", limits, &mut |_| {
             seen += 1;
             ControlFlow::Continue(())
-        })
-        .unwrap_err();
-        assert_eq!(err.code, "text_limit");
-        assert_eq!(err.row, Some(seen + 1), "refused in the row that crosses the limit");
+        });
+        (result, seen)
+    }
+
+    #[test]
+    fn a_sheet_holds_no_more_text_than_the_upload_limit() {
+        // GH#446: with a 3 MiB upload limit, the fourth row of ~1 MiB crosses it,
+        // although the file itself is a few kilobytes.
+        let mib = 1024 * 1024;
+        let limits = Limits::new(100_000, 200, 3 * mib);
+        assert_eq!(limits.max_text_bytes, 3 * mib as usize);
+        let file = wide_rows(5);
+        assert!(file.len() < 64 * 1024, "the file is small: {} bytes", file.len());
+        let (result, seen) = read_with(file, &limits);
+        let err = result.unwrap_err();
+        assert_eq!((err.code, err.row, seen), ("text_limit", Some(4), 3), "refused in the row that crosses the limit");
+        assert!(err.message.contains("3 MiB"), "names the configured limit: {}", err.message);
+        // Three rows fit.
+        let (result, seen) = read_with(wide_rows(3), &limits);
+        assert!(result.is_ok() && seen == 3);
+        // The default upload limit (50 MiB) is the cap, not the 256 MiB ceiling.
+        assert_eq!(Limits::new(1, 1, 50 * mib).max_text_bytes, 50 * mib as usize);
+        // The ceiling holds whatever the configuration says.
+        assert_eq!(Limits::new(1, 1, u64::MAX).max_text_bytes, MAX_SHEET_TEXT_BYTES);
     }
 
     #[test]

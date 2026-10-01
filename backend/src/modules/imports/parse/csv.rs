@@ -454,7 +454,7 @@ mod tests {
     use super::*;
     use std::ops::ControlFlow;
 
-    const LIMITS: Limits = Limits { max_rows: 100, max_columns: 200 };
+    const LIMITS: Limits = Limits { max_rows: 100, max_columns: 200, max_text_bytes: 1 << 20 };
 
     fn rows(
         bytes: &[u8],

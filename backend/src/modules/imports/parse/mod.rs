@@ -133,6 +133,19 @@ pub struct Limits {
     /// Data rows, the header row not counted.
     pub max_rows: u32,
     pub max_columns: u32,
+    /// Most bytes of text in one XLSX sheet with every shared string written
+    /// out; never above [`MAX_SHEET_TEXT_BYTES`](xlsx::MAX_SHEET_TEXT_BYTES).
+    /// A CSV file is bounded by its size already.
+    pub max_text_bytes: usize,
+}
+
+impl Limits {
+    /// The bounds of an import whose upload limit is `max_file_bytes`: a sheet
+    /// may hold as much text as a CSV file of that size, no more (GH#446).
+    pub fn new(max_rows: u32, max_columns: u32, max_file_bytes: u64) -> Self {
+        let max_text_bytes = usize::try_from(max_file_bytes).unwrap_or(usize::MAX).min(xlsx::MAX_SHEET_TEXT_BYTES);
+        Limits { max_rows, max_columns, max_text_bytes }
+    }
 }
 
 /// What the callback returns for each row: go on, or stop reading.
