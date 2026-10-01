@@ -18,6 +18,9 @@
 --   * the core field already holds that value: nothing to do;
 --   * the core field holds another value: the core value wins;
 --   * no match: the core field stays empty.
+-- The core field is checked again as each CI is updated: a value another
+-- session sets while this runs (the upgrade needs no downtime) wins and is
+-- counted as a kept core value (GH#391).
 -- Nothing is deleted. The field is archived (is_active = false): its column
 -- and every value stay readable, forms hide it and it takes no new values. Its
 -- audit entry reports the counts and the values that did not map, so an
@@ -39,7 +42,7 @@ DECLARE
 BEGIN
   SELECT id INTO crit_list FROM cmdb.lookup_lists WHERE system_role = 'criticality';
   CREATE TEMP TABLE m0036 (ci_id uuid, raw text, raw_name text) ON COMMIT DROP;
-  CREATE TEMP TABLE m0036_plan (ci_id uuid, raw text, class_id uuid, current_id uuid, target_id uuid) ON COMMIT DROP;
+  CREATE TEMP TABLE m0036_plan (ci_id uuid, raw text, class_id uuid, current_id uuid, target_id uuid, moved boolean NOT NULL DEFAULT false) ON COMMIT DROP;
 
   FOR att IN
     SELECT d.id, d.data_type, c.key AS class_key, a.key AS area_key
@@ -85,7 +88,10 @@ BEGIN
       SET criticality_value_id = p.target_id, version = ci.version + 1, updated_at = now()
       FROM m0036_plan p
       WHERE ci.id = p.ci_id AND p.current_id IS NULL AND p.target_id IS NOT NULL
+        AND ci.criticality_value_id IS NULL
       RETURNING ci.id, ci.class_id, p.raw, p.target_id
+    ), flagged AS (
+      UPDATE m0036_plan p SET moved = true FROM moved mv WHERE p.ci_id = mv.id
     )
     INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, old_value, new_value)
     SELECT 'system', 'migration 0036', 'update', 'configuration_items', mv.id,
@@ -96,6 +102,11 @@ BEGIN
              'from', jsonb_build_object('field', 'attributes.criticality', 'value', mv.raw))
     FROM moved mv JOIN cmdb.lookup_list_values v ON v.id = mv.target_id;
     GET DIAGNOSTICS mapped = ROW_COUNT;
+
+    -- A CI left out because its core field was set meanwhile: count the value it holds now.
+    UPDATE m0036_plan p SET current_id = ci.criticality_value_id
+    FROM cmdb.configuration_items ci
+    WHERE ci.id = p.ci_id AND p.current_id IS NULL AND NOT p.moved;
 
     SELECT count(*) FILTER (WHERE current_id IS NOT NULL AND current_id = target_id),
            count(*) FILTER (WHERE current_id IS NOT NULL AND target_id IS NOT NULL AND current_id <> target_id),
