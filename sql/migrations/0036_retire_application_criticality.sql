@@ -38,8 +38,8 @@ DECLARE
   unmapped_values jsonb;
 BEGIN
   SELECT id INTO crit_list FROM cmdb.lookup_lists WHERE system_role = 'criticality';
-  CREATE TEMP TABLE m0035 (ci_id uuid, raw text, raw_name text) ON COMMIT DROP;
-  CREATE TEMP TABLE m0035_plan (ci_id uuid, raw text, class_id uuid, current_id uuid, target_id uuid) ON COMMIT DROP;
+  CREATE TEMP TABLE m0036 (ci_id uuid, raw text, raw_name text) ON COMMIT DROP;
+  CREATE TEMP TABLE m0036_plan (ci_id uuid, raw text, class_id uuid, current_id uuid, target_id uuid) ON COMMIT DROP;
 
   FOR att IN
     SELECT d.id, d.data_type, c.key AS class_key, a.key AS area_key
@@ -53,7 +53,7 @@ BEGIN
       SELECT FROM information_schema.columns
       WHERE table_schema = att.area_key AND table_name = att.class_key AND column_name = 'criticality'
     ) THEN
-      RAISE NOTICE '0035: %.% has no column "criticality"; field left as it is', att.area_key, att.class_key;
+      RAISE NOTICE '0036: %.% has no column "criticality"; field left as it is', att.area_key, att.class_key;
       CONTINUE;
     END IF;
 
@@ -68,27 +68,27 @@ BEGIN
         att.area_key, att.class_key);
     END IF;
 
-    TRUNCATE m0035, m0035_plan;
-    EXECUTE 'INSERT INTO m0035 (ci_id, raw, raw_name) ' || source_sql;
+    TRUNCATE m0036, m0036_plan;
+    EXECUTE 'INSERT INTO m0036 (ci_id, raw, raw_name) ' || source_sql;
 
-    INSERT INTO m0035_plan (ci_id, raw, class_id, current_id, target_id)
+    INSERT INTO m0036_plan (ci_id, raw, class_id, current_id, target_id)
     SELECT m.ci_id, m.raw, ci.class_id, ci.criticality_value_id AS current_id,
            (SELECT v.id FROM cmdb.lookup_list_values v
             WHERE v.list_id = crit_list AND v.is_active
               AND (v.key = lower(btrim(m.raw)) OR lower(v.name) IN (lower(btrim(m.raw)), lower(btrim(m.raw_name))))
             ORDER BY (v.key = lower(btrim(m.raw))) DESC, v.sort_order, v.key
             LIMIT 1) AS target_id
-    FROM m0035 m JOIN cmdb.configuration_items ci ON ci.id = m.ci_id;
+    FROM m0036 m JOIN cmdb.configuration_items ci ON ci.id = m.ci_id;
 
     WITH moved AS (
       UPDATE cmdb.configuration_items ci
       SET criticality_value_id = p.target_id, version = ci.version + 1, updated_at = now()
-      FROM m0035_plan p
+      FROM m0036_plan p
       WHERE ci.id = p.ci_id AND p.current_id IS NULL AND p.target_id IS NOT NULL
       RETURNING ci.id, ci.class_id, p.raw, p.target_id
     )
     INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, old_value, new_value)
-    SELECT 'system', 'migration 0035', 'update', 'configuration_items', mv.id,
+    SELECT 'system', 'migration 0036', 'update', 'configuration_items', mv.id,
            jsonb_build_object('classId', mv.class_id, 'criticality', NULL),
            jsonb_build_object(
              'classId', mv.class_id,
@@ -102,11 +102,11 @@ BEGIN
            count(*) FILTER (WHERE target_id IS NULL),
            coalesce(jsonb_agg(DISTINCT raw) FILTER (WHERE target_id IS NULL), '[]'::jsonb)
       INTO already, conflicting, unmapped, unmapped_values
-    FROM m0035_plan;
+    FROM m0036_plan;
 
     UPDATE cmdb.ci_attribute_definitions SET is_active = false, updated_at = now() WHERE id = att.id;
     INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, old_value, new_value)
-    VALUES ('system', 'migration 0035', 'update', 'ci_attribute_definitions', att.id,
+    VALUES ('system', 'migration 0036', 'update', 'ci_attribute_definitions', att.id,
             jsonb_build_object('isActive', true),
             jsonb_build_object(
               'isActive', false,
@@ -116,9 +116,9 @@ BEGIN
               'keptCoreValue', conflicting,
               'notMapped', unmapped,
               'notMappedValues', unmapped_values));
-    RAISE NOTICE '0035: %.criticality archived; core criticality set on % CIs, already set on %, other core value kept on %, not mapped on % (values: %)',
+    RAISE NOTICE '0036: %.criticality archived; core criticality set on % CIs, already set on %, other core value kept on %, not mapped on % (values: %)',
       att.class_key, mapped, already, conflicting, unmapped, unmapped_values;
   END LOOP;
-  DROP TABLE m0035, m0035_plan;
+  DROP TABLE m0036, m0036_plan;
 END;
 $$;

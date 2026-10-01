@@ -487,7 +487,7 @@ async function main() {
     classId: appClass,
     attributes: { name: `smoke-app-${RUN}`, status: inService, url: 'https://smoke.example.com', primary_database: database.id },
   })).json;
-  // The template's Application field "criticality" is gone (migration 0035, GH#354): the core Criticality replaces it.
+  // The template's Application field "criticality" is gone (migration 0036, GH#354): the core Criticality replaces it.
   await post('/api/v1/configuration-items', { classId: appClass, attributes: { name: `smoke-app-crit-${RUN}`, status: inService, criticality: 'high' } }, 400);
   check(app.attributeReferences?.primary_database?.name === database.label, 'reference attribute resolves to the database label');
   const listed = (await get(`/api/v1/configuration-items?classId=${appClass}&q=smoke-app-${RUN}`)).json;

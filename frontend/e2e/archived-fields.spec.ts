@@ -1,6 +1,6 @@
 import { apiSend, classIdByName, createCi, snap, expect, test } from "./support";
 
-// An archived field keeps its stored values (GH#354: migration 0035 archives the Application field
+// An archived field keeps its stored values (GH#354: migration 0036 archives the Application field
 // "criticality" in favour of the core Criticality). The detail page lists them in their own panel,
 // labelled, not among the active fields nor as raw values under "Not defined by this class" (GH#369).
 const stamp = Date.now().toString(36);

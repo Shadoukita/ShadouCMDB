@@ -271,12 +271,12 @@ const CHANGED_ON_PURPOSE: Array<{ url: RegExp; diff: RegExp; before: number; why
     why: '0016 adds the former fixed CI columns (name, status, ...) as attributes of the classes whose CIs held values',
   },
   {
-    url: /^\/api\/v1\/configuration-items\/[^/]+$/, diff: /^\$\.(version|updatedAt|criticality): /, before: 36,
-    why: '0035 copies the Application field "criticality" onto the empty core Criticality (an audited update of the CI)',
+    url: /^\/api\/v1\/configuration-items\/[^/]+$/, diff: /^\$\.(version|updatedAt|criticality): /, before: 37,
+    why: '0036 copies the Application field "criticality" onto the empty core Criticality (an audited update of the CI)',
   },
   {
-    url: /^\/api\/v1\/ci-classes\/[^/]+\/attributes$/, diff: /^\$\.data(: \d+ entries -> \d+|\[id=[^\]]+\]: missing)$/, before: 36,
-    why: '0035 archives the Application field "criticality"; the attribute list leaves archived fields out (includeInactive shows it)',
+    url: /^\/api\/v1\/ci-classes\/[^/]+\/attributes$/, diff: /^\$\.data(: \d+ entries -> \d+|\[id=[^\]]+\]: missing)$/, before: 37,
+    why: '0036 archives the Application field "criticality"; the attribute list leaves archived fields out (includeInactive shows it)',
   },
 ];
 

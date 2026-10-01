@@ -1659,11 +1659,11 @@ fn keep_current_settings(mut file: ConfigFile, current: &ConfigFile) -> ConfigFi
 }
 
 /// Fields that a core field of every CI replaced, as (class, field): the
-/// starter template's Application "criticality" (migration 0035, GH#354).
+/// starter template's Application "criticality" (migration 0036, GH#354).
 const SUPERSEDED_FIELDS: &[(&str, &str)] = &[("application", "criticality")];
 
 /// A superseded field that is active in the file is imported archived, so an
-/// export from before 0035 does not bring back a second Criticality on every
+/// export from before 0036 does not bring back a second Criticality on every
 /// Application. Archived, its column and values stay readable and references
 /// to it in the file still resolve. The one exception is a field an
 /// administrator restored here: it stays active.
@@ -2623,7 +2623,7 @@ mod tests {
         b.drop().await;
     }
 
-    /// GH#354: an export from before 0035 still has the template's active
+    /// GH#354: an export from before 0036 still has the template's active
     /// Application field "criticality". It imports archived, with a warning,
     /// so Applications do not get a second Criticality; a field an
     /// administrator restored here stays active.

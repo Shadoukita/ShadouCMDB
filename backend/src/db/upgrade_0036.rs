@@ -1,4 +1,4 @@
-//! Migration 0035 (GH#354) against an install that has the IT infrastructure
+//! Migration 0036 (GH#354) against an install that has the IT infrastructure
 //! template's Application field "criticality" with values: values that match
 //! the criticality list move onto the core field (audited), the core field
 //! wins where it is already set, nothing is deleted, and the field is archived
@@ -14,7 +14,7 @@ const APP: &str = "00000000-0000-0000-0000-00000000c001";
 const BIZ: &str = "00000000-0000-0000-0000-00000000c002";
 
 /// Application, a subclass and a server (with a "criticality" field of its own)
-/// as the template and an administrator left them before 0035. The enum check
+/// as the template and an administrator left them before 0036. The enum check
 /// is left out of the tables so a value an administrator added can be stored.
 const BEFORE: &str = r#"
 INSERT INTO areas (key, name) VALUES ('infrastruktur', 'Infrastruktur');
@@ -70,10 +70,10 @@ async fn core(pool: &PgPool) -> Vec<(Uuid, Option<String>, i32)> {
 async fn application_criticality_moves_to_the_core_field() {
     let Some(db) = scratch::empty("application_criticality_moves_to_the_core_field").await else { return };
     let pool = &db.pool;
-    MIGRATOR.run_to(34, pool).await.expect("migrations up to 0034");
+    MIGRATOR.run_to(35, pool).await.expect("migrations up to 0035");
     pool.execute(sqlx::AssertSqlSafe(BEFORE)).await.expect("data before the upgrade");
 
-    MIGRATOR.run(pool).await.expect("migration 0035");
+    MIGRATOR.run(pool).await.expect("migration 0036");
 
     let s = |k: &str| Some(k.to_owned());
     assert_eq!(
@@ -120,7 +120,7 @@ async fn application_criticality_moves_to_the_core_field() {
     let entry = |n: u8, class: &str, key: &str| {
         (
             ci(n),
-            "migration 0035".to_owned(),
+            "migration 0036".to_owned(),
             json!({ "classId": class, "criticality": null }),
             json!({ "classId": class, "key": key, "from": { "field": "attributes.criticality", "value": key } }),
         )
@@ -157,7 +157,7 @@ async fn application_criticality_moves_to_the_core_field() {
 async fn lookup_typed_field_maps_by_value_key_or_name() {
     let Some(db) = scratch::empty("lookup_typed_field_maps_by_value_key_or_name").await else { return };
     let pool = &db.pool;
-    MIGRATOR.run_to(34, pool).await.expect("migrations up to 0034");
+    MIGRATOR.run_to(35, pool).await.expect("migrations up to 0035");
     pool.execute(
         r#"
 INSERT INTO areas (key, name) VALUES ('apps', 'Apps');
@@ -182,7 +182,7 @@ INSERT INTO apps.application (id, criticality) VALUES
     .await
     .expect("data before the upgrade");
 
-    MIGRATOR.run(pool).await.expect("migration 0035");
+    MIGRATOR.run(pool).await.expect("migration 0036");
 
     let s = |k: &str| Some(k.to_owned());
     assert_eq!(core(pool).await, [(ci(1), s("critical"), 2), (ci(2), s("low"), 2)]);
