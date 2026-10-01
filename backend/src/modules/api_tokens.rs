@@ -1880,8 +1880,21 @@ pub(crate) mod tests {
         // otherwise pull the data model, profiles and mappings in one call.
         let (status, v, _) = call(&app, "GET", "/api/v1/admin/config/export", &tok, None).await;
         assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+        // GH#414: it is audited, so a session must send the CSRF token (a
+        // cross-site navigation carries the Lax cookie but no header).
+        let exports = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log WHERE action = 'export'")
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        };
+        let no_csrf = Creds { csrf: None, ..session.clone() };
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/config/export", &no_csrf, None).await;
+        assert_eq!((status, code(&v)), (403, "CSRF_TOKEN_INVALID"), "{v}");
+        assert_eq!(exports().await, 0, "a refused export is not recorded");
         let (status, mut file, _) = call(&app, "GET", "/api/v1/admin/config/export", &session, None).await;
         assert_eq!(status, 200, "{file}");
+        assert_eq!(exports().await, 1);
         file["permissionProfiles"][0]["globalPermissions"] = json!(["audit.view", "users.manage"]);
 
         // Every profile write, and the import, is refused.

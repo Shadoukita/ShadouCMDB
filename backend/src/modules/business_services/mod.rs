@@ -176,10 +176,11 @@ pub fn routes() -> Vec<Route> {
                  one), and a line break inside a value stays in its field. The first \
                  row is a comment with the service, the filters and the visibility note; then the columns ci_id, \
                  ident, name, class, criticality, is_service, active, added_at. Each export is recorded in the audit \
-                 log (action `export` on the service, with the row count, never the rows). Needs view on the \
-                 business service class. {VISIBILITY}"
+                 log (action `export` on the service, with the row count, never the rows), so a signed-in session \
+                 must send X-CSRF-Token as on a write. Needs view on the business service class. {VISIBILITY}"
             ))
             .errors(&[ErrorCode::NotFound])
+            .csrf_on_read()
             .class_checked()
             .handle(|api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<MemberExportQuery>, NoBody>| async move {
                 let (name, body) = service::export(&api.pool, &api.ctx, api.business_services, id, q.into()).await?;

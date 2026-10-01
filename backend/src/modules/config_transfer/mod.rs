@@ -2120,10 +2120,11 @@ pub fn routes() -> Vec<Route> {
                  the caller holds `views.share`, without the class keys the caller may not view and without views \
                  whose classes they may view none of. Every export is recorded in the audit log as one `export` \
                  entry (entity type `config`) naming the sections included and the number of import mappings and \
-                 saved views, never their content.",
+                 saved views, never their content, so the request must send X-CSRF-Token as on a write.",
             )
             .requires(GlobalPermission::ConfigExportImport)
             .session_only()
+            .csrf_on_read()
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 let file = export(&api.pool, &api.ctx).await?;
                 let name = format!(

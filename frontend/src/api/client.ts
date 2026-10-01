@@ -57,11 +57,15 @@ export function onMfaEnrolmentRequired(handler: () => void) {
   enrolmentRequiredHandler = handler;
 }
 
+/** GETs the API treats like writes (audited CSV exports): they need the CSRF token too, so a link on another site cannot run them. */
+const CSRF_READS = /\/api\/v1\/(configuration-items\/[^/]+\/impact|business-services\/[^/]+\/members|admin\/config)\/export$/;
+
 api.use({
   // Every state-changing request echoes the CSRF token; the API rejects it otherwise.
   onRequest({ request }) {
     const token = csrfToken();
-    if (token && !["GET", "HEAD"].includes(request.method)) request.headers.set("X-CSRF-Token", token);
+    const needsToken = !["GET", "HEAD"].includes(request.method) || CSRF_READS.test(new URL(request.url).pathname);
+    if (token && needsToken) request.headers.set("X-CSRF-Token", token);
     requestEpoch.set(request, sessionEpoch);
     return request;
   },

@@ -1406,6 +1406,50 @@ async fn member_export_uses_the_shared_csv_safe_rule() {
     assert!(!csv.contains("Rack A Slot 4"), "{csv:?}");
 }
 
+/// GH#414: the member export is audited, so a session must send the CSRF
+/// token. A cross-site top-level navigation carries the SameSite=Lax cookie
+/// but no custom header: refused before any work, nothing recorded. The UI's
+/// fetch (with the token) and an API token still export.
+#[tokio::test]
+async fn member_export_needs_the_csrf_token_from_a_session() {
+    let Some(db) = scratch::database("business_services_export_csrf").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig::default()).await;
+    let admin = w.admin.clone();
+    let s = w.ci("business_service", "SHOP-1", "Shop").await;
+    w.ci("server", "web-01", "Web").await;
+    assert_eq!(w.add(&admin, "SHOP-1", &["web-01"]).await.0, 200);
+    let path = format!("/api/v1/business-services/{s}/members/export");
+    let exports = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log WHERE action = 'export'")
+            .fetch_one(&w.pool)
+            .await
+            .unwrap()
+    };
+
+    for csrf in [None, Some("not-the-token".to_owned())] {
+        let forged = Creds { csrf, ..admin.clone() };
+        let (status, _, body) = raw(&w.app, "GET", &path, &forged, None).await;
+        assert_eq!(status, 403, "{body}");
+        assert!(body.contains("CSRF_TOKEN_INVALID"), "{body}");
+    }
+    assert_eq!(exports().await, 0, "a refused export is not recorded");
+
+    let (status, _, body) = raw(&w.app, "GET", &path, &admin, None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(exports().await, 1);
+
+    let admins: Uuid =
+        sqlx::query_scalar("SELECT id FROM permission_profiles WHERE is_builtin").fetch_one(&w.pool).await.unwrap();
+    let expires = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+    let create = json!({ "name": "export script", "profileId": admins, "expiresAt": expires });
+    let (status, created, _) = call(&w.app, "POST", "/api/v1/admin/api-tokens", &admin, Some(create)).await;
+    assert_eq!(status, 201, "{created}");
+    let token = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+    let (status, _, body) = raw(&w.app, "GET", &path, &token, None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(exports().await, 2);
+}
+
 // ---------------------------------------------------------------------------
 // Principals and settings
 // ---------------------------------------------------------------------------
