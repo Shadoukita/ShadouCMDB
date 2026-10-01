@@ -7,7 +7,6 @@
 pub mod analyse;
 pub mod commit;
 pub mod convert;
-pub mod csv_safe;
 pub mod dry_run;
 pub mod jobs;
 pub mod mapping;

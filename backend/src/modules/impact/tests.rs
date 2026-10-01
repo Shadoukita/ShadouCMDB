@@ -738,6 +738,40 @@ async fn export_is_neutralised_audited_and_scoped() {
     db.drop().await;
 }
 
+/// Names the API's validation would refuse today but older rows or imports
+/// can hold: what the shared csv_safe rule neutralises (leading spaces,
+/// full-width signs, tab and CR) gets a `'`, and a line break stays inside its
+/// quoted cell instead of being folded to a space (GH#388).
+const FORMULA_NAMES: [&str; 9] =
+    [" =1+1", "\u{3000}=1+1", "＝1+1", "＋1", "－1", "＠SUM(A1)", "\t=1", "\r=1", "Rack A\nSlot 4"];
+
+#[tokio::test]
+async fn export_uses_the_shared_csv_safe_rule() {
+    let Some(db) = scratch::database("impact_export_uses_the_shared_csv_safe_rule").await else { return };
+    let f = fixture(&db).await;
+    let root = f.ci("app").await;
+    for name in FORMULA_NAMES {
+        let c = f.ci("app").await;
+        f.affects(root, c).await;
+        sqlx::query("UPDATE cmdb.configuration_items SET label = $1 WHERE id = $2")
+            .bind(name)
+            .bind(c)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+    }
+
+    let path = format!("/api/v1/configuration-items/{root}/impact/export?depth=1");
+    let (status, body, _) = raw(&f.app, &path, &f.session).await;
+    assert_eq!(status, 200, "{body}");
+    for name in &FORMULA_NAMES[..8] {
+        assert!(body.contains(&format!(",\"'{name}\",")), "{name:?} in {body:?}");
+    }
+    assert!(body.contains(",\"Rack A\nSlot 4\","), "{body:?}");
+    assert!(!body.contains("Rack A Slot 4"), "{body:?}");
+    db.drop().await;
+}
+
 /// The routes: 404 for a hidden or missing root with the same body shape, 400
 /// for bad parameters, the settings endpoint, and 401 without a session.
 #[tokio::test]

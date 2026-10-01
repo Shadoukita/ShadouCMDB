@@ -1273,6 +1273,41 @@ async fn membership_changes_and_exports_are_audited() {
     );
 }
 
+/// The member export neutralises what the shared csv_safe rule does and keeps
+/// a line break inside its quoted cell (GH#388). The labels are written
+/// directly, as older rows or imports can hold them.
+#[tokio::test]
+async fn member_export_uses_the_shared_csv_safe_rule() {
+    let Some(db) = scratch::database("business_services_export_csv_safe").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig::default()).await;
+    let admin = w.admin.clone();
+    let s = w.ci("business_service", "SHOP-1", "Shop").await;
+    let labels = [" =1+1", "\u{3000}=1+1", "＝1+1", "＋1", "－1", "＠SUM(A1)", "\t=1", "\r=1", "Rack A\nSlot 4"];
+    let mut idents = Vec::new();
+    for (i, label) in labels.iter().enumerate() {
+        let ident = format!("web-{i:02}");
+        let id = w.ci("server", &ident, "placeholder").await;
+        sqlx::query("UPDATE cmdb.configuration_items SET label = $1 WHERE id = $2")
+            .bind(label)
+            .bind(id)
+            .execute(&w.pool)
+            .await
+            .unwrap();
+        idents.push(ident);
+    }
+    let members: Vec<&str> = idents.iter().map(String::as_str).collect();
+    assert_eq!(w.add(&admin, "SHOP-1", &members).await.0, 200);
+
+    let (status, _, csv) =
+        raw(&w.app, "GET", &format!("/api/v1/business-services/{s}/members/export"), &admin, None).await;
+    assert_eq!(status, 200, "{csv}");
+    for label in &labels[..8] {
+        assert!(csv.contains(&format!(",\"'{label}\",")), "{label:?} in {csv:?}");
+    }
+    assert!(csv.contains(",\"Rack A\nSlot 4\","), "{csv:?}");
+    assert!(!csv.contains("Rack A Slot 4"), "{csv:?}");
+}
+
 // ---------------------------------------------------------------------------
 // Principals and settings
 // ---------------------------------------------------------------------------

@@ -194,8 +194,10 @@ pub fn routes() -> Vec<Route> {
             .summary("Impact analysis as CSV")
             .description(
                 "The same analysis as getConfigurationItemImpact (same parameters, limits and visibility) as a CSV \
-                 file (`Content-Disposition: attachment`). Every field is quoted; a value starting with =, +, -, @, \
-                 a tab or a line break is prefixed with ' so spreadsheets do not run it as a formula. The first row \
+                 file (`Content-Disposition: attachment`). Every field is quoted; a value starting with a tab or a \
+                 line break, or with =, +, -, @ or their full-width forms after any leading spaces, is prefixed with \
+                 ' so spreadsheets do not run it as a formula (a value already starting with ' gets a second one), \
+                 and a line break inside a value stays in its field. The first row \
                  is a comment with the root, the parameters, whether the result was truncated and the visibility \
                  note; then the columns ci_id, ident, name, class, criticality, direction, hops, via_relationship, \
                  via_ci_ident, path_idents, active, status. Each export is recorded in the audit log (action \

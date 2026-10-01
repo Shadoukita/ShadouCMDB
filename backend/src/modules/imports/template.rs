@@ -6,13 +6,13 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::csv_safe;
 use super::jobs::require_enabled;
 use crate::api::context::RequestContext;
 use crate::auth::permissions::ClassOp;
 use crate::config::ImportConfig;
 use crate::data::classes as class_data;
 use crate::http::error::AppError;
+use crate::modules::csv_safe;
 
 /// A class the caller may import into: concrete, active, visible, and with
 /// create or edit on it. Anything else is `None`, reported like an unknown key.
