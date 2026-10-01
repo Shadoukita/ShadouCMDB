@@ -12,6 +12,9 @@ import IdentityProviderEditPage from "./pages/admin/identity/IdentityProviderEdi
 import IdentityProvidersPage from "./pages/admin/identity/IdentityProvidersPage.vue";
 import AuditLogPage from "./pages/admin/AuditLogPage.vue";
 import TemplatesPage from "./pages/admin/TemplatesPage.vue";
+import ImportSettingsPage from "./pages/admin/ImportSettingsPage.vue";
+import ImportsPage from "./pages/imports/ImportsPage.vue";
+import ImportWizardPage from "./pages/imports/ImportWizardPage.vue";
 import ConfigTransferPage from "./pages/admin/config/ConfigTransferPage.vue";
 import CustomizationPage from "./pages/admin/customization/CustomizationPage.vue";
 import AreasPage from "./pages/admin/datamodel/AreasPage.vue";
@@ -70,6 +73,9 @@ export const router = createRouter({
     { path: `/cis/:id${EDITOR_SUFFIX}`, component: CiDetailPage, meta: { layoutEditor: true } },
     { path: `/cis/:id/edit${EDITOR_SUFFIX}`, component: CiEditPage, meta: { layoutEditor: true } },
     { path: "/search", component: SearchPage },
+    { path: "/imports", component: ImportsPage },
+    { path: "/imports/new", component: ImportWizardPage },
+    { path: "/imports/:id", component: ImportWizardPage },
     { path: "/account", component: AccountPage },
     { path: TWO_FACTOR_SETUP, component: TwoFactorSetupPage, meta: { bare: true } },
     {
@@ -105,6 +111,7 @@ export const router = createRouter({
         { path: "templates", component: TemplatesPage, meta: { permissions: section("templates") } },
         { path: "customization", redirect: "/admin/customization/branding" },
         { path: "customization/:section", component: CustomizationPage, meta: { permissions: section("customization") } },
+        { path: "import", component: ImportSettingsPage, meta: { administratorOnly: true } },
         { path: "config", component: ConfigTransferPage, meta: { permissions: section("config") } },
         { path: "audit", component: AuditLogPage, meta: { permissions: section("audit") } },
       ],

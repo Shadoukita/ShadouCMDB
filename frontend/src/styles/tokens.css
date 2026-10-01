@@ -35,6 +35,11 @@
   --c-danger: #b42318;
   --c-danger-hover: #8f1c13;
   --c-danger-bg: #fdecea;
+  /* Error text on surfaces and hovered rows (at least 4.5:1 on both). */
+  --c-danger-text: #b42318;
+  /* Solid danger buttons (white text). */
+  --c-danger-solid: #b42318;
+  --c-danger-solid-hover: #8f1c13;
   --c-warn-bg: #fff6e0;
   --c-warn-border: #e8c46b;
   --c-ok: #1a7f37;
@@ -74,10 +79,13 @@
   --c-text-muted: #9aa5b4;
   --c-link: #7fb0ff;
   --c-primary: #326fd4; /* white text on it: 4.8:1 */
-  --c-primary-hover: #3b7be0;
+  --c-primary-hover: #2a62bf; /* darker, not lighter: white text keeps 5.8:1 on hover */
   --c-danger: #e5534b;
   --c-danger-hover: #f06e66;
   --c-danger-bg: #3a1d1c;
+  --c-danger-text: #ff7b72; /* 6.5:1 on the surface, 5.3:1 on a hovered row */
+  --c-danger-solid: #c0342d; /* white text: 5.6:1 */
+  --c-danger-solid-hover: #a52b25;
   --c-danger-border: #7a2e29;
   --c-warn-bg: #352b12;
   --c-warn-border: #8a6d1f;

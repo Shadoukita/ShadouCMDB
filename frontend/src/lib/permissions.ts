@@ -14,6 +14,11 @@ export const GLOBAL_PERMISSIONS: { key: GlobalPermission; label: string; hint: s
   { key: "customization.manage", label: "Manage customization", hint: "Branding, navigation, dashboards and layouts" },
   { key: "config.export_import", label: "Export and import configuration", hint: "Export or import the whole configuration" },
   { key: "audit.view", label: "View the audit log", hint: "Read the change history of every record" },
+  {
+    key: "cis.import",
+    label: "Bulk import",
+    hint: "Import configuration items from CSV and Excel files (still limited by the class rights)",
+  },
 ];
 
 export const CLASS_RIGHTS: ClassRight[] = ["view", "create", "edit", "delete"];

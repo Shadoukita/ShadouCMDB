@@ -83,6 +83,8 @@ const query = computed<AuditListQuery>(() => ({
   actorName: get("actorName") || undefined,
   entityType: oneOf(get("entityType"), ENTITY_TYPES.map((e) => e.value)),
   action: oneOf(get("action"), ACTIONS),
+  // Set by links from a record (for example an import's "View in audit log"); cleared with the other filters.
+  entityId: get("entityId") || undefined,
   sort: lq.sort.value === "occurredAt" ? "occurredAt" : "-occurredAt",
   limit: limit.value,
   offset: offset.value,
@@ -99,13 +101,13 @@ watch(
   (v) => (actorText.value = v),
 );
 
-const filtered = computed(() => ["actorId", "actorName", "entityType", "action"].some((k) => get(k)));
+const filtered = computed(() => ["actorId", "actorName", "entityType", "entityId", "action"].some((k) => get(k)));
 const total = computed(() => list.data.value?.page.total ?? 0);
 const rows = computed(() => list.data.value?.data ?? []);
 
 function clearFilters() {
   actorText.value = "";
-  update({ actorId: undefined, actorName: undefined, entityType: undefined, action: undefined });
+  update({ actorId: undefined, actorName: undefined, entityType: undefined, entityId: undefined, action: undefined });
 }
 
 
