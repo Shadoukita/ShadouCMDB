@@ -306,7 +306,7 @@ jobs:
           & $exe --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
           if ($LASTEXITCODE) { throw 'service install failed' }
           function Find-ReparsePoint($dir) {
-            Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
+            Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop | ForEach-Object {
               if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $_.FullName }
               elseif ($_.PSIsContainer) { Find-ReparsePoint $_.FullName } }
           }
@@ -314,6 +314,17 @@ jobs:
           New-Item -ItemType Junction -Path "$data\logs\planted" -Target "$env:RUNNER_TEMP\elsewhere" | Out-Null
           if (-not (Find-ReparsePoint $data)) { throw 'the link check missed a junction' }
           Remove-Item "$data\logs\planted" -Force
+          # A folder that Administrators may not list must stop the check, not hide a link from it. The
+          # guide is run interactively, where errors do not stop a script, so test with that default.
+          New-Item -ItemType Directory -Force "$data\logs\hidden" | Out-Null
+          New-Item -ItemType Junction -Path "$data\logs\hidden\planted" -Target "$env:RUNNER_TEMP\elsewhere" | Out-Null
+          icacls "$data\logs\hidden" /deny '*S-1-5-32-544:(RD)' | Out-Null
+          $stopped = $false
+          try { & { $ErrorActionPreference = 'Continue'; Find-ReparsePoint $data } | Out-Null } catch { $stopped = $true }
+          if (-not $stopped) { throw 'the link check passed over a folder it could not read' }
+          icacls "$data\logs\hidden" /remove:d '*S-1-5-32-544' | Out-Null
+          Remove-Item "$data\logs\hidden\planted" -Force
+          Remove-Item "$data\logs\hidden" -Force
           if ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$data is a link" }
           icacls $data /setowner '*S-1-5-32-544' /C
           icacls $data /reset /C

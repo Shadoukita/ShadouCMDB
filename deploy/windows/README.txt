@@ -76,9 +76,10 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
   # Any user may create folders under C:\ProgramData, and the owner of a file or
   # folder can always change its permissions again, so Administrators take
   # ownership of everything in the data folder. Links are refused: the recursive
-  # commands would follow a junction or symbolic link out of the folder.
+  # commands would follow a junction or symbolic link out of the folder, and a
+  # folder the check cannot read stops it.
   function Find-ReparsePoint($dir) {
-    Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
+    Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop | ForEach-Object {
       if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $_.FullName }
       elseif ($_.PSIsContainer) { Find-ReparsePoint $_.FullName } }
   }
@@ -175,7 +176,7 @@ to the env file, then:
   # itself access again. Lock the folder and take ownership as for a new
   # install; /reset also drops every LocalService permission:
   function Find-ReparsePoint($dir) {
-    Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
+    Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop | ForEach-Object {
       if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $_.FullName }
       elseif ($_.PSIsContainer) { Find-ReparsePoint $_.FullName } }
   }
