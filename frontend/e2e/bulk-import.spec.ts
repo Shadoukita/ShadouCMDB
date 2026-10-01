@@ -354,8 +354,11 @@ test("happy path, CSV: auto-matched columns with a lookup, a reference and a rel
   await page.goto("/imports");
   const listed = page.getByRole("row", { name: new RegExp(`apps-${stamp}\\.csv`) });
   await expect(listed).toBeVisible();
-  // The clipped File cell stays a table cell (an inline-block drops out of the row's grid and misaligns its border).
-  await expect(listed.locator("td.cell-clip")).toHaveCSS("display", "table-cell");
+  // The clipped File cell stays a table cell (an inline-block drops out of the row's grid and misaligns its border);
+  // the span inside it does the clipping.
+  const fileCell = listed.locator("td").first();
+  await expect(fileCell).toHaveCSS("display", "table-cell");
+  await expect(fileCell.locator("span.cell-clip")).toHaveCSS("text-overflow", "ellipsis");
   await checkA11y(page, testInfo, "imports-list");
   await page.context().close();
 

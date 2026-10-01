@@ -1413,11 +1413,6 @@ nav.tabs a[aria-current="page"] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* On a table cell the clip must not turn it into an inline-block, or it drops out of the row's grid. */
-table.data td.cell-clip {
-  display: table-cell;
-  vertical-align: middle;
-}
 
 /* ---------- Layout panels (Customization › Detail and form layout) ---------- */
 /* Sections sit on the tab's 12-column grid (lg-sec above); each lays its fields out on its own grid. */
