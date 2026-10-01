@@ -342,6 +342,53 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Rows per data-model table: `(table, total, built-in)`. Built-in rows carry
+/// a `system_role` (the Business service class and member type, migration
+/// 0033; the criticality list, 0031) and exist on every install. Attributes,
+/// rules and list values have no such marker: the administrator and the
+/// templates may add their own to a built-in class or list.
+async fn data_model_counts(pool: &PgPool) -> sqlx::Result<Vec<(String, i64, i64)>> {
+    sqlx::query_as(
+        "SELECT 'ci_classes', count(*), count(*) FILTER (WHERE system_role IS NOT NULL) FROM ci_classes
+         UNION ALL SELECT 'ci_attribute_definitions', count(*), 0 FROM ci_attribute_definitions
+         UNION ALL SELECT 'relationship_types', count(*), count(*) FILTER (WHERE system_role IS NOT NULL)
+           FROM relationship_types
+         UNION ALL SELECT 'relationship_type_rules', count(*), 0 FROM relationship_type_rules
+         UNION ALL SELECT 'lookup_lists', count(*), count(*) FILTER (WHERE system_role IS NOT NULL) FROM lookup_lists
+         UNION ALL SELECT 'lookup_list_values', count(*), 0 FROM lookup_list_values",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// The data model is empty while no class without a system role exists: the
+/// same rule as `dataModelEmpty()` in the web UI (SHAA-961).
+fn data_model_empty(counts: &[(String, i64, i64)]) -> bool {
+    counts.iter().any(|(table, total, builtin)| table == "ci_classes" && total == builtin)
+}
+
+/// The "Data model:" block `seed` prints, one line per table
+/// (`  <table>: <total>`, plus ` (built-in: <n>)` when some rows are built
+/// in), followed by the first-run hint while the data model is empty.
+fn data_model_report(counts: &[(String, i64, i64)]) -> Vec<String> {
+    let mut lines = vec!["Data model:".to_owned()];
+    for (table, total, builtin) in counts {
+        lines.push(if *builtin > 0 {
+            format!("  {table}: {total} (built-in: {builtin})")
+        } else {
+            format!("  {table}: {total}")
+        });
+    }
+    if data_model_empty(counts) {
+        lines.push(
+            "The data model is empty. Build it under Administration, or install a starter template: \
+             shadoucmdb seed --template it_infrastructure"
+                .to_owned(),
+        );
+    }
+    lines
+}
+
 pub async fn run(cfg: &DatabaseConfig, template_keys: &[String], demo: bool) -> anyhow::Result<()> {
     let pool = crate::db::connect(cfg).await?;
     let result = async {
@@ -367,25 +414,8 @@ pub async fn run(cfg: &DatabaseConfig, template_keys: &[String], demo: bool) -> 
                 println!("  skipped {s}");
             }
         }
-        let counts: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT 'ci_classes', count(*) FROM ci_classes
-             UNION ALL SELECT 'ci_attribute_definitions', count(*) FROM ci_attribute_definitions
-             UNION ALL SELECT 'relationship_types', count(*) FROM relationship_types
-             UNION ALL SELECT 'relationship_type_rules', count(*) FROM relationship_type_rules
-             UNION ALL SELECT 'lookup_lists', count(*) FROM lookup_lists
-             UNION ALL SELECT 'lookup_list_values', count(*) FROM lookup_list_values",
-        )
-        .fetch_all(&pool)
-        .await?;
-        println!("Data model:");
-        for (table, n) in &counts {
-            println!("  {table}: {n}");
-        }
-        if counts.first().is_some_and(|(_, n)| *n == 0) {
-            println!(
-                "The data model is empty. Build it under Administration, or install a starter template: \
-                 shadoucmdb seed --template it_infrastructure"
-            );
+        for line in data_model_report(&data_model_counts(&pool).await?) {
+            println!("{line}");
         }
         if demo {
             let loaded = seed_demo_data(&pool).await?;
@@ -403,4 +433,46 @@ pub async fn run(cfg: &DatabaseConfig, template_keys: &[String], demo: bool) -> 
     .await;
     pool.close().await;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{data_model_counts, data_model_report, install_template};
+    use crate::db::scratch;
+
+    const HINT: &str = "The data model is empty.";
+
+    /// GH#386: on a fresh install only built-in rows exist (migrations 0031,
+    /// 0033), and the first-run hint is shown until a template or a class of
+    /// the administrator's own exists.
+    #[tokio::test]
+    async fn empty_data_model_hint_ignores_built_in_rows() {
+        let Some(db) = scratch::database("seed_empty_data_model_hint").await else { return };
+
+        let fresh = data_model_report(&data_model_counts(&db.pool).await.unwrap());
+        assert!(fresh.iter().any(|l| l.starts_with(HINT)), "{fresh:#?}");
+        assert!(fresh.contains(&"  ci_classes: 1 (built-in: 1)".to_owned()), "{fresh:#?}");
+
+        install_template(&db.pool, "it_infrastructure").await.unwrap();
+        let seeded = data_model_report(&data_model_counts(&db.pool).await.unwrap());
+        assert!(!seeded.iter().any(|l| l.starts_with(HINT)), "{seeded:#?}");
+
+        db.drop().await;
+    }
+
+    #[tokio::test]
+    async fn a_class_of_your_own_ends_the_empty_data_model_hint() {
+        let Some(db) = scratch::database("seed_own_class_ends_hint").await else { return };
+        sqlx::query(
+            "WITH a AS (INSERT INTO areas (key, name) VALUES ('network', 'Network') RETURNING id)
+             INSERT INTO ci_classes (key, name, area_id) SELECT 'load_balancer', 'Load Balancer', id FROM a",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let report = data_model_report(&data_model_counts(&db.pool).await.unwrap());
+        assert!(!report.iter().any(|l| l.starts_with(HINT)), "{report:#?}");
+        assert!(report.contains(&"  ci_classes: 2 (built-in: 1)".to_owned()), "{report:#?}");
+        db.drop().await;
+    }
 }
