@@ -76,6 +76,9 @@ function toJobStep() {
 const presetClassKey = computed(() => (typeof route.query.classKey === "string" ? route.query.classKey : undefined));
 const presetFromJob = computed(() => (typeof route.query.fromJob === "string" ? route.query.fromJob : undefined));
 
+/** Settings loaded and import off: the job's step actions would all be refused with `403 import_disabled`. */
+const importOff = computed(() => !!settings.data.value && !available.value);
+
 const committedRows = computed(() => {
   const c = data.value?.summary?.committed;
   return c ? c.created + c.updated + c.unchanged : 0;
@@ -153,7 +156,21 @@ const committedRows = computed(() => {
         </template>
       </div>
 
-      <FileStep v-if="step === 1" :job="data" @next="toMapping" />
+      <!-- While import is off the server refuses every step (W3): only cancel and delete remain, on /imports. -->
+      <div v-if="importOff" class="alert alert-warn" role="status">
+        <strong v-if="settings.data.value?.locked">Bulk import is disabled by the server configuration.</strong>
+        <template v-else>
+          <strong>Bulk import is turned off for this instance.</strong>
+          An administrator can turn it on under
+          <RouterLink v-if="session.isAdministrator" to="/admin/import">Administration › Import</RouterLink>
+          <template v-else>Administration › Import</template>.
+        </template>
+        This import cannot continue. You can still stop or delete it under
+        <RouterLink to="/imports">Imports</RouterLink>.
+      </div>
+      <ErrorAlert v-else-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />
+      <LoadingState v-else-if="!settings.data.value" label="Loading import settings…" />
+      <FileStep v-else-if="step === 1" :job="data" @next="toMapping" />
       <MappingStep v-else-if="step === 2" :job="data" :preset-class-key="presetClassKey" :preset-from-job="presetFromJob" @checking="toJobStep" />
       <CheckStep v-else-if="step === 3" :job="data" @committing="toJobStep" />
       <CommitStep v-else :job="data" />
