@@ -254,8 +254,9 @@ pub async fn list(
         cis.extend(edges.values().flat_map(|&(source, target)| [source, target]));
         let classes = ci_classes(pool, &cis).await?;
         let changes = schema_changes::visible_changes(pool, &referenced_changes(&rows), &visible).await?;
+        let fields = field_classes(pool, &reported_fields(&rows)).await?;
         let visible = visible.into_iter().collect();
-        redact(&mut rows, &classes, &changes, &visible);
+        redact(&mut rows, &classes, &changes, &fields, &visible);
         hide_path_ids(&mut rows, &classes, &edges, &visible);
         // Raw ids would show, by a gap, that a row left out sits between two shown (GH#378).
         for e in &mut rows {
@@ -274,8 +275,14 @@ pub async fn list(
 // into such a CI keeps only its id. A schema change entry holds the writer's
 // record, counts of stored data included, so it shows the summary and impact
 // GET /schema-changes would show the caller (GH#261); its existence is no
-// secret, so it stays listed. [`redact`] applies the same CI rules again to the
-// page, in case a CI changed class between the two queries.
+// secret, so it stays listed. A field entry that lists stored values
+// (`notMappedValues`, written by migration 0036) keeps its counts but shows the
+// values only to a caller who may view the field's type and every subtype,
+// whose CIs hold them (GH#392). [`redact`] applies the same CI rules again to
+// the page, in case a CI changed class between the two queries.
+
+/// The key of a field entry that lists values stored in CIs of the field's type.
+const STORED_VALUES: &str = "notMappedValues";
 
 /// The condition that keeps only entries the caller may see in full, given the
 /// classes they may view: the rules of [`redact`], in SQL. A CI that no longer
@@ -397,6 +404,16 @@ fn referenced_changes(rows: &[AuditEntry]) -> Vec<Uuid> {
     ids.into_iter().collect()
 }
 
+/// Every field whose entry lists stored values ([`STORED_VALUES`]).
+fn reported_fields(rows: &[AuditEntry]) -> Vec<Uuid> {
+    let ids: HashSet<Uuid> = rows
+        .iter()
+        .filter(|e| e.entity_type == "ci_attribute_definitions" && values(e).any(|v| v.get(STORED_VALUES).is_some()))
+        .map(|e| e.entity_id)
+        .collect();
+    ids.into_iter().collect()
+}
+
 /// Every relationship a `token.use` path names.
 fn path_relationships(rows: &[AuditEntry]) -> Vec<Uuid> {
     let ids: HashSet<Uuid> = rows
@@ -434,12 +451,34 @@ async fn ci_classes(pool: &PgPool, ids: &[Uuid]) -> Result<HashMap<Uuid, Uuid>, 
     Ok(rows.into_iter().collect())
 }
 
+/// The type of each field and every type below it, whose CIs hold the field's values.
+async fn field_classes(pool: &PgPool, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<Uuid>>, AppError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(Uuid, Vec<Uuid>)> = sqlx::query_as(
+        "WITH RECURSIVE down (field, class_id, depth) AS (
+           SELECT id, class_id, 0 FROM cmdb.ci_attribute_definitions WHERE id = ANY($1)
+           UNION
+           SELECT down.field, c.id, down.depth + 1 FROM cmdb.ci_classes c JOIN down ON c.parent_id = down.class_id
+           WHERE down.depth < 64
+         )
+         SELECT field, array_agg(DISTINCT class_id) FROM down GROUP BY field",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
 /// `classes`: the current class of each CI in [`referenced_cis`]; `changes`: each
-/// change in [`referenced_changes`] as the caller sees it; `visible`: the classes the caller may view.
+/// change in [`referenced_changes`] as the caller sees it; `fields`: the types of each
+/// field in [`reported_fields`] ([`field_classes`]); `visible`: the classes the caller may view.
 fn redact(
     rows: &mut [AuditEntry],
     classes: &HashMap<Uuid, Uuid>,
     changes: &HashMap<Uuid, SchemaChange>,
+    fields: &HashMap<Uuid, Vec<Uuid>>,
     visible: &HashSet<Uuid>,
 ) {
     let can_view = |ci: Uuid| classes.get(&ci).is_some_and(|c| visible.contains(c));
@@ -466,6 +505,15 @@ fn redact(
                 }
                 None => false,
             },
+            // The counts stay; a field that no longer exists reveals nothing.
+            "ci_attribute_definitions" => {
+                if !fields.get(&e.entity_id).is_some_and(|types| types.iter().all(|c| visible.contains(c))) {
+                    for v in e.old_value.iter_mut().chain(e.new_value.iter_mut()).filter_map(Value::as_object_mut) {
+                        v.remove(STORED_VALUES);
+                    }
+                }
+                continue;
+            }
             _ => continue,
         };
         if !shown {
@@ -612,7 +660,7 @@ pub fn routes() -> Vec<Route> {
             .tag("Audit log")
             .summary("Change history (read-only, paginated, newest first by default)")
             .description(
-                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`) and a business service's member CSV (`kind` business_service_members, on the service). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{\"members\": {\"added\": [ids], \"removed\": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{\"owners\": {\"technical\": [...], \"business\": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
+                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`) and a business service's member CSV (`kind` business_service_members, on the service). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{\"members\": {\"added\": [ids], \"removed\": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{\"owners\": {\"technical\": [...], \"business\": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
             )
             .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<AuditQuery>, NoBody>| async move {
@@ -622,7 +670,7 @@ pub fn routes() -> Vec<Route> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use serde_json::json;
 
     use super::*;
@@ -667,7 +715,7 @@ mod tests {
         let mut ids = referenced_cis(&rows);
         ids.sort();
         assert!(ids.iter().all(|i| classes.contains_key(i) || *i == id(9)), "{ids:?}");
-        redact(&mut rows, &classes, &HashMap::new(), &HashSet::from([id(10)]));
+        redact(&mut rows, &classes, &HashMap::new(), &HashMap::new(), &HashSet::from([id(10)]));
         rows
     }
 
@@ -854,7 +902,7 @@ mod tests {
             entry("schema_changes", id(61), None, Some(written)),
         ];
         let changes = HashMap::from([(id(60), change("Purge field code"))]);
-        redact(&mut rows, &HashMap::new(), &changes, &HashSet::new());
+        redact(&mut rows, &HashMap::new(), &changes, &HashMap::new(), &HashSet::new());
         let v = rows[0].new_value.as_ref().unwrap();
         assert!(!rows[0].redacted);
         assert_eq!((&v["summary"], &v["impact"]), (&json!("Purge field code"), &json!([])));
@@ -865,10 +913,35 @@ mod tests {
     }
 
     #[test]
+    fn a_field_entry_lists_stored_values_only_to_who_may_view_every_type_holding_them() {
+        let report = || json!({ "isActive": false, "notMapped": 2, "notMappedValues": ["urgent", "ask Bob"] });
+        let fields = HashMap::from([(id(80), vec![id(10)]), (id(81), vec![id(10), id(20)])]);
+        let mut rows = vec![
+            entry("ci_attribute_definitions", id(80), None, Some(report())),
+            entry("ci_attribute_definitions", id(81), None, Some(report())),
+            // No longer there: no telling which type held the values.
+            entry("ci_attribute_definitions", id(82), None, Some(report())),
+        ];
+        redact(&mut rows, &HashMap::new(), &HashMap::new(), &fields, &HashSet::from([id(10)]));
+        assert_eq!(rows[0].new_value, Some(report()));
+        for r in &rows[1..] {
+            assert!(!r.redacted);
+            assert_eq!(r.new_value, Some(json!({ "isActive": false, "notMapped": 2 })));
+        }
+        assert_eq!(reported_fields(&rows[..1]), [id(80)]);
+        assert!(reported_fields(&rows[1..]).is_empty());
+    }
+
+    #[test]
     fn other_entity_types_are_left_alone() {
         let rows = run(vec![entry("ci_classes", id(20), None, Some(json!({ "id": id(20), "name": "Server" })))]);
         assert!(!rows[0].redacted);
         assert!(rows[0].new_value.is_some());
+    }
+
+    /// Every entry of one entity type, up to 50.
+    pub(crate) fn of_type(t: EntityType) -> AuditQuery {
+        query(|q| (q.entity_type, q.limit) = (Some(t), 50))
     }
 
     fn query(f: impl FnOnce(&mut AuditQuery)) -> AuditQuery {
@@ -889,7 +962,7 @@ mod tests {
         q
     }
 
-    fn viewer(classes: &[Uuid]) -> RequestContext {
+    pub(crate) fn viewer(classes: &[Uuid]) -> RequestContext {
         use crate::auth::permissions::{ClassRights, Permissions};
         let view = ClassRights { view: true, ..Default::default() };
         let permissions = Permissions {
