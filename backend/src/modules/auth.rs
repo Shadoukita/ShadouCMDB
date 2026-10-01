@@ -1751,7 +1751,7 @@ pub(crate) mod tests {
         let secret = crate::auth::totp::new_secret();
         for (name, method) in [("totp", LoginMethod::Totp), ("recovery", LoginMethod::RecoveryCode)] {
             let (user, _) = account(pool, name, Some(&secret)).await;
-            let checked = data::get_user(&mut *pool.acquire().await.unwrap(), user, false).await.unwrap().unwrap();
+            let checked = data::get_user(&mut pool.acquire().await.unwrap(), user, false).await.unwrap().unwrap();
             let verified = Some(checked.password_changed_at);
 
             // Committed after the code's transaction, before the session's.
@@ -1766,7 +1766,7 @@ pub(crate) mod tests {
             // for the authenticator's lock and then finds it gone.
             let late = format!("{name}-late");
             let (user, _) = account(pool, &late, Some(&secret)).await;
-            let checked = data::get_user(&mut *pool.acquire().await.unwrap(), user, false).await.unwrap().unwrap();
+            let checked = data::get_user(&mut pool.acquire().await.unwrap(), user, false).await.unwrap().unwrap();
             let verified = Some(checked.password_changed_at);
             let tx = removing_mfa(pool, user).await;
             let ctx = anon();
