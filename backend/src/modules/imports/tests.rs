@@ -1478,6 +1478,54 @@ async fn the_error_report_lists_each_problem_with_its_row_and_audits_other_reade
     db.drop().await;
 }
 
+/// SHAA-989: with import off the owner still reads the problems and the report; nobody else gains
+/// access, and changes stay refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_owner_keeps_the_problems_and_the_report_while_import_is_off() {
+    let Some(db) = scratch::database("import_off_reads").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let bob = user(&e, "bob", &["cis.import"]).await;
+    let carol = user(&e, "carol", &[]).await;
+    let id = validated(&e, &alice, "Hostname;Cores\nweb01;many\n").await;
+    let (_, _, before) = download(&e, &alice, &format!("/api/v1/imports/{id}/error-report")).await;
+    let (status, _, _) =
+        call(&e.app, "PUT", "/api/v1/imports/settings", &e.admin, Some(json!({ "enabled": false }))).await;
+    assert_eq!(status, 200);
+
+    let issues = format!("/api/v1/imports/{id}/issues");
+    let report = format!("/api/v1/imports/{id}/error-report");
+    let (status, v, _) = call(&e.app, "GET", &issues, &alice, None).await;
+    assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(1)), "{v}");
+    assert_eq!(v["data"][0]["row"], 2, "{v}");
+    let (status, _, body) = download(&e, &alice, &report).await;
+    assert_eq!((status, body == before), (200, true), "{body}");
+    // Administrators keep their access too; their download is still audited.
+    assert_eq!(call(&e.app, "GET", &issues, &e.admin, None).await.0, 200);
+    assert_eq!(download(&e, &e.admin, &report).await.0, 200);
+    // No new access: another user's job does not exist, and cis.import is still required.
+    for uri in [&issues, &report] {
+        assert_eq!(download(&e, &bob, uri).await.0, 404, "{uri}");
+        assert_eq!(download(&e, &carol, uri).await.0, 403, "{uri}");
+    }
+    // Every change is still refused.
+    let path = format!("/api/v1/imports/{id}");
+    for (m, p, body) in [
+        ("POST", format!("{path}/dry-run"), None),
+        ("PUT", format!("{path}/mapping"), Some(server_mapping())),
+        ("PATCH", format!("{path}/file-options"), Some(json!({ "hasHeaderRow": true }))),
+    ] {
+        let (status, v, _) = call(&e.app, m, &p, &alice, body).await;
+        assert_eq!((status, detail(&v)), (403, "import_disabled"), "{m} {p}: {v}");
+    }
+    let (status, v) = commit(&e, &alice, &id, true, None).await;
+    assert_eq!((status, detail(&v)), (403, "import_disabled"), "{v}");
+    let (status, v, _) = upload(&e.app, &alice, CSV_TYPE, Some("srv-errors.csv"), &[], before.into_bytes()).await;
+    assert_eq!((status, detail(&v)), (403, "import_disabled"), "the corrected file is refused: {v}");
+    db.drop().await;
+}
+
 // ---------------------------------------------------------------------------
 // Saved mappings and suggestions (SHAA-799 part 4, D9, §3.3)
 // ---------------------------------------------------------------------------
