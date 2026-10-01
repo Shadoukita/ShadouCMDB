@@ -14,6 +14,9 @@
 //!
 //! Stored layout: `nonce(12) || ciphertext || tag(16)`, with a fresh random
 //! nonce per encryption.
+//!
+//! The master key also keys [`Keyring::audit_row_id`], the audit row ids shown
+//! to a reader whose view is limited to some classes (GH#378).
 
 pub mod cli;
 #[cfg(test)]
@@ -29,7 +32,7 @@ use anyhow::{Context, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
-use ring::hkdf;
+use ring::{hkdf, hmac};
 
 use crate::config::EncryptionConfig;
 
@@ -38,6 +41,15 @@ pub const OVERHEAD: usize = NONCE_LEN + 16;
 
 const KEY_LEN: usize = 32;
 const KEY_ID_INFO: &[u8] = b"shadoucmdb/key-id/v1";
+const AUDIT_ROW_ID_INFO: &[u8] = b"shadoucmdb/audit-row-id/v1";
+
+/// [`Keyring::audit_row_id`] permutes the low 52 bits of an id (two halves of
+/// 26), so every result stays an integer JavaScript represents exactly.
+const ROW_ID_HALF_BITS: u32 = 26;
+const ROW_ID_HALF_MASK: u64 = (1 << ROW_ID_HALF_BITS) - 1;
+const ROW_ID_MASK: u64 = (1 << (2 * ROW_ID_HALF_BITS)) - 1;
+/// Feistel rounds; FF1 (NIST SP 800-38G) uses 10 as well.
+const ROW_ID_ROUNDS: u8 = 10;
 
 /// What a subkey encrypts. Each has its own HKDF info string, hence its own key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +139,7 @@ pub enum OpenError {
 struct Key {
     id: KeyId,
     subkeys: Vec<(Purpose, LessSafeKey)>,
+    row_id: hmac::Key,
 }
 
 impl Key {
@@ -142,7 +155,8 @@ impl Key {
                 (p, LessSafeKey::new(UnboundKey::from(okm)))
             })
             .collect();
-        Key { id: KeyId(i32::from_be_bytes(id)), subkeys }
+        let row_id = prk.expand(&[AUDIT_ROW_ID_INFO], hmac::HMAC_SHA256).expect("HKDF output of one HMAC key").into();
+        Key { id: KeyId(i32::from_be_bytes(id)), subkeys, row_id }
     }
 
     fn subkey(&self, purpose: Purpose) -> &LessSafeKey {
@@ -219,6 +233,31 @@ impl Keyring {
 
     pub fn previous_id(&self) -> Option<KeyId> {
         self.previous.as_ref().map(|k| k.id)
+    }
+
+    /// The id an audit row is shown under to a reader whose view is limited to
+    /// some classes (GH#378). Raw ids are one global sequence, and the rows of a
+    /// request are written one after the other, so a gap between two rows of a
+    /// request the reader may see would tell that a row they may not see was
+    /// written in between. This is a keyed permutation of the id instead: stable
+    /// (the same row keeps its id from page to page and request to request),
+    /// distinct per row, and with no order or distance the reader can relate to
+    /// another row's. A 10-round Feistel network over the low 52 bits, with
+    /// HMAC-SHA256 under a subkey of the active key as round function; the high
+    /// bits are kept, so it is a permutation of every `i64`. A key rotation
+    /// changes the ids.
+    pub fn audit_row_id(&self, id: i64) -> i64 {
+        let raw = id as u64;
+        let (mut left, mut right) = ((raw >> ROW_ID_HALF_BITS) & ROW_ID_HALF_MASK, raw & ROW_ID_HALF_MASK);
+        for round in 0..ROW_ID_ROUNDS {
+            let mut input = [0u8; 5];
+            input[0] = round;
+            input[1..].copy_from_slice(&(right as u32).to_be_bytes());
+            let tag = hmac::sign(&self.active.row_id, &input);
+            let f = u32::from_be_bytes(tag.as_ref()[..4].try_into().expect("4 bytes of a SHA-256 tag")) as u64;
+            (left, right) = (right, left ^ (f & ROW_ID_HALF_MASK));
+        }
+        ((raw & !ROW_ID_MASK) | (left << ROW_ID_HALF_BITS) | right) as i64
     }
 
     /// Encrypts under the active key with a fresh nonce. `ad` binds the value to
@@ -510,5 +549,28 @@ mod tests {
         let err = Keyring::load(&EncryptionConfig::default()).unwrap_err().to_string();
         assert!(err.starts_with("ENCRYPTION_KEY_FILE is not set"), "{err}");
         assert!(err.contains("generate-encryption-key"), "{err}");
+    }
+
+    /// GH#378: distinct and stable per row, unrelated in order or distance to
+    /// the raw ids, keyed, and exact as a JavaScript number.
+    #[test]
+    fn audit_row_ids_are_a_keyed_permutation_without_order() {
+        let (ring, other) = (Keyring::random(), Keyring::random());
+        let raw: Vec<i64> = (1..=50_000).collect();
+        let shown: Vec<i64> = raw.iter().map(|&id| ring.audit_row_id(id)).collect();
+        assert_eq!(shown.iter().collect::<std::collections::HashSet<_>>().len(), raw.len(), "distinct");
+        assert_eq!(shown, raw.iter().map(|&id| ring.audit_row_id(id)).collect::<Vec<_>>(), "stable");
+        assert!(shown.iter().all(|&id| (0..1 << 53).contains(&id)), "JavaScript-safe");
+        let near = shown.windows(2).filter(|w| (w[1] - w[0]).abs() <= 2).count();
+        assert!(near < 5, "{near} neighbours stay neighbours");
+        let ascending = shown.windows(2).filter(|w| w[1] > w[0]).count();
+        assert!((20_000..30_000).contains(&ascending), "order kept for {ascending} pairs");
+        let same = raw.iter().zip(&shown).filter(|(r, s)| r == s).count();
+        assert!(same < 5, "{same} ids shown as stored");
+        let same_key = raw.iter().filter(|&&id| other.audit_row_id(id) == ring.audit_row_id(id)).count();
+        assert!(same_key < 5, "{same_key} ids shown alike under another key");
+        // The high bits are kept, so the whole i64 range is permuted.
+        let high = (1i64 << 52) + 7;
+        assert_eq!(ring.audit_row_id(high) >> 52, 1);
     }
 }
