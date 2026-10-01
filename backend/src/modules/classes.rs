@@ -733,6 +733,26 @@ pub async fn purge_class_in(
 // Attribute definitions
 // ===========================================================================
 
+/// What a built-in CI class is for (`ci_classes.system_role`, migration 0033).
+/// The class with a role cannot be deleted, archived or subclassed, and its
+/// role never changes; its key may differ between installs (`service` when
+/// the starter class was adopted, `business_service` otherwise).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum ClassSystemRole {
+    BusinessService,
+}
+
+/// What a built-in relationship type is for (`relationship_types.system_role`,
+/// migration 0033): its key, direction, impact direction and state are fixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum RelationshipTypeSystemRole {
+    BusinessServiceMember,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
 #[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "text", rename_all = "lowercase")]

@@ -2,8 +2,11 @@
 //! lookups, the permission profiles and the UI settings of an install.
 //!
 //! Everything refers to everything else by key (class key, list key, value
-//! key, profile name), never by id, so a file moves between installs. Users,
-//! passwords, sessions, CIs and relationships are never part of it.
+//! key, profile name), never by id, so a file moves between installs. The
+//! built-in classes and relationship types are the exception: they are matched
+//! by their system role (version 5), because their key differs between
+//! installs. Users, user groups, passwords, sessions, CIs, relationships and
+//! business services with their members and owners are never part of it.
 //!
 //! Identity providers are not part of it either. If they ever are, their
 //! secrets stay out: a provider carries `clientSecretSet` / `bindPasswordSet`
@@ -21,7 +24,7 @@ use serde_json::Value;
 use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
 use utoipa::{PartialSchema, ToSchema};
 
-use super::super::classes::{AttributeDataType, ValidationRules};
+use super::super::classes::{AttributeDataType, ClassSystemRole, RelationshipTypeSystemRole, ValidationRules};
 use super::super::impact::ImpactDirection;
 use super::super::lookups::{LocationType, SystemRole};
 use super::super::ui_settings::assets::ImageType;
@@ -33,9 +36,10 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// Version 2 adds areas (and the area of each class), version 3 dependent
 /// lookup lists (the parent of a list, a value and a field), version 4 the
 /// impact direction of relationship types, the system role of lookup lists
-/// (the criticality list) and saved import mappings; versions 1 to 3 are still
-/// read.
-pub const FORMAT_VERSION: i32 = 4;
+/// (the criticality list) and saved import mappings, version 5 the system role
+/// of classes and relationship types (business services) and of class grants;
+/// versions 1 to 4 are still read.
+pub const FORMAT_VERSION: i32 = 5;
 
 fn yes() -> bool {
     true
@@ -129,6 +133,12 @@ pub struct ClassSpec {
     #[schema(schema_with = nullable_key_schema)]
     #[serde(default, deserialize_with = "schemas::patch", skip_serializing_if = "Option::is_none")]
     pub title_attribute: Option<Option<String>>,
+    /// Set on the built-in business service class (version 5). An import matches such a class to this install's
+    /// class of the same role, whatever its key, and keeps that class's key and area; it never gives a class a
+    /// role or takes one away
+    #[schema(inline)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_role: Option<ClassSystemRole>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -214,6 +224,12 @@ pub struct RelationshipTypeSpec {
     pub sort_order: i32,
     #[serde(default = "yes")]
     pub is_active: bool,
+    /// Set on the built-in business service membership type (version 5). An import matches such a type to this
+    /// install's type of the same role, whatever its key, and keeps that type's key; it never gives a type a role
+    /// or takes one away
+    #[schema(inline)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_role: Option<RelationshipTypeSystemRole>,
 }
 
 /// Which classes a relationship type may connect (by keys). Ordered by
@@ -473,6 +489,11 @@ pub struct LookupSection {
 pub struct ClassGrantSpec {
     #[schema(schema_with = nullable_key_schema)]
     pub class: Option<String>,
+    /// Set when `class` is a built-in class (version 5). On import the grant applies to this install's class of
+    /// that role, whatever `class` says
+    #[schema(inline)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_system_role: Option<ClassSystemRole>,
     #[serde(default)]
     pub view: bool,
     #[serde(default)]
@@ -575,8 +596,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 4 and reads 1 to 4
-    #[schema(minimum = 1, maximum = 4)]
+    /// File format version; this server writes version 5 and reads 1 to 5
+    #[schema(minimum = 1, maximum = 5)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]
