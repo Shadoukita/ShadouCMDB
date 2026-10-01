@@ -31,6 +31,7 @@ use crate::data::business_services::{
     ServiceSort,
 };
 use crate::data::crud::{self, AuditAction, AuditEntry};
+use crate::data::impact as impact_data;
 use crate::data::items::{self as items_data, ActiveFilter, ItemFilters, SummaryRow};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::csv_safe;
@@ -50,7 +51,11 @@ pub const MAX_PRINCIPALS: i64 = 20;
 const NOT_FOUND: &str = "Configuration item does not exist";
 
 async fn roles(conn: &mut PgConnection) -> Result<Roles, AppError> {
-    data::roles(conn).await?.ok_or_else(|| {
+    configured(data::roles(conn).await?)
+}
+
+fn configured(roles: Option<Roles>) -> Result<Roles, AppError> {
+    roles.ok_or_else(|| {
         tracing::error!("the built-in business service class or member type is missing (migration 0033)");
         AppError::internal()
     })
@@ -102,7 +107,7 @@ fn principal(o: &data::OwnerRow) -> PrincipalRef {
     PrincipalRef { kind, id, display_name: o.display_name.clone(), active: o.active }
 }
 
-async fn owners_of(conn: &mut PgConnection, ids: &[Uuid]) -> Result<HashMap<Uuid, ServiceOwners>, AppError> {
+async fn owners_of(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<HashMap<Uuid, ServiceOwners>> {
     let mut out: HashMap<Uuid, ServiceOwners> = HashMap::new();
     for o in data::owners(conn, ids).await? {
         let entry = out.entry(o.service_ci_id).or_default();
@@ -115,7 +120,7 @@ async fn owners_of(conn: &mut PgConnection, ids: &[Uuid]) -> Result<HashMap<Uuid
 }
 
 /// The summaries of these rows, in their order.
-async fn summaries(conn: &mut PgConnection, rows: Vec<ServiceRow>) -> Result<Vec<BusinessServiceSummary>, AppError> {
+async fn summaries(conn: &mut PgConnection, rows: Vec<ServiceRow>) -> sqlx::Result<Vec<BusinessServiceSummary>> {
     let ids: Vec<Uuid> = rows.iter().map(|r| r.ci.id).collect();
     let mut owners = owners_of(conn, &ids).await?;
     Ok(rows
@@ -710,6 +715,32 @@ pub async fn replace_owners(
 // "Part of business services"
 // ---------------------------------------------------------------------------
 
+/// The "part of" view could not be assembled within the impact analysis's
+/// allowance after its deadline (a very slow database): answered rather than
+/// holding the connection and the analysis place until the request times out
+/// (SHAA-1112).
+fn part_of_out_of_time() -> AppError {
+    let mut err = AppError::new(
+        ErrorCode::ServerBusy,
+        "The business services of the configuration item could not be listed in time because the database is \
+         responding slowly; retry shortly",
+    );
+    err.retry_after = Some(1);
+    err
+}
+
+/// A statement's error, with one cancelled by the deadline as [`part_of_out_of_time`].
+fn part_of_db_error(e: sqlx::Error) -> AppError {
+    if engine::is_query_canceled(&e) { part_of_out_of_time() } else { e.into() }
+}
+
+/// Bounds the next statement on `conn` by `until`.
+async fn bound(conn: &mut PgConnection, until: tokio::time::Instant) -> Result<(), AppError> {
+    let ms = engine::remaining_ms(until).ok_or_else(part_of_out_of_time)?;
+    impact_data::set_statement_timeout(conn, ms).await?;
+    Ok(())
+}
+
 pub async fn part_of(
     pool: &PgPool,
     ctx: &RequestContext,
@@ -723,13 +754,20 @@ pub async fn part_of(
         truncated: false,
         visibility: visibility(visible),
     };
+    // As an impact analysis (GH#393): the walk stops at IMPACT_TIMEOUT_MS from
+    // the start of the request, and every statement, before and after it, ends
+    // within the assembly allowance after that (SHAA-1112).
+    let deadline = tokio::time::Instant::now() + impact.config.timeout;
+    let assembly = engine::assembly_deadline(deadline);
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY").execute(&mut *tx).await?;
-    match items_data::summary(&mut tx, ci).await? {
+    bound(&mut tx, assembly).await?;
+    match items_data::summary(&mut tx, ci).await.map_err(part_of_db_error)? {
         Some(r) if r.deleted_at.is_none() => ctx.require_class_visible(r.class_id, "Configuration item", ci)?,
         _ => return Err(AppError::missing("Configuration item", ci)),
     }
-    let roles = roles(&mut tx).await?;
+    bound(&mut tx, assembly).await?;
+    let roles = configured(data::roles(&mut tx).await.map_err(part_of_db_error)?)?;
     if !may(ctx, roles, ClassOp::View) {
         return Ok(empty(&visible));
     }
@@ -742,7 +780,7 @@ pub async fn part_of(
         types: Some(&types),
         include_inactive: true,
         max_nodes: MAX_PART_OF + 1,
-        deadline: tokio::time::Instant::now() + impact.config.timeout,
+        deadline,
         visible: visible.as_deref(),
         result_classes: Some(&classes),
     };
@@ -753,9 +791,11 @@ pub async fn part_of(
     let truncated = nodes.len() > MAX_PART_OF || walk.truncated.is_some_and(|t| t != engine::Truncation::MaxNodes);
     nodes.truncate(MAX_PART_OF);
     let ids: Vec<Uuid> = nodes.iter().map(|n| n.id).collect();
-    let rows = data::services(&mut tx, roles, visible.as_deref(), &ids).await?;
+    bound(&mut tx, assembly).await?;
+    let rows = data::services(&mut tx, roles, visible.as_deref(), &ids).await.map_err(part_of_db_error)?;
+    bound(&mut tx, assembly).await?;
     let mut by_id: HashMap<Uuid, BusinessServiceSummary> =
-        summaries(&mut tx, rows).await?.into_iter().map(|s| (s.id, s)).collect();
+        summaries(&mut tx, rows).await.map_err(part_of_db_error)?.into_iter().map(|s| (s.id, s)).collect();
     tx.commit().await?;
 
     let mut data = Vec::with_capacity(nodes.len());
