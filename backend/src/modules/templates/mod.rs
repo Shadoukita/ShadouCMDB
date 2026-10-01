@@ -169,7 +169,7 @@ pub struct TemplateCounts {
 }
 
 impl TemplateCounts {
-    fn total(&self) -> i64 {
+    pub fn total(&self) -> i64 {
         self.areas
             + self.classes
             + self.attribute_definitions
@@ -249,6 +249,9 @@ pub struct TemplateInstallResult {
 
 type KeyMap = HashMap<String, Uuid>;
 
+/// The template class a business service type stands in for.
+const SERVICE_CLASS: &str = "service";
+
 /// `key -> id` for one of the keyed tables (the name is always a constant).
 async fn key_map(c: &mut PgConnection, table: &'static str) -> sqlx::Result<KeyMap> {
     let rows: Vec<(String, Uuid)> =
@@ -256,7 +259,25 @@ async fn key_map(c: &mut PgConnection, table: &'static str) -> sqlx::Result<KeyM
     Ok(rows.into_iter().collect())
 }
 
+/// `key -> id` of the classes, as templates see them: without a class keyed
+/// "service", the template's service is the business service type (migration
+/// 0033), so its fields, rules and demo CIs go there.
+pub async fn template_classes(c: &mut PgConnection) -> sqlx::Result<KeyMap> {
+    let mut classes = key_map(c, "ci_classes").await?;
+    if !classes.contains_key(SERVICE_CLASS) {
+        let system: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role = 'business_service'")
+                .fetch_optional(&mut *c)
+                .await?;
+        classes.extend(system.map(|id| (SERVICE_CLASS.to_owned(), id)));
+    }
+    Ok(classes)
+}
+
+#[derive(Clone)]
 struct State {
+    /// "service" in `classes` is the business service type standing in for it
+    service_stand_in: bool,
     areas: KeyMap,
     lists: KeyMap,
     /// (list id, value key)
@@ -286,11 +307,14 @@ impl State {
         )
         .fetch_all(&mut *c)
         .await?;
+        let classes = template_classes(c).await?;
+        let service_stand_in = classes.len() > key_map(c, "ci_classes").await?.len();
         Ok(State {
+            service_stand_in,
             areas: key_map(c, "areas").await?,
             lists: key_map(c, "lookup_lists").await?,
             list_values: list_values.into_iter().collect(),
-            classes: key_map(c, "ci_classes").await?,
+            classes,
             types: key_map(c, "relationship_types").await?,
             attributes: attributes.into_iter().collect(),
             parents: parents.into_iter().collect(),
@@ -344,6 +368,14 @@ fn contents(c: &Content) -> TemplateCounts {
 }
 
 fn present(c: &Content, s: &State) -> TemplateCounts {
+    // The built-in business service type is there on every install; it only
+    // counts as the template's service once the template itself is (its area).
+    if s.service_stand_in && !s.areas.contains_key(c.area.key) {
+        let mut own = s.clone();
+        own.classes.remove(SERVICE_CLASS);
+        own.service_stand_in = false;
+        return present(c, &own);
+    }
     let n = |it: &mut dyn Iterator<Item = bool>| it.filter(|b| *b).count() as i64;
     TemplateCounts {
         areas: n(&mut std::iter::once(s.areas.contains_key(c.area.key))),

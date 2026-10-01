@@ -56,26 +56,30 @@ test.describe("a bare install", () => {
 
   test("starts without a data model, and the starter template fills it in one click", async ({ page, request }) => {
     // What `seed` leaves: system rows only.
-    for (const path of ["/ci-classes", "/relationship-types", "/statuses", "/environments", "/locations", "/owners", "/configuration-items"]) {
+    for (const path of ["/statuses", "/environments", "/locations", "/owners", "/configuration-items"]) {
       expect((await apiGet<Page_<unknown>>(request, path)).page.total, path).toBe(0);
     }
     // The one lookup list is the system list behind the core Criticality field.
     const lists = await apiGet<Page_<{ key: string; systemRole: string | null }>>(request, "/lookup-lists");
     expect(lists.data.map((l) => [l.key, l.systemRole])).toEqual([["criticality", "criticality"]]);
+    // The one class and the one relationship type are the built-in business service type and its member type (migration 0033).
+    expect((await apiGet<Page_<{ key: string }>>(request, "/ci-classes")).data.map((c) => c.key)).toEqual(["business_service"]);
+    expect((await apiGet<Page_<{ key: string }>>(request, "/relationship-types")).data.map((t) => t.key)).toEqual(["business_service_member"]);
+    // The dashboard's data-model guide leaves out the built-in class once class reads carry systemRole (SHAA-927 §4); until then it
+    // offers the first CI, so the templates page is opened directly.
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "No CI classes are defined yet" })).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Main" }).getByText("No classes yet.")).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /^Business service/ })).toBeVisible();
     await snap(page, "50-bare-install");
-    await page.getByRole("link", { name: "Install a starter template" }).click();
-    await expect(page).toHaveURL(/\/admin\/templates$/);
+    await page.goto("/admin/templates");
     await expect(page.getByRole("heading", { name: "Your CMDB is empty" })).toBeVisible();
 
     const panel = page.getByRole("region", { name: "IT infrastructure" });
     await expect(panel.locator(".badge", { hasText: "Not installed" })).toBeVisible();
     await panel.getByRole("button", { name: "Install IT infrastructure starter" }).click();
     await expect(panel.getByRole("status")).toContainText("Installed IT infrastructure.");
-    // The area, 8 classes, 69 attributes, 4 relationship types, 12 rules, 4 lookup lists and their 17 values.
-    await expect(panel.getByRole("status")).toContainText("Added 115 rows");
+    // The area, 8 classes, 69 attributes, 4 relationship types, 12 rules, 4 lookup lists and their 17 values, less the
+    // service class and its name field: the built-in business service type stands in for them.
+    await expect(panel.getByRole("status")).toContainText("Added 113 rows");
     await expect(panel.getByRole("status")).toContainText('CREATE SCHEMA "infrastruktur"');
     await expect(panel.locator(".badge", { hasText: "Installed" })).toBeVisible();
     await expect(panel.getByRole("button", { name: "Installed" })).toBeDisabled();
@@ -213,7 +217,8 @@ test.describe("imported into a fresh install", () => {
   test.use({ baseURL: targetURL, storageState: IMPORT_TARGET_STATE });
 
   test("the dry run, then apply, rebuild the same setup; exporting it again gives the same file", async ({ page, request }) => {
-    expect((await apiGet<Page_<unknown>>(request, "/ci-classes")).page.total).toBe(0);
+    // Only the built-in business service type.
+    expect((await apiGet<Page_<unknown>>(request, "/ci-classes")).page.total).toBe(1);
     const file = { name: "fresh-install.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(exported)) };
 
     await page.goto("/admin");
@@ -221,11 +226,12 @@ test.describe("imported into a fresh install", () => {
     await page.locator("#config-file").setInputFiles(file);
     const summary = page.getByRole("table", { name: "Import summary" });
     await expect(summary).toBeVisible();
-    await expect(summary.getByRole("row", { name: /^CI classes/ }).getByRole("cell").nth(1)).toHaveText("9");
+    // 9 classes in the file; the business service type is already there, built in.
+    await expect(summary.getByRole("row", { name: /^CI classes/ }).getByRole("cell").nth(1)).toHaveText("8");
     await expect(summary.getByRole("row", { name: /^Permission profiles/ }).getByRole("cell").nth(1)).toHaveText("1");
     await expect(page.locator(".import-changes").filter({ hasText: "CI classes" })).toContainText(CLASS_KEY);
     // A dry run writes nothing.
-    expect((await apiGet<Page_<unknown>>(request, "/ci-classes")).page.total).toBe(0);
+    expect((await apiGet<Page_<unknown>>(request, "/ci-classes")).page.total).toBe(1);
     await snap(page, "53-import-into-fresh-dry-run");
 
     await page.getByRole("button", { name: "Apply import" }).click();

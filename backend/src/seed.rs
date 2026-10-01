@@ -123,7 +123,7 @@ pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
         .execute(&mut *tx)
         .await?;
     }
-    let cls = key_map(&mut tx, "ci_classes").await?;
+    let cls = crate::modules::templates::template_classes(&mut tx).await?;
     let types = key_map(&mut tx, "relationship_types").await?;
     // "list.value" -> id
     let lookups: KeyMap = sqlx::query_as::<_, (String, Uuid)>(

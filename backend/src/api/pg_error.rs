@@ -146,7 +146,9 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
             return Some(AppError::new(ErrorCode::LastAdministrator, humanise(pg.message())));
         }
         Some("permission_profiles_builtin_protected") => return Some(AppError::conflict(humanise(pg.message()))),
-        Some("lookup_lists_system_protected") => {
+        Some(
+            "lookup_lists_system_protected" | "ci_classes_system_protected" | "relationship_types_system_protected",
+        ) => {
             return Some(AppError::new(ErrorCode::InUse, humanise(pg.message())));
         }
         Some("relationship_types_impact_nondirectional") => {

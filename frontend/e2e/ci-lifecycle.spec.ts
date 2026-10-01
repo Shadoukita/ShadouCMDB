@@ -178,7 +178,8 @@ test("relationships: add in both directions; illegal pairs offer no type", async
   await expect(panel.getByRole("row", { name: /hosts\s+CRM/ })).toContainText("← incoming");
 
   await pickCi(page, "#rel-target", "Customer Relationship", "Customer Relationship Management");
-  await expect(page.locator("#rel-type-hint")).toHaveText("No relationship rule allows Server ↔ Service.");
+  // A fresh install's template services are the built-in business service type (migration 0033).
+  await expect(page.locator("#rel-type-hint")).toHaveText("No relationship rule allows Server ↔ Business service.");
   await expect(page.locator("#rel-type")).toBeDisabled();
   await snap(page, "09-relationships");
   await page.getByRole("button", { name: "Clear Customer Relationship Management" }).click();

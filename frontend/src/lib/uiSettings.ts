@@ -62,11 +62,8 @@ export interface BuiltinField {
   sort?: UiListSort["field"];
   /** The CI form's field for it; absent for fields the form does not edit (label, class, timestamps). */
   form?: string;
-  /**
-   * False for a field the inventory shows (a column in its URL) but a stored list view or layout
-   * cannot name yet: the UI settings API's field names do not include it (criticality).
-   */
-  storable?: false;
+  /** A form field a layout may hide (criticality, which a CI need not have); the other form fields cannot be hidden. */
+  hideable?: true;
 }
 
 /**
@@ -77,7 +74,7 @@ export const BUILTIN_FIELDS: BuiltinField[] = [
   { key: "label", label: "Label", sort: "label" },
   { key: "ident", label: "Ident", sort: "ident", form: "ident" },
   { key: "class", label: "Class", sort: "className" },
-  { key: "criticality", label: "Criticality", sort: "criticality", storable: false },
+  { key: "criticality", label: "Criticality", sort: "criticality", form: "criticalityValueId", hideable: true },
   { key: "validFrom", label: "Valid from", sort: "validFrom", form: "validFrom" },
   { key: "validUntil", label: "Valid until", sort: "validUntil", form: "validUntil" },
   { key: "active", label: "Active" },
@@ -87,7 +84,7 @@ export const BUILTIN_FIELDS: BuiltinField[] = [
 export const BUILTIN = new Map(BUILTIN_FIELDS.map((f) => [f.key, f]));
 
 /** Built-in sort fields the list API accepts, with labels (attributes.<key> needs a class). */
-export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUILTIN_FIELDS.filter((f) => f.sort && f.storable !== false).map((f) => ({
+export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUILTIN_FIELDS.filter((f) => f.sort).map((f) => ({
   field: f.sort!,
   label: f.label,
 }));
@@ -633,9 +630,11 @@ export function freeAreaStyle(sections: readonly { frame?: UiSectionFrame }[]): 
   return { "--free-h": `${bottom}px` };
 }
 
-/** The core fields of every CI, which the form edits: the General section starts with them. */
-export const CORE_FIELDS = BUILTIN_FIELDS.filter((f) => f.form).map((f) => f.key);
+/** Core fields a layout cannot hide (the API's CORE_FIELDS): every CI has them. */
+export const LOCKED_FIELDS = BUILTIN_FIELDS.filter((f) => f.form && !f.hideable).map((f) => f.key);
+/** The core fields of every CI, which the form edits: the General section starts with them, the hideable ones last. */
+export const CORE_FIELDS = [...LOCKED_FIELDS, ...BUILTIN_FIELDS.filter((f) => f.form && f.hideable).map((f) => f.key)];
 /** Core fields the detail page's General panel shows: the edited ones and whether the CI is active. */
-export const DETAIL_CORE = [...CORE_FIELDS, "active"];
+export const DETAIL_CORE = [...LOCKED_FIELDS, "active", ...CORE_FIELDS.filter((f) => !LOCKED_FIELDS.includes(f))];
 /** Bookkeeping fields the detail page shows last, in a "Record" panel (the label is the page title). */
-export const DETAIL_RECORD = BUILTIN_FIELDS.filter((f) => f.key !== "label" && f.storable !== false && !DETAIL_CORE.includes(f.key)).map((f) => f.key);
+export const DETAIL_RECORD = BUILTIN_FIELDS.filter((f) => f.key !== "label" && !DETAIL_CORE.includes(f.key)).map((f) => f.key);
