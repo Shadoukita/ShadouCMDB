@@ -641,20 +641,38 @@ pub struct QueryParam {
     pub schema: Value,
 }
 
+/// Distinct query keys accepted beyond those a route declares; the excess is
+/// reported as unrecognized up to this point, and refused outright past it.
+const EXTRA_QUERY_KEYS: usize = 16;
+
 /// Parses a raw query string against its documented parameters into a JSON
 /// object ready for deserialisation: repeated keys are joined with commas,
 /// numeric parameters are coerced from text, defaults are applied, unknown
 /// keys are rejected.
 pub fn parse_query(raw: Option<&str>, params: &[QueryParam]) -> Result<Value, Vec<FieldError>> {
+    // GH#439: keys are merged through a hash index, and a query with far more
+    // distinct keys than the route declares is refused before any of them is
+    // checked, so a long run of junk keys costs linear time and one error.
+    let max_keys = params.len() + EXTRA_QUERY_KEYS;
     let mut given: Vec<(String, String)> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     for (k, v) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
-        match given.iter_mut().find(|(key, _)| *key == k) {
-            Some((_, existing)) => {
-                existing.push(',');
-                existing.push_str(&v);
-            }
-            None => given.push((k.into_owned(), v.into_owned())),
+        if let Some(&i) = index.get(k.as_ref()) {
+            let existing = &mut given[i].1;
+            existing.push(',');
+            existing.push_str(&v);
+            continue;
         }
+        if given.len() == max_keys {
+            return Err(vec![FieldError {
+                location: FieldLocation::Query,
+                field: "(root)".into(),
+                message: format!("Too many query parameters: at most {max_keys} distinct keys are accepted"),
+                code: "too_many_keys".into(),
+            }]);
+        }
+        index.insert(k.clone().into_owned(), given.len());
+        given.push((k.into_owned(), v.into_owned()));
     }
 
     let mut errors = Vec::new();
@@ -694,7 +712,7 @@ pub fn parse_query(raw: Option<&str>, params: &[QueryParam]) -> Result<Value, Ve
         out.insert(key.clone(), value);
     }
     for p in params {
-        if out.contains_key(&p.name) || given.iter().any(|(k, _)| *k == p.name) {
+        if out.contains_key(&p.name) || index.contains_key(&p.name) {
             continue;
         }
         if let Some(default) = p.schema.get("default") {
@@ -829,6 +847,28 @@ mod tests {
         // GH#289: a NUL in a query string is refused, not sent to the database.
         let e = parse_query(Some("q=a%00b"), &params).unwrap_err();
         assert_eq!((e[0].field.as_str(), e[0].code.as_str()), ("q", "invalid_character"));
+    }
+
+    /// GH#439: distinct keys are capped at the declared ones plus a margin.
+    #[test]
+    fn query_key_cap() {
+        let params = vec![QueryParam { name: "q".into(), required: false, schema: json!({"type": "string"}) }];
+        let keys = |n: usize| (0..n).map(|i| format!("k{i}")).collect::<Vec<_>>().join("&");
+        // At the cap, extra keys are still listed as unrecognized.
+        let e = parse_query(Some(&keys(1 + EXTRA_QUERY_KEYS)), &params).unwrap_err();
+        assert_eq!(e[0].code, "unrecognized_keys");
+        // One more distinct key is refused as a whole, with a single error.
+        let e = parse_query(Some(&keys(2 + EXTRA_QUERY_KEYS)), &params).unwrap_err();
+        assert_eq!(e.len(), 1);
+        assert_eq!((e[0].field.as_str(), e[0].code.as_str()), ("(root)", "too_many_keys"));
+        // Repeating a declared key does not count against the cap.
+        let repeated = vec!["q=a"; 1000].join("&");
+        assert_eq!(parse_query(Some(&repeated), &params).unwrap()["q"].as_str().unwrap().len(), 1999);
+        // 20k distinct keys are refused quickly rather than merged quadratically.
+        let started = std::time::Instant::now();
+        let e = parse_query(Some(&keys(20_000)), &params).unwrap_err();
+        assert_eq!(e[0].code, "too_many_keys");
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
     }
 
     /// GH#289: U+0000 is refused wherever it appears, with one error per value.
