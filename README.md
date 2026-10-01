@@ -40,9 +40,14 @@ the same flow for a source checkout.
 1. **Create the database and its roles** on your PostgreSQL server (run as an admin there):
 
    ```sh
-   psql "<admin connection string>" -v owner_password='<pw 1>' -v app_password='<pw 2>' \
-        -v maintenance_password='<pw 3>' -f sql/bootstrap/00_create_role_and_database.sql
+   psql "<admin connection string>" -f sql/bootstrap/00_create_role_and_database.sql
+   psql "<admin connection string>" -c '\password shadoucmdb_owner' -c '\password shadoucmdb_app' \
+        -c '\password shadoucmdb_maintenance'
    ```
+
+   The roles are created without a password and can log in once `\password` has set one. It prompts
+   for the password and sends the server only a SCRAM-SHA-256 verifier, so no password reaches the
+   process list or the server log; do not pass passwords as psql variables (`-v`).
 
    This creates `shadoucmdb_owner` (owns the schema, runs migrations), `shadoucmdb_app` (the API:
    reads and writes data, cannot delete audit history) and `shadoucmdb_maintenance` (may only prune

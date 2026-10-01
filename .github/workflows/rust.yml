@@ -123,8 +123,12 @@ jobs:
         run: |
           psql "$ADMIN_URL" -X -v ON_ERROR_STOP=1 \
             -v owner_role=invqa-owner -v app_role=invqa.api -v maintenance_role=Invqa-Maint -v db_name=invqa-cmdb \
-            -v owner_password=ci-owner -v app_password=ci-app -v maintenance_password=ci-maint \
             -f ../sql/bootstrap/00_create_role_and_database.sql
+          # The documented unattended path (GH#444): no terminal, so \password reads password and confirmation from stdin.
+          printf '%s\n' ci-owner ci-owner ci-app ci-app ci-maint ci-maint | psql "$ADMIN_URL" -X -v ON_ERROR_STOP=1 \
+            -c '\password "invqa-owner"' -c '\password "invqa.api"' -c '\password "Invqa-Maint"'
+          test "$(psql "$ADMIN_URL" -XAtc "SELECT count(*) FROM pg_authid WHERE rolname IN ('invqa-owner', 'invqa.api', 'Invqa-Maint')
+                                           AND rolpassword LIKE 'SCRAM-SHA-256\$%'")" = 3
           export DATABASE_URL="postgres://invqa.api:ci-app@$U" MAINTENANCE_DATABASE_URL="postgres://Invqa-Maint:ci-maint@$U"
           B=./target/release/shadoucmdb
           MIGRATION_DATABASE_URL="postgres://invqa-owner:ci-owner@$U" $B migrate | tee migrate.txt
