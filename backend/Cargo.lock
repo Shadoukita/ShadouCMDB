@@ -2133,6 +2133,7 @@ dependencies = [
  "quick-xml",
  "rcgen",
  "regex",
+ "regex-automata",
  "reqwest",
  "ring",
  "roxmltree",
