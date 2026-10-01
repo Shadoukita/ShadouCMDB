@@ -26,6 +26,8 @@ import ProfileEditPage from "./pages/admin/ProfileEditPage.vue";
 import ProfilesPage from "./pages/admin/ProfilesPage.vue";
 import UserEditPage from "./pages/admin/UserEditPage.vue";
 import UsersPage from "./pages/admin/UsersPage.vue";
+import GroupEditPage from "./pages/admin/GroupEditPage.vue";
+import GroupsPage from "./pages/admin/GroupsPage.vue";
 import { ADMIN_SECTIONS, visibleSections } from "./pages/admin/sections";
 import AccountPage from "./pages/account/AccountPage.vue";
 import TwoFactorSetupPage from "./pages/account/TwoFactorSetupPage.vue";
@@ -91,6 +93,9 @@ export const router = createRouter({
         { path: "users", component: UsersPage, meta: { permissions: section("users") } },
         { path: "users/new", component: UserEditPage, meta: { permissions: section("users") } },
         { path: "users/:id", component: UserEditPage, meta: { permissions: section("users") } },
+        { path: "groups", component: GroupsPage, meta: { permissions: section("groups") } },
+        { path: "groups/new", component: GroupEditPage, meta: { permissions: section("groups") } },
+        { path: "groups/:id", component: GroupEditPage, meta: { permissions: section("groups") } },
         { path: "profiles", component: ProfilesPage, meta: { permissions: section("profiles") } },
         { path: "profiles/new", component: ProfileEditPage, meta: { permissions: ["profiles.manage"] } },
         { path: "profiles/:id", component: ProfileEditPage, meta: { permissions: section("profiles") } },

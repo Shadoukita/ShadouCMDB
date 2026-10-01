@@ -10,6 +10,7 @@ import PaginationBar from "../../components/PaginationBar.vue";
 import { useDebounced, useDocumentTitle } from "../../lib/composables";
 import { formatRelative } from "../../lib/format";
 import { useListQuery } from "../../lib/listQuery";
+import { useFlashStore } from "../../stores/flash";
 
 /** Administration › Users. Search, filters, sort and page live in the URL; the API filters and pages. */
 useDocumentTitle("Users");
@@ -38,6 +39,9 @@ const query = computed<UserListQuery>(() => ({
   offset: offset.value,
 }));
 const list = useUserList(query);
+// Set by the user page after a delete.
+const flash = useFlashStore();
+const flashText = computed(() => flash.forCi("users"));
 const profiles = useAllProfiles();
 
 const qText = ref(get("q"));
@@ -70,6 +74,8 @@ function clearFilters() {
       <RouterLink class="btn btn-primary" to="/admin/users/new">+ New user</RouterLink>
     </div>
   </div>
+
+  <div v-if="flashText" class="alert" role="status" data-testid="users-flash">{{ flashText }}</div>
 
   <section class="panel" aria-label="Users">
     <form class="toolbar" role="search" @submit.prevent>
