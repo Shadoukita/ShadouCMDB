@@ -8,7 +8,10 @@ use serde_json::{Value, json};
 use sqlx::{Executor, PgPool};
 use uuid::Uuid;
 
+use crate::api::context::RequestContext;
 use crate::db::{MIGRATOR, scratch};
+use crate::modules::audit;
+use crate::secrets::Keyring;
 
 const APP: &str = "00000000-0000-0000-0000-00000000c001";
 const BIZ: &str = "00000000-0000-0000-0000-00000000c002";
@@ -148,6 +151,23 @@ async fn application_criticality_moves_to_the_core_field() {
             })
         )]
     );
+
+    // GH#392: the values are listed only to an audit reader who may view
+    // Application and every type below it; the counts to every reader.
+    let report = |ctx: RequestContext| async move {
+        let q = audit::tests::of_type(audit::EntityType::CiAttributeDefinitions);
+        let page = audit::list(pool, &ctx, &Keyring::for_tests(), &q).await.unwrap();
+        assert_eq!(page.page.total, 1);
+        let v = page.data[0].new_value.clone().unwrap();
+        assert_eq!(v["notMapped"], 1);
+        v.get("notMappedValues").cloned()
+    };
+    let class = |n: &str| n.parse::<Uuid>().unwrap();
+    let server = class("00000000-0000-0000-0000-00000000c003");
+    assert_eq!(report(audit::tests::viewer(&[server])).await, None);
+    assert_eq!(report(audit::tests::viewer(&[class(APP), server])).await, None, "not the subtype");
+    assert_eq!(report(audit::tests::viewer(&[class(APP), class(BIZ)])).await, Some(json!(["urgent"])));
+    assert_eq!(report(RequestContext::system("test", "test")).await, Some(json!(["urgent"])));
     db.drop().await;
 }
 
