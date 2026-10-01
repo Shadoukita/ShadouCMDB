@@ -62,6 +62,9 @@ pub enum Outcome {
     Ambiguous(usize),
     WrongPassword,
     SignedIn(DirectoryUser),
+    /// One entry matches, but the caller refused to have its password checked
+    /// (its sign-ins are locked, GH#406): no bind was attempted.
+    NotAdmitted,
 }
 
 /// The directory could not be reached or refused the service account.
@@ -199,9 +202,15 @@ async fn find(ldap: &mut Ldap, s: &Settings, username: &str) -> Result<Result<Di
     Ok(Ok(describe(users.remove(0), s)))
 }
 
-/// Checks `username` and `password` against the directory.
-pub async fn authenticate(s: &Settings, username: &str, password: &str) -> Result<Outcome, DirectoryError> {
-    check(s, username, None, password).await
+/// Checks `username` and `password` against the directory. `admit` sees the
+/// one entry the name finds before its password is tried; `false`: no bind.
+pub async fn authenticate(
+    s: &Settings,
+    username: &str,
+    password: &str,
+    admit: impl FnOnce(&DirectoryUser) -> bool + Send,
+) -> Result<Outcome, DirectoryError> {
+    check(s, username, None, password, admit).await
 }
 
 /// Checks the password of one known entry: the one `username` finds must have
@@ -213,7 +222,7 @@ pub async fn reauthenticate(
     external_id: &str,
     password: &str,
 ) -> Result<Outcome, DirectoryError> {
-    check(s, username, Some(external_id), password).await
+    check(s, username, Some(external_id), password, |_| true).await
 }
 
 async fn check(
@@ -221,6 +230,7 @@ async fn check(
     username: &str,
     expected: Option<&str>,
     password: &str,
+    admit: impl FnOnce(&DirectoryUser) -> bool + Send,
 ) -> Result<Outcome, DirectoryError> {
     if password.is_empty() {
         return Ok(Outcome::WrongPassword);
@@ -232,6 +242,10 @@ async fn check(
         Ok(_) | Err(0) => return Ok(Outcome::NotFound),
         Err(n) => return Ok(Outcome::Ambiguous(n)),
     };
+    if !admit(&user) {
+        let _ = ldap.unbind().await;
+        return Ok(Outcome::NotAdmitted);
+    }
     let outcome = match ldap.with_timeout(TIMEOUT).simple_bind(&user.dn, password).await {
         Ok(r) if r.rc == 0 => Outcome::SignedIn(user),
         Ok(r) if r.rc == INVALID_CREDENTIALS => Outcome::WrongPassword,
@@ -325,7 +339,7 @@ mod tests {
         // The URL points nowhere: an attempt to connect would fail, not "sign in".
         let s = Settings { url: "ldaps://unreachable.invalid".into(), ..settings() };
         let empty = String::new();
-        assert!(matches!(authenticate(&s, "alice", &empty).await, Ok(Outcome::WrongPassword)));
+        assert!(matches!(authenticate(&s, "alice", &empty, |_| true).await, Ok(Outcome::WrongPassword)));
     }
 
     #[test]

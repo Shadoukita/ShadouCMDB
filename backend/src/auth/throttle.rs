@@ -1,7 +1,8 @@
 //! Backoff for password guessing, per key and process-wide.
 //!
-//! Per key (the username for login, the user id for changing one's own
-//! password) and client network ([`Net`]): the first [`FREE_FAILURES`] - 1
+//! Per key (the username for login, also the directory entry it found for a
+//! directory sign-in, the user id for changing one's own password) and client
+//! network ([`Net`]): the first [`FREE_FAILURES`] - 1
 //! wrong passwords cost nothing. From then on every failure locks the key for
 //! that network for 1 s, 2 s, 4 s, ... up to [`MAX_LOCK`]; while locked, the
 //! endpoint answers 429 without checking the password. A success clears the

@@ -275,6 +275,15 @@ async function main(): Promise<void> {
     { wrong: wrong.json, unknown: unknown.json },
   );
   check(!cookieOf(wrong, 'shadoucmdb_session') && !cookieOf(unknown, 'shadoucmdb_session'), 'neither sets a session cookie');
+  // GH#406: OpenLDAP's uid matching (RFC 4518 string preparation) finds alice's entry for other
+  // spellings, each of which the per-name lock would count on its own. Only names an account could
+  // have are looked up: a full-width spelling with her right password is an unknown name.
+  const wide = await login({ username: 'ａｌｉｃｅ', password: ALICE.password });
+  check(
+    wide.status === 401 && message(wide) === message(wrong) && !cookieOf(wide, 'shadoucmdb_session'),
+    'a full-width spelling of alice with her password is not looked up: the generic 401, no session',
+    wide.json,
+  );
 
   // Wrong directory passwords count toward the per-username lock (5 free failures, then 429).
   for (const [name, password] of [['bob', 'wrong-bob-password'], ['nobody-in-the-directory', 'still-wrong']]) {
