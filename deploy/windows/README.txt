@@ -64,18 +64,37 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
   New-Item -ItemType Directory -Force $bin, $data | Out-Null
   Copy-Item .\shadoucmdb.exe $bin
   Copy-Item .\shadoucmdb.env.example "$data\shadoucmdb.env"
-  notepad "$data\shadoucmdb.env"      # DATABASE_URL, or PGHOST/PGUSER/PGPASSWORD/..., as shadoucmdb_app
+  # In the env file, set DATABASE_URL (or PGHOST/PGUSER/PGPASSWORD/...) as shadoucmdb_app,
+  # and these two lines, in single quotes (unquoted, the backslashes are read as
+  # escapes and the service does not start):
+  #   ENCRYPTION_KEY_FILE='C:\ProgramData\ShadouCMDB\encryption.key'
+  #   SETUP_TOKEN_FILE='C:\ProgramData\ShadouCMDB\state\setup-token'
+  notepad "$data\shadoucmdb.env"
 
-  # The service runs as the low-privilege LocalService account: let it read the
-  # settings and write its log, and keep the env file away from other users.
-  icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'NT AUTHORITY\LocalService:(OI)(CI)M'
+  # Only administrators and SYSTEM may change anything in the data folder; other
+  # users get no access to it at all (the service is granted read access below).
+  # Any user may create folders under C:\ProgramData, and the owner of a file or
+  # folder can always change its permissions again, so Administrators take
+  # ownership of everything in the data folder. Links are refused: the recursive
+  # commands would follow a junction or symbolic link out of the folder, and a
+  # folder the check cannot read stops it.
+  function Find-ReparsePoint($dir) {
+    Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop | ForEach-Object {
+      if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $_.FullName }
+      elseif ($_.PSIsContainer) { Find-ReparsePoint $_.FullName } }
+  }
+  if ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$data is a link" }
+  icacls $data /setowner '*S-1-5-32-544' /C
+  icacls $data /reset /C
+  icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F'
+  if ($links = Find-ReparsePoint $data) { throw "Remove these links from the data folder first: $links" }
+  New-Item -ItemType Directory -Force "$data\logs", "$data\state" | Out-Null
+  icacls $data /setowner '*S-1-5-32-544' /T /C
+  icacls "$data\*" /reset /T /C
 
-  # The key that encrypts the authenticator secrets: read-only for the service,
-  # outside the Modify grant above. Add ENCRYPTION_KEY_FILE='C:\ProgramData\ShadouCMDB\encryption.key'
-  # to the env file, in single quotes (unquoted, the backslashes are read as escapes and the
-  # service does not start), and store a copy apart from the database backups (password vault):
+  # The key that encrypts the authenticator secrets. Store a copy apart from the
+  # database backups (password vault):
   & "$bin\shadoucmdb.exe" generate-encryption-key --out "$data\encryption.key"
-  icacls "$data\encryption.key" /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' 'NT AUTHORITY\LocalService:R'
 
   # Migrate as the owner. The password is prompted for, so it stays out of the
   # env file and the PowerShell history; the variable is set for this session
@@ -88,9 +107,20 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
   # Optional starter data model (or install it later under Administration > Templates):
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" seed --template it_infrastructure
   # First administrator (or skip this and use first-run setup in the web UI, with the setup token from
-  # "$data\setup-token"; it is in the log file only if that file cannot be written):
+  # "$data\state\setup-token"; it is in the log file only if that file cannot be written):
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" create-admin --username admin
+  # Register the service. It runs as its own virtual account, NT SERVICE\ShadouCMDB,
+  # which Windows creates with the service; no other service shares it.
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
+
+  # The service reads its settings and the key, and writes only to logs\ and state\
+  # (the first-run setup token). It cannot change the env file or the key:
+  $svc = 'NT SERVICE\ShadouCMDB'
+  icacls $data /grant "${svc}:RX"
+  icacls "$data\shadoucmdb.env" /grant "${svc}:R"
+  icacls "$data\encryption.key" /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' "${svc}:R"
+  icacls "$data\logs" /grant "${svc}:(OI)(CI)M"
+  icacls "$data\state" /grant "${svc}:(OI)(CI)M"
   Start-Service ShadouCMDB
   Invoke-RestMethod http://127.0.0.1:3000/readyz
 
@@ -127,6 +157,59 @@ in your password vault). At its first start the service encrypts the existing
 authenticator secrets; nobody has to set up two-factor sign-in again. Going
 back to the previous release afterwards needs a restore of a backup taken
 before the upgrade.
+
+Upgrading an install whose service runs as NT AUTHORITY\LocalService (installed
+before the service had its own account): LocalService is shared by many Windows
+services, and the old install steps let it change the env file. Switch the
+service to NT SERVICE\ShadouCMDB once, after the migrate command below and
+before Start-Service. Add SETUP_TOKEN_FILE='C:\ProgramData\ShadouCMDB\state\setup-token'
+to the env file, then:
+
+  $bin  = 'C:\Program Files\ShadouCMDB'
+  $data = 'C:\ProgramData\ShadouCMDB'
+  $svc  = 'NT SERVICE\ShadouCMDB'
+  & "$bin\shadoucmdb.exe" service uninstall
+  & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
+
+  # LocalService still owns the files it created (the log, the setup token, and
+  # anything another LocalService service put there), and an owner can grant
+  # itself access again. Lock the folder and take ownership as for a new
+  # install; /reset also drops every LocalService permission:
+  function Find-ReparsePoint($dir) {
+    Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop | ForEach-Object {
+      if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $_.FullName }
+      elseif ($_.PSIsContainer) { Find-ReparsePoint $_.FullName } }
+  }
+  if ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$data is a link" }
+  icacls $data /setowner '*S-1-5-32-544' /C
+  icacls $data /reset /C
+  icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F'
+  if ($links = Find-ReparsePoint $data) { throw "Remove these links from the data folder first: $links" }
+  Remove-Item "$data\setup-token" -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force "$data\logs", "$data\state" | Out-Null
+  icacls $data /setowner '*S-1-5-32-544' /T /C
+  icacls "$data\*" /reset /T /C
+
+  # The same grants as for a new install:
+  icacls $data /grant "${svc}:RX"
+  icacls "$data\shadoucmdb.env" /grant "${svc}:R"
+  icacls "$data\encryption.key" /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' "${svc}:R"
+  icacls "$data\logs" /grant "${svc}:(OI)(CI)M"
+  icacls "$data\state" /grant "${svc}:(OI)(CI)M"
+  icacls $data /T /C        # check: no NT AUTHORITY\LOCAL SERVICE entries remain
+  # Check: no output (every file and folder is owned by Administrators):
+  @(Get-Item $data -Force) + @(Get-ChildItem $data -Recurse -Force) | Get-Acl |
+    Where-Object { $_.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544' } | Select-Object Path, Owner
+
+Use the same --env-file and --log-file paths as the original install. A service
+installed with --account (a domain or managed service account) keeps it: skip
+the uninstall and install commands and set $svc to that account instead.
+
+The virtual account signs in to other computers on the network as the computer
+account (DOMAIN\HOST$), where LocalService connected anonymously. ShadouCMDB
+only connects to the PostgreSQL, LDAP and OIDC servers you configure; check
+that no file share or other server grants the computer account access the
+service should not have.
 
   Stop-Service ShadouCMDB
   Copy-Item .\shadoucmdb.exe 'C:\Program Files\ShadouCMDB' -Force
