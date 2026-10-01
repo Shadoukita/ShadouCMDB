@@ -136,6 +136,9 @@ code,
   align-items: center;
   gap: var(--sp-3);
   margin-left: auto;
+  min-width: 0;
+}
+.shell-actions .new-ci {
   flex-shrink: 0;
 }
 .nav-toggle {
@@ -1049,6 +1052,7 @@ dialog.confirm .footer {
 /* ---------- Header user menu ---------- */
 .user-menu {
   position: relative;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--sp-3);
@@ -1068,11 +1072,17 @@ dialog.confirm .footer {
   white-space: nowrap;
 }
 .user-menu .who-name {
+  min-width: 0;
   max-width: 16ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.user-menu .who-initials,
+.user-menu .menu-who {
+  display: none;
+}
 button.who {
+  min-width: 0;
   height: var(--control-h);
   padding: 0 var(--sp-2);
   border: 1px solid transparent;
@@ -1120,6 +1130,42 @@ button.who:hover {
     overflow: hidden;
     clip: rect(0 0 0 0);
     white-space: nowrap;
+  }
+}
+/* Phone width (WCAG 1.4.10 reflow at 320 px, GH#363): the user's initials stand in for the name. */
+@media (max-width: 480px) {
+  .shell-header {
+    gap: var(--sp-3);
+    padding: 0 var(--sp-3);
+  }
+  .shell-actions {
+    gap: var(--sp-2);
+  }
+  .global-search {
+    min-width: 120px;
+  }
+  .user-menu button.who .who-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    clip: rect(0 0 0 0);
+  }
+  .user-menu button.who .who-initials {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 var(--sp-1);
+    border-radius: 11px;
+    background: var(--c-sidebar);
+    color: #fff;
+    font-size: var(--fs-xs);
+  }
+  .user-menu.compact .menu-who {
+    display: block;
+    margin-bottom: 0;
+    overflow-wrap: anywhere;
   }
 }
 .user-menu .who:hover {

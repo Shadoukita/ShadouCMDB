@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useMediaQuery } from "../lib/composables";
 import { useBrandingStore } from "../stores/branding";
@@ -32,6 +32,16 @@ onMounted(() => document.addEventListener("click", onDocClick));
 onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
 const branding = useBrandingStore();
 const THEME_NAMES = { light: "Light", dark: "Dark", system: "System" } as const;
+/** Shown instead of the name on phone-width screens (GH#363); the name stays the button's accessible name. */
+const initials = computed(() => {
+  const name = session.user?.displayName?.trim() || session.user?.username || "";
+  const words = name.split(/\s+/).filter(Boolean);
+  return words
+    .slice(0, 2)
+    .map((w) => Array.from(w)[0])
+    .join("")
+    .toLocaleUpperCase();
+});
 const busy = ref(false);
 const error = ref<unknown>(null);
 
@@ -64,9 +74,11 @@ async function signOut() {
     >
       <span class="sr-only">Signed in as</span>
       <span class="who-name">{{ session.user.displayName }}</span>
+      <span class="who-initials" aria-hidden="true">{{ initials }}</span>
       <span aria-hidden="true">▾</span>
     </button>
     <div v-show="!compact || open" id="user-menu-panel" class="user-menu-panel">
+      <span v-if="compact" class="menu-label menu-who">Signed in as {{ session.user.displayName }}</span>
       <RouterLink class="who" to="/account" :title="`Signed in as ${session.user.username}: my account and two-factor authentication`">
         <template v-if="compact">My account</template>
         <template v-else>
