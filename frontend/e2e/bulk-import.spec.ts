@@ -325,6 +325,12 @@ test("happy path, CSV: auto-matched columns with a lookup, a reference and a rel
   await expect(counts(page)).toContainText("Errors 0 rows");
   await expect(counts(page)).toContainText("Relationships to add 30");
   await expect(page.locator("caption", { hasText: "Planned changes: all 20 rows that create, update or fail" })).toBeVisible();
+  // Lookup and reference values show their names, not the stored ids (GH#360); the referenced CI is a link.
+  const planned = page.locator("caption", { hasText: "Planned changes" }).locator("xpath=..").getByRole("row", { name: /^1 / });
+  await expect(planned).toContainText("Status: In service");
+  await expect(planned).toContainText(`Primary database: ${DB}`);
+  await expect(planned.getByRole("link", { name: DB })).toBeVisible();
+  await expect(planned).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-/);
   await checkA11y(page, testInfo, "import-check-clean");
 
   await page.reload();

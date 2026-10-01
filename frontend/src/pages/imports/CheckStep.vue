@@ -17,7 +17,7 @@ import ErrorAlert from "../../components/ErrorAlert.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
 import { plural } from "../../lib/format";
 import { columnLetter, refusalCode } from "../../lib/imports";
-import { changeText } from "../../lib/importMapping";
+import ChangeValue from "./ChangeValue.vue";
 import ImportProgress from "./ImportProgress.vue";
 
 /**
@@ -153,12 +153,11 @@ const OUTCOME = {
 const classes = useCiClasses();
 const classId = computed(() => classes.data.value?.find((c) => c.key === props.job.classKey)?.id);
 const attributes = useClassAttributes(classId);
-const attributeLabels = computed(() => new Map((attributes.data.value ?? []).map((a) => [a.key, a.label])));
+const attributeDefs = computed(() => new Map((attributes.data.value ?? []).map((a) => [a.key, a])));
+const attributeDef = (f: string) => (f.startsWith("attributes.") ? attributeDefs.value.get(f.slice("attributes.".length)) : undefined);
 const fieldLabel = (f: string) => {
-  if (f.startsWith("attributes.")) {
-    const label = attributeLabels.value.get(f.slice("attributes.".length));
-    if (label) return label;
-  }
+  const label = attributeDef(f)?.label;
+  if (label) return label;
   const key = f.replace(/^attributes\./, "").replace(/^relationships\./, "");
   if (f === "ident") return "Ident";
   if (f === "validFrom") return "Valid from";
@@ -252,7 +251,9 @@ const fieldLabel = (f: string) => {
               <td class="wrap">
                 <template v-if="r.changes.length">
                   <div v-for="c in r.changes" :key="c.field">
-                    <strong>{{ fieldLabel(c.field) }}:</strong> {{ r.outcome === "update" ? `${changeText(c.old)} → ` : "" }}{{ changeText(c.new) }}
+                    <strong>{{ fieldLabel(c.field) }}:</strong>
+                    <template v-if="r.outcome === 'update'"><ChangeValue :def="attributeDef(c.field)" :value="c.old" /> → </template>
+                    <ChangeValue :def="attributeDef(c.field)" :value="c.new" />
                   </div>
                 </template>
                 <span v-else class="muted">–</span>
