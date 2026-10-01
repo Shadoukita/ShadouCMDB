@@ -1928,6 +1928,10 @@ table.data td.fill {
   font-size: var(--fs-sm);
   color: var(--c-text-muted);
 }
+/* A referenced CI in a planned change sits in running text (label: value): underlined, not told apart by colour alone. */
+.import-preview td.wrap a {
+  text-decoration: underline;
+}
 .import-preview .cell-clip {
   max-width: 220px;
 }

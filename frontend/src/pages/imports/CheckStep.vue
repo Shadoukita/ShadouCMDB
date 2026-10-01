@@ -251,8 +251,8 @@ const fieldLabel = (f: string) => {
               <td class="wrap">
                 <template v-if="r.changes.length">
                   <div v-for="c in r.changes" :key="c.field">
-                    <strong>{{ fieldLabel(c.field) }}:</strong>
-                    <template v-if="r.outcome === 'update'"><ChangeValue :def="attributeDef(c.field)" :value="c.old" /> → </template>
+                    <strong>{{ fieldLabel(c.field) }}:</strong>{{ " " }}
+                    <template v-if="r.outcome === 'update'"><ChangeValue :def="attributeDef(c.field)" :value="c.old" />{{ " → " }}</template>
                     <ChangeValue :def="attributeDef(c.field)" :value="c.new" />
                   </div>
                 </template>
