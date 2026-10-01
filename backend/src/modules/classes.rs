@@ -1041,10 +1041,24 @@ impl ValidationRules {
         {
             errors.push(custom("validation.min", "min must not exceed max"));
         }
-        if let Some(p) = &self.pattern
-            && validate::cached_regex(p).is_none()
-        {
-            errors.push(custom("validation.pattern", "Not a valid regular expression"));
+        if let Some(p) = &self.pattern {
+            match validate::check_pattern(p) {
+                Ok(()) => {}
+                Err(validate::PatternError::Syntax) => {
+                    errors.push(custom("validation.pattern", "Not a valid regular expression"))
+                }
+                Err(validate::PatternError::TooBig) => errors.push(FieldError {
+                    code: "invalid_format".into(),
+                    ..custom(
+                        "validation.pattern",
+                        format!(
+                            "Regular expression is too complex: it compiles to more than {} KiB. \
+                             Reduce bounded repetitions such as \\w{{200}}",
+                            validate::PATTERN_SIZE_LIMIT / 1024
+                        ),
+                    )
+                }),
+            }
         }
     }
 }
@@ -2120,6 +2134,25 @@ mod tests {
 
     fn body<T: serde::de::DeserializeOwned>(value: Value) -> T {
         serde_json::from_value(value).unwrap()
+    }
+
+    /// GH#412: a pattern that compiles past the size limit is refused as
+    /// `invalid_format`; a syntax error stays a custom error.
+    #[test]
+    fn oversized_validation_patterns_are_refused() {
+        let class_id = Uuid::nil();
+        let errors = |pattern: &str| {
+            body::<AttributeDefinitionCreate>(json!({"classId": class_id, "label": "Serial", "dataType": "text",
+                "validation": {"pattern": pattern}}))
+            .check()
+            .into_iter()
+            .map(|e| (e.field, e.code))
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(errors(r"\w{900}"), [("validation.pattern".to_owned(), "invalid_format".to_owned())]);
+        assert_eq!(errors(r"\w{200}x1"), [("validation.pattern".to_owned(), "invalid_format".to_owned())]);
+        assert_eq!(errors("(x"), [("validation.pattern".to_owned(), "custom".to_owned())]);
+        assert_eq!(errors(r"^[A-Z]{2}-\d{4}-[A-Z0-9]{8}$"), []);
     }
 
     /// GH#109: text attributes can be flagged multi-line, and their values keep
