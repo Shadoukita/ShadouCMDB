@@ -291,7 +291,7 @@ async fn commit(
         len: s.job.file_size as u64,
         runtime: tokio::runtime::Handle::current(),
     };
-    let limits = Limits { max_rows: cfg.max_rows, max_columns: MAX_COLUMNS };
+    let limits = Limits::new(cfg.max_rows, MAX_COLUMNS, cfg.max_file_bytes);
     let (mut rx, reader) = stream_rows(file, s.job.format(), s.job.options(), limits, reading.clone());
     let end = |r: Result<Option<&'static str>, Stop>| {
         reading.store(true, Ordering::SeqCst);

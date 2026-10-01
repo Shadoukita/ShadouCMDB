@@ -210,7 +210,7 @@ async fn validate(pool: &PgPool, cfg: &ImportConfig, lease: &Lease, lost: &Arc<A
         len: job.file_size as u64,
         runtime: tokio::runtime::Handle::current(),
     };
-    let limits = || Limits { max_rows: cfg.max_rows, max_columns: MAX_COLUMNS };
+    let limits = || Limits::new(cfg.max_rows, MAX_COLUMNS, cfg.max_file_bytes);
     let stopped = || -> Stop { ("stopped", String::new()) };
     let parse_failed = |e: ParseError| -> Stop {
         if e.code == "stopped" {

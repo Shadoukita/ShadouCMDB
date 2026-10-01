@@ -257,7 +257,7 @@ async fn analyse_phase(pool: &PgPool, cfg: &ImportConfig, lease: &Lease, lost: &
     };
     let format = job.format();
     let options = job.options();
-    let limits = Limits { max_rows: cfg.max_rows, max_columns: MAX_COLUMNS };
+    let limits = Limits::new(cfg.max_rows, MAX_COLUMNS, cfg.max_file_bytes);
     let (progress_pool, progress_lease, progress_lost) = (pool.clone(), lease.clone(), lost.clone());
     let runtime = tokio::runtime::Handle::current();
     let blocking_options = options.clone();
