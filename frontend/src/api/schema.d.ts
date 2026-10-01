@@ -806,7 +806,7 @@ export interface paths {
         head?: never;
         /**
          * Change how the file is read (sheet, encoding, delimiter, header row)
-         * @description Requires `cis.import`. The analysis runs again and the mapping and any dry run are dropped. In `ready`, or after an analysis that failed. `sheet` is for workbooks, `encoding` and `delimiter` for CSV files. Only the job's owner: `403 not_owner` for an administrator. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `cis.import`. The analysis runs again and the mapping and any dry run are dropped. In `ready`, or after an analysis that failed for a reason other than `internal_error` (`409 invalid_state` otherwise: delete the import and upload the file again). `sheet` is for workbooks, `encoding` and `delimiter` for CSV files. `429 import_busy` while another import of the job's owner runs. Only the job's owner: `403 not_owner` for an administrator. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updateImportFileOptions"];
         trace?: never;
@@ -10068,6 +10068,15 @@ export interface operations {
             };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

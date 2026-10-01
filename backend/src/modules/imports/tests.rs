@@ -302,6 +302,64 @@ async fn an_xlsx_sheet_holds_no_more_text_than_the_upload_limit() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn new_file_options_wait_for_the_owners_running_import_and_never_retry_an_internal_error() {
+    let Some(db) = scratch::database("import_file_options_busy").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let patch = |id: String| {
+        let app = e.app.clone();
+        let admin = e.admin.clone();
+        async move {
+            let (status, v, _) = call(
+                &app,
+                "PATCH",
+                &format!("/api/v1/imports/{id}/file-options"),
+                &admin,
+                Some(json!({ "hasHeaderRow": true })),
+            )
+            .await;
+            (status, v)
+        }
+    };
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("b.csv"), &[], CSV.to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let b = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    assert_eq!(job(&e, &e.admin, &b).await["status"], "ready");
+
+    // A is queued for analysis: B cannot be queued again beside it (T19, GH#404).
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("a.csv"), &[], CSV.to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let (status, v) = patch(b.clone()).await;
+    assert_eq!((status, detail(&v)), (429, "import_busy"), "{v}");
+    assert_eq!(job(&e, &e.admin, &b).await["status"], "ready", "nothing changed");
+    drain(&e.pool).await;
+    let (status, v) = patch(b.clone()).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+
+    // An analysis the worker gave up on with internal_error is not queued again with fresh attempts.
+    sqlx::query(
+        "UPDATE cmdb.import_jobs SET status = 'failed', phase = 'analyse', attempts = 3,
+           error = '{\"code\":\"internal_error\",\"message\":\"x\"}' WHERE id = $1::uuid",
+    )
+    .bind(&b)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let (status, v) = patch(b.clone()).await;
+    assert_eq!((status, detail(&v)), (409, "invalid_state"), "{v}");
+    let (st, attempts): (String, i32) =
+        sqlx::query_as("SELECT status, attempts FROM cmdb.import_jobs WHERE id = $1::uuid")
+            .bind(&b)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!((st.as_str(), attempts), ("failed", 3));
+    assert!(worker::claim(&e.pool, "w").await.unwrap().is_none(), "not claimed again");
+    db.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn uploads_are_refused_at_their_limits() {
     let Some(db) = scratch::database("import_upload_limits").await else { return };
     let cfg = ImportConfig { max_file_bytes: 2 * 1024 * 1024, max_stored_bytes: 3 * 1024 * 1024, ..Default::default() };
