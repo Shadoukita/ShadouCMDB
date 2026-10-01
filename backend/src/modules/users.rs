@@ -348,6 +348,19 @@ fn not_yourself(ctx: &RequestContext, id: Uuid, what: &str) -> Result<(), AppErr
     Ok(())
 }
 
+/// GH#413: the administration routes ask for no current password, so a
+/// session alone (a stolen one, say) must not use them to take over its own
+/// account for good. The caller is sent to the self-service route, which
+/// asks for the current password (and the code, once MFA is set up).
+pub(crate) fn not_your_own(ctx: &RequestContext, id: Uuid, what: &str, instead: &str) -> Result<(), AppError> {
+    if ctx.principal().is_some_and(|me| me.user_id == id) {
+        return Err(AppError::conflict(format!(
+            "You cannot {what} of your own account here. {instead}, which asks for your current password."
+        )));
+    }
+    Ok(())
+}
+
 pub async fn list(pool: &PgPool, q: &UserList) -> Result<Page<User>, AppError> {
     let filter = |w: &mut Where<'_>| {
         if let Some(text) = &q.q {
@@ -470,6 +483,18 @@ pub async fn update(pool: &PgPool, ctx: &RequestContext, id: Uuid, b: &UserUpdat
     // The last-Administrator check is deferred to here (LAST_ADMINISTRATOR).
     tx.commit().await?;
     Ok(dto)
+}
+
+/// An administrator's reset of another user's password (GH#413: never the
+/// caller's own, see [`not_your_own`]).
+pub async fn reset_password(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    id: Uuid,
+    new_password: &str,
+) -> Result<User, AppError> {
+    not_your_own(ctx, id, "reset the password", "Change it under PUT /api/v1/auth/password")?;
+    set_password(pool, ctx, id, new_password).await
 }
 
 /// Sets a new password, ends the user's sessions (all but the caller's own),
@@ -605,12 +630,12 @@ pub fn routes() -> Vec<Route> {
         route(Method::PUT, "/api/v1/admin/users/{id}/password", "resetUserPassword")
             .tag(TAG)
             .summary("Set a new password for a user, end their sessions and revoke their API tokens")
-            .description("Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here).")
+            .description("Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here), and for your own account: change your own password with `changeOwnPassword` (PUT /api/v1/auth/password), which asks for your current password.")
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<PasswordReset>>| async move {
-                Ok(Json(set_password(&api.pool, &api.ctx, id, &b.password).await?))
+                Ok(Json(reset_password(&api.pool, &api.ctx, id, &b.password).await?))
             }),
     ]
 }
