@@ -325,6 +325,13 @@ test("happy path, CSV: auto-matched columns with a lookup, a reference and a rel
   await expect(counts(page)).toContainText("Errors 0 rows");
   await expect(counts(page)).toContainText("Relationships to add 30");
   await expect(page.locator("caption", { hasText: "Planned changes: all 20 rows that create, update or fail" })).toBeVisible();
+  // Lookup and reference values show their names, not the stored ids (GH#360); the referenced CI is a link.
+  const planned = page.locator("caption", { hasText: "Planned changes" }).locator("xpath=..").getByRole("row", { name: /^2 / });
+  await expect(planned).toContainText("Name: " + APP(1));
+  await expect(planned).toContainText("Status: In service");
+  await expect(planned).toContainText(`Primary database: ${DB}`);
+  await expect(planned.getByRole("link", { name: DB })).toBeVisible();
+  await expect(planned).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-/);
   await checkA11y(page, testInfo, "import-check-clean");
 
   await page.reload();
@@ -347,8 +354,11 @@ test("happy path, CSV: auto-matched columns with a lookup, a reference and a rel
   await page.goto("/imports");
   const listed = page.getByRole("row", { name: new RegExp(`apps-${stamp}\\.csv`) });
   await expect(listed).toBeVisible();
-  // The clipped File cell stays a table cell (an inline-block drops out of the row's grid and misaligns its border).
-  await expect(listed.locator("td.cell-clip")).toHaveCSS("display", "table-cell");
+  // The clipped File cell stays a table cell (an inline-block drops out of the row's grid and misaligns its border);
+  // the span inside it does the clipping.
+  const fileCell = listed.locator("td").first();
+  await expect(fileCell).toHaveCSS("display", "table-cell");
+  await expect(fileCell.locator("span.cell-clip")).toHaveCSS("text-overflow", "ellipsis");
   await checkA11y(page, testInfo, "imports-list");
   await page.context().close();
 
@@ -360,7 +370,7 @@ test("happy path, CSV: auto-matched columns with a lookup, a reference and a rel
 
 test("saved mapping and update: the same headers apply the mapping; 2 changed cells update, 18 stay unchanged", async ({ browser }) => {
   const page = await signInUi(browser, IMPORTER);
-  const rows = range(20).map((n) => appRow(n, n === 3 || n === 7 ? "2.0" : "1.0"));
+  const rows = range(20).map((n) => appRow(n, n === 3 || n === 7 ? "2.0" : "1.0", n === 7 ? "Maintenance" : "In service"));
   await newImport(page, { name: `apps-${stamp}-v2.csv`, mimeType: "text/csv", buffer: appsCsv(rows) }, "?classKey=application");
   await mappingReady(page, 5);
   await expect(page.getByText(`Mapping ${VENDOR} applied because the column names match.`)).toBeVisible();
@@ -371,6 +381,8 @@ test("saved mapping and update: the same headers apply the mapping; 2 changed ce
   await expect(counts(page)).toContainText("Update 2");
   await expect(counts(page)).toContainText("Unchanged 18");
   await expect(page.getByRole("cell", { name: /Version: 1\.0 → 2\.0/ }).first()).toBeVisible();
+  // A changed lookup value reads old → new by name (GH#360).
+  await expect(page.getByRole("cell", { name: /Status: In service → Maintenance/ })).toBeVisible();
   await page.getByRole("button", { name: "Import 20 rows" }).click();
   await expect(result(page)).toContainText("Import finished: 0 created, 2 updated, 18 unchanged, 0 relationships added.", { timeout: 30_000 });
   await page.context().close();

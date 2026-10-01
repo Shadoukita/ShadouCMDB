@@ -1450,18 +1450,14 @@ nav.tabs a[aria-current="page"] {
 .theme-select {
   width: auto;
 }
+/* Clips a long value inside a table cell. Put it on a span in the cell, not on the td: a td with a display of its own
+   leaves table-cell layout and sits out of line with its row. */
 .cell-clip {
-  display: inline-block;
+  display: block;
   max-width: 28ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  vertical-align: bottom;
-}
-/* On a table cell the clip must not turn it into an inline-block, or it drops out of the row's grid. */
-table.data td.cell-clip {
-  display: table-cell;
-  vertical-align: middle;
 }
 
 /* ---------- Layout panels (Customization › Detail and form layout) ---------- */
@@ -1973,7 +1969,11 @@ table.data td.fill {
   font-size: var(--fs-sm);
   color: var(--c-text-muted);
 }
-.import-preview td.cell-clip {
+/* A referenced CI in a planned change sits in running text (label: value): underlined, not told apart by colour alone. */
+.import-preview td.wrap a {
+  text-decoration: underline;
+}
+.import-preview .cell-clip {
   max-width: 220px;
 }
 .import-mapping-settings {

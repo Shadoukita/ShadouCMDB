@@ -145,7 +145,7 @@ const header = (i: number) => headers.value[i] ?? `Column ${i + 1}`;
         <tbody>
           <tr v-for="r in file.previewRows" :key="r.row">
             <th scope="row" class="num">{{ r.row }}</th>
-            <td v-for="i in previewWidth" :key="i" class="cell-clip" :title="r.cells[i - 1]">{{ r.cells[i - 1] ?? "" }}</td>
+            <td v-for="i in previewWidth" :key="i" :title="r.cells[i - 1]"><span class="cell-clip">{{ r.cells[i - 1] ?? "" }}</span></td>
           </tr>
         </tbody>
       </table>

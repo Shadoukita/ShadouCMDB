@@ -204,8 +204,8 @@ function openDelete(j: ImportJobSummary) {
             </thead>
             <tbody>
               <tr v-for="j in rows" :key="j.id">
-                <td class="cell-clip" :title="`${j.fileName} (${formatBytes(j.fileSize)})`">
-                  <RouterLink :to="`/imports/${j.id}`">{{ j.fileName }}</RouterLink>
+                <td :title="`${j.fileName} (${formatBytes(j.fileSize)})`">
+                  <span class="cell-clip"><RouterLink :to="`/imports/${j.id}`">{{ j.fileName }}</RouterLink></span>
                 </td>
                 <td>{{ className(j.classKey) }}</td>
                 <td><ImportStatusBadge :status="j.status" /></td>
