@@ -87,22 +87,6 @@ pub struct CiClass {
     pub updated_at: DateTime<Utc>,
 }
 
-/// What a built-in CI type is for (`ci_classes.system_role`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
-#[serde(rename_all = "snake_case")]
-#[sqlx(type_name = "text", rename_all = "snake_case")]
-pub enum ClassSystemRole {
-    BusinessService,
-}
-
-/// What a built-in relationship type is for (`relationship_types.system_role`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
-#[serde(rename_all = "snake_case")]
-#[sqlx(type_name = "text", rename_all = "snake_case")]
-pub enum RelationshipTypeSystemRole {
-    BusinessServiceMember,
-}
-
 /// 409 IN_USE for a removal or change the built-in business service type does not allow (§4.10).
 pub fn system_class_refused(key: &str, what: &str) -> AppError {
     let message = format!("The {key} type is the built-in business service type and cannot be {what}");
