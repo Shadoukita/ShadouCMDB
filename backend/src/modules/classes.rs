@@ -3057,7 +3057,7 @@ mod tests {
         {
             let query: AuditQuery =
                 body(json!({"limit": 200, "offset": 0, "sort": "-occurredAt", "entityType": "schema_changes"}));
-            let entries = audit::list(pool, &reader, &query).await.unwrap().data;
+            let entries = audit::list(pool, &reader, &crate::secrets::Keyring::for_tests(), &query).await.unwrap().data;
             let value = |id: Uuid| {
                 let e = entries.iter().find(|e| e.entity_id == id).expect("audit entry");
                 assert!(!e.redacted);
