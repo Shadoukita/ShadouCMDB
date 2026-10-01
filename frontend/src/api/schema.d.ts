@@ -237,7 +237,7 @@ export interface paths {
         put?: never;
         /**
          * Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)
-         * @description From now on sign-in asks for a code after the password. This session counts as having proven the second factor; your other sessions that did not prove one end (audited as `session.revoke`, reason mfa_enrolled) and sign in again with a code. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description From now on sign-in asks for a code after the password. This session counts as having proven the second factor; your other sessions that did not prove one end (audited as `session.revoke`, reason mfa_enrolled) and sign in again with a code. 400 (field `code`) when the code does not match (audited as `mfa.failure`, stage enrol_confirm); 409 without a started set-up, when one is already confirmed, or when it was started more than 15 minutes ago (start it again). Wrong codes count together with wrong current passwords on the MFA routes: the first 4 cost nothing; from the 5th on, each one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). A right code clears the count. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["confirmTotpEnrolment"];
         delete?: never;
@@ -6593,6 +6593,15 @@ export interface operations {
             };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
