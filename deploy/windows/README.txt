@@ -72,9 +72,24 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
   notepad "$data\shadoucmdb.env"
 
   # Only administrators and SYSTEM may change anything in the data folder; other
-  # users get no access to it at all (the service is granted read access below):
-  New-Item -ItemType Directory -Force "$data\logs", "$data\state" | Out-Null
+  # users get no access to it at all (the service is granted read access below).
+  # Any user may create folders under C:\ProgramData, and the owner of a file or
+  # folder can always change its permissions again, so Administrators take
+  # ownership of everything in the data folder. Links are refused: the recursive
+  # commands would follow a junction or symbolic link out of the folder.
+  function Find-ReparsePoint($dir) {
+    Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
+      if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $_.FullName }
+      elseif ($_.PSIsContainer) { Find-ReparsePoint $_.FullName } }
+  }
+  if ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$data is a link" }
+  icacls $data /setowner '*S-1-5-32-544' /C
+  icacls $data /reset /C
   icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F'
+  if ($links = Find-ReparsePoint $data) { throw "Remove these links from the data folder first: $links" }
+  New-Item -ItemType Directory -Force "$data\logs", "$data\state" | Out-Null
+  icacls $data /setowner '*S-1-5-32-544' /T /C
+  icacls "$data\*" /reset /T /C
 
   # The key that encrypts the authenticator secrets. Store a copy apart from the
   # database backups (password vault):
@@ -154,19 +169,46 @@ to the env file, then:
   $svc  = 'NT SERVICE\ShadouCMDB'
   & "$bin\shadoucmdb.exe" service uninstall
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
-  New-Item -ItemType Directory -Force "$data\logs", "$data\state" | Out-Null
-  icacls $data /remove:g 'NT AUTHORITY\LocalService' /T /C
+
+  # LocalService still owns the files it created (the log, the setup token, and
+  # anything another LocalService service put there), and an owner can grant
+  # itself access again. Lock the folder and take ownership as for a new
+  # install; /reset also drops every LocalService permission:
+  function Find-ReparsePoint($dir) {
+    Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
+      if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $_.FullName }
+      elseif ($_.PSIsContainer) { Find-ReparsePoint $_.FullName } }
+  }
+  if ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$data is a link" }
+  icacls $data /setowner '*S-1-5-32-544' /C
+  icacls $data /reset /C
+  icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F'
+  if ($links = Find-ReparsePoint $data) { throw "Remove these links from the data folder first: $links" }
   Remove-Item "$data\setup-token" -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force "$data\logs", "$data\state" | Out-Null
+  icacls $data /setowner '*S-1-5-32-544' /T /C
+  icacls "$data\*" /reset /T /C
+
+  # The same grants as for a new install:
   icacls $data /grant "${svc}:RX"
   icacls "$data\shadoucmdb.env" /grant "${svc}:R"
   icacls "$data\encryption.key" /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' "${svc}:R"
   icacls "$data\logs" /grant "${svc}:(OI)(CI)M"
   icacls "$data\state" /grant "${svc}:(OI)(CI)M"
-  icacls $data /T /C        # check: no LocalService entries remain
+  icacls $data /T /C        # check: no NT AUTHORITY\LOCAL SERVICE entries remain
+  # Check: no output (every file and folder is owned by Administrators):
+  @(Get-Item $data -Force) + @(Get-ChildItem $data -Recurse -Force) | Get-Acl |
+    Where-Object { $_.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544' } | Select-Object Path, Owner
 
 Use the same --env-file and --log-file paths as the original install. A service
 installed with --account (a domain or managed service account) keeps it: skip
 the uninstall and install commands and set $svc to that account instead.
+
+The virtual account signs in to other computers on the network as the computer
+account (DOMAIN\HOST$), where LocalService connected anonymously. ShadouCMDB
+only connects to the PostgreSQL, LDAP and OIDC servers you configure; check
+that no file share or other server grants the computer account access the
+service should not have.
 
   Stop-Service ShadouCMDB
   Copy-Item .\shadoucmdb.exe 'C:\Program Files\ShadouCMDB' -Force
