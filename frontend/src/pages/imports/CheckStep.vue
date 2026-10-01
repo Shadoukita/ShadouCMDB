@@ -329,7 +329,7 @@ const fieldLabel = (f: string) => {
             <tr v-for="(p, n) in issues.data.value?.data ?? []" :key="`${p.row}-${p.column}-${p.code}-${n}`">
               <th scope="row" class="num">{{ p.row.toLocaleString() }}</th>
               <td>{{ columnName(p.column, p.header) }}</td>
-              <td class="cell-clip" :title="p.value ?? undefined">{{ p.value ?? "" }}</td>
+              <td :title="p.value ?? undefined"><span class="cell-clip">{{ p.value ?? "" }}</span></td>
               <td class="wrap">
                 <span aria-hidden="true">{{ p.severity === "error" ? "✕ " : "⚠ " }}</span>
                 <span class="sr-only">{{ p.severity === "error" ? "Error: " : "Warning: " }}</span>{{ p.message }}
