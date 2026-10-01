@@ -348,13 +348,13 @@ code,
 }
 /* Row-level destructive action in dense tables: the confirmation dialog carries the red button. */
 .btn-quiet-danger {
-  color: var(--c-danger);
+  color: var(--c-danger-text);
 }
 .btn-quiet-danger:hover {
   border-color: var(--c-danger);
 }
 .btn-link.danger {
-  color: var(--c-danger);
+  color: var(--c-danger-text);
 }
 input[type="text"],
 input[type="search"],
@@ -1412,6 +1412,11 @@ nav.tabs a[aria-current="page"] {
   white-space: nowrap;
   vertical-align: bottom;
 }
+/* On a table cell the clip must not turn it into an inline-block, or it drops out of the row's grid. */
+table.data td.cell-clip {
+  display: table-cell;
+  vertical-align: middle;
+}
 
 /* ---------- Layout panels (Customization › Detail and form layout) ---------- */
 /* Sections sit on the tab's 12-column grid (lg-sec above); each lays its fields out on its own grid. */
@@ -1949,8 +1954,9 @@ table.data td.fill {
 .import-mapping-options[open] summary {
   margin-bottom: var(--sp-2);
 }
-/* Mapping rows hold stacked controls: they grow with their content instead of the one-line data row. */
-.import-mapping td {
+/* Mapping rows hold stacked controls: they grow with their content instead of the one-line data row.
+   The selector must outrank `table.data td`, which fixes the height and hides overflow. */
+.import-mapping table.data td {
   vertical-align: top;
   height: auto;
   padding-top: var(--sp-1);
@@ -2019,7 +2025,8 @@ table.data td.fill {
   .import-mapping table,
   .import-mapping tbody,
   .import-mapping tr,
-  .import-mapping td {
+  .import-mapping caption,
+  .import-mapping table.data td {
     display: block;
     width: 100%;
   }
@@ -2034,8 +2041,9 @@ table.data td.fill {
     border-bottom: 1px solid var(--c-border-strong);
     padding: var(--sp-2) 0;
   }
-  .import-mapping td {
+  .import-mapping table.data td {
     border: 0;
+    max-width: none;
     white-space: normal;
   }
   .import-mapping td::before {
