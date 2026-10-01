@@ -75,6 +75,10 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
     ("Audit log", "Read-only change history written in the same transaction as every change."),
     ("Users", "Administration: local user accounts, passwords and the permission profiles they hold."),
     (
+        "User groups",
+        "Administration: named sets of users that can own business services. Managed with users.manage; not part of the configuration export.",
+    ),
+    (
         "Permission profiles",
         "Administration: named sets of global and per-CI-class permissions. Users can hold several; the built-in Administrator profile holds everything.",
     ),

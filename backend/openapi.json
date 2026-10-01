@@ -19100,7 +19100,8 @@
                 "lookup_list_values",
                 "import_jobs",
                 "import_settings",
-                "import_mappings"
+                "import_mappings",
+                "user_groups"
               ]
             }
           },
@@ -19739,7 +19740,7 @@
           "Users"
         ],
         "summary": "Delete a user (prefer disabling; the audit log keeps their id and name)",
-        "description": "Requires `users.manage`. 409 when deleting yourself or the last active Administrator. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `users.manage`. 409 when deleting yourself or the last active Administrator. The business services the user owns lose them as owner, each with an `update` row in its history; `affectedServices` counts them (null when the caller may not view the business service class). Disabling keeps the user as owner, marked as disabled. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "deleteUser",
         "parameters": [
           {
@@ -19753,8 +19754,15 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "Success, no content"
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerRemoval"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
@@ -20080,6 +20088,1033 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/groups": {
+      "get": {
+        "tags": [
+          "User groups"
+        ],
+        "summary": "List user groups (paginated, searchable, sortable by name or member count)",
+        "description": "Requires `users.manage`.",
+        "operationId": "listUserGroups",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: name, memberCount",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "name",
+              "enum": [
+                "name",
+                "-name",
+                "memberCount",
+                "-memberCount"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroupList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "User groups"
+        ],
+        "summary": "Create a user group",
+        "description": "Requires `users.manage`. 409 CONFLICT on `name` when another group has the same name (compared regardless of case). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "createUserGroup",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "x-multiline": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/groups/{id}": {
+      "get": {
+        "tags": [
+          "User groups"
+        ],
+        "summary": "Get one user group with the number of business services it owns",
+        "description": "Requires `users.manage`. `ownedServiceCount` is what a delete would remove the group from. It is null when the caller may not view the business service class: the count spans services they could not open.",
+        "operationId": "getUserGroup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroupDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "User groups"
+        ],
+        "summary": "Delete a user group; it is removed as owner from every business service it owns",
+        "description": "Requires `users.manage`. Allowed while the group owns business services: each loses the group as owner and gets an `update` row in its history. `affectedServices` counts them (null when the caller may not view the business service class). Ask first with getUserGroup's `ownedServiceCount`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "deleteUserGroup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerRemoval"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "User groups"
+        ],
+        "summary": "Rename a user group or change its description",
+        "description": "Requires `users.manage`. Send the `version` you loaded: 409 VERSION_CONFLICT if someone changed the group or its members in between. 409 CONFLICT on `name` when another group has the same name (regardless of case). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "updateUserGroup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT",
+                    "minimum": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "x-multiline": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/groups/{id}/members": {
+      "get": {
+        "tags": [
+          "User groups"
+        ],
+        "summary": "List the users in a group (paginated)",
+        "description": "Requires `users.manage`.",
+        "operationId": "listUserGroupMembers",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: displayName, username, addedAt",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "displayName",
+              "enum": [
+                "displayName",
+                "-displayName",
+                "username",
+                "-username",
+                "addedAt",
+                "-addedAt"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroupMemberList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "User groups"
+        ],
+        "summary": "Replace the users in a group (at most 1000)",
+        "description": "Requires `users.manage`. `userIds` is the complete new member list. Send the group's `version`: 409 VERSION_CONFLICT if someone changed it in between. An unknown user is 400 VALIDATION_ERROR `not_found` on `userIds[i]`; disabled users may be members. A change bumps the group's version and writes one `update` audit row whose `newValue.members` lists who was added and removed. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "replaceUserGroupMembers",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "userIds"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT",
+                    "minimum": 1
+                  },
+                  "userIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "Every member of the group (replaces the current set; empty removes all)",
+                    "maxItems": 1000,
+                    "uniqueItems": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroup"
                 }
               }
             }
@@ -22878,7 +23913,7 @@
           "Configuration export/import"
         ],
         "summary": "Download the whole configuration as one JSON file",
-        "description": "Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookup lists and their values, permission profiles (not the built-in one), UI settings including the logo and favicon, and saved import mappings. Never contains users, passwords, sessions, CIs, relationships, import jobs or the import switch. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched. Likewise `importMappings` is only present when the caller holds `cis.import`, and holds only the mappings of classes the caller can view.",
+        "description": "Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookup lists and their values, permission profiles (not the built-in one), UI settings including the logo and favicon, and saved import mappings. Never contains users, user groups, passwords, sessions, CIs, relationships, business service members or owners, import jobs or the import switch. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched. Likewise `importMappings` is only present when the caller holds `cis.import`, and holds only the mappings of classes the caller can view.",
         "operationId": "exportConfig",
         "parameters": [],
         "responses": {
@@ -22959,7 +23994,7 @@
           "Configuration export/import"
         ],
         "summary": "Import a configuration file (dry run or apply)",
-        "description": "Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and name (case-insensitive); an existing one gets the file's description and definition. Keys the target lacks are warnings, and mappings of classes the caller cannot view are skipped. Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Files of earlier versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, as migration 0016 converts those tables, or skipped when the file's lists already hold them; either way a warning names the section. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by name) and created or updated; a class or relationship type with a `systemRole` (the built-in business service class and membership type, version 5) is matched to this install's class or type of that role whatever its key, keeps its key and area here, and is reported as a \"Matched by role\" warning; a grant's `classSystemRole` resolves the same way. An import never sets or clears a role; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and name (case-insensitive); an existing one gets the file's description and definition. Keys the target lacks are warnings, and mappings of classes the caller cannot view are skipped. Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Files of earlier versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, as migration 0016 converts those tables, or skipped when the file's lists already hold them; either way a warning names the section. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "importConfig",
         "parameters": [
           {
@@ -22997,8 +24032,8 @@
                   "formatVersion": {
                     "type": "integer",
                     "format": "int32",
-                    "description": "File format version; this server writes version 4 and reads 1 to 4",
-                    "maximum": 4,
+                    "description": "File format version; this server writes version 5 and reads 1 to 5",
+                    "maximum": 5,
                     "minimum": 1
                   },
                   "exportedAt": {
@@ -23104,6 +24139,21 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "classSystemRole": {
+                                "oneOf": [
+                                  {
+                                    "type": "string",
+                                    "description": "What a built-in CI class is for (`ci_classes.system_role`, migration 0033).\nThe class with a role cannot be deleted, archived or subclassed, and its\nrole never changes; its key may differ between installs (`service` when\nthe starter class was adopted, `business_service` otherwise).",
+                                    "enum": [
+                                      "business_service"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Set when `class` is a built-in class (version 5). On import the grant applies to this install's class of\nthat role, whatever `class` says"
                               },
                               "view": {
                                 "type": "boolean"
@@ -24036,8 +25086,8 @@
           "formatVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "File format version; this server writes version 4 and reads 1 to 4",
-            "maximum": 4,
+            "description": "File format version; this server writes version 5 and reads 1 to 5",
+            "maximum": 5,
             "minimum": 1
           },
           "exportedAt": {
@@ -24143,6 +25193,21 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "classSystemRole": {
+                        "oneOf": [
+                          {
+                            "type": "string",
+                            "description": "What a built-in CI class is for (`ci_classes.system_role`, migration 0033).\nThe class with a role cannot be deleted, archived or subclassed, and its\nrole never changes; its key may differ between installs (`service` when\nthe starter class was adopted, `business_service` otherwise).",
+                            "enum": [
+                              "business_service"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Set when `class` is a built-in class (version 5). On import the grant applies to this install's class of\nthat role, whatever `class` says"
                       },
                       "view": {
                         "type": "boolean"
@@ -24720,6 +25785,21 @@
                       "type": "null"
                     }
                   ]
+                },
+                "systemRole": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "What a built-in CI class is for (`ci_classes.system_role`, migration 0033).\nThe class with a role cannot be deleted, archived or subclassed, and its\nrole never changes; its key may differ between installs (`service` when\nthe starter class was adopted, `business_service` otherwise).",
+                      "enum": [
+                        "business_service"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Set on the built-in business service class (version 5). An import matches such a class to this install's\nclass of the same role, whatever its key, and keeps that class's key and area; it never gives a class a\nrole or takes one away"
                 }
               },
               "additionalProperties": false
@@ -25010,6 +26090,21 @@
                 },
                 "isActive": {
                   "type": "boolean"
+                },
+                "systemRole": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "What a built-in relationship type is for (`relationship_types.system_role`,\nmigration 0033): its key, direction, impact direction and state are fixed.",
+                      "enum": [
+                        "business_service_member"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Set on the built-in business service membership type (version 5). An import matches such a type to this\ninstall's type of the same role, whatever its key, and keeps that type's key; it never gives a type a role\nor takes one away"
                 }
               },
               "additionalProperties": false
@@ -28731,6 +29826,24 @@
         },
         "additionalProperties": false
       },
+      "OwnerRemoval": {
+        "type": "object",
+        "description": "What a delete changed",
+        "required": [
+          "affectedServices"
+        ],
+        "properties": {
+          "affectedServices": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Business services that lost this owner (each has an `update` row in its history). Null when withheld: the\ncaller may not view the business service class."
+          }
+        },
+        "additionalProperties": false
+      },
       "PageMeta": {
         "type": "object",
         "required": [
@@ -31559,6 +32672,178 @@
         },
         "additionalProperties": false
       },
+      "UserGroup": {
+        "type": "object",
+        "description": "A user group",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "memberCount",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique regardless of case"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Send it back with a change; a stale one fails with 409 VERSION_CONFLICT"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UserGroupDetail": {
+        "type": "object",
+        "description": "A user group with the number of business services it owns",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "memberCount",
+          "version",
+          "ownedServiceCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "ownedServiceCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Business services the group owns in any role (deleted ones that can still be restored included): the\nowner entries a delete removes. Null when withheld: the caller may not view the business service class."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UserGroupList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserGroup"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UserGroupMember": {
+        "type": "object",
+        "description": "A user in a group",
+        "required": [
+          "id",
+          "username",
+          "displayName",
+          "isActive",
+          "addedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The user's id"
+          },
+          "username": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "Disabled users stay members"
+          },
+          "addedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UserGroupMemberList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserGroupMember"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
       "UserList": {
         "type": "object",
         "required": [
@@ -31713,6 +32998,10 @@
     {
       "name": "Audit log",
       "description": "Read-only change history written in the same transaction as every change."
+    },
+    {
+      "name": "User groups",
+      "description": "Administration: named sets of users that can own business services. Managed with users.manage; not part of the configuration export."
     },
     {
       "name": "Permission profiles",

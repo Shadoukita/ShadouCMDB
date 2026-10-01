@@ -2035,7 +2035,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a user (prefer disabling; the audit log keeps their id and name)
-         * @description Requires `users.manage`. 409 when deleting yourself or the last active Administrator. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. 409 when deleting yourself or the last active Administrator. The business services the user owns lose them as owner, each with an `update` row in its history; `affectedServices` counts them (null when the caller may not view the business service class). Disabling keeps the user as owner, marked as disabled. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["deleteUser"];
         options?: never;
@@ -2060,6 +2060,82 @@ export interface paths {
          * @description Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["resetUserPassword"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List user groups (paginated, searchable, sortable by name or member count)
+         * @description Requires `users.manage`.
+         */
+        get: operations["listUserGroups"];
+        put?: never;
+        /**
+         * Create a user group
+         * @description Requires `users.manage`. 409 CONFLICT on `name` when another group has the same name (compared regardless of case). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["createUserGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/groups/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one user group with the number of business services it owns
+         * @description Requires `users.manage`. `ownedServiceCount` is what a delete would remove the group from. It is null when the caller may not view the business service class: the count spans services they could not open.
+         */
+        get: operations["getUserGroup"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a user group; it is removed as owner from every business service it owns
+         * @description Requires `users.manage`. Allowed while the group owns business services: each loses the group as owner and gets an `update` row in its history. `affectedServices` counts them (null when the caller may not view the business service class). Ask first with getUserGroup's `ownedServiceCount`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        delete: operations["deleteUserGroup"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename a user group or change its description
+         * @description Requires `users.manage`. Send the `version` you loaded: 409 VERSION_CONFLICT if someone changed the group or its members in between. 409 CONFLICT on `name` when another group has the same name (regardless of case). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        patch: operations["updateUserGroup"];
+        trace?: never;
+    };
+    "/api/v1/admin/groups/{id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the users in a group (paginated)
+         * @description Requires `users.manage`.
+         */
+        get: operations["listUserGroupMembers"];
+        /**
+         * Replace the users in a group (at most 1000)
+         * @description Requires `users.manage`. `userIds` is the complete new member list. Send the group's `version`: 409 VERSION_CONFLICT if someone changed it in between. An unknown user is 400 VALIDATION_ERROR `not_found` on `userIds[i]`; disabled users may be members. A change bumps the group's version and writes one `update` audit row whose `newValue.members` lists who was added and removed. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        put: operations["replaceUserGroupMembers"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2268,7 +2344,7 @@ export interface paths {
         };
         /**
          * Download the whole configuration as one JSON file
-         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookup lists and their values, permission profiles (not the built-in one), UI settings including the logo and favicon, and saved import mappings. Never contains users, passwords, sessions, CIs, relationships, import jobs or the import switch. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched. Likewise `importMappings` is only present when the caller holds `cis.import`, and holds only the mappings of classes the caller can view.
+         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookup lists and their values, permission profiles (not the built-in one), UI settings including the logo and favicon, and saved import mappings. Never contains users, user groups, passwords, sessions, CIs, relationships, business service members or owners, import jobs or the import switch. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched. Likewise `importMappings` is only present when the caller holds `cis.import`, and holds only the mappings of classes the caller can view.
          */
         get: operations["exportConfig"];
         put?: never;
@@ -2290,7 +2366,7 @@ export interface paths {
         put?: never;
         /**
          * Import a configuration file (dry run or apply)
-         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by name) and created or updated; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and name (case-insensitive); an existing one gets the file's description and definition. Keys the target lacks are warnings, and mappings of classes the caller cannot view are skipped. Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Files of earlier versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, as migration 0016 converts those tables, or skipped when the file's lists already hold them; either way a warning names the section. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by name) and created or updated; a class or relationship type with a `systemRole` (the built-in business service class and membership type, version 5) is matched to this install's class or type of that role whatever its key, keeps its key and area here, and is reported as a "Matched by role" warning; a grant's `classSystemRole` resolves the same way. An import never sets or clears a role; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and name (case-insensitive); an existing one gets the file's description and definition. Keys the target lacks are warnings, and mappings of classes the caller cannot view are skipped. Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Files of earlier versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, as migration 0016 converts those tables, or skipped when the file's lists already hold them; either way a warning names the section. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["importConfig"];
         delete?: never;
@@ -2558,7 +2634,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 4 and reads 1 to 4
+             * @description File format version; this server writes version 5 and reads 1 to 5
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -2571,6 +2647,11 @@ export interface components {
                 globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
                 classPermissions?: {
                     class?: string | null;
+                    /**
+                     * @description Set when `class` is a built-in class (version 5). On import the grant applies to this install's class of
+                     *     that role, whatever `class` says
+                     */
+                    classSystemRole?: "business_service" | null;
                     view?: boolean;
                     create?: boolean;
                     edit?: boolean;
@@ -2738,6 +2819,12 @@ export interface components {
                 sortOrder?: number;
                 isActive?: boolean;
                 titleAttribute?: string | null;
+                /**
+                 * @description Set on the built-in business service class (version 5). An import matches such a class to this install's
+                 *     class of the same role, whatever its key, and keeps that class's key and area; it never gives a class a
+                 *     role or takes one away
+                 */
+                systemRole?: "business_service" | null;
             }[];
             attributes?: {
                 /** @description Stable machine key, lower_snake_case */
@@ -2795,6 +2882,12 @@ export interface components {
                 impactDirection?: ("none" | "target_to_source" | "source_to_target" | "both") | null;
                 sortOrder?: number;
                 isActive?: boolean;
+                /**
+                 * @description Set on the built-in business service membership type (version 5). An import matches such a type to this
+                 *     install's type of the same role, whatever its key, and keeps that type's key; it never gives a type a role
+                 *     or takes one away
+                 */
+                systemRole?: "business_service_member" | null;
             }[];
             relationshipRules?: {
                 /** @description Stable machine key, lower_snake_case */
@@ -3934,6 +4027,15 @@ export interface components {
             data: components["schemas"]["Owner"][];
             page: components["schemas"]["PageMeta"];
         };
+        /** @description What a delete changed */
+        OwnerRemoval: {
+            /**
+             * Format: int64
+             * @description Business services that lost this owner (each has an `update` row in its history). Null when withheld: the
+             *     caller may not view the business service class.
+             */
+            affectedServices: number | null;
+        };
         PageMeta: {
             /** Format: int64 */
             limit: number;
@@ -4878,6 +4980,68 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        /** @description A user group */
+        UserGroup: {
+            /** Format: uuid */
+            id: string;
+            /** @description Unique regardless of case */
+            name: string;
+            description: string | null;
+            /** Format: int64 */
+            memberCount: number;
+            /**
+             * Format: int32
+             * @description Send it back with a change; a stale one fails with 409 VERSION_CONFLICT
+             */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description A user group with the number of business services it owns */
+        UserGroupDetail: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description: string | null;
+            /** Format: int64 */
+            memberCount: number;
+            /** Format: int32 */
+            version: number;
+            /**
+             * Format: int64
+             * @description Business services the group owns in any role (deleted ones that can still be restored included): the
+             *     owner entries a delete removes. Null when withheld: the caller may not view the business service class.
+             */
+            ownedServiceCount: number | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        UserGroupList: {
+            data: components["schemas"]["UserGroup"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description A user in a group */
+        UserGroupMember: {
+            /**
+             * Format: uuid
+             * @description The user's id
+             */
+            id: string;
+            username: string;
+            displayName: string;
+            /** @description Disabled users stay members */
+            isActive: boolean;
+            /** Format: date-time */
+            addedAt: string;
+        };
+        UserGroupMemberList: {
+            data: components["schemas"]["UserGroupMember"][];
+            page: components["schemas"]["PageMeta"];
         };
         UserList: {
             data: components["schemas"]["User"][];
@@ -17808,7 +17972,7 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings" | "user_groups";
                 /** @description History of these entities */
                 entityId?: string;
                 action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read";
@@ -18193,12 +18357,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Success, no content */
-            204: {
+            /** @description Success */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["OwnerRemoval"];
+                };
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
             400: {
@@ -18426,6 +18592,709 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["User"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listUserGroups: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Case-insensitive substring search */
+                q?: string;
+                /** @description Sort field; prefix with "-" for descending. One of: name, memberCount */
+                sort?: "name" | "-name" | "memberCount" | "-memberCount";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroupList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createUserGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    description?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroup"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getUserGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroupDetail"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteUserGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnerRemoval"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateUserGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT
+                     */
+                    version: number;
+                    name?: string;
+                    description?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroup"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listUserGroupMembers: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Case-insensitive substring search */
+                q?: string;
+                /** @description Sort field; prefix with "-" for descending. One of: displayName, username, addedAt */
+                sort?: "displayName" | "-displayName" | "username" | "-username" | "addedAt" | "-addedAt";
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroupMemberList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    replaceUserGroupMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT
+                     */
+                    version: number;
+                    /** @description Every member of the group (replaces the current set; empty removes all) */
+                    userIds: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroup"];
                 };
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
@@ -20291,7 +21160,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 4 and reads 1 to 4
+                     * @description File format version; this server writes version 5 and reads 1 to 5
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
@@ -20304,6 +21173,11 @@ export interface operations {
                         globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
                         classPermissions?: {
                             class?: string | null;
+                            /**
+                             * @description Set when `class` is a built-in class (version 5). On import the grant applies to this install's class of
+                             *     that role, whatever `class` says
+                             */
+                            classSystemRole?: "business_service" | null;
                             view?: boolean;
                             create?: boolean;
                             edit?: boolean;
