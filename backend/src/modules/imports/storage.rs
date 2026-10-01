@@ -75,7 +75,11 @@ impl DbReader {
                     .fetch_optional(&pool)
                     .await
             })
-            .map_err(std::io::Error::other)?;
+            .map_err(|e| {
+                // The database error stays in the log; readers turn this into a fixed message.
+                tracing::error!(job = %job, seq, error = %e, "import: reading a stored file chunk failed");
+                std::io::Error::other("the database query for a chunk failed")
+            })?;
         let data = Arc::new(data.ok_or_else(|| std::io::Error::other("the stored file is incomplete"))?);
         if self.cache.len() == CACHED_CHUNKS {
             self.cache.pop_front();
