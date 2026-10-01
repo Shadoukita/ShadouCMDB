@@ -59,6 +59,20 @@ pub async fn confirm_totp(conn: &mut PgConnection, user_id: Uuid, step: i64) -> 
     Ok(())
 }
 
+/// Drops the user's unconfirmed set-up if it was started more than
+/// `max_age_secs` ago; whether one was dropped.
+pub async fn drop_stale_pending_totp(conn: &mut PgConnection, user_id: Uuid, max_age_secs: i64) -> sqlx::Result<bool> {
+    let done = sqlx::query(
+        "DELETE FROM user_totp
+         WHERE user_id = $1 AND confirmed_at IS NULL AND created_at < now() - make_interval(secs => $2)",
+    )
+    .bind(user_id)
+    .bind(max_age_secs as f64)
+    .execute(conn)
+    .await?;
+    Ok(done.rows_affected() == 1)
+}
+
 /// Records `step` as used; false when it (or a later one) already was, i.e. a replay.
 pub async fn use_step(conn: &mut PgConnection, user_id: Uuid, step: i64) -> sqlx::Result<bool> {
     let done = sqlx::query(

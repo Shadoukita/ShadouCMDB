@@ -13,7 +13,7 @@ use utoipa::ToSchema;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use uuid::Uuid;
 
-use super::auth::{confirm_current_password, confirm_current_password_attempt, password_field_schema};
+use super::auth::{confirm_current_password, confirm_current_password_attempt, password_field_schema, password_gate};
 use super::users;
 use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
@@ -261,7 +261,15 @@ async fn enrol(
     })
 }
 
+/// How long a started set-up can be confirmed: an abandoned one does not stay
+/// open to guessing (GH#408).
+const PENDING_TOTP_MAX_AGE_SECS: i64 = 15 * 60;
+
 /// A code from the app proves it holds the secret: MFA is on from now on.
+///
+/// A wrong code counts against the same per-user lock as a wrong current
+/// password (GH#408): with a stolen session, the 6-digit code of an abandoned
+/// set-up cannot be guessed.
 async fn confirm(
     pool: &PgPool,
     auth: &AuthState,
@@ -269,6 +277,7 @@ async fn confirm(
     b: TotpConfirmation,
 ) -> Result<RecoveryCodes, AppError> {
     let me = me(ctx)?;
+    let attempt = password_gate(auth, me).await?;
     let mut tx = pool.begin().await?;
     // The user's row first, as a sign-in locks it before opening a session:
     // one that checked for an authenticator before this commits either
@@ -281,12 +290,24 @@ async fn confirm(
     if t.confirmed {
         return Err(already_enabled());
     }
+    if data::drop_stale_pending_totp(&mut tx, me.user_id, PENDING_TOTP_MAX_AGE_SECS).await? {
+        tx.commit().await?;
+        return Err(AppError::conflict(
+            "The set-up was started more than 15 minutes ago and has expired; start it again (POST /api/v1/auth/mfa/totp)",
+        ));
+    }
     let Some(secret) = open_secret(&auth.keyring, me.user_id, &t) else {
         return Err(AppError::conflict(
             "The set-up in progress cannot be read; start the set-up again (POST /api/v1/auth/mfa/totp)",
         ));
     };
     let Some(step) = totp::verify(&secret, &b.code, totp::current_step(), None) else {
+        tx.rollback().await?;
+        let locked = attempt.failure();
+        let extra = json!({ "stage": "enrol_confirm", "lockedForSeconds": locked.map(|d| d.as_secs().max(1)) });
+        let mut own = pool.begin().await?;
+        events::mfa(&mut own, ctx, AuditAction::MfaFailure, me.user_id, &me.username, extra).await?;
+        own.commit().await?;
         return Err(AppError::field(
             "code",
             "The code does not match; check the app's clock and enter the current code",
@@ -308,6 +329,7 @@ async fn confirm(
     let ended = auth_data::delete_unverified_sessions(&mut tx, me.user_id, me.session_id()).await?;
     events::revoked(&mut tx, ctx, &ended, RevokeReason::MfaEnrolled).await?;
     tx.commit().await?;
+    attempt.success();
     tracing::info!(user = %me.username, "two-factor authentication set up");
     Ok(codes)
 }
@@ -456,11 +478,11 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)")
             .description(
-                "From now on sign-in asks for a code after the password. This session counts as having proven the second factor; your other sessions that did not prove one end (audited as `session.revoke`, reason mfa_enrolled) and sign in again with a code. 400 (field `code`) when the code does not match; 409 without a started set-up or when one is already confirmed.",
+                "From now on sign-in asks for a code after the password. This session counts as having proven the second factor; your other sessions that did not prove one end (audited as `session.revoke`, reason mfa_enrolled) and sign in again with a code. 400 (field `code`) when the code does not match (audited as `mfa.failure`, stage enrol_confirm); 409 without a started set-up, when one is already confirmed, or when it was started more than 15 minutes ago (start it again). Wrong codes count together with wrong current passwords on the MFA routes: the first 4 cost nothing; from the 5th on, each one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). A right code clears the count.",
             )
             .session_only()
             .before_mfa_enrolment()
-            .errors(&[ErrorCode::Conflict])
+            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<TotpConfirmation>>| async move {
                 Ok(Json(confirm(&api.pool, &api.auth, &api.ctx, b).await?))
             }),
@@ -618,6 +640,8 @@ pub(crate) mod tests {
         let far = json!({ "code": totp::code_at(&secret, step + 10) });
         let (status, v, _) = call(&app, "POST", "/api/v1/auth/mfa/totp/confirm", &session, Some(far)).await;
         assert_eq!((status, v["error"]["details"][0]["code"].as_str()), (400, Some("invalid_code")));
+        let first = mfa_rows(pool).await;
+        assert_eq!((first[0].0.as_str(), first[0].1["stage"].as_str()), ("mfa.failure", Some("enrol_confirm")));
         let (secret, recovery) = enrol(&app, pool, &session, step).await;
         assert_eq!(recovery.len(), 10);
         let (status, _, _) =
@@ -666,6 +690,7 @@ pub(crate) mod tests {
         assert_eq!(
             actions,
             [
+                "mfa.failure",
                 "mfa.enrol",
                 "mfa.failure",
                 "mfa.failure",
@@ -676,6 +701,7 @@ pub(crate) mod tests {
                 "mfa.disable"
             ]
         );
+        let rows = &rows[1..];
         assert_eq!((rows[1].1["stage"].as_str(), rows[1].1["username"].as_str()), (Some("login"), Some("owner")));
         assert_eq!((rows[3].1["stage"].as_str(), &rows[3].1["recoveryCodesRemaining"]), (Some("login"), &json!(9)));
         assert_eq!((rows[4].1["stage"].as_str(), rows[5].1["stage"].as_str()), (Some("login"), Some("disable")));
@@ -844,6 +870,61 @@ pub(crate) mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
         let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(with(&right))).await;
         assert_eq!(status, 204, "{v}");
+        db.drop().await;
+    }
+
+    /// GH#408: with only a session, guessing the code of a started set-up locks
+    /// like guessing the password, and an abandoned set-up expires.
+    #[tokio::test]
+    async fn wrong_enrolment_codes_lock_the_confirm() {
+        let Some(db) = scratch::database("wrong_enrolment_codes_lock_the_confirm").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, _) = setup(&app).await;
+        let step = settled_step().await;
+        let start = json!({ "currentPassword": PASSWORD });
+        let (status, _, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(start.clone())).await;
+        assert_eq!(status, 201);
+        let secret = stored_seed(pool).await;
+        let confirm = "/api/v1/auth/mfa/totp/confirm";
+        let wrong = json!({ "code": totp::code_at(&secret, step + 10) });
+        let right = json!({ "code": totp::code_at(&secret, step) });
+
+        for i in 0..crate::auth::throttle::FREE_FAILURES {
+            let (status, v, _) = call(&app, "POST", confirm, &session, Some(wrong.clone())).await;
+            assert_eq!((status, v["error"]["details"][0]["code"].as_str()), (400, Some("invalid_code")), "{i}: {v}");
+        }
+        let (status, v, headers) = call(&app, "POST", confirm, &session, Some(right.clone())).await;
+        assert_eq!((status, code(&v)), (429, "RATE_LIMITED"), "locked: not even the right code is checked");
+        assert!(headers.contains_key(header::RETRY_AFTER), "{headers:?}");
+        let (status, _, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(start.clone())).await;
+        assert_eq!(status, 429, "the password routes share the lock");
+        let rows = mfa_rows(pool).await;
+        assert_eq!(rows.len(), crate::auth::throttle::FREE_FAILURES as usize);
+        assert!(rows.iter().all(|(a, v)| a == "mfa.failure" && v["stage"] == "enrol_confirm"), "{rows:?}");
+        assert_eq!(rows.last().unwrap().1["lockedForSeconds"], json!(1));
+
+        // Once the lock has passed the right code confirms and clears the count.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let (status, v, _) = call(&app, "POST", confirm, &session, Some(right)).await;
+        assert_eq!(status, 200, "{v}");
+        let recovery = v["codes"][0].as_str().unwrap().to_owned();
+        let off = json!({ "currentPassword": PASSWORD, "code": recovery });
+        let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(off)).await;
+        assert_eq!(status, 204, "{v}");
+
+        // A set-up started more than 15 minutes ago is dropped, not checked.
+        let (status, _, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(start)).await;
+        assert_eq!(status, 201);
+        let secret = stored_seed(pool).await;
+        sqlx::query("UPDATE user_totp SET created_at = now() - interval '16 minutes'").execute(pool).await.unwrap();
+        let body = json!({ "code": totp::code_at(&secret, step) });
+        let (status, v, _) = call(&app, "POST", confirm, &session, Some(body.clone())).await;
+        assert_eq!(status, 409, "{v}");
+        assert!(v["error"]["message"].as_str().unwrap().contains("expired"), "{v}");
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM user_totp").fetch_one(pool).await.unwrap();
+        assert_eq!(left, 0, "the stale set-up is gone");
+        let (status, v, _) = call(&app, "POST", confirm, &session, Some(body)).await;
+        assert!(status == 409 && v["error"]["message"].as_str().unwrap().contains("Start the set-up"), "{v}");
         db.drop().await;
     }
 

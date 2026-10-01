@@ -820,7 +820,7 @@ fn principal(ctx: &RequestContext) -> Result<&Principal, AppError> {
 /// kind of account, so a stolen session cannot be turned into a known
 /// password, local or directory, by guessing the current one. Not per
 /// network: only the signed-in user can lock their own key.
-async fn password_gate<'a>(auth: &'a AuthState, me: &Principal) -> Result<Attempt<'a>, AppError> {
+pub(crate) async fn password_gate<'a>(auth: &'a AuthState, me: &Principal) -> Result<Attempt<'a>, AppError> {
     let key = me.user_id.to_string();
     throttle_gate(&auth.password_throttle, &key, Net::default(), "attempts at your current password").await
 }
