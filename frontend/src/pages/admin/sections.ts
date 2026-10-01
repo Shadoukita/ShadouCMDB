@@ -1,4 +1,5 @@
 import type { GlobalPermission } from "../../api/admin";
+import { t } from "../../i18n";
 
 /**
  * The Administration area's sections, in sub-navigation order and grouped under
@@ -28,6 +29,7 @@ export function sectionAllowed(s: Pick<AdminSection, "permissions" | "administra
 
 export const ADMIN_SECTIONS: AdminSection[] = [
   { key: "users", label: "Users", group: "Access", to: "/admin/users", permissions: ["users.manage"] },
+  { key: "groups", label: t("groups.nav"), group: "Access", to: "/admin/groups", permissions: ["users.manage"] },
   // users.manage may read profiles too, to know what they assign.
   { key: "profiles", label: "Permission profiles", group: "Access", to: "/admin/profiles", permissions: ["profiles.manage", "users.manage"] },
   { key: "api-tokens", label: "API tokens", group: "Access", to: "/admin/api-tokens", permissions: ["users.manage"] },
