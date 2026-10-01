@@ -27,8 +27,12 @@ import DeleteCiButton from "./detail/DeleteCiButton.vue";
 import HistoryPanel from "./detail/HistoryPanel.vue";
 import ImpactPanel from "./detail/ImpactPanel.vue";
 import LayoutPanels from "./detail/LayoutPanels.vue";
+import PartOfServicesPanel from "./detail/PartOfServicesPanel.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
+import ServiceMembersPanel from "./services/ServiceMembersPanel.vue";
+import { useService, useServiceSettings } from "../api/services";
+import { t } from "../i18n";
 
 /**
  * The class layout's tabs (`layout:<key>`; a single one is "overview"), then the relationship map, the
@@ -101,8 +105,16 @@ const usualPlaces = computed(() => {
   return `The record details come last on the first tab; ${rest.join(", ")}. + Panel places the relationships, the history or the audit trail in any tab.`;
 });
 
+// A business service (the built-in class) has a Members tab, its place in the URL (`?tab=members`, with the
+// tab's filters) so it can be bookmarked. Until the service pages (/services/:id) take over, it lives here.
+const serviceSettings = useServiceSettings();
+const isService = computed(() => !!c.value && !c.value.deletedAt && c.value.classId === serviceSettings.data.value?.classId);
+const service = useService(() => (isService.value ? id.value : ""));
+const membersLabel = computed(() => t("services.tab.members", { n: (service.data.value?.memberCount ?? 0).toLocaleString() }));
+
 const TABS = computed<[Tab, string][]>(() => [
   ...(layoutTabs.value.length > 1 ? layoutTabs.value.map((t): [Tab, string] => [`layout:${t.key}`, t.label]) : [["overview", "Overview"] as [Tab, string]]),
+  ...(isService.value ? [["members", membersLabel.value] as [Tab, string]] : []),
   ["graph", "Relationship map"],
   // A deleted CI has no live relationships to analyse.
   ...(c.value?.deletedAt ? [] : [["impact", "Impact"] as [Tab, string]]),
@@ -110,16 +122,19 @@ const TABS = computed<[Tab, string][]>(() => [
   ...(session.can("audit.view") && !placed.value.has("history") ? [["history", "History"] as [Tab, string]] : []),
 ]);
 /** The tab shown: Impact on its URL, else the chosen one while it exists (a layout can change under the page), else the first. */
+const onMembersUrl = computed(() => !onImpactRoute.value && route.query.tab === "members");
 const current = computed<Tab>(() => {
   if (onImpactRoute.value && TABS.value.some(([k]) => k === "impact")) return "impact";
-  const chosen = tab.value === "impact" ? "" : tab.value;
+  if (onMembersUrl.value && TABS.value.some(([k]) => k === "members")) return "members";
+  const chosen = tab.value === "impact" || tab.value === "members" ? "" : tab.value;
   return TABS.value.some(([k]) => k === chosen) ? chosen : TABS.value[0][0];
 });
 /** Shows a tab: Impact by its URL, the others on the CI's own URL. */
 function selectTab(key: Tab) {
   tab.value = key;
   if (key === "impact" && !onImpactRoute.value) void router.push(`/cis/${id.value}/impact`);
-  else if (key !== "impact" && onImpactRoute.value) void router.push(`/cis/${id.value}`);
+  else if (key === "members" && !onMembersUrl.value) void router.push({ path: `/cis/${id.value}`, query: { tab: "members" } });
+  else if (key !== "impact" && key !== "members" && (onImpactRoute.value || onMembersUrl.value)) void router.push(`/cis/${id.value}`);
 }
 /** Which layout tab is shown (they come first in TABS), or -1. */
 const layoutIndex = computed(() => (current.value === "overview" || current.value.startsWith("layout:") ? TABS.value.findIndex(([k]) => k === current.value) : -1));
@@ -240,11 +255,20 @@ const crumbs = computed<Crumb[]>(() => {
           :trail="trail"
           :orphans="layoutIndex === 0"
         />
+        <PartOfServicesPanel v-if="layoutIndex === 0" :ci="c" :self="self" :trail="trail" />
         <template v-if="layoutIndex === 0 && !placed.has('relations')">
           <div style="height: var(--sp-4)" />
           <RelationshipsPanel :ci="c" :self="self" :trail="trail" />
         </template>
       </template>
+      <ServiceMembersPanel
+        v-else-if="current === 'members'"
+        :service="{ id: c.id, ident: c.ident, name: c.label }"
+        :can-edit="!!serviceSettings.data.value?.canEdit"
+        :limits="service.data.value?.limits ?? serviceSettings.data.value?.limits"
+        :self="self"
+        :trail="trail"
+      />
       <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="trail" />
       <ImpactPanel v-else-if="current === 'impact'" :ci="c" :self="self" :trail="trail" />
       <HistoryPanel v-else :ci="c" />
