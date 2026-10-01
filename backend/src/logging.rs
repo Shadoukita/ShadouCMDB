@@ -22,6 +22,16 @@ fn filter(level: &str) -> EnvFilter {
     EnvFilter::new(format!("{level},sqlx={sqlx}"))
 }
 
+/// Logs can hold the setup token and client addresses: a new file is readable
+/// by owner and group only, whatever the umask (GH#443). An existing file keeps its mode.
+fn open_append(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o640);
+    options.open(path)
+}
+
 pub fn init(level: &str, log_file: Option<&Path>) -> anyhow::Result<()> {
     let builder = tracing_subscriber::fmt()
         .json()
@@ -34,10 +44,24 @@ pub fn init(level: &str, log_file: Option<&Path>) -> anyhow::Result<()> {
             if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
                 std::fs::create_dir_all(dir)?;
             }
-            let file = OpenOptions::new().create(true).append(true).open(path)?;
+            let file = open_append(path)?;
             builder.with_ansi(false).with_writer(Mutex::new(file)).init();
         }
         None => builder.with_writer(std::io::stdout).init(),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn the_log_file_is_created_owner_and_group_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("shadoucmdb-log-{}.jsonl", uuid::Uuid::new_v4()));
+        drop(super::open_append(&path).unwrap());
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(mode & !0o640, 0, "mode {mode:o} is 0640 or stricter");
+    }
 }
