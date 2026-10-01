@@ -1096,7 +1096,7 @@ async fn run(
     if file.format_version < 3 {
         file = keep_current_parents(&file, &snap.file);
     }
-    let file = &keep_current_settings(file, &snap.file);
+    let file = &archive_superseded_fields(keep_current_settings(file, &snap.file), &snap.file, &mut warnings);
     let decoded = validate(file, &snap, ctx, legacy_problems, &mut warnings)?;
     let Snapshot { file: current, ids, .. } = snap;
     let cur_dm = current.data_model.unwrap_or_default();
@@ -1653,6 +1653,45 @@ fn keep_current_settings(mut file: ConfigFile, current: &ConfigFile) -> ConfigFi
             current.lookups.iter().flat_map(|l| l.lists.iter()).map(|l| (l.key.as_str(), l)).collect();
         for l in &mut lk.lists {
             l.system_role = cur.get(l.key.as_str()).and_then(|o| o.system_role);
+        }
+    }
+    file
+}
+
+/// Fields that a core field of every CI replaced, as (class, field): the
+/// starter template's Application "criticality" (migration 0035, GH#354).
+const SUPERSEDED_FIELDS: &[(&str, &str)] = &[("application", "criticality")];
+
+/// A superseded field that is active in the file is imported archived, so an
+/// export from before 0035 does not bring back a second Criticality on every
+/// Application. Archived, its column and values stay readable and references
+/// to it in the file still resolve. The one exception is a field an
+/// administrator restored here: it stays active.
+fn archive_superseded_fields(
+    mut file: ConfigFile,
+    current: &ConfigFile,
+    warnings: &mut Vec<ImportWarning>,
+) -> ConfigFile {
+    let Some(dm) = file.data_model.as_mut() else { return file };
+    let active_here: HashSet<(&str, &str)> = current
+        .data_model
+        .iter()
+        .flat_map(|d| d.attributes.iter())
+        .filter(|a| a.is_active)
+        .map(|a| (a.class.as_str(), a.key.as_str()))
+        .collect();
+    for (i, a) in dm.attributes.iter_mut().enumerate() {
+        let field = (a.class.as_str(), a.key.as_str());
+        if a.is_active && SUPERSEDED_FIELDS.contains(&field) && !active_here.contains(&field) {
+            a.is_active = false;
+            warnings.push(ImportWarning {
+                path: format!("dataModel.attributes.{i}.isActive"),
+                message: format!(
+                    "Field {}.{} is imported archived: every CI has a core Criticality field (criticalityValueId), \
+                     which replaces it",
+                    a.class, a.key
+                ),
+            });
         }
     }
     file
@@ -2582,5 +2621,61 @@ mod tests {
         assert!(fields.iter().any(|f| f.ends_with(".impactDirection")), "{fields:?}");
         a.drop().await;
         b.drop().await;
+    }
+
+    /// GH#354: an export from before 0035 still has the template's active
+    /// Application field "criticality". It imports archived, with a warning,
+    /// so Applications do not get a second Criticality; a field an
+    /// administrator restored here stays active.
+    #[tokio::test]
+    async fn superseded_application_criticality_imports_archived() {
+        let Some(db) = scratch::database("superseded_application_criticality_imports_archived").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("test", "test");
+        crate::seed::seed_system_rows(pool).await.unwrap();
+        crate::modules::templates::install_by_key(pool, &ctx, "it_infrastructure").await.unwrap();
+
+        let mut old = export(pool, &ctx).await.unwrap();
+        let attrs = &mut old.data_model.as_mut().unwrap().attributes;
+        assert!(!attrs.iter().any(|a| a.key == "criticality"), "the template no longer has the field");
+        let version = attrs.iter().find(|a| a.class == "application" && a.key == "version").unwrap().clone();
+        attrs.push(AttributeSpec {
+            key: "criticality".into(),
+            label: "Criticality".into(),
+            data_type: AttributeDataType::Enum,
+            enum_values: Some(["low", "medium", "high", "critical"].map(String::from).to_vec()),
+            ..version
+        });
+        let at = format!("dataModel.attributes.{}.isActive", attrs.len() - 1);
+        let field_state = async || -> Option<bool> {
+            sqlx::query_scalar(
+                "SELECT d.is_active FROM ci_attribute_definitions d JOIN ci_classes c ON c.id = d.class_id
+                 WHERE c.key = 'application' AND d.key = 'criticality'",
+            )
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+        };
+
+        // Created archived, and imported again it stays archived.
+        for _ in 0..2 {
+            let res = import(pool, &ctx, &old, ImportMode::Apply).await.unwrap();
+            assert!(
+                res.warnings.iter().any(|w| w.path == at && w.message.contains("core Criticality")),
+                "{:?}",
+                res.warnings
+            );
+            assert_eq!(field_state().await, Some(false));
+        }
+
+        // Restored by an administrator: the file no longer overrides that.
+        sqlx::query("UPDATE ci_attribute_definitions SET is_active = true WHERE key = 'criticality'")
+            .execute(pool)
+            .await
+            .unwrap();
+        let res = import(pool, &ctx, &old, ImportMode::Apply).await.unwrap();
+        assert!(!res.warnings.iter().any(|w| w.path == at), "{:?}", res.warnings);
+        assert_eq!(field_state().await, Some(true));
+        db.drop().await;
     }
 }
