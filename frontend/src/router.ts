@@ -6,6 +6,8 @@ import DashboardPage from "./pages/DashboardPage.vue";
 import InventoryPage from "./pages/InventoryPage.vue";
 import NotFoundPage from "./pages/NotFoundPage.vue";
 import SearchPage from "./pages/SearchPage.vue";
+import ServiceDetailPage from "./pages/services/ServiceDetailPage.vue";
+import ServiceListPage from "./pages/services/ServiceListPage.vue";
 import AdminLayout from "./pages/admin/AdminLayout.vue";
 import ApiTokensPage from "./pages/admin/ApiTokensPage.vue";
 import IdentityProviderEditPage from "./pages/admin/identity/IdentityProviderEditPage.vue";
@@ -72,6 +74,11 @@ export const router = createRouter({
     { path: `/cis/new${EDITOR_SUFFIX}`, component: CiCreatePage, meta: { layoutEditor: true } },
     { path: `/cis/:id${EDITOR_SUFFIX}`, component: CiDetailPage, meta: { layoutEditor: true } },
     { path: `/cis/:id/edit${EDITOR_SUFFIX}`, component: CiEditPage, meta: { layoutEditor: true } },
+    // Business services (CIs of the built-in service class): /cis/:id of a service redirects here (CiDetailPage).
+    { path: "/services", component: ServiceListPage },
+    { path: "/services/:id", component: ServiceDetailPage },
+    // The service's Impact tab, defaulting to Upstream; its own URL like a CI's.
+    { path: "/services/:id/impact", component: ServiceDetailPage },
     { path: "/search", component: SearchPage },
     { path: "/imports", component: ImportsPage },
     { path: "/imports/new", component: ImportWizardPage },

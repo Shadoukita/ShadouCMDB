@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../api/client";
 import { useAreas } from "../api/datamodel";
 import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
+import { useServiceSettings } from "../api/services";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
@@ -59,6 +60,20 @@ const notFound = computed(() => {
 // The API refuses a CI of a class the user may not view; that is a permission limit, not a missing record.
 const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.value.code === "FORBIDDEN");
 const c = computed(() => ci.data.value);
+
+// A business service has its own page (/services/:id): its CI URL redirects there, the Impact tab to the
+// service's (which defaults to Upstream). A deleted service stays here, read-only, and the layout editor
+// edits the class's layout on this page.
+const serviceSettings = useServiceSettings();
+const isService = computed(() => !!c.value && !c.value.deletedAt && c.value.classId === serviceSettings.data.value?.classId);
+const redirecting = computed(() => isService.value && !route.meta.layoutEditor);
+watch(
+  redirecting,
+  (go) => {
+    if (go) void router.replace({ path: `/services/${id.value}${onImpactRoute.value ? "/impact" : ""}`, query: route.query, hash: route.hash });
+  },
+  { immediate: true },
+);
 
 // The class's layout from Customization, if it has one; otherwise the built-in one: General (core fields and
 // ungrouped attributes), the attribute groups, then the record's class and timestamps.
@@ -152,7 +167,7 @@ const crumbs = computed<Crumb[]>(() => {
 </script>
 
 <template>
-  <LoadingState v-if="ci.isLoading.value" label="Loading configuration item…" />
+  <LoadingState v-if="ci.isLoading.value || serviceSettings.isLoading.value || redirecting" label="Loading configuration item…" />
   <template v-else-if="ci.isError.value">
     <Breadcrumbs :items="[{ label: 'Inventory', to: '/cis' }, { label: forbidden ? 'Permission denied' : notFound ? 'Not found' : 'Error' }]" />
     <EmptyState v-if="forbidden" title="Permission denied">

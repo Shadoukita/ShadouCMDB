@@ -4,6 +4,8 @@ import { computed, ref, watch } from "vue";
 import { RouterLink, type RouteLocationNormalizedLoaded } from "vue-router";
 import { useAreas } from "../api/datamodel";
 import { ciCountQuery, useCiClasses } from "../api/queries";
+import { useServiceSettings } from "../api/services";
+import { t } from "../i18n";
 import type { UiPage } from "../api/uiSettings";
 import { useAppSettings, useNavPreviewStore } from "../lib/appSettings";
 import { viewableClasses } from "../lib/permissions";
@@ -31,6 +33,9 @@ const { doc } = useAppSettings();
 const preview = useNavPreviewStore();
 
 const importAccess = useImportAccess();
+/** Business services sit under Inventory for users who may view them (GET /settings/business-services). */
+const services = useServiceSettings();
+const showServices = computed(() => !!services.data.value?.canView);
 const hasAdmin = computed(() => visibleSections(session.adminAccess).length > 0);
 function showPage(p: UiPage): boolean {
   if (p === "audit_log") return session.can("audit.view");
@@ -117,6 +122,9 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
       <!-- Bulk import sits under Inventory, only while it is switched on and the user holds cis.import. -->
       <NavLink v-if="item.page === 'inventory' && importAccess.available.value" to="/imports" :active="(r) => r.path.startsWith('/imports')">
         Bulk import
+      </NavLink>
+      <NavLink v-if="item.page === 'inventory' && showServices" to="/services" :active="(r) => r.path.startsWith('/services')">
+        {{ t("services.nav") }}
       </NavLink>
     </template>
   </template>
