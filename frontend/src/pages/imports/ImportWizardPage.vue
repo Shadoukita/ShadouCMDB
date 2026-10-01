@@ -73,6 +73,12 @@ function toMapping() {
 function toJobStep() {
   router.replace({ path: `/imports/${id.value}` });
 }
+/**
+ * An existing job while import is off (W3): the server still answers reading, cancelling and deleting, and
+ * refuses everything else with `import_disabled`, so the steps show what happened and hide what cannot work.
+ */
+const off = computed(() => !!id.value && !!settings.data.value && !available.value);
+
 const presetClassKey = computed(() => (typeof route.query.classKey === "string" ? route.query.classKey : undefined));
 const presetFromJob = computed(() => (typeof route.query.fromJob === "string" ? route.query.fromJob : undefined));
 
@@ -102,6 +108,20 @@ const committedRows = computed(() => {
         <ImportStatusBadge v-if="data" :status="data.status" />
         <span v-if="data && session.isAdministrator && data.createdBy.id !== session.user?.id" class="muted">by {{ data.createdBy.name }}</span>
       </div>
+    </div>
+
+    <div v-if="off" class="alert alert-warn" role="status">
+      <template v-if="settings.data.value?.locked">
+        <strong>Bulk import is disabled by the server configuration.</strong>
+      </template>
+      <template v-else>
+        <strong>Bulk import is turned off for this instance.</strong>
+        An administrator can turn it on under
+        <RouterLink v-if="session.isAdministrator" to="/admin/import">Administration › Import</RouterLink>
+        <template v-else>Administration › Import</template>.
+      </template>
+      This import can't continue until then; you can still cancel it or delete it from
+      <RouterLink to="/imports">Imports</RouterLink>.
     </div>
 
     <ImportStepper :current="step" :last="last" :link-to="linkTo" />
@@ -153,10 +173,15 @@ const committedRows = computed(() => {
         </template>
       </div>
 
-      <FileStep v-if="step === 1" :job="data" @next="toMapping" />
+      <FileStep v-if="step === 1" :job="data" :off="off" @next="toMapping" />
+      <!-- The mapping needs the server's suggestion and saved mappings, which are refused while import is off. -->
+      <section v-else-if="step === 2 && off" class="panel" aria-labelledby="step-heading">
+        <div class="panel-header"><h2 id="step-heading" tabindex="-1">Map columns</h2></div>
+        <div class="panel-body"><p class="muted">The mapping can't be viewed or changed while bulk import is off.</p></div>
+      </section>
       <MappingStep v-else-if="step === 2" :job="data" :preset-class-key="presetClassKey" :preset-from-job="presetFromJob" @checking="toJobStep" />
-      <CheckStep v-else-if="step === 3" :job="data" @committing="toJobStep" />
-      <CommitStep v-else :job="data" />
+      <CheckStep v-else-if="step === 3" :job="data" :off="off" @committing="toJobStep" />
+      <CommitStep v-else :job="data" :off="off" />
     </template>
   </template>
 </template>

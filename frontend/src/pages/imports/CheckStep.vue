@@ -25,7 +25,8 @@ import ImportProgress from "./ImportProgress.vue";
  * planned changes, and the row problems as a server-paged table whose filters live in the URL, so a reload or a
  * shared link shows the same page.
  */
-const props = defineProps<{ job: ImportJob }>();
+/** `off`: bulk import is turned off; the server refuses the row problems, the report and every next step. */
+const props = defineProps<{ job: ImportJob; off?: boolean }>();
 const emit = defineEmits<{ committing: [] }>();
 
 const route = useRoute();
@@ -76,7 +77,7 @@ const issueQuery = computed<ImportIssueQuery>(() => {
   if (q("issueColumn") !== "" && Number.isInteger(Number(q("issueColumn")))) out.column = Number(q("issueColumn"));
   return out;
 });
-const run = computed(() => (checked.value && (summary.value?.issuesTotal ?? 0) > 0 ? props.job.dryRun?.finishedAt : undefined));
+const run = computed(() => (!props.off && checked.value && (summary.value?.issuesTotal ?? 0) > 0 ? props.job.dryRun?.finishedAt : undefined));
 const issues = useImportIssues(() => props.job.id, run, issueQuery);
 
 function setQuery(patch: Record<string, string | number | undefined>) {
@@ -216,7 +217,7 @@ const fieldLabel = (f: string) => {
         <p v-if="summary.issuesTotal > 10000" class="muted">
           Showing the first 10,000 of {{ summary.issuesTotal.toLocaleString() }} problems. Fix the mapping or the file.
         </p>
-        <div v-if="summary.issuesTotal > 0 && job.status !== 'expired'" class="inline-control">
+        <div v-if="summary.issuesTotal > 0 && job.status !== 'expired' && !off" class="inline-control">
           <button type="button" class="btn" :disabled="downloading" @click="download">
             {{ downloading ? "Preparing the report…" : "Download error report" }}
           </button>
@@ -262,7 +263,11 @@ const fieldLabel = (f: string) => {
         </table>
       </div>
 
-      <div v-if="summary.issuesTotal > 0" class="panel-body">
+      <div v-if="summary.issuesTotal > 0 && off" class="panel-body">
+        <h3>Row problems</h3>
+        <p class="muted">The row problems and the error report can't be opened while bulk import is off.</p>
+      </div>
+      <div v-else-if="summary.issuesTotal > 0" class="panel-body">
         <h3 id="import-issues-title">Row problems</h3>
         <form class="import-file-options" @submit.prevent="setQuery({ issueCode: codeInput.trim(), issueOffset: undefined })">
           <div class="field">
@@ -306,8 +311,8 @@ const fieldLabel = (f: string) => {
           </div>
         </form>
       </div>
-      <ErrorAlert v-if="issues.isError.value" :error="issues.error.value" :on-retry="() => issues.refetch()" />
-      <div v-else-if="summary.issuesTotal > 0" class="table-wrap import-preview">
+      <ErrorAlert v-if="!off && issues.isError.value" :error="issues.error.value" :on-retry="() => issues.refetch()" />
+      <div v-else-if="summary.issuesTotal > 0 && !off" class="table-wrap import-preview">
         <table class="data" aria-labelledby="import-issues-title">
           <caption>
             <template v-if="issues.isPending.value">Loading the row problems…</template>
@@ -347,7 +352,7 @@ const fieldLabel = (f: string) => {
         />
       </div>
 
-      <div v-if="job.status === 'validated'" class="form-footer">
+      <div v-if="job.status === 'validated' && !off" class="form-footer">
         <template v-if="stale">
           <button type="button" class="btn btn-primary" :disabled="again.isPending.value" @click="again.mutate(job.id)">
             {{ again.isPending.value ? "Starting the check…" : "Check again" }}

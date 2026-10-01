@@ -11,7 +11,8 @@ import ImportProgress from "./ImportProgress.vue";
  * encoding and delimiter the server detected; changing any of them, or the header row, reads the file again. The
  * preview shows the first 20 rows as parsed, so wrong umlauts or one-value-per-row are seen at once.
  */
-const props = defineProps<{ job: ImportJob }>();
+/** `off`: bulk import is turned off, so the file can't be read again and the wizard can't go on. */
+const props = defineProps<{ job: ImportJob; off?: boolean }>();
 const emit = defineEmits<{ next: [] }>();
 
 const update = useUpdateImportFileOptions();
@@ -20,7 +21,7 @@ const file = computed(() => props.job.file);
 const reading = computed(() => ["uploading", "analysing"].includes(props.job.status) || (props.job.status === "queued" && props.job.phase === "analyse"));
 const analysisFailed = computed(() => props.job.status === "failed" && props.job.phase === "analyse");
 /** The server reads the file again only in `ready` or after a failed analysis. */
-const editable = computed(() => props.job.status === "ready" || analysisFailed.value);
+const editable = computed(() => !props.off && (props.job.status === "ready" || analysisFailed.value));
 
 const sheet = ref<string>();
 const encoding = ref<ImportFileOptions["encoding"]>();
@@ -127,6 +128,9 @@ const header = (i: number) => headers.value[i] ?? `Column ${i + 1}`;
         </div>
       </form>
       <p v-if="editable && dirty && job.mapping" class="muted">Reading the file again drops the column mapping.</p>
+      <p v-else-if="off && !reading && file.rowCount != null" class="muted">
+        The file options can't be changed while bulk import is off.
+      </p>
       <p v-else-if="!editable && !reading && file.rowCount != null" class="muted">
         The file options can no longer be changed for this import. To read the file differently, upload it again.
       </p>
@@ -151,7 +155,7 @@ const header = (i: number) => headers.value[i] ?? `Column ${i + 1}`;
       </table>
     </div>
 
-    <div v-if="job.status === 'ready'" class="form-footer">
+    <div v-if="job.status === 'ready' && !off" class="form-footer">
       <button type="button" class="btn btn-primary" :disabled="dirty" @click="emit('next')">Next: Map columns</button>
       <span v-if="dirty" class="muted">Read the file again with the changed options first.</span>
     </div>

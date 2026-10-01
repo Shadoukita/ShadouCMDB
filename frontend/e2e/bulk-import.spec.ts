@@ -347,7 +347,7 @@ test("saved mapping and update: the same headers apply the mapping; 2 changed ce
   await page.context().close();
 });
 
-test("errors and report: per-row problems, the neutralised report, a corrected file, and skipping the rest", async ({ browser }, testInfo) => {
+test("errors and report: per-row problems, the neutralised report, a corrected file, and skipping the rest", async ({ browser, request }, testInfo) => {
   const page = await signInUi(browser, IMPORTER);
   const bad = [
     appRow(21, "1.0", "Nope"), // unknown lookup value
@@ -413,6 +413,28 @@ test("errors and report: per-row problems, the neutralised report, a corrected f
   await expect(result(page)).toContainText("Import finished: 4 created, 0 updated, 0 unchanged, 1 skipped", { timeout: 30_000 });
   const [skipped] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download error report" }).click()]);
   expect(await readFile(await skipped.path(), "utf-8")).toContain(APP(25));
+  const doneUrl = page.url();
+
+  // While import is off (GH#362), both jobs say so and offer nothing the server would refuse.
+  await setImport(request, false);
+  const offNotice = page.getByText("Bulk import is turned off for this instance.");
+  await page.goto(`/imports/${firstId}`);
+  await expect(offNotice).toBeVisible();
+  await expect(counts(page)).not.toContainText("Errors 0 rows");
+  await expect(page.getByText("The row problems and the error report can't be opened while bulk import is off.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Download error report" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Import \d+ valid row/ })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Back to mapping" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Upload a corrected file" })).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.goto(`/imports/${firstId}?step=2`);
+  await expect(page.getByText("The mapping can't be viewed or changed while bulk import is off.")).toBeVisible();
+  await page.goto(doneUrl);
+  await expect(offNotice).toBeVisible();
+  await expect(result(page)).toContainText("1 skipped");
+  await expect(page.getByRole("button", { name: "Download error report" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Import another file" })).toHaveCount(0);
+  await setImport(request, true);
   await page.context().close();
 });
 

@@ -15,7 +15,8 @@ import ImportProgress from "./ImportProgress.vue";
  * rows). Then the result counts, links to the imported CIs and the audit entry, and the error report when rows
  * were skipped or failed.
  */
-const props = defineProps<{ job: ImportJob }>();
+/** `off`: bulk import is turned off; the server refuses the error report and new uploads. */
+const props = defineProps<{ job: ImportJob; off?: boolean }>();
 
 const session = useSessionStore();
 const classes = useCiClasses();
@@ -113,10 +114,10 @@ async function download() {
         <div class="form-footer">
           <RouterLink class="btn btn-primary" :to="inventoryTo">Open inventory</RouterLink>
           <RouterLink v-if="session.can('audit.view')" class="btn" :to="auditTo">View in audit log</RouterLink>
-          <button v-if="hasReport" type="button" class="btn" :disabled="downloading" @click="download">
+          <button v-if="hasReport && !off" type="button" class="btn" :disabled="downloading" @click="download">
             {{ downloading ? "Preparing the report…" : "Download error report" }}
           </button>
-          <RouterLink class="btn btn-link" to="/imports/new">Import another file</RouterLink>
+          <RouterLink v-if="!off" class="btn btn-link" to="/imports/new">Import another file</RouterLink>
         </div>
         <ErrorAlert v-if="downloadError" :error="downloadError" title="The error report was not downloaded" />
       </template>
