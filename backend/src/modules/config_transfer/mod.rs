@@ -509,6 +509,37 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
         mappings
             .retain(|m| ids.classes.get(&m.class_key).is_some_and(|c| ctx.require_class(*c, ClassOp::View).is_ok()));
     }
+
+    // GH#407: one `export` row per download, in its own transaction (the
+    // snapshot is read-only). Which sections left and how many mappings,
+    // never the content.
+    let sections: Vec<&str> = [
+        ("dataModel", file.data_model.is_some()),
+        ("lookups", file.lookups.is_some()),
+        ("permissionProfiles", file.permission_profiles.is_some()),
+        ("uiSettings", file.ui_settings.is_some()),
+        ("importMappings", file.import_mappings.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, present)| present.then_some(name))
+    .collect();
+    let entry = crud::AuditEntry {
+        action: crud::AuditAction::Export,
+        entity_type: "config",
+        entity_id: Uuid::nil(),
+        old_value: None,
+        new_value: Some(serde_json::json!({
+            "kind": "config",
+            "format": "json",
+            "formatVersion": file.format_version,
+            "sections": sections,
+            "profilesIncluded": file.permission_profiles.is_some(),
+            "mappingCount": file.import_mappings.as_ref().map_or(0, Vec::len),
+        })),
+    };
+    let mut tx = pool.begin().await?;
+    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    tx.commit().await?;
     Ok(file)
 }
 
@@ -1811,7 +1842,9 @@ pub fn routes() -> Vec<Route> {
                  caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on \
                  `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves \
                  the target's profiles untouched. Likewise `importMappings` is only present when the caller holds \
-                 `cis.import`, and holds only the mappings of classes the caller can view.",
+                 `cis.import`, and holds only the mappings of classes the caller can view. Every export is \
+                 recorded in the audit log as one `export` entry (entity type `config`) naming the sections \
+                 included and the number of import mappings, never their content.",
             )
             .requires(GlobalPermission::ConfigExportImport)
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
@@ -2010,6 +2043,74 @@ mod tests {
             let ctx = user_ctx(&db.pool, name, &[GlobalPermission::ConfigExportImport, extra]).await;
             let profiles = export(&db.pool, &ctx).await.unwrap().permission_profiles.unwrap();
             assert!(profiles.iter().any(|p| p.name == "Service Desk"), "{name}: {profiles:?}");
+        }
+
+        db.drop().await;
+    }
+
+    /// GH#407: every export writes exactly one `export` row naming the sections
+    /// and counts, attributed to the caller, never the profiles themselves.
+    #[tokio::test]
+    async fn export_is_audited() {
+        let Some(db) = scratch::database("export_audited").await else { return };
+        crate::seed::seed_system_rows(&db.pool).await.unwrap();
+        let profile = ProfileSpec {
+            name: "Service Desk".into(),
+            description: Some("Tier one".into()),
+            global_permissions: vec![GlobalPermission::CisImport],
+            class_permissions: Vec::new(),
+        };
+        let file = ConfigFile {
+            format: FORMAT.into(),
+            format_version: FORMAT_VERSION,
+            exported_at: None,
+            app_version: None,
+            data_model: None,
+            lookups: None,
+            permission_profiles: Some(vec![profile]),
+            ui_settings: None,
+            import_mappings: None,
+        };
+        import(&db.pool, &RequestContext::system("test", "test"), &file, ImportMode::Apply).await.unwrap();
+
+        let rows = |actor: Uuid| {
+            let pool = db.pool.clone();
+            async move {
+                sqlx::query_as::<_, (String, Uuid, Option<Value>, Option<Value>)>(
+                    "SELECT entity_type, entity_id, old_value, new_value FROM audit_log
+                     WHERE action = 'export' AND actor_id = $1::text",
+                )
+                .bind(actor)
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let only_export = user_ctx(&db.pool, "exporter", &[GlobalPermission::ConfigExportImport]).await;
+        let admin = user_ctx(
+            &db.pool,
+            "profile_admin",
+            &[GlobalPermission::ConfigExportImport, GlobalPermission::ProfilesManage],
+        )
+        .await;
+        for (ctx, included) in [(&only_export, false), (&admin, true)] {
+            let actor = ctx.principal().unwrap().user_id;
+            assert!(rows(actor).await.is_empty());
+            let exported = export(&db.pool, ctx).await.unwrap();
+            assert_eq!(exported.permission_profiles.is_some(), included);
+            let audited = rows(actor).await;
+            assert_eq!(audited.len(), 1, "{audited:?}");
+            let (entity_type, entity_id, old, new) = audited.into_iter().next().unwrap();
+            assert_eq!((entity_type.as_str(), entity_id, old), ("config", Uuid::nil(), None));
+            let new = new.unwrap();
+            assert_eq!(new["kind"], "config");
+            assert_eq!(new["profilesIncluded"], included);
+            assert_eq!(new["mappingCount"], 0);
+            let sections: Vec<&str> = new["sections"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            assert_eq!(sections.contains(&"permissionProfiles"), included, "{sections:?}");
+            assert!(sections.contains(&"dataModel") && !sections.contains(&"importMappings"), "{sections:?}");
+            let text = new.to_string();
+            assert!(!text.contains("Service Desk") && !text.contains("Tier one"), "{text}");
         }
 
         db.drop().await;

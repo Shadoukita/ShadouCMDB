@@ -63,6 +63,8 @@ pub enum EntityType {
     ImportMappings,
     /// User groups (owners of business services): create, update (members too), delete
     UserGroups,
+    /// Configuration file downloads (`export`; entity id is the nil UUID)
+    Config,
 }
 
 impl EntityType {
@@ -94,6 +96,7 @@ impl EntityType {
             EntityType::ImportSettings => "import_settings",
             EntityType::ImportMappings => "import_mappings",
             EntityType::UserGroups => "user_groups",
+            EntityType::Config => "config",
         }
     }
 }

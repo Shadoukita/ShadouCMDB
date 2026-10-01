@@ -305,7 +305,8 @@ pub enum AuditAction {
     SchemaChangeRefused,
     /// Data left the system as a file (entity: what was exported; the
     /// parameters and row count in new_value, never the rows). Today: the
-    /// impact analysis CSV.
+    /// impact analysis CSV, business service members and the configuration
+    /// file (entity type `config`, nil id).
     Export,
     /// One bulk import commit (entity type `import_jobs`; the counts in new_value).
     #[serde(rename = "import.commit")]
