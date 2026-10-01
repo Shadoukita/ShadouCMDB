@@ -163,6 +163,22 @@ pub fn column_limit(limits: &Limits, row: u32, column: u32) -> ParseError {
     .at(Some(row), Some(column))
 }
 
+/// Refuses a cell longer than [`MAX_CELL_CHARS`](super::MAX_CELL_CHARS)
+/// characters with `cell_too_long` (§3.5). Called before the text is copied,
+/// so a long shared string referenced from many cells is never multiplied.
+pub fn check_cell(text: &str, row: u32, column: u32) -> Result<(), ParseError> {
+    let max = super::MAX_CELL_CHARS as usize;
+    // A character takes at least one byte: most cells need no count.
+    if text.len() > max && text.chars().count() > max {
+        return Err(ParseError::new(
+            "cell_too_long",
+            format!("A cell is longer than {} characters.", group_thousands(max as u64)),
+        )
+        .at(Some(row), Some(column)));
+    }
+    Ok(())
+}
+
 /// 100000 → "100,000".
 pub fn group_thousands(n: u64) -> String {
     let s = n.to_string();
@@ -192,5 +208,15 @@ mod tests {
         assert_eq!(float_text(1.5), "1.5");
         assert!(CellValue::Text("  ".into()).is_blank());
         assert!(!CellValue::Int(0).is_blank());
+    }
+
+    #[test]
+    fn cells_are_capped_in_characters_not_bytes() {
+        assert!(check_cell(&"x".repeat(10_000), 2, 0).is_ok());
+        // 10,000 characters of two bytes each.
+        assert!(check_cell(&"ü".repeat(10_000), 2, 0).is_ok());
+        let err = check_cell(&"ü".repeat(10_001), 7, 3).unwrap_err();
+        assert_eq!((err.code, err.row, err.column), ("cell_too_long", Some(7), Some(3)));
+        assert_eq!(err.message, "A cell is longer than 10,000 characters.");
     }
 }

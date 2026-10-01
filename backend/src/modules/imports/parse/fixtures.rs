@@ -113,6 +113,8 @@ const STYLES: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 /// A worksheet cell for [`sheet_xml`].
 pub enum C<'a> {
     S(&'a str),
+    /// An index into the shared strings (see [`with_shared_strings`]).
+    Shared(u32),
     N(&'a str),
     B(bool),
     /// A serial date with style 1.
@@ -134,6 +136,7 @@ pub fn sheet_xml(cells: &[(&str, C<'_>)]) -> String {
         let row: u32 = r.trim_start_matches(|ch: char| ch.is_ascii_alphabetic()).parse().unwrap();
         let xml = match c {
             C::S(s) => format!(r#"<c r="{r}" t="inlineStr"><is><t>{}</t></is></c>"#, escape(s)),
+            C::Shared(i) => format!(r#"<c r="{r}" t="s"><v>{i}</v></c>"#),
             C::N(n) => format!(r#"<c r="{r}"><v>{n}</v></c>"#),
             C::B(b) => format!(r#"<c r="{r}" t="b"><v>{}</v></c>"#, u8::from(*b)),
             C::Date(n) => format!(r#"<c r="{r}" s="1"><v>{n}</v></c>"#),
@@ -181,4 +184,30 @@ pub fn workbook_parts(sheet1: &str, sheet2: Option<&str>, date1904: bool, second
 /// A plain one-sheet workbook.
 pub fn workbook(cells: &[(&str, C<'_>)]) -> Vec<u8> {
     zip(&workbook_parts(&sheet_xml(cells), None, false, false))
+}
+
+/// Adds `xl/sharedStrings.xml` with `strings` to the parts of [`workbook_parts`].
+pub fn with_shared_strings(parts: &mut Vec<Part>, strings: &[&str]) {
+    let items: String = strings.iter().map(|s| format!("<si><t>{}</t></si>", escape(s))).collect();
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{n}" uniqueCount="{n}">{items}</sst>"#,
+        n = strings.len()
+    );
+    for part in parts.iter_mut() {
+        let (anchor, add) = match part.name.as_str() {
+            "[Content_Types].xml" => (
+                "</Types>",
+                r#"<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>"#,
+            ),
+            "xl/_rels/workbook.xml.rels" => (
+                "</Relationships>",
+                r#"<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>"#,
+            ),
+            _ => continue,
+        };
+        let text = String::from_utf8(std::mem::take(&mut part.data)).unwrap();
+        part.data = text.replace(anchor, &format!("{add}{anchor}")).into_bytes();
+    }
+    parts.push(Part::new("xl/sharedStrings.xml", xml));
 }
