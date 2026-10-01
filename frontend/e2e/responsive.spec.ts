@@ -85,3 +85,22 @@ test("desktop: user name, badge, theme and sign-out stay in the header", async (
   await expect(page.getByRole("button", { name: /^Signed in as/ })).toHaveCount(0);
   await expectHeaderFits(page);
 });
+
+// GH#363: at 320 px (WCAG 1.4.10 reflow) the user's name in the header pushed the page to 397 px.
+test("320 px: header reflows, the user menu shows initials and names the user when opened", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  for (const path of ["/", "/cis"]) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expectHeaderFits(page);
+  }
+  const who = page.getByRole("button", { name: /^Signed in as \S/ });
+  await expect(who.locator(".who-initials")).toBeVisible();
+  await expect(who.locator(".who-initials")).not.toBeEmpty();
+  await who.click();
+  await expect(page.locator(".user-menu-panel").getByText(/^Signed in as \S/)).toBeVisible();
+  const panel = await page.locator(".user-menu-panel").boundingBox();
+  expect(panel!.x).toBeGreaterThanOrEqual(0);
+  expect(panel!.x + panel!.width).toBeLessThanOrEqual(320);
+  await snap(page, "responsive-320-user-menu");
+});
