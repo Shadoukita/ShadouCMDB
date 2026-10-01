@@ -248,21 +248,22 @@ async fn a_backup_restores_into_another_database_value_for_value() {
 /// it. The restored chain verifies and keeps the same head.
 #[tokio::test]
 async fn the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it() {
-    const TEST: &str = "the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it";
-    if !scratch::split_roles().await {
-        scratch::database(TEST).await; // prints the skip notice (or fails in CI)
+    let Some(roles) = scratch::Roles::create("the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it").await
+    else {
         return;
-    }
-    let Some(a) = scratch::database("api_role_backup_a").await else { return };
-    let Some(b) = scratch::database("api_role_backup_b").await else { return };
-    populate(&a.pool).await;
-    let mut ca = a.pool.acquire().await.unwrap();
+    };
+    let a = roles.database().await;
+    let b = roles.database().await;
+    // As in production (`seed`, the running application), the API role creates
+    // the area schemas and type tables and so owns them.
+    let api = roles.api_pool(&a).await;
+    populate(&api).await;
+    let mut ca = api.acquire().await.unwrap();
     let mut cb = b.pool.acquire().await.unwrap();
     let head = "SELECT last_seq, encode(last_hash, 'hex') FROM cmdb.audit_log_chain_head";
-    let head_a: (i64, String) = sqlx::query_as(head).fetch_one(&mut *ca).await.unwrap();
+    let head_a: (i64, String) = sqlx::query_as(head).fetch_one(&a.pool).await.unwrap();
     assert!(head_a.0 > 0, "demo data writes audit entries");
 
-    sqlx::query("SET ROLE shadoucmdb_app").execute(&mut *ca).await.unwrap();
     for denied in [
         "SELECT * FROM cmdb.audit_log_chain_head FOR UPDATE",
         "SELECT * FROM cmdb.audit_log_chain_head FOR KEY SHARE",
@@ -276,7 +277,6 @@ async fn the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it() {
         assert_eq!(code, "42501", "{denied}: {err}");
     }
     let (buf, header) = take_backup(&mut ca).await;
-    sqlx::query("RESET ROLE").execute(&mut *ca).await.unwrap();
     let copied = header.tables.iter().find(|t| t.schema == "cmdb" && t.name == "audit_log_chain_head");
     assert_eq!(copied.map(|t| t.rows), Some(1));
 
@@ -288,18 +288,20 @@ async fn the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it() {
     assert_eq!(problems, 0, "the restored audit chain verifies");
     // The restored schema grants the same: read, nothing else.
     let (read, write): (bool, bool) = sqlx::query_as(
-        "SELECT has_table_privilege('shadoucmdb_app', 'cmdb.audit_log_chain_head', 'SELECT'),
-                has_table_privilege('shadoucmdb_app', 'cmdb.audit_log_chain_head',
-                                    'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')",
+        "SELECT has_table_privilege($1, 'cmdb.audit_log_chain_head', 'SELECT'),
+                has_table_privilege($1, 'cmdb.audit_log_chain_head', 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')",
     )
+    .bind(&roles.app)
     .fetch_one(&mut *cb)
     .await
     .unwrap();
     assert_eq!((read, write), (true, false));
 
     drop((ca, cb));
+    api.close().await;
     a.drop().await;
     b.drop().await;
+    roles.drop().await;
 }
 
 /// SHAA-714 §6.3: a backup keeps the import switch, saved mappings and job

@@ -423,6 +423,11 @@ pub mod scratch {
 
     /// A database with no migrations applied, as after `CREATE DATABASE`.
     pub async fn empty(test: &str) -> Option<Scratch> {
+        let admin = admin(test)?;
+        Some(create(admin, &[]).await)
+    }
+
+    fn admin(test: &str) -> Option<PgConnectOptions> {
         let Ok(url) = std::env::var("SHADOUCMDB_TEST_DATABASE_URL") else {
             let opted_out = std::env::var("SHADOUCMDB_SKIP_DB_TESTS").is_ok_and(|v| v == "1");
             if std::env::var_os("CI").is_some() && !opted_out {
@@ -433,15 +438,77 @@ pub mod scratch {
             eprintln!("{test}: skipped, SHADOUCMDB_TEST_DATABASE_URL is not set");
             return None;
         };
-        let admin = PgConnectOptions::from_str(&url).expect("SHADOUCMDB_TEST_DATABASE_URL");
+        Some(PgConnectOptions::from_str(&url).expect("SHADOUCMDB_TEST_DATABASE_URL"))
+    }
+
+    async fn create(admin: PgConnectOptions, settings: &[(&str, &str)]) -> Scratch {
         let name = format!("shadoucmdb_test_{}", uuid::Uuid::new_v4().simple());
         let mut c = admin.connect().await.expect("connect to SHADOUCMDB_TEST_DATABASE_URL");
         c.execute(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}"))).await.expect("CREATE DATABASE");
         c.close().await.ok();
         // The same search_path as the application's pool (system tables live in `cmdb`).
-        let opts = admin.clone().database(&name).options([("search_path", super::SEARCH_PATH)]);
+        let opts = admin
+            .clone()
+            .database(&name)
+            .options([("search_path", super::SEARCH_PATH)])
+            .options(settings.iter().copied());
         let pool = PgPoolOptions::new().max_connections(8).connect_with(opts).await.unwrap();
-        Some(Scratch { admin, name, pool })
+        Scratch { admin, name, pool }
+    }
+
+    /// A three-role install of a test's own: an API and a maintenance role
+    /// (NOLOGIN) named for this test, which its databases name in
+    /// `shadoucmdb.app_role` / `shadoucmdb.maintenance_role` as
+    /// [`super::RoleNames`] does. Unlike [`split_roles`] it never creates the
+    /// cluster-wide default `shadoucmdb_app`, which would make every other
+    /// test's restore switch to that role (`act_as_api_role`).
+    pub struct Roles {
+        admin: PgConnectOptions,
+        pub app: String,
+        pub maintenance: String,
+    }
+
+    impl Roles {
+        pub async fn create(test: &str) -> Option<Roles> {
+            let admin = admin(test)?;
+            let id = uuid::Uuid::new_v4().simple().to_string();
+            let roles = Roles {
+                app: format!("shadoucmdb_test_{}_app", &id[..12]),
+                maintenance: format!("shadoucmdb_test_{}_maint", &id[..12]),
+                admin,
+            };
+            let mut c = roles.admin.connect().await.expect("connect to SHADOUCMDB_TEST_DATABASE_URL");
+            for role in [&roles.app, &roles.maintenance] {
+                c.execute(sqlx::AssertSqlSafe(format!("CREATE ROLE {role} NOLOGIN"))).await.unwrap();
+            }
+            c.close().await.ok();
+            Some(roles)
+        }
+
+        /// A database migrated as its owner, with the grants to these roles.
+        pub async fn database(&self) -> Scratch {
+            let settings = [
+                ("shadoucmdb.app_role", self.app.as_str()),
+                ("shadoucmdb.maintenance_role", self.maintenance.as_str()),
+            ];
+            let db = create(self.admin.clone(), &settings).await;
+            super::MIGRATOR.run(&db.pool).await.expect("migrations");
+            db
+        }
+
+        /// A pool on `db` that works as the API role, as the running application does.
+        pub async fn api_pool(&self, db: &Scratch) -> PgPool {
+            let opts = (*db.pool.connect_options()).clone().options([("role", self.app.as_str())]);
+            PgPoolOptions::new().max_connections(4).connect_with(opts).await.unwrap()
+        }
+
+        /// After every database of these roles is dropped.
+        pub async fn drop(self) {
+            let mut c = self.admin.connect().await.unwrap();
+            for role in [&self.app, &self.maintenance] {
+                c.execute(sqlx::AssertSqlSafe(format!("DROP ROLE {role}"))).await.unwrap();
+            }
+        }
     }
 
     /// Roles are cluster-wide. Creates the API and maintenance roles the
