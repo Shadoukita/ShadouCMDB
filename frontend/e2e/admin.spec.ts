@@ -188,6 +188,16 @@ test("disable, enable and reset the password; the audit log names who did it", a
   await snap(page, "26-audit-log");
 });
 
+test("your own user page points to My account instead of offering a password reset", async ({ page, request }) => {
+  const me = await apiGet<{ user: { id: string } }>(request, "/auth/me");
+  await page.goto(`/admin/users/${me.user.id}`);
+  await expect(page.getByTestId("self-password")).toContainText("change your own password under My account");
+  await expect(page.locator("#reset-password")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Set new password" })).toHaveCount(0);
+  await page.getByTestId("self-password").getByRole("link", { name: "My account" }).click();
+  await expect(page).toHaveURL(/\/account$/);
+});
+
 test("the audit log filters offer every OpenAPI value and show sign-in events as text", async ({ page, browser }) => {
   const spec = JSON.parse(readFileSync(new URL("../../backend/openapi.json", import.meta.url), "utf8"));
   const params: { name: string; schema: { enum: string[] } }[] = spec.paths["/api/v1/audit-log"].get.parameters;
