@@ -184,6 +184,11 @@ test("while import is off, the user still sees and deletes their import", async 
   await expect(page.getByText("Your remaining imports are listed below")).toBeVisible();
   const row = page.getByRole("row", { name: new RegExp(`servers-${stamp}\\.csv`) });
   await expect(row).toBeVisible();
+  // The job page says so too, and offers no step action the server would refuse.
+  await row.getByRole("link", { name: `servers-${stamp}.csv` }).click();
+  await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText("Bulk import is turned off for this instance.");
+  await expect(page.getByRole("button", { name: "Next: Map columns" })).toHaveCount(0);
+  await page.getByRole("status").getByRole("link", { name: "Imports" }).click();
   await row.getByRole("button", { name: /Delete import of/ }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("Configuration items already imported are not changed");
@@ -296,6 +301,19 @@ test("happy path, CSV: auto-matched columns with a lookup, a reference and a rel
 
   // At 320 CSS px the table becomes one card per column (1.4.10).
   await page.setViewportSize({ width: 320, height: 800 });
+  // axe does not see clipping: no card cell may cut off its content, the selects fit the width, and the caption
+  // keeps its width.
+  const clipped = await page.locator("#import-mapping-table td").evaluateAll((tds) =>
+    tds
+      .filter((td) => td.scrollHeight > td.clientHeight + 1 || td.scrollWidth > td.clientWidth + 1)
+      .map((td) => `${td.closest("tr")?.querySelector("td")?.textContent?.trim()} › ${(td as HTMLElement).dataset.label}`),
+  );
+  expect(clipped, "clipped mapping cells at 320 px").toEqual([]);
+  for (const label of ["Primary database", "Runs on"]) {
+    const box = (await page.getByLabel(label, { exact: true }).boundingBox())!;
+    expect(box.x + box.width, `${label} select within 320 px`).toBeLessThanOrEqual(320);
+  }
+  expect((await page.locator("#import-mapping-table caption").boundingBox())!.width).toBeGreaterThan(200);
   await checkA11y(page, testInfo, "import-mapping-320");
   await page.setViewportSize({ width: 1440, height: 900 });
 
@@ -321,6 +339,14 @@ test("happy path, CSV: auto-matched columns with a lookup, a reference and a rel
 
   await page.getByRole("link", { name: "Open inventory" }).click();
   await expect(page).toHaveURL(/\/cis\?classId=/);
+
+  // The list with rows: its Stop and Delete buttons are checked too, not only the empty state.
+  await page.goto("/imports");
+  const listed = page.getByRole("row", { name: new RegExp(`apps-${stamp}\\.csv`) });
+  await expect(listed).toBeVisible();
+  // The clipped File cell stays a table cell (an inline-block drops out of the row's grid and misaligns its border).
+  await expect(listed.locator("td.cell-clip")).toHaveCSS("display", "table-cell");
+  await checkA11y(page, testInfo, "imports-list");
   await page.context().close();
 
   const imported = await apiGet<{ id: string; attributes: Record<string, unknown> }>(request, `/configuration-items/${await ciIdByName(request, APP(1))}`);
@@ -350,8 +376,8 @@ test("saved mapping and update: the same headers apply the mapping; 2 changed ce
 test("errors and report: per-row problems, the neutralised report, a corrected file, and skipping the rest", async ({ browser }, testInfo) => {
   const page = await signInUi(browser, IMPORTER);
   const bad = [
-    appRow(21, "1.0", "Nope"), // unknown lookup value
-    appRow(22, "=cmd|' /C calc'!A0"), // stays a text, but the report neutralises it
+    appRow(21, "=cmd|' /C calc'!A0", "Nope"), // unknown lookup value; the formula lands in the report, neutralised
+    appRow(22),
     appRow(23, "1.0", ""), // missing required value
     appRow(24),
     appRow(24, "1.1"), // duplicate key within the file
@@ -381,6 +407,7 @@ test("errors and report: per-row problems, the neutralised report, a corrected f
   const [head, ...lines] = report.split("\r\n").filter(Boolean);
   expect(head).toMatch(/^"Row"[,;]"Severity"[,;]"Column"[,;]"Problem"[,;]"Code"[,;]"Name"/);
   expect(lines.every((l) => l.startsWith('"'))).toBeTruthy();
+  expect(report).toContain(`"'=cmd|' /C calc'!A0"`);
   expect(report).not.toContain(`"=cmd`);
 
   // Upload a corrected file: a new job with the same class and mapping. One row still has an error.
