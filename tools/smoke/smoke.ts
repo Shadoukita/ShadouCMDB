@@ -653,7 +653,7 @@ async function main() {
   await get('/api/v1/principals?q=a', 400);
   const owners = (await call('PUT', `/api/v1/business-services/${svc.id}/owners`,
     { version: svcDetail.version, technical: [{ kind: 'user', id: adminMe.user.id }], business: [] }, 200)).json;
-  check(owners.technical[0]?.displayName === 'Smoke admin' && !('username' in owners.technical[0]), 'owners by display name only');
+  check(owners.technical[0]?.displayName === adminMe.user.displayName && !('username' in owners.technical[0]), 'owners by display name only');
   await call('PUT', `/api/v1/business-services/${svc.id}/owners`, { version: svcDetail.version, technical: [], business: [] }, 409);
   const svcCsv = await get(`/api/v1/business-services/${svc.id}/members/export`);
   check(
