@@ -26971,7 +26971,7 @@
             "oneOf": [
               {
                 "type": "string",
-                "description": "What a built-in CI type is for (`ci_classes.system_role`).",
+                "description": "What a built-in CI class is for (`ci_classes.system_role`, migration 0033).\nThe class with a role cannot be deleted, archived or subclassed, and its\nrole never changes; its key may differ between installs (`service` when\nthe starter class was adopted, `business_service` otherwise).",
                 "enum": [
                   "business_service"
                 ]
@@ -32811,7 +32811,7 @@
             "oneOf": [
               {
                 "type": "string",
-                "description": "What a built-in relationship type is for (`relationship_types.system_role`).",
+                "description": "What a built-in relationship type is for (`relationship_types.system_role`,\nmigration 0033): its key, direction, impact direction and state are fixed.",
                 "enum": [
                   "business_service_member"
                 ]
