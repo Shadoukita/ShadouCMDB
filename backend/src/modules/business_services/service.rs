@@ -403,7 +403,11 @@ pub async fn add_members(
                 Some((false, depth)) if above + 1 + depth > cfg.max_nesting => errors.push(entry_error(
                     "memberIds",
                     *i,
-                    &format!("Business services can be nested at most {} levels deep", cfg.max_nesting),
+                    &format!(
+                        "Business services can be nested at most {} {} deep",
+                        cfg.max_nesting,
+                        if cfg.max_nesting == 1 { "level" } else { "levels" }
+                    ),
                     "membership_nesting_depth",
                 )),
                 _ => {}
