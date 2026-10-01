@@ -4,6 +4,7 @@ pub mod api_tokens;
 pub mod areas;
 pub mod audit;
 pub mod auth;
+pub mod business_services;
 pub mod classes;
 pub mod config_transfer;
 pub mod health;

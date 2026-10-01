@@ -581,6 +581,22 @@ pub(crate) mod tests {
             crate::http::Capacity::new(512, StdDuration::from_secs(10)),
             |_| {},
             imports,
+            Default::default(),
+        )
+    }
+
+    /// The real router with these business service limits.
+    pub(crate) fn app_with_business_services(
+        pool: sqlx::PgPool,
+        limits: crate::config::BusinessServiceConfig,
+    ) -> Router {
+        build_app_full(
+            pool,
+            CookieSecure::Never,
+            crate::http::Capacity::new(512, StdDuration::from_secs(10)),
+            |_| {},
+            Default::default(),
+            limits,
         )
     }
 
@@ -590,7 +606,7 @@ pub(crate) mod tests {
         capacity: crate::http::Capacity,
         configure: impl FnOnce(&mut AuthConfig),
     ) -> Router {
-        build_app_full(pool, cookie_secure, capacity, configure, Default::default())
+        build_app_full(pool, cookie_secure, capacity, configure, Default::default(), Default::default())
     }
 
     fn build_app_full(
@@ -599,6 +615,7 @@ pub(crate) mod tests {
         capacity: crate::http::Capacity,
         configure: impl FnOnce(&mut AuthConfig),
         imports: crate::config::ImportConfig,
+        business_services: crate::config::BusinessServiceConfig,
     ) -> Router {
         let mut auth = AuthConfig {
             session_idle: StdDuration::from_secs(3600),
@@ -644,8 +661,11 @@ pub(crate) mod tests {
             encryption: Default::default(),
             impact: Default::default(),
             imports: imports.clone(),
+            business_services,
         };
-        let state = AppState::new(pool, auth, crate::secrets::Keyring::for_tests()).importing(&imports);
+        let state = AppState::new(pool, auth, crate::secrets::Keyring::for_tests())
+            .importing(&imports)
+            .with_business_services(business_services);
         router(AppState { capacity, ..state }, &cfg)
     }
 

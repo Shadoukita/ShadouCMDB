@@ -42,6 +42,12 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
         "Which CIs are affected if a CI fails (downstream) and which it depends on (upstream), along the relationship \
          types that propagate impact. Bounded, and limited to the CIs the caller may view.",
     ),
+    (
+        "Business services",
+        "Business services: CIs of the built-in business service class, with members (CIs of any class, including \
+         other services), technical and business owners (users and groups) and a criticality. Members of classes the \
+         caller may not view are neither listed nor counted.",
+    ),
     ("Relationships", "Typed, directional edges between CIs. Removal is a soft delete."),
     (
         "CI classes",
@@ -87,7 +93,7 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
 // `{public}` is replaced with the operations that need no session.
 const DESCRIPTION: &str = "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.
 
-- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes`, `listTemplates` and `listImportMappings` (`{ data }` with every item) and the `.../usage` operations (`{ inUse, data }`).
+- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes`, `listTemplates` and `listImportMappings` (`{ data }` with every item), `searchPrincipals` (`{ data }`, at most 20 matches), `listConfigurationItemServices` (`{ data, truncated, visibility }`, at most 200 services) and the `.../usage` operations (`{ inUse, data }`).
 - `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.
 - Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.
 - Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Without a live session every operation answers 401 `UNAUTHENTICATED`, except these public ones: {public}.

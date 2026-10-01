@@ -280,6 +280,16 @@ fn push_visible(qb: &mut QueryBuilder<Postgres>, visible: &[Uuid]) {
             .push_bind(texts.clone())
             .push("), false))");
     }
+    // A business service's membership change: shown only with a member the
+    // caller may view; the others are dropped from the row by `redact`.
+    qb.push(
+        " AND (new_value IS NULL OR jsonb_typeof(new_value->'members') IS DISTINCT FROM 'object' OR EXISTS (\
+         SELECT 1 FROM jsonb_array_elements_text(coalesce(new_value->'members'->'added', '[]'::jsonb) \
+         || coalesce(new_value->'members'->'removed', '[]'::jsonb)) AS m(id) \
+         WHERE m.id IN (SELECT id::text FROM cmdb.configuration_items WHERE class_id = ANY(",
+    )
+    .push_bind(visible.to_vec())
+    .push("))))");
     qb.push(") OR (entity_type = 'ci_relationships'");
     for v in ["old_value", "new_value"] {
         qb.push(format!(" AND ({v} IS NULL OR ("));
@@ -317,6 +327,30 @@ fn reference_ids(value: &Value) -> impl Iterator<Item = Uuid> + '_ {
         .flat_map(|refs| refs.values().filter_map(|r| uuid_at(r, "id")))
 }
 
+/// The CIs a business service's membership change names (`members.added`, `members.removed`).
+fn member_ids(value: &Value) -> impl Iterator<Item = Uuid> + '_ {
+    let members = value.get("members").filter(|m| m.is_object());
+    ["added", "removed"]
+        .into_iter()
+        .filter_map(move |k| members.and_then(|m| m.get(k)).and_then(Value::as_array))
+        .flatten()
+        .filter_map(|id| id.as_str()?.parse().ok())
+}
+
+/// Drops the members the caller may not view from a membership change;
+/// false when none is left (the entry then says nothing to the caller).
+fn hide_members(value: &mut Value, can_view: &impl Fn(Uuid) -> bool) -> bool {
+    let Some(members) = value.get_mut("members").and_then(Value::as_object_mut) else { return true };
+    let mut any = false;
+    for k in ["added", "removed"] {
+        if let Some(ids) = members.get_mut(k).and_then(Value::as_array_mut) {
+            ids.retain(|id| id.as_str().and_then(|s| s.parse().ok()).is_some_and(can_view));
+            any |= !ids.is_empty();
+        }
+    }
+    any
+}
+
 /// Every CI whose class decides what the caller may see of these entries.
 fn referenced_cis(rows: &[AuditEntry]) -> Vec<Uuid> {
     let mut ids = HashSet::new();
@@ -325,6 +359,7 @@ fn referenced_cis(rows: &[AuditEntry]) -> Vec<Uuid> {
             "configuration_items" => {
                 ids.insert(e.entity_id);
                 ids.extend(values(e).flat_map(reference_ids));
+                ids.extend(values(e).flat_map(member_ids));
             }
             "ci_relationships" => {
                 ids.extend(values(e).flat_map(|v| [uuid_at(v, "sourceCiId"), uuid_at(v, "targetCiId")]).flatten());
@@ -422,14 +457,26 @@ fn redact(
             for v in e.old_value.iter_mut().chain(e.new_value.iter_mut()) {
                 hide_references(v, &can_view);
             }
+            // Left out in SQL when no member is viewable; this covers a member
+            // that changed class between the two queries.
+            if let Some(v) = e.old_value.as_mut() {
+                hide_members(v, &can_view);
+            }
+            let members_left = e.new_value.as_mut().is_none_or(|v| hide_members(v, &can_view));
+            if !members_left {
+                e.old_value = None;
+                e.new_value = None;
+                e.redacted = true;
+            }
         }
     }
 }
 
 // A `token.use` entry records the raw request path, so a request for one CI or
-// relationship carries its id: `/api/v1/configuration-items/{id}` (and
-// `/graph`) or `/api/v1/relationships/{id}`, the only routes whose path names
-// one (GH#270). The id is judged like the entries above and replaced with
+// relationship carries its id: `/api/v1/configuration-items/{id}` (and the
+// paths below it), `/api/v1/business-services/{id}` (a service is a CI, and so
+// the paths below it) or `/api/v1/relationships/{id}`, the only routes whose
+// path names one (GH#270, SHAA-927 §3.4). The id is judged like the entries above and replaced with
 // `{hidden}` when the caller may not view it; the rest of the entry stays.
 // The path is parsed on read, so rows written before this check are covered.
 
@@ -462,7 +509,7 @@ fn path_id(e: &AuditEntry) -> Option<PathId> {
     let id = decoded(segments.get(PATH_ID_SEGMENT)?)?;
     let id = validate::is_uuid(&id).then(|| Uuid::parse_str(&id).ok()).flatten()?;
     match prefix.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        ["", "api", "v1", "configuration-items"] => Some(PathId::Ci(id)),
+        ["", "api", "v1", "configuration-items"] | ["", "api", "v1", "business-services"] => Some(PathId::Ci(id)),
         ["", "api", "v1", "relationships"] => Some(PathId::Relationship(id)),
         _ => None,
     }
@@ -516,7 +563,7 @@ pub fn routes() -> Vec<Route> {
             .tag("Audit log")
             .summary("Change history (read-only, paginated, newest first by default)")
             .description(
-                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export (today the impact analysis CSV) is an `export` row on what was exported (`entityType` configuration_items, the analysed CI), `newValue` holding `kind`, `format`, the `parameters`, `rowCount`, `truncated` and `visibility`, never the rows. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do). In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
+                "Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`) and a business service's member CSV (`kind` business_service_members, on the service). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{\"members\": {\"added\": [ids], \"removed\": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{\"owners\": {\"technical\": [...], \"business\": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
             )
             .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<AuditQuery>, NoBody>| async move {
@@ -610,6 +657,21 @@ mod tests {
     }
 
     #[test]
+    fn a_membership_change_lists_only_viewable_members() {
+        let members = |added: &[Uuid], removed: &[Uuid]| json!({ "members": { "added": added, "removed": removed } });
+        let rows = run(vec![
+            entry("configuration_items", id(3), None, Some(members(&[id(1), id(2)], &[]))),
+            entry("configuration_items", id(3), None, Some(members(&[], &[id(2), id(9)]))),
+            entry("configuration_items", id(3), None, Some(members(&[id(2)], &[id(1)]))),
+        ]);
+        assert_eq!(rows[0].new_value, Some(members(&[id(1)], &[])));
+        assert!(!rows[0].redacted);
+        // Nothing viewable left (SQL leaves such a row out; this is the backstop).
+        assert!(rows[1].redacted && rows[1].new_value.is_none());
+        assert_eq!(rows[2].new_value, Some(members(&[], &[id(1)])));
+    }
+
+    #[test]
     fn relationships_need_both_endpoints_viewable() {
         let rows = run(vec![
             entry("ci_relationships", id(50), None, Some(edge(id(1), id(3)))),
@@ -637,6 +699,11 @@ mod tests {
         assert_eq!(parsed(&format!("/api/v1/configuration-items/{ci}/impact")), Some(PathId::Ci(id(2))));
         assert_eq!(parsed(&format!("/api/v1/configuration-items/{ci}/impact/export")), Some(PathId::Ci(id(2))));
         assert_eq!(parsed(&format!("/api/v1/relationships/{ci}")), Some(PathId::Relationship(id(2))));
+        // A business service is a CI (SHAA-927 §3.4).
+        for below in ["", "/members", "/members/export", "/members/remove", "/owners"] {
+            assert_eq!(parsed(&format!("/api/v1/business-services/{ci}{below}")), Some(PathId::Ci(id(2))), "{below}");
+        }
+        assert_eq!(parsed(&format!("/api/v1/configuration-items/{ci}/business-services")), Some(PathId::Ci(id(2))));
         // The router decodes the segment before parsing it, so the check does too.
         let encoded = format!("/api/v1/configuration%2Ditems/%{:02x}{}", ci.as_bytes()[0], &ci[1..]);
         assert_eq!(parsed(&encoded), Some(PathId::Ci(id(2))));
@@ -664,6 +731,8 @@ mod tests {
             token_use(&format!("/api/v1/relationships/{}", id(50))),
             token_use(&format!("/api/v1/relationships/{}", id(51))),
             token_use(&format!("/api/v1/relationships/{}", id(52))),
+            token_use(&format!("/api/v1/business-services/{}/members/{}", id(2), id(1))),
+            token_use(&format!("/api/v1/business-services/{}/owners", id(3))),
         ];
         hide_path_ids(&mut rows, &classes, &edges, &HashSet::from([id(10)]));
         let paths: Vec<&str> = rows.iter().map(|r| r.new_value.as_ref().unwrap()["path"].as_str().unwrap()).collect();
@@ -676,6 +745,8 @@ mod tests {
                 format!("/api/v1/relationships/{}", id(50)).as_str(),
                 "/api/v1/relationships/{hidden}",
                 "/api/v1/relationships/{hidden}",
+                format!("/api/v1/business-services/{{hidden}}/members/{}", id(1)).as_str(),
+                format!("/api/v1/business-services/{}/owners", id(3)).as_str(),
             ]
         );
         assert!(rows.iter().all(|r| !r.redacted && r.new_value.as_ref().unwrap()["outcome"] == "accepted"));

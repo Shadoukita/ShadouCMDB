@@ -42,7 +42,7 @@ pub struct SummaryRow {
     pub criticality_rank: Option<i64>,
 }
 
-fn summary_columns() -> String {
+pub(crate) fn summary_columns() -> String {
     format!(
         "ci.id, ci.ident, ci.label, ci.class_id, ci.valid_from, ci.valid_until, {ACTIVE_SQL} AS active, ci.version,
          ci.created_at, ci.updated_at, ci.deleted_at, cls.key AS class_key, cls.name AS class_name,
@@ -53,7 +53,8 @@ fn summary_columns() -> String {
 
 /// With the CI's criticality value and its rank: the value's position in the
 /// list (sort order, then key), 1 being the most critical.
-const SUMMARY_FROM: &str = "configuration_items ci JOIN ci_classes cls ON cls.id = ci.class_id LEFT JOIN LATERAL (
+pub(crate) const SUMMARY_FROM: &str =
+    "configuration_items ci JOIN ci_classes cls ON cls.id = ci.class_id LEFT JOIN LATERAL (
        SELECT v.id, v.key, v.name, v.sort_order,
               (SELECT count(*) FROM cmdb.lookup_list_values w
                WHERE w.list_id = v.list_id AND (w.sort_order, w.key) < (v.sort_order, v.key)) + 1 AS rank
@@ -230,7 +231,7 @@ fn push_in_columns(
     qb.push(")");
 }
 
-fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
+pub(crate) fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
     if let Some(p) = f.deleted.and_then(|d| d.predicate("ci.deleted_at")) {
         w.and_sql(&p);
     }
@@ -506,7 +507,7 @@ pub async fn soft_delete(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> 
 }
 
 /// A relationship row as stored, for the audit entries of a cascaded delete.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeRecord {
     pub id: Uuid,
