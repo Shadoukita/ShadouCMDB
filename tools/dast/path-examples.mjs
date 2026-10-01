@@ -6,7 +6,7 @@
 // request was refused 400 while the path was parsed, and no `/{id}` handler was ever attacked. This
 // script signs in to the running server as the scan's administrator, reads one id per resource from
 // its list endpoint (demo data from `seed --demo`), creates the objects the scan may damage (a user,
-// a profile, an identity provider, an API token, an import job, a saved mapping), and writes the spec with those ids
+// a profile, a group, an identity provider, an API token, an import job, a saved mapping), and writes the spec with those ids
 // as examples.
 //
 //   DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json> [<examples.json>]
@@ -29,6 +29,7 @@ const PREFIX = "/api/v1/";
 /** Resources whose id is the first row of their list endpoint (demo data). */
 export const LISTED = [
   "configuration-items",
+  "business-services",
   "relationships",
   "areas",
   "ci-classes",
@@ -43,7 +44,7 @@ export const LISTED = [
  * Objects created for the scan. The scan changes, disables and deletes what it is given, so it gets
  * objects of its own: never its own account (a password change would end its session) or token.
  */
-export const CREATED = ["admin/profiles", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings"];
+export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings"];
 
 /**
  * Resources that may have no row yet; any well-formed value still reaches the handler (404). The
@@ -54,7 +55,11 @@ export const LEGACY = ["statuses", "environments", "locations", "owners"];
 export const OPTIONAL = ["schema-changes", ...LEGACY, "ui-settings/versions", "admin/templates"];
 
 /** Paths whose parameter names an object of another resource. */
-export const ALIASES = { "auth/oidc": "admin/identity-providers" };
+export const ALIASES = {
+  "auth/oidc": "admin/identity-providers",
+  // DELETE /business-services/{id}/members/{ciId}: a CI.
+  "business-services/{id}/members": "configuration-items",
+};
 
 /** The resource a path parameter names: the path between /api/v1/ and the parameter. */
 export function resourceOf(path, name) {
@@ -139,6 +144,7 @@ async function collect(request) {
 
   const name = "DAST scan target";
   examples["admin/profiles"] = (await request("POST", "admin/profiles", { name })).id;
+  examples["admin/groups"] = (await request("POST", "admin/groups", { name })).id;
   examples["admin/users"] = (
     await request("POST", "admin/users", {
       username: "dast-target",

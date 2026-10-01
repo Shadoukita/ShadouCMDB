@@ -520,6 +520,6 @@ mod upgrade_0024;
 #[cfg(test)]
 mod upgrade_0029;
 #[cfg(test)]
-mod upgrade_0033;
+pub(crate) mod upgrade_0033;
 #[cfg(test)]
 mod upgrade_0036;

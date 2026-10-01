@@ -20,9 +20,10 @@ use utoipa::openapi::schema::{ArrayBuilder, KnownFormat, ObjectBuilder, Schema, 
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use super::groups::OwnerRemoval;
 use super::{api_tokens, profiles};
-use crate::api::context::{RequestContext, forbidden};
-use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
+use crate::api::context::{Count, RequestContext, forbidden};
+use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{
     self, Page, Paged, QueryBool, Sort, USERNAME_PATTERN, UuidList, like_pattern, name_schema, trimmed, ts, ts_opt,
 };
@@ -33,6 +34,7 @@ use crate::auth::secret::Secret;
 use crate::data::auth::{self as data, UserRow};
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Where};
 use crate::data::mfa;
+use crate::data::service_owners::{self, OwnerCleanup, Principal};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::lookups::email_schema;
 use crate::modules::simple_resource::non_empty;
@@ -509,11 +511,15 @@ pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_pas
     Ok(dto)
 }
 
-pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
+/// Deletes the account. The business services it owns lose it as owner, each
+/// with an `update` row in its history (SHAA-927 §1.4); the result counts them.
+pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<OwnerRemoval, AppError> {
     not_yourself(ctx, id, "delete")?;
     let mut tx = pool.begin().await?;
     let before = lock(&mut tx, id).await?;
     must_cover_user(&mut tx, ctx, id).await?;
+    // The services are locked before the first audit row takes the chain head (GH#166).
+    let cleanup = OwnerCleanup::prepare(&mut tx, Principal::User(id)).await?;
     // Tokens first (GH#166): the ones they created for other owners are
     // revoked, as for disabling (GH#183); their own are then deleted with them.
     api_tokens::revoke_all_of_user(&mut tx, ctx, id, true, "account deletion").await?;
@@ -531,8 +537,10 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
         new_value: None,
     };
     crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    let affected = cleanup.finish(&mut tx, ctx).await?;
+    let class = service_owners::service_class_id(&mut tx).await?;
     tx.commit().await?;
-    Ok(())
+    Ok(OwnerRemoval { affected_services: Count::scoped(ctx, &[class], affected) })
 }
 
 // ---------------------------------------------------------------------------
@@ -587,13 +595,12 @@ pub fn routes() -> Vec<Route> {
         route(Method::DELETE, BY_ID, "deleteUser")
             .tag(TAG)
             .summary("Delete a user (prefer disabling; the audit log keeps their id and name)")
-            .description("409 when deleting yourself or the last active Administrator.")
+            .description("409 when deleting yourself or the last active Administrator. The business services the user owns lose them as owner, each with an `update` row in its history; `affectedServices` counts them (null when the caller may not view the business service class). Disabling keeps the user as owner, marked as disabled.")
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::LastAdministrator])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                remove(&api.pool, &api.ctx, id).await?;
-                Ok(NoContent)
+                Ok(Json(remove(&api.pool, &api.ctx, id).await?))
             }),
         route(Method::PUT, "/api/v1/admin/users/{id}/password", "resetUserPassword")
             .tag(TAG)

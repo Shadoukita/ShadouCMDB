@@ -77,10 +77,25 @@ pub struct CiClass {
     /// and search; null labels them by their ident
     #[schema(required = true)]
     pub title_attribute_id: Option<Uuid>,
+    /// Set on the built-in type the application itself uses: `business_service` (the business services). It can be
+    /// renamed and given fields, but not deleted, archived, purged, made abstract, given a parent or subtypes
+    #[schema(required = true, inline)]
+    pub system_role: Option<ClassSystemRole>,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
     #[serde(serialize_with = "ts::serialize")]
     pub updated_at: DateTime<Utc>,
+}
+
+/// 409 IN_USE for a removal or change the built-in business service type does not allow (§4.10).
+pub fn system_class_refused(key: &str, what: &str) -> AppError {
+    let message = format!("The {key} type is the built-in business service type and cannot be {what}");
+    AppError::new(ErrorCode::InUse, message.clone()).with_details(vec![FieldError {
+        location: FieldLocation::Params,
+        field: "id".into(),
+        message,
+        code: "system_class".into(),
+    }])
 }
 
 fn title_attribute_schema() -> Schema {
@@ -291,7 +306,8 @@ impl Resource for CiClasses {
     const COLUMNS: &'static str = "id, key, name, area_id,
         (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.' || key AS table_name,
         (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.v_' || key AS view_name,
-        description, parent_id, is_abstract, icon, color, sort_order, is_active, title_attribute_id, created_at, updated_at";
+        description, parent_id, is_abstract, icon, color, sort_order, is_active, title_attribute_id, system_role,
+        created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
     const ARCHIVE_ON_DELETE: bool = true;
     const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
@@ -362,6 +378,26 @@ impl Resource for CiClasses {
         }
     }
 
+    /// The built-in business service type keeps its role, stays active and
+    /// concrete, and has no parent (SHAA-927 §1.1); the database refuses the
+    /// same, this answers first with the documented code.
+    fn before_change(row: &CiClass, columns: Option<&ColumnSet>) -> Result<(), AppError> {
+        if row.system_role.is_none() {
+            return Ok(());
+        }
+        let Some(columns) = columns else { return Err(system_class_refused(&row.key, "deleted")) };
+        for (column, value) in &columns.0 {
+            let what = match (*column, value) {
+                ("is_active", Val::Bool(Some(false))) => "archived",
+                ("is_abstract", Val::Bool(Some(true))) => "made abstract",
+                ("parent_id", Val::Uuid(Some(_))) => "given a parent type",
+                _ => continue,
+            };
+            return Err(system_class_refused(&row.key, what));
+        }
+        Ok(())
+    }
+
     fn before_write(conn: &mut PgConnection) -> BoxFuture<'_, Result<(), AppError>> {
         Box::pin(async move { Ok(engine::lock(conn).await?) })
     }
@@ -376,6 +412,20 @@ impl Resource for CiClasses {
                 (&"parent_id", Val::Uuid(Some(id))) => Some(*id),
                 _ => None,
             });
+            if let Some(parent) = parent
+                && sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS (SELECT 1 FROM cmdb.ci_classes WHERE id = $1 AND system_role IS NOT NULL)",
+                )
+                .bind(parent)
+                .fetch_one(&mut *conn)
+                .await?
+            {
+                return Err(AppError::field(
+                    "parentId",
+                    "The built-in business service type cannot have subtypes",
+                    "system_class",
+                ));
+            }
             // A subtype is labelled like its parent unless told otherwise.
             if let Some(parent) = parent
                 && !columns.0.iter().any(|(c, _)| *c == "title_attribute_id")
@@ -594,6 +644,9 @@ pub async fn purge_class_in(
     let row: CiClass = crud::select_by_id(conn, CiClasses::TABLE, CiClasses::COLUMNS, id, true)
         .await?
         .ok_or_else(|| AppError::missing(CiClasses::LABEL, id))?;
+    if row.system_role.is_some() {
+        return Err(system_class_refused(&row.key, "purged"));
+    }
     check_purge("type", &row.key, row.is_active, confirm)?;
     let model = Model::load(conn).await?;
     let table = model.table(id).ok_or_else(AppError::internal)?;
@@ -732,6 +785,26 @@ pub async fn purge_class_in(
 // ===========================================================================
 // Attribute definitions
 // ===========================================================================
+
+/// What a built-in CI class is for (`ci_classes.system_role`, migration 0033).
+/// The class with a role cannot be deleted, archived or subclassed, and its
+/// role never changes; its key may differ between installs (`service` when
+/// the starter class was adopted, `business_service` otherwise).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum ClassSystemRole {
+    BusinessService,
+}
+
+/// What a built-in relationship type is for (`relationship_types.system_role`,
+/// migration 0033): its key, direction, impact direction and state are fixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum RelationshipTypeSystemRole {
+    BusinessServiceMember,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
 #[serde(rename_all = "lowercase")]
@@ -1549,6 +1622,11 @@ pub struct RelationshipType {
     pub impact_direction: ImpactDirection,
     pub sort_order: i32,
     pub is_active: bool,
+    /// Set on the built-in type the application itself uses: `business_service_member` (a business service includes
+    /// a CI). Its name and labels can change; its key, direction, impact direction and active flag cannot, it cannot
+    /// be deleted, and its relationships are managed on the business service (`/api/v1/business-services`)
+    #[schema(required = true, inline)]
+    pub system_role: Option<RelationshipTypeSystemRole>,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
     #[serde(serialize_with = "ts::serialize")]
@@ -1735,7 +1813,7 @@ impl Resource for RelationshipTypes {
     const TAG: &'static str = "Relationship types";
     const SINGULAR: &'static str = "relationshipType";
     const PLURAL: &'static str = "relationshipTypes";
-    const COLUMNS: &'static str = "id, key, name, description, forward_label, reverse_label, is_directional, impact_direction, sort_order, is_active, created_at, updated_at";
+    const COLUMNS: &'static str = "id, key, name, description, forward_label, reverse_label, is_directional, impact_direction, sort_order, is_active, system_role, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "forward_label", "reverse_label"];
     const USAGE: &'static [Usage] = &[
         Usage {
@@ -1763,6 +1841,48 @@ impl Resource for RelationshipTypes {
 
     fn id(row: &RelationshipType) -> Uuid {
         row.id
+    }
+
+    /// The built-in member type keeps its key, direction, impact direction and
+    /// active flag and cannot be deleted (SHAA-927 §4.10).
+    fn before_change(row: &RelationshipType, columns: Option<&ColumnSet>) -> Result<(), AppError> {
+        if row.system_role.is_none() {
+            return Ok(());
+        }
+        let Some(columns) = columns else {
+            let message = format!(
+                "The {} relationship type is the built-in business service membership and cannot be deleted",
+                row.key
+            );
+            return Err(AppError::new(ErrorCode::InUse, message.clone()).with_details(vec![FieldError {
+                location: FieldLocation::Params,
+                field: "id".into(),
+                message,
+                code: "system_relationship_type".into(),
+            }]));
+        };
+        let fixed: Vec<FieldError> = columns
+            .0
+            .iter()
+            .filter_map(|(column, value)| {
+                let field = match (*column, value) {
+                    ("impact_direction", Val::Text(Some(d))) if d != row.impact_direction.as_str() => "impactDirection",
+                    ("is_active", Val::Bool(Some(a))) if *a != row.is_active => "isActive",
+                    ("is_directional", Val::Bool(Some(d))) if *d != row.is_directional => "isDirectional",
+                    ("key", Val::Text(Some(k))) if *k != row.key => "key",
+                    _ => return None,
+                };
+                Some(FieldError {
+                    location: FieldLocation::Body,
+                    field: field.into(),
+                    message: "Fixed on the built-in business service membership type; only its name, description \
+                              and labels can change"
+                        .into(),
+                    code: "system_relationship_type".into(),
+                })
+            })
+            .collect();
+        if fixed.is_empty() { Ok(()) } else { Err(AppError::validation(fixed)) }
     }
 }
 

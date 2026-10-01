@@ -617,6 +617,58 @@ async function main() {
   const exportRows = (await get(`/api/v1/audit-log?action=export&entityId=${database.id}`)).json;
   check(exportRows.data.length === 1 && exportRows.data[0].newValue.kind === 'impact', 'the CSV export is audited');
 
+  // --- Business services ----------------------------------------------------------
+  console.log('\n# Business services');
+  const bsSettings = (await get('/api/v1/settings/business-services')).json;
+  check(bsSettings.canView && bsSettings.canEdit && bsSettings.limits.maxBatch === 500, 'business service settings');
+  const bsClass = (await get(`/api/v1/ci-classes/${bsSettings.classId}`)).json;
+  check(bsClass.systemRole === 'business_service', 'the business service class reports its system role');
+  // A service of our own, with the class's required fields filled in.
+  const bsFields = (await get(`/api/v1/ci-classes/${bsSettings.classId}/attributes`)).json.data as Json[];
+  const bsAttributes: Json = {};
+  for (const f of bsFields.filter((f: Json) => f.isRequired)) {
+    if (f.dataType === 'lookup') {
+      bsAttributes[f.key] = (await get(`/api/v1/lookup-list-values?listId=${f.lookupListId}&limit=1`)).json.data[0].id;
+    } else {
+      bsAttributes[f.key] = f.dataType === 'enum' ? f.enumValues[0] : ['number', 'integer'].includes(f.dataType) ? 1 : f.key === 'name' ? `smoke-svc-${RUN}` : `smoke-${RUN}`;
+    }
+  }
+  if (!('name' in bsAttributes) && bsFields.some((f: Json) => f.key === 'name')) bsAttributes.name = `smoke-svc-${RUN}`;
+  const svc = (await post('/api/v1/configuration-items', { classId: bsSettings.classId, ident: `SMOKE-SVC-${RUN}`, attributes: bsAttributes })).json;
+  const added = (await post(`/api/v1/business-services/${svc.id}/members`, { memberIds: [server.id, database.id] }, 200)).json;
+  check(added.added.length === 2 && added.alreadyMembers.length === 0, 'members added');
+  const addedAgain = (await post(`/api/v1/business-services/${svc.id}/members`, { memberIds: [server.id] }, 200)).json;
+  check(addedAgain.added.length === 0 && addedAgain.alreadyMembers[0] === server.id, 'a member added again is reported, not an error');
+  const self = await post(`/api/v1/business-services/${svc.id}/members`, { memberIds: [svc.id] }, 400);
+  check(self.json.error.details[0].code === 'membership_self', 'a service cannot include itself');
+  await post('/api/v1/relationships', { relationshipTypeId: bsSettings.memberRelationshipTypeId, sourceCiId: svc.id, targetCiId: app.id }, 400);
+  const svcDetail = (await get(`/api/v1/business-services/${svc.id}`)).json;
+  check(svcDetail.memberCount === 2 && svcDetail.visibility === 'all_classes' && svcDetail.classId === bsSettings.classId, 'service detail with member count');
+  const svcList = (await get(`/api/v1/business-services?q=SMOKE-SVC-${RUN}&sort=-memberCount`)).json;
+  check(svcList.data.length === 1 && svcList.data[0].memberCount === 2, 'service list');
+  const svcMembers = (await get(`/api/v1/business-services/${svc.id}/members?ciId=${server.id}`)).json;
+  check(svcMembers.page.total === 1 && svcMembers.data[0].ci.id === server.id, 'member list filtered by ciId');
+  const partOf = (await get(`/api/v1/configuration-items/${server.id}/business-services`)).json;
+  check(partOf.data.some((e: Json) => e.service.id === svc.id && e.direct), 'the server is part of the service');
+  const principals = (await get(`/api/v1/principals?q=${ADMIN_USERNAME.slice(0, 5)}&kind=user`)).json;
+  check(principals.data.some((p: Json) => p.id === adminMe.user.id && p.username === ADMIN_USERNAME), 'owner picker finds the administrator');
+  await get('/api/v1/principals?q=a', 400);
+  const owners = (await call('PUT', `/api/v1/business-services/${svc.id}/owners`,
+    { version: svcDetail.version, technical: [{ kind: 'user', id: adminMe.user.id }], business: [] }, 200)).json;
+  check(owners.technical[0]?.displayName === adminMe.user.displayName && !('username' in owners.technical[0]), 'owners by display name only');
+  await call('PUT', `/api/v1/business-services/${svc.id}/owners`, { version: svcDetail.version, technical: [], business: [] }, 409);
+  const svcCsv = await get(`/api/v1/business-services/${svc.id}/members/export`);
+  check(
+    svcCsv.headers.get('content-type') === 'text/csv; charset=utf-8' &&
+      new TextDecoder().decode(svcCsv.bytes).split('\r\n')[1] === '"ci_id","ident","name","class","criticality","is_service","active","added_at"',
+    'service member CSV export',
+  );
+  await post(`/api/v1/business-services/${svc.id}/members/remove`, { memberIds: [database.id] }, 204);
+  await del(`/api/v1/business-services/${svc.id}/members/${server.id}`);
+  await del(`/api/v1/business-services/${svc.id}/members/${server.id}`, 404);
+  const svcHistory = (await get(`/api/v1/audit-log?entityId=${svc.id}&action=update`)).json;
+  check(svcHistory.data.some((e: Json) => e.newValue?.members?.added?.length === 2) && svcHistory.data.some((e: Json) => e.newValue?.owners), 'membership and owner changes in the service history');
+
   // --- Search -------------------------------------------------------------------
   console.log('\n# Search');
   const s1 = (await get(`/api/v1/search?q=smoke-srv-${RUN}.example`)).json;
@@ -950,7 +1002,7 @@ async function permissions(x: Json) {
   const asAdmin = (await get(`/api/v1/configuration-items/${app.id}`)).json.attributeReferences?.primary_database;
   check(asAdmin?.name === database.label && asAdmin.hidden === false, 'an administrator still sees the referenced name');
   await del(`/api/v1/configuration-items/${otherDb.id}`, 204);
-  await del(`/api/v1/admin/users/${appEditor.id}`);
+  await del(`/api/v1/admin/users/${appEditor.id}`, 200);
   await del(`/api/v1/admin/profiles/${appEditors.id}`);
 
   console.log('\n# Global permissions (no profiles: 403 on every permission-guarded operation)');
@@ -979,7 +1031,7 @@ async function permissions(x: Json) {
     await put(`/api/v1/admin/users/${adminMe.user.id}/password`, { password: 'correct horse battery' }, 403);
     await patch(`/api/v1/admin/users/${reader.id}`, { profileIds: [] }, 403); // reader can view servers, the manager cannot
     const plain = (await post('/api/v1/admin/users', { username: `smoke-plain-${RUN}`, displayName: 'Plain', password })).json;
-    await del(`/api/v1/admin/users/${plain.id}`);
+    await del(`/api/v1/admin/users/${plain.id}`, 200);
     await del(`/api/v1/admin/users/${nobody.id}`, 409); // not yourself
     // Identity providers decide who gets which profile: Administrator only, even with users.manage.
     await get('/api/v1/admin/identity-providers', 403);
@@ -996,7 +1048,26 @@ async function permissions(x: Json) {
   }
   const second = (await post('/api/v1/admin/users', { username: `smoke-admin2-${RUN}`, displayName: 'Second admin', password, profileIds: [builtin.id] })).json;
   await patch(`/api/v1/admin/users/${second.id}`, { profileIds: [editors.id] }); // fine: another administrator remains
-  await del(`/api/v1/admin/users/${second.id}`);
+  await del(`/api/v1/admin/users/${second.id}`, 200);
+
+  console.log('\n# User groups');
+  const group = (await post('/api/v1/admin/groups', { name: `Smoke group ${RUN}`, description: 'Smoke suite' })).json;
+  check(group.version === 1 && group.memberCount === 0, 'a new group has version 1 and no members');
+  const groupDup = await post('/api/v1/admin/groups', { name: `SMOKE GROUP ${RUN}` }, 409);
+  check(groupDup.json.error?.code === 'CONFLICT' && groupDup.json.error.details?.[0]?.field === 'name', 'group names are unique, ignoring case');
+  await get(`/api/v1/admin/groups?q=${encodeURIComponent(`Smoke group ${RUN}`)}&sort=name`);
+  const groupRead = (await get(`/api/v1/admin/groups/${group.id}`)).json;
+  check(groupRead.ownedServiceCount === 0, 'an administrator sees the number of services the group owns');
+  await get('/api/v1/admin/groups/00000000-0000-4000-8000-000000000000', 404);
+  const renamed = (await patch(`/api/v1/admin/groups/${group.id}`, { version: 1, name: `Smoke group ${RUN} renamed` })).json;
+  const stale = await patch(`/api/v1/admin/groups/${group.id}`, { version: 1, description: null }, 409);
+  check(stale.json.error?.code === 'VERSION_CONFLICT', 'a stale group version is refused');
+  const members = (await call('PUT', `/api/v1/admin/groups/${group.id}/members`, { version: renamed.version, userIds: [reader.id] }, 200)).json;
+  check((await get(`/api/v1/admin/groups/${group.id}/members`)).json.data.some((u: Json) => u.id === reader.id), 'the member list holds the user just added');
+  await call('PUT', `/api/v1/admin/groups/${group.id}/members`, { version: renamed.version, userIds: [] }, 409);
+  const groupGone = (await del(`/api/v1/admin/groups/${group.id}`, 200)).json;
+  check(groupGone.affectedServices === 0 && members.version > renamed.version, 'deleting a group reports the services it owned');
+  await as(asNobody, () => get('/api/v1/admin/groups'));
 
   console.log('\n# Disable, reset password');
   const readerSession = await login(reader.username, `${password}-2`);
@@ -1147,8 +1218,8 @@ async function permissions(x: Json) {
   await identityProviders(builtin, readers);
 
   // Clean up what only this run uses.
-  await del(`/api/v1/admin/users/${reader.id}`);
-  await del(`/api/v1/admin/users/${nobody.id}`);
+  await del(`/api/v1/admin/users/${reader.id}`, 200);
+  await del(`/api/v1/admin/users/${nobody.id}`, 200);
   for (const p of [readers, editors, copy, userManagers]) await del(`/api/v1/admin/profiles/${p.id}`);
   await del(`/api/v1/admin/profiles/${readers.id}`, 404);
 }
@@ -1322,7 +1393,7 @@ async function mfa(builtin: Json, createHash: typeof import('node:crypto').creat
   check(trail.every((e) => secrets.every((s) => !JSON.stringify(e).includes(s) && !JSON.stringify(e).includes(createHash('sha256').update(s).digest('hex')))),
     'no TOTP secret or recovery code (or its hash) in the audit log');
 
-  await del(`/api/v1/admin/users/${user.id}`);
+  await del(`/api/v1/admin/users/${user.id}`, 200);
   await del(`/api/v1/admin/profiles/${required.id}`);
 }
 
@@ -1594,7 +1665,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 4 && Array.isArray(file.importMappings) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 5 && Array.isArray(file.importMappings) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -1643,7 +1714,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 5 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 6 }, 400);
   // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
   const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
   const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };
@@ -1672,7 +1743,7 @@ async function customization(x: Json) {
   });
 
   // Clean up and put the settings and images back.
-  await del(`/api/v1/admin/users/${importer.id}`);
+  await del(`/api/v1/admin/users/${importer.id}`, 200);
   await del(`/api/v1/admin/profiles/${importers.id}`);
   const attrs = (await get(`/api/v1/attribute-definitions?q=rack_unit&limit=200`)).json.data;
   const newClass = (await get(`/api/v1/ci-classes?q=smoke_imp_${RUN}`)).json.data[0];

@@ -94,7 +94,7 @@ async fn fingerprint(pool: &PgPool) -> Vec<(String, Option<String>)> {
     out
 }
 
-async fn v02x(test: &str, tier: bool) -> Option<scratch::Scratch> {
+pub(crate) async fn v02x(test: &str, tier: bool) -> Option<scratch::Scratch> {
     let db = scratch::empty(test).await?;
     MIGRATOR.run_to(32, &db.pool).await.expect("migrations up to 0032");
     db.pool.execute(V02X).await.expect("v0.2.x data model");

@@ -15,6 +15,7 @@
 
 pub mod format;
 mod legacy;
+mod system_roles;
 
 use std::collections::{HashMap, HashSet};
 
@@ -29,8 +30,9 @@ use uuid::Uuid;
 use self::format::*;
 use super::areas::{Area, Areas, DEFAULT_AREA};
 use super::classes::{
-    AttributeDataType, AttributeDefinition, AttributeDefinitions, CiClass, CiClasses, RelationshipRule,
-    RelationshipRules, RelationshipType, RelationshipTypes, ValidationRules,
+    AttributeDataType, AttributeDefinition, AttributeDefinitions, CiClass, CiClasses, ClassSystemRole,
+    RelationshipRule, RelationshipRules, RelationshipType, RelationshipTypeSystemRole, RelationshipTypes,
+    ValidationRules,
 };
 use super::imports::saved;
 use super::imports::schemas::ColumnTarget;
@@ -241,6 +243,19 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
     .await?
     .into_iter()
     .collect();
+    // Built-in classes and types are matched by role on import (format version 5).
+    let class_roles: HashMap<Uuid, ClassSystemRole> =
+        sqlx::query_as("SELECT id, system_role FROM cmdb.ci_classes WHERE system_role IS NOT NULL")
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .collect();
+    let type_roles: HashMap<Uuid, RelationshipTypeSystemRole> =
+        sqlx::query_as("SELECT id, system_role FROM cmdb.relationship_types WHERE system_role IS NOT NULL")
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .collect();
     let class_specs: Vec<ClassSpec> = classes
         .iter()
         .map(|c| ClassSpec {
@@ -255,6 +270,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             sort_order: c.sort_order,
             is_active: c.is_active,
             title_attribute: Some(c.title_attribute_id.and_then(|t| field_keys.get(&t).cloned())),
+            system_role: class_roles.get(&c.id).copied(),
         })
         .collect();
     let (mut class_specs, cyclic) = parents_first(class_specs, |c| &c.key, |c| c.parent.as_deref());
@@ -362,6 +378,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             impact_direction: Some(t.impact_direction),
             sort_order: t.sort_order,
             is_active: t.is_active,
+            system_role: type_roles.get(&t.id).copied(),
         })
         .collect();
     let rules: Vec<RelationshipRule> =
@@ -407,7 +424,15 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
                             None => None,
                             Some(id) => Some(class_key.get(&id)?.clone()),
                         };
-                        Some(ClassGrantSpec { class, view: g.view, create: g.create, edit: g.edit, delete: g.delete })
+                        let class_system_role = g.class_id.and_then(|id| class_roles.get(&id).copied());
+                        Some(ClassGrantSpec {
+                            class,
+                            class_system_role,
+                            view: g.view,
+                            create: g.create,
+                            edit: g.edit,
+                            delete: g.delete,
+                        })
                     })
                     .collect(),
             };
@@ -1092,7 +1117,8 @@ async fn run(
     let snap = snapshot(conn).await?;
     let mut warnings = Vec::new();
     let mut file = file.clone();
-    let legacy_problems = legacy::fold(&mut file, snap.file.lookups.as_ref(), &mut warnings);
+    let mut legacy_problems = legacy::fold(&mut file, snap.file.lookups.as_ref(), &mut warnings);
+    legacy_problems.extend(system_roles::match_by_role(&mut file, &snap.file, &mut warnings));
     if file.format_version < 3 {
         file = keep_current_parents(&file, &snap.file);
     }
@@ -1778,8 +1804,8 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "Data model (classes, attributes, relationship types and rules), lookup lists and their values, \
                  permission profiles (not the built-in one), UI settings including the logo and favicon, and \
-                 saved import mappings. Never contains users, passwords, sessions, CIs, relationships, import jobs \
-                 or the import switch. \
+                 saved import mappings. Never contains users, user groups, passwords, sessions, CIs, relationships, \
+                 business service members or owners, import jobs or the import switch. \
                  Everything refers to everything else by key, so the file imports into another install. Answers \
                  with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the \
                  caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on \
@@ -1803,7 +1829,10 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "`mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, \
                  returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by \
-                 name) and created or updated; nothing is deleted, so data missing from the file \
+                 name) and created or updated; a class or relationship type with a `systemRole` (the built-in \
+                 business service class and membership type, version 5) is matched to this install's class or type of \
+                 that role whatever its key, keeps its key and area here, and is reported as a \"Matched by role\" \
+                 warning; a grant's `classSystemRole` resolves the same way. An import never sets or clears a role; nothing is deleted, so data missing from the file \
                  is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) \
                  and the logo and favicon. All sections are optional. Problems in the file are reported together as \
                  400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making \
@@ -2020,9 +2049,9 @@ mod tests {
         }
         drop(conn);
 
-        // Export writes version 4 with the section; the JSON parses back.
+        // Export writes the current version with the section; the JSON parses back.
         let file = export(&src.pool, &system).await.unwrap();
-        assert_eq!(file.format_version, 4);
+        assert_eq!(file.format_version, FORMAT_VERSION);
         let mappings = file.import_mappings.clone().unwrap();
         assert_eq!(mappings.len(), 2, "{mappings:?}");
         let raw = serde_json::to_value(&file).unwrap();
@@ -2106,10 +2135,15 @@ mod tests {
         assert_eq!(audits().await, 3);
 
         // An unknown version is refused; version 3 files (no section) still import.
-        let err = import(&dst.pool, &system, &ConfigFile { format_version: 5, ..changed.clone() }, ImportMode::DryRun)
-            .await
-            .unwrap_err();
-        assert!(format!("{err:?}").contains("versions 1 to 4"), "{err:?}");
+        let err = import(
+            &dst.pool,
+            &system,
+            &ConfigFile { format_version: FORMAT_VERSION + 1, ..changed.clone() },
+            ImportMode::DryRun,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{err:?}").contains("versions 1 to 5"), "{err:?}");
         let v3 = ConfigFile { format_version: 3, import_mappings: None, ..changed };
         import(&dst.pool, &system, &v3, ImportMode::DryRun).await.unwrap();
 
@@ -2208,9 +2242,30 @@ mod tests {
             description: None,
             global_permissions: vec![GlobalPermission::AuditView, GlobalPermission::UsersManage],
             class_permissions: vec![
-                ClassGrantSpec { class: Some("server".into()), view: false, create: false, edit: true, delete: false },
-                ClassGrantSpec { class: None, view: true, create: false, edit: false, delete: false },
-                ClassGrantSpec { class: Some("app".into()), view: false, create: false, edit: false, delete: false },
+                ClassGrantSpec {
+                    class: Some("server".into()),
+                    class_system_role: None,
+                    view: false,
+                    create: false,
+                    edit: true,
+                    delete: false,
+                },
+                ClassGrantSpec {
+                    class: None,
+                    class_system_role: None,
+                    view: true,
+                    create: false,
+                    edit: false,
+                    delete: false,
+                },
+                ClassGrantSpec {
+                    class: Some("app".into()),
+                    class_system_role: None,
+                    view: false,
+                    create: false,
+                    edit: false,
+                    delete: false,
+                },
             ],
         };
         normalise_profile(&mut p);
@@ -2566,7 +2621,7 @@ mod tests {
             .unwrap();
 
         let exported = export(&a.pool, &ctx).await.unwrap();
-        assert_eq!(exported.format_version, 4);
+        assert_eq!(exported.format_version, FORMAT_VERSION);
         let direction = |f: &ConfigFile, key: &str| {
             f.data_model.as_ref().unwrap().relationship_types.iter().find(|t| t.key == key).unwrap().impact_direction
         };
@@ -2575,6 +2630,14 @@ mod tests {
         let lists = &exported.lookups.as_ref().unwrap().lists;
         let criticality = lists.iter().find(|l| l.key == "criticality").unwrap();
         assert_eq!(criticality.system_role, Some(crate::modules::lookups::SystemRole::Criticality));
+        // Version 5: the built-in business service class and membership type carry their role.
+        let dm = exported.data_model.as_ref().unwrap();
+        let roles: Vec<(&str, ClassSystemRole)> =
+            dm.classes.iter().filter_map(|c| Some((c.key.as_str(), c.system_role?))).collect();
+        assert_eq!(roles, vec![("business_service", ClassSystemRole::BusinessService)]);
+        let roles: Vec<(&str, RelationshipTypeSystemRole)> =
+            dm.relationship_types.iter().filter_map(|t| Some((t.key.as_str(), t.system_role?))).collect();
+        assert_eq!(roles, vec![("business_service_member", RelationshipTypeSystemRole::BusinessServiceMember)]);
 
         // The dry run shows the change, the import applies it, and the target then exports the same file.
         let result = import(&b.pool, &ctx, &exported, ImportMode::DryRun).await.unwrap();
@@ -2604,6 +2667,7 @@ mod tests {
         for l in &mut v3.lookups.as_mut().unwrap().lists {
             l.system_role = None;
         }
+        strip_system_roles(&mut v3);
         let result = import(&b.pool, &ctx, &v3, ImportMode::DryRun).await.unwrap();
         assert!(result.changes.is_empty(), "{:?}", result.changes);
         import(&b.pool, &ctx, &v3, ImportMode::Apply).await.unwrap();
@@ -2677,5 +2741,205 @@ mod tests {
         assert!(!res.warnings.iter().any(|w| w.path == at), "{:?}", res.warnings);
         assert_eq!(field_state().await, Some(true));
         db.drop().await;
+    }
+
+    /// A file without the version 5 role markers, as versions 1 to 4 write it.
+    fn strip_system_roles(file: &mut ConfigFile) {
+        if let Some(dm) = file.data_model.as_mut() {
+            dm.classes.iter_mut().for_each(|c| c.system_role = None);
+            dm.relationship_types.iter_mut().for_each(|t| t.system_role = None);
+        }
+        for p in file.permission_profiles.iter_mut().flatten() {
+            p.class_permissions.iter_mut().for_each(|g| g.class_system_role = None);
+        }
+    }
+
+    /// SHAA-927 §6.3, §7.1 "Config transfer": an export from an install that
+    /// adopted the starter `service` class imports into one whose class is
+    /// `business_service`, matched by role: the target class keeps its key,
+    /// area and role, gets the file's labels and fields, and no `service` class
+    /// appears. A grant follows `classSystemRole`; so does the member type. A
+    /// version 4 file still matches by key only.
+    #[tokio::test]
+    async fn system_classes_and_types_are_matched_by_role() {
+        const TEST: &str = "config_system_roles";
+        let Some(src) = crate::db::upgrade_0033::v02x(TEST, true).await else { return };
+        crate::db::MIGRATOR.run(&src.pool).await.expect("migrations after 0032");
+        let Some(dst) = scratch::database(TEST).await else {
+            src.drop().await;
+            return;
+        };
+        let ctx = RequestContext::system("test", "test");
+        crate::modules::templates::install_by_key(&dst.pool, &ctx, "it_infrastructure").await.unwrap();
+        let system_class = |pool: PgPool| async move {
+            sqlx::query_as::<_, (Uuid, String, String, String)>(
+                "SELECT c.id, c.key, c.name, a.key FROM ci_classes c JOIN areas a ON a.id = c.area_id
+                 WHERE c.system_role = 'business_service'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        let (_, src_key, _, src_area) = system_class(src.pool.clone()).await;
+        assert_eq!((src_key.as_str(), src_area.as_str()), ("service", "infrastruktur"), "the source adopted service");
+        let (dst_class, dst_key, _, dst_area) = system_class(dst.pool.clone()).await;
+        assert_eq!(dst_key, "business_service");
+
+        // The source renames its class and gives it a field the target lacks.
+        sqlx::query("UPDATE ci_classes SET name = 'IT service' WHERE key = 'service'")
+            .execute(&src.pool)
+            .await
+            .unwrap();
+        let mut tx = src.pool.begin().await.unwrap();
+        let mut c = ColumnSet::default();
+        c.opt(
+            "class_id",
+            Some(
+                sqlx::query_scalar::<_, Uuid>("SELECT id FROM ci_classes WHERE key = 'service'")
+                    .fetch_one(&mut *tx)
+                    .await
+                    .unwrap(),
+            ),
+        )
+        .opt("key", Some("cost_centre".to_owned()))
+        .opt("label", Some("Cost centre".to_owned()))
+        .opt("data_type", Some("text".to_owned()));
+        simple::create_in::<AttributeDefinitions>(&mut tx, &ctx, c).await.unwrap_or_else(|e| panic!("{}", e.message));
+        tx.commit().await.unwrap();
+
+        let file = export(&src.pool, &ctx).await.unwrap();
+        assert_eq!(file.format_version, 5);
+        let dm = file.data_model.as_ref().unwrap();
+        assert_eq!(
+            dm.classes.iter().find(|c| c.key == "service").unwrap().system_role,
+            Some(ClassSystemRole::BusinessService)
+        );
+        let desk = file.permission_profiles.as_ref().unwrap().iter().find(|p| p.name == "Service desk").unwrap();
+        assert_eq!(desk.class_permissions[0].class.as_deref(), Some("service"));
+        assert_eq!(desk.class_permissions[0].class_system_role, Some(ClassSystemRole::BusinessService));
+
+        // The dry run says what it matched, and changes the target's class, not a new "service".
+        let result =
+            import(&dst.pool, &ctx, &file, ImportMode::DryRun).await.unwrap_or_else(|e| panic!("{e}: {:?}", e.details));
+        let matched: Vec<&str> = result
+            .warnings
+            .iter()
+            .filter(|w| w.message.starts_with("Matched by role"))
+            .map(|w| w.message.as_str())
+            .collect();
+        assert_eq!(matched.len(), 1, "{:?}", result.warnings);
+        assert!(matched[0].contains("\"service\"") && matched[0].contains("\"business_service\""), "{matched:?}");
+        let changes: Vec<(&str, &str, ChangeAction)> =
+            result.changes.iter().map(|c| (c.section.as_str(), c.key.as_str(), c.action)).collect();
+        assert!(changes.contains(&("classes", "business_service", ChangeAction::Update)), "{changes:?}");
+        assert!(changes.contains(&("attributes", "business_service.cost_centre", ChangeAction::Create)), "{changes:?}");
+        assert!(!changes.iter().any(|(s, k, _)| *s == "classes" && *k == "service"), "{changes:?}");
+        let class_change =
+            result.changes.iter().find(|c| c.section == "classes" && c.key == "business_service").unwrap();
+        let fields: Vec<&str> = class_change.fields.iter().map(|f| f.field.as_str()).collect();
+        assert!(fields.contains(&"name") && !fields.contains(&"systemRole") && !fields.contains(&"area"), "{fields:?}");
+
+        import(&dst.pool, &ctx, &file, ImportMode::Apply).await.unwrap();
+        let (id, key, name, area) = system_class(dst.pool.clone()).await;
+        assert_eq!(
+            (id, key.as_str(), name.as_str(), area.as_str()),
+            (dst_class, "business_service", "IT service", dst_area.as_str())
+        );
+        let service: i64 = sqlx::query_scalar("SELECT count(*) FROM ci_classes WHERE key = 'service'")
+            .fetch_one(&dst.pool)
+            .await
+            .unwrap();
+        assert_eq!(service, 0, "no second service class");
+        let cost: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM ci_attribute_definitions WHERE class_id = $1 AND key = 'cost_centre'",
+        )
+        .bind(dst_class)
+        .fetch_one(&dst.pool)
+        .await
+        .unwrap();
+        assert_eq!(cost, 1);
+        let grant: (bool, bool) = sqlx::query_as(
+            "SELECT g.can_view, g.can_edit FROM permission_profile_class_permissions g
+             JOIN permission_profiles p ON p.id = g.profile_id WHERE p.name = 'Service desk' AND g.class_id = $1",
+        )
+        .bind(dst_class)
+        .fetch_one(&dst.pool)
+        .await
+        .unwrap();
+        assert_eq!(grant, (true, true), "the grant on service lands on business_service");
+        // Importing the same file again changes nothing.
+        let again = import(&dst.pool, &ctx, &file, ImportMode::DryRun).await.unwrap();
+        assert!(again.changes.is_empty(), "{:?}", again.changes);
+
+        // A grant resolves by classSystemRole, whatever its class key says; the member type by role too.
+        let mut by_role = file.clone();
+        for g in by_role.permission_profiles.iter_mut().flatten().flat_map(|p| p.class_permissions.iter_mut()) {
+            if g.class_system_role.is_some() {
+                g.class = Some("no_such_class".into());
+                g.create = true;
+            }
+        }
+        for t in &mut by_role.data_model.as_mut().unwrap().relationship_types {
+            if t.system_role.is_some() {
+                t.key = "service_member".into();
+                t.forward_label = "contains".into();
+            }
+        }
+        let result = import(&dst.pool, &ctx, &by_role, ImportMode::Apply)
+            .await
+            .unwrap_or_else(|e| panic!("{e}: {:?}", e.details));
+        let changes: Vec<(&str, &str)> = result.changes.iter().map(|c| (c.section.as_str(), c.key.as_str())).collect();
+        assert!(changes.contains(&("relationshipTypes", "business_service_member")), "{changes:?}");
+        assert!(changes.contains(&("permissionProfiles", "Service desk")), "{changes:?}");
+        let created: i64 = sqlx::query_scalar("SELECT count(*) FROM relationship_types WHERE key = 'service_member'")
+            .fetch_one(&dst.pool)
+            .await
+            .unwrap();
+        assert_eq!(created, 0);
+        let label: String = sqlx::query_scalar(
+            "SELECT forward_label FROM relationship_types WHERE system_role = 'business_service_member'",
+        )
+        .fetch_one(&dst.pool)
+        .await
+        .unwrap();
+        assert_eq!(label, "contains");
+        let can_create: bool = sqlx::query_scalar(
+            "SELECT g.can_create FROM permission_profile_class_permissions g
+             JOIN permission_profiles p ON p.id = g.profile_id WHERE p.name = 'Service desk' AND g.class_id = $1",
+        )
+        .bind(dst_class)
+        .fetch_one(&dst.pool)
+        .await
+        .unwrap();
+        assert!(can_create);
+
+        // A file holding both the role class and another class with the target's key is refused.
+        let mut clash = file.clone();
+        let mut other =
+            clash.data_model.as_ref().unwrap().classes.iter().find(|c| c.key == "application").unwrap().clone();
+        other.key = "business_service".into();
+        other.system_role = None;
+        clash.data_model.as_mut().unwrap().classes.push(other);
+        let err = import(&dst.pool, &ctx, &clash, ImportMode::DryRun).await.unwrap_err();
+        let codes: Vec<(String, String)> = err.details.unwrap().into_iter().map(|d| (d.field, d.code)).collect();
+        assert!(codes.iter().any(|(f, c)| f.ends_with(".key") && c == "conflict"), "{codes:?}");
+
+        // Version 4 (no roles): matched by key, so "service" is an ordinary new class here.
+        let mut v4 = ConfigFile { format_version: 4, ..file.clone() };
+        strip_system_roles(&mut v4);
+        let result =
+            import(&dst.pool, &ctx, &v4, ImportMode::DryRun).await.unwrap_or_else(|e| panic!("{e}: {:?}", e.details));
+        let changes: Vec<(&str, &str, ChangeAction)> =
+            result.changes.iter().map(|c| (c.section.as_str(), c.key.as_str(), c.action)).collect();
+        assert!(changes.contains(&("classes", "service", ChangeAction::Create)), "{changes:?}");
+        assert!(!result.warnings.iter().any(|w| w.message.starts_with("Matched by role")), "{:?}", result.warnings);
+        let roles: i64 = sqlx::query_scalar("SELECT count(*) FROM ci_classes WHERE system_role IS NOT NULL")
+            .fetch_one(&dst.pool)
+            .await
+            .unwrap();
+        assert_eq!(roles, 1);
+
+        src.drop().await;
+        dst.drop().await;
     }
 }
