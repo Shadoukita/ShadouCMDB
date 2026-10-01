@@ -187,9 +187,7 @@ test("while import is off, the user still sees and deletes their import", async 
   // The job page says so too, and offers no step action the server would refuse.
   await row.getByRole("link", { name: `servers-${stamp}.csv` }).click();
   await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText("Bulk import is turned off for this instance.");
-  await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText(
-    "error report can be read again once an administrator turns bulk import back on",
-  );
+  await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).not.toContainText("read-only");
   await expect(page.getByRole("button", { name: "Next: Map columns" })).toHaveCount(0);
   await page.getByRole("status").getByRole("link", { name: "Imports" }).click();
   await row.getByRole("button", { name: /Delete import of/ }).click();
@@ -388,7 +386,7 @@ test("saved mapping and update: the same headers apply the mapping; 2 changed ce
   await page.context().close();
 });
 
-test("errors and report: per-row problems, the neutralised report, a corrected file, and skipping the rest", async ({ browser }, testInfo) => {
+test("errors and report: per-row problems, the neutralised report, a corrected file, and skipping the rest", async ({ browser, request }, testInfo) => {
   const page = await signInUi(browser, IMPORTER);
   const bad = [
     appRow(21, "=cmd|' /C calc'!A0", "Nope"), // unknown lookup value; the formula lands in the report, neutralised
@@ -455,6 +453,33 @@ test("errors and report: per-row problems, the neutralised report, a corrected f
   await expect(result(page)).toContainText("Import finished: 4 created, 0 updated, 0 unchanged, 1 skipped", { timeout: 30_000 });
   const [skipped] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download error report" }).click()]);
   expect(await readFile(await skipped.path(), "utf-8")).toContain(APP(25));
+
+  // Import off (#362): the owner still reads the check's row problems and downloads its report, but no step action
+  // is offered; the finished import keeps its report too.
+  await setImport(request, false);
+  try {
+    await page.goto(`/imports/${firstId}`);
+    const notice = page.getByRole("status").filter({ hasText: "This import cannot continue" });
+    await expect(notice).toContainText("Bulk import is turned off for this instance.");
+    await expect(notice).toContainText("The result below is read-only.");
+    await expect(counts(page)).not.toContainText("Errors 0 rows");
+    await expect(problems.getByRole("row", { name: /^7 / })).toContainText("Primary database");
+    const [offReport] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download error report" }).click()]);
+    expect(await readFile(await offReport.path(), "utf-8")).toContain(`"'=cmd|' /C calc'!A0"`);
+    for (const name of [/^Import \d+ valid rows? and skip/, /^Import \d+ rows?$/, /^Check again$/]) {
+      await expect(page.getByRole("button", { name })).toHaveCount(0);
+    }
+    for (const name of ["Back to mapping", "Upload a corrected file"]) await expect(page.getByRole("link", { name })).toHaveCount(0);
+    await checkA11y(page, testInfo, "import-check-off");
+
+    await page.goBack();
+    await expect(result(page)).toContainText("1 skipped");
+    await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText("The result below is read-only.");
+    await expect(page.getByRole("button", { name: "Download error report" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Import another file" })).toHaveCount(0);
+  } finally {
+    await setImport(request, true);
+  }
   await page.context().close();
 });
 

@@ -28,7 +28,8 @@ a:hover {
 }
 /* A link inside running text is told apart by more than its colour (WCAG 1.4.1). */
 p a:not(.btn),
-.hint a:not(.btn) {
+.hint a:not(.btn),
+.alert a:not(.btn) {
   text-decoration: underline;
 }
 :focus-visible {

@@ -78,6 +78,8 @@ const presetFromJob = computed(() => (typeof route.query.fromJob === "string" ? 
 
 /** Settings loaded and import off: the job's step actions would all be refused with `403 import_disabled`. */
 const importOff = computed(() => !!settings.data.value && !available.value);
+/** While off, the check and import results stay readable: their row problems and error report are plain reads. */
+const readableWhileOff = computed(() => step.value >= 3 && !!data.value?.summary);
 
 const committedRows = computed(() => {
   const c = data.value?.summary?.committed;
@@ -156,19 +158,24 @@ const committedRows = computed(() => {
         </template>
       </div>
 
-      <!-- While import is off the server refuses every step (W3): only cancel and delete remain, on /imports. -->
-      <div v-if="importOff" class="alert alert-warn" role="status">
-        <strong v-if="settings.data.value?.locked">Bulk import is disabled by the server configuration.</strong>
-        <template v-else>
-          <strong>Bulk import is turned off for this instance.</strong>
-          An administrator can turn it on under
-          <RouterLink v-if="session.isAdministrator" to="/admin/import">Administration › Import</RouterLink>
-          <template v-else>Administration › Import</template>.
-        </template>
-        This import cannot continue. You can still stop or delete it under
-        <RouterLink to="/imports">Imports</RouterLink>. Its row problems and error report can be read again once an
-        administrator turns bulk import back on.
-      </div>
+      <!-- While import is off the server refuses every step (W3): only cancel and delete remain, on /imports.
+           The check or import result stays below, read-only, with its row problems and error report. -->
+      <template v-if="importOff">
+        <div class="alert alert-warn" role="status">
+          <strong v-if="settings.data.value?.locked">Bulk import is disabled by the server configuration.</strong>
+          <template v-else>
+            <strong>Bulk import is turned off for this instance.</strong>
+            An administrator can turn it on under
+            <RouterLink v-if="session.isAdministrator" to="/admin/import">Administration › Import</RouterLink>
+            <template v-else>Administration › Import</template>.
+          </template>
+          This import cannot continue. You can still stop or delete it under
+          <RouterLink to="/imports">Imports</RouterLink>.
+          <template v-if="readableWhileOff">The result below is read-only.</template>
+        </div>
+        <CheckStep v-if="readableWhileOff && step === 3" :job="data" read-only />
+        <CommitStep v-else-if="readableWhileOff" :job="data" read-only />
+      </template>
       <ErrorAlert v-else-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />
       <LoadingState v-else-if="!settings.data.value" label="Loading import settings…" />
       <FileStep v-else-if="step === 1" :job="data" @next="toMapping" />

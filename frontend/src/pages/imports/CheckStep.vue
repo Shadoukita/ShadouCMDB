@@ -25,7 +25,11 @@ import ImportProgress from "./ImportProgress.vue";
  * planned changes, and the row problems as a server-paged table whose filters live in the URL, so a reload or a
  * shared link shows the same page.
  */
-const props = defineProps<{ job: ImportJob }>();
+const props = defineProps<{
+  job: ImportJob;
+  /** Import is off: the result and the row problems stay readable (GETs), every step action is hidden. */
+  readOnly?: boolean;
+}>();
 const emit = defineEmits<{ committing: [] }>();
 
 const route = useRoute();
@@ -181,7 +185,7 @@ const fieldLabel = (f: string) => {
           :total="job.progress.total || null"
         />
         <p v-if="elapsed" class="muted">Elapsed: {{ elapsed }}</p>
-        <div class="inline-control">
+        <div v-if="!readOnly" class="inline-control">
           <button type="button" class="btn" :disabled="cancel.isPending.value" @click="cancel.mutate(job.id)">Cancel</button>
           <span class="muted">You can leave this page. The check continues and you can come back from Imports.</span>
         </div>
@@ -191,7 +195,7 @@ const fieldLabel = (f: string) => {
       <div class="sr-only" aria-live="polite">{{ finished }}</div>
 
       <template v-if="summary && !checking">
-        <div v-if="stale && job.status !== 'expired'" class="alert alert-warn" role="status">
+        <div v-if="stale && job.status !== 'expired' && !readOnly" class="alert alert-warn" role="status">
           <strong>This check is out of date.</strong>
           {{
             job.dryRun?.staleReason === "model_changed"
@@ -348,7 +352,7 @@ const fieldLabel = (f: string) => {
         />
       </div>
 
-      <div v-if="job.status === 'validated'" class="form-footer">
+      <div v-if="job.status === 'validated' && !readOnly" class="form-footer">
         <template v-if="stale">
           <button type="button" class="btn btn-primary" :disabled="again.isPending.value" @click="again.mutate(job.id)">
             {{ again.isPending.value ? "Starting the check…" : "Check again" }}

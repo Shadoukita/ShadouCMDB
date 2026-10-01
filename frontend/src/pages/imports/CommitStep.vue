@@ -15,7 +15,11 @@ import ImportProgress from "./ImportProgress.vue";
  * rows). Then the result counts, links to the imported CIs and the audit entry, and the error report when rows
  * were skipped or failed.
  */
-const props = defineProps<{ job: ImportJob }>();
+const props = defineProps<{
+  job: ImportJob;
+  /** Import is off: the result and the error report stay readable, Stop and a new import are hidden. */
+  readOnly?: boolean;
+}>();
 
 const session = useSessionStore();
 const classes = useCiClasses();
@@ -93,7 +97,7 @@ async function download() {
           :done="job.progress.done"
           :total="job.progress.total || null"
         />
-        <div class="inline-control">
+        <div v-if="!readOnly" class="inline-control">
           <button type="button" class="btn btn-danger" :disabled="cancel.isPending.value" @click="stopping = true">Stop import</button>
           <span class="muted">You can leave this page. The import continues and you can come back from Imports.</span>
         </div>
@@ -116,7 +120,7 @@ async function download() {
           <button v-if="hasReport" type="button" class="btn" :disabled="downloading" @click="download">
             {{ downloading ? "Preparing the report…" : "Download error report" }}
           </button>
-          <RouterLink class="btn btn-link" to="/imports/new">Import another file</RouterLink>
+          <RouterLink v-if="!readOnly" class="btn btn-link" to="/imports/new">Import another file</RouterLink>
         </div>
         <ErrorAlert v-if="downloadError" :error="downloadError" title="The error report was not downloaded" />
       </template>
