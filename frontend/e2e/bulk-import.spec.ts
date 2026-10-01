@@ -13,6 +13,7 @@ const PROFILE = `E2E importers ${stamp}`;
 const NO_IMPORT_PROFILE = `E2E no import ${stamp}`;
 const IMPORTER = `e2e-importer-${stamp}`;
 const PLAIN = `e2e-plain-${stamp}`;
+const OTHER_IMPORTER = `e2e-other-importer-${stamp}`;
 const PASSWORD = "importer-password-123";
 const FAILING = new Set(["critical", "serious"]);
 
@@ -57,6 +58,7 @@ test.beforeAll(async ({ request }) => {
   });
   await apiSend(request, "POST", "/admin/users", { username: IMPORTER, displayName: `E2E Importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
   await apiSend(request, "POST", "/admin/users", { username: PLAIN, displayName: `E2E Plain ${stamp}`, password: PASSWORD, profileIds: [plain.id] });
+  await apiSend(request, "POST", "/admin/users", { username: OTHER_IMPORTER, displayName: `E2E Other importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
   await setImport(request, false);
 });
 
@@ -477,6 +479,44 @@ test("errors and report: per-row problems, the neutralised report, a corrected f
     await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText("The result below is read-only.");
     await expect(page.getByRole("button", { name: "Download error report" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Import another file" })).toHaveCount(0);
+  } finally {
+    await setImport(request, true);
+  }
+  await page.context().close();
+});
+
+test("import off: another importer cannot open the job, and the owner's earlier steps offer no action", async ({ browser, request }) => {
+  const page = await signInUi(browser, IMPORTER);
+  const id = await newImport(page, { name: `apps-${stamp}-off.csv`, mimeType: "text/csv", buffer: appsCsv([appRow(31, "1.0", "Nope"), appRow(32)]) }, "?classKey=application");
+  await mappingReady(page, 5);
+  await checkFile(page);
+  await expect(counts(page)).not.toContainText("Errors 0 rows");
+
+  // SHAA-1031: the reads kept while import is off (#376) are the owner's only. Another importer gets the
+  // not-found page, no row problems and no report, and the API answers 404 to each read.
+  await setImport(request, false);
+  try {
+    const other = await signInUi(browser, OTHER_IMPORTER);
+    await other.goto(`/imports/${id}`);
+    await expect(other.getByText("This import does not exist or belongs to another user.")).toBeVisible();
+    await expect(other.getByRole("table", { name: "Row problems" })).toHaveCount(0);
+    await expect(other.getByRole("button", { name: "Download error report" })).toHaveCount(0);
+    for (const path of [`/imports/${id}`, `/imports/${id}/issues`, `/imports/${id}/error-report`]) {
+      expect((await other.request.get(`/api/v1${path}`)).status(), path).toBe(404);
+    }
+    await other.context().close();
+
+    // The owner's earlier steps, opened from the step list, show the notice and nothing to act on.
+    await page.goto(`/imports/${id}`);
+    const notice = page.getByRole("status").filter({ hasText: "This import cannot continue" });
+    await expect(notice).toContainText("The result below is read-only.");
+    for (const step of [/^Upload/, /^Map columns/]) {
+      await page.getByRole("link", { name: step }).click();
+      await expect(notice).toContainText("Bulk import is turned off for this instance.");
+      await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
+      await expect(page.getByLabel(/Spreadsheet file \(CSV or XLSX/)).toHaveCount(0);
+      await page.goto(`/imports/${id}`);
+    }
   } finally {
     await setImport(request, true);
   }
