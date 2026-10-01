@@ -540,7 +540,7 @@ async fn write_rows(
                 let (before, body) = p.update.as_ref().ok_or_else(AppError::internal)?;
                 let class = before.summary.class_id;
                 let defs = planned.defs.get(&class).map(Vec::as_slice).unwrap_or_default();
-                let plan = plan::plan_update(ctx, model, defs, before.clone(), body, &planned.resolver)?;
+                let plan = plan::plan_update(ctx, model, defs, before.clone(), body, &planned.resolver, None)?;
                 let id = plan::apply_rows(conn, model, &plan).await?;
                 written.push((id, class, Some(crud::json(before))));
                 delta.updated += 1;

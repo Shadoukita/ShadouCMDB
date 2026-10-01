@@ -1198,7 +1198,7 @@ fn plan_row(
                 }
                 p.outcome = RowOutcome::Unchanged;
             } else {
-                match plan::plan_update(c.ctx, model, class_defs, before.clone(), &body, &*resolver) {
+                match plan::plan_update(c.ctx, model, class_defs, before.clone(), &body, &*resolver, None) {
                     Ok(planned) => {
                         p.changes = changes(&planned, &before);
                         if !planned.clear.is_empty() {
