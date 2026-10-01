@@ -35,7 +35,7 @@ use std::io::{Read, Seek, SeekFrom};
 use calamine::{DataRef, Reader, SheetType, SheetVisible, Xlsx};
 use quick_xml::events::Event;
 
-use super::{CellValue, Limits, OnRow, ParseError, Row, column_limit};
+use super::{CellValue, Limits, OnRow, ParseError, Row, check_cell, column_limit, group_thousands};
 
 pub const MAX_ENTRIES: u64 = 10_000;
 pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
@@ -54,6 +54,13 @@ pub const MAX_RATIO: u64 = 1000;
 /// so a `>` inside an attribute value or a `<` inside CDATA does not end the
 /// count.
 pub const MAX_XML_TOKEN: u64 = 4 * 1024 * 1024;
+/// Most bytes of text in one row, as the CSV reader allows for a record.
+pub const MAX_ROW_TEXT_BYTES: usize = super::csv::MAX_RECORD_BYTES;
+/// Most bytes of text in one sheet with every shared string written out. A
+/// shared string is stored once but read once per cell that refers to it, so
+/// without this a small file could hand the import more text than any file of
+/// the upload limit holds.
+pub const MAX_SHEET_TEXT_BYTES: usize = 256 * 1024 * 1024;
 
 const SPREADSHEET_MAIN: [&str; 2] = [
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
@@ -746,6 +753,15 @@ fn calamine_error(e: calamine::XlsxError) -> ParseError {
     }
 }
 
+/// The text a cell holds before conversion, borrowed from the reader.
+fn cell_text<'a>(v: &'a DataRef<'_>) -> Option<&'a str> {
+    match v {
+        DataRef::String(s) | DataRef::DateTimeIso(s) | DataRef::DurationIso(s) => Some(s),
+        DataRef::SharedString(s) => Some(s),
+        _ => None,
+    }
+}
+
 fn cell_value(v: DataRef<'_>, has_formula: bool) -> CellValue {
     match v {
         DataRef::Empty if has_formula => CellValue::FormulaWithoutValue,
@@ -778,6 +794,9 @@ fn cell_value(v: DataRef<'_>, has_formula: bool) -> CellValue {
 /// Reads one worksheet cell by cell and hands it over row by row (rows the
 /// sheet leaves out are not produced). A non-empty cell at or beyond
 /// `max_columns` stops the reading with `column_limit` before its row grows.
+/// A cell's text is checked before it is copied: over `MAX_CELL_CHARS` is
+/// `cell_too_long`, a row over [`MAX_ROW_TEXT_BYTES`] `record_too_long`, a
+/// sheet over [`MAX_SHEET_TEXT_BYTES`] `text_limit`.
 pub fn read_sheet<R: Read + Seek>(
     workbook: &mut Xlsx<R>,
     sheet: &str,
@@ -786,11 +805,11 @@ pub fn read_sheet<R: Read + Seek>(
 ) -> Result<(), ParseError> {
     let mut cells = workbook.worksheet_cells_reader(sheet).map_err(calamine_error)?;
     let mut current: Option<Row> = None;
+    let (mut text_row, mut row_bytes, mut sheet_bytes) = (0u32, 0usize, 0usize);
     loop {
         let next = cells.next_cell_with_formula_metadata().map_err(calamine_error)?;
         let Some(cell) = next else { break };
         let (row, col) = cell.pos;
-        let value = cell_value(cell.value, cell.formula.is_some());
         let number = row.saturating_add(1);
         if current.as_ref().is_some_and(|r| r.number != number)
             && let Some(done) = current.take()
@@ -798,6 +817,28 @@ pub fn read_sheet<R: Read + Seek>(
         {
             return Ok(());
         }
+        if let Some(text) = cell_text(&cell.value) {
+            check_cell(text, number, col)?;
+            if text_row != number {
+                (text_row, row_bytes) = (number, 0);
+            }
+            row_bytes += text.len();
+            sheet_bytes += text.len();
+            if row_bytes > MAX_ROW_TEXT_BYTES {
+                return Err(bad("record_too_long", "A row holds more than 1 MiB of text.").at(Some(number), None));
+            }
+            if sheet_bytes > MAX_SHEET_TEXT_BYTES {
+                return Err(bad(
+                    "text_limit",
+                    format!(
+                        "The sheet holds more than {} MiB of text. Split the file and import it in parts.",
+                        group_thousands((MAX_SHEET_TEXT_BYTES / (1024 * 1024)) as u64)
+                    ),
+                )
+                .at(Some(number), None));
+            }
+        }
+        let value = cell_value(cell.value, cell.formula.is_some());
         if value == CellValue::Empty {
             continue;
         }
@@ -822,7 +863,7 @@ mod tests {
     use std::io::Cursor;
     use std::ops::ControlFlow;
 
-    use super::super::fixtures::{C, Part, sheet_xml, workbook, workbook_parts, zip};
+    use super::super::fixtures::{C, Part, sheet_xml, with_shared_strings, workbook, workbook_parts, zip};
     use super::*;
 
     const LIMITS: Limits = Limits { max_rows: 100_000, max_columns: 200 };
@@ -909,6 +950,67 @@ mod tests {
         // GR is the 200th column, the last allowed; GS the first refused.
         assert!(read(workbook(&[("GR1", C::S("x"))]), None).is_ok());
         assert_eq!(read(workbook(&[("GS1", C::S("x"))]), None).unwrap_err().code, "column_limit");
+    }
+
+    /// A sheet whose row 1 is a header and whose row 2 refers to shared string 0 from `cells` columns.
+    fn shared_row(strings: &[&str], cells: u32) -> Vec<u8> {
+        let refs: Vec<String> = (0..cells).map(|c| format!("{}2", super::super::column_name(c))).collect();
+        let mut sheet: Vec<(&str, C<'_>)> = vec![("A1", C::S("Hostname"))];
+        sheet.extend(refs.iter().map(|r| (r.as_str(), C::Shared(0))));
+        let mut parts = workbook_parts(&sheet_xml(&sheet), None, false, false);
+        with_shared_strings(&mut parts, strings);
+        zip(&parts)
+    }
+
+    #[test]
+    fn a_long_shared_string_is_refused_before_it_is_copied_into_cells() {
+        // GH#403: one 20,000-character string, referenced by 200 cells.
+        let long = "x".repeat(20_000);
+        let err = read(shared_row(&[&long], 200), None).unwrap_err();
+        assert_eq!((err.code, err.row, err.column), ("cell_too_long", Some(2), Some(0)));
+        assert!(!err.message.contains('x'), "the message never quotes the cell");
+        // An inline string is held to the same limit.
+        let err = read(workbook(&[("A1", C::S("h")), ("C3", C::S(&"y".repeat(10_001)))]), None).unwrap_err();
+        assert_eq!((err.code, err.row, err.column), ("cell_too_long", Some(3), Some(2)));
+        // 10,000 characters are accepted.
+        let ok = "é".repeat(10_000);
+        let (_, rows) = read(shared_row(&[&ok], 3), None).unwrap();
+        assert_eq!(rows[1].cells.len(), 3);
+        assert_eq!(rows[1].cells[2], CellValue::Text(ok.clone()));
+    }
+
+    #[test]
+    fn rows_and_sheets_are_capped_in_text() {
+        // 200 cells of 10,000 two-byte characters: each cell is allowed, the row is not.
+        let wide = "é".repeat(10_000);
+        let err = read(shared_row(&[&wide], 200), None).unwrap_err();
+        assert_eq!((err.code, err.row), ("record_too_long", Some(2)));
+        // 52 such cells (1,040,000 bytes) fit in a row.
+        assert!(read(shared_row(&[&wide], 52), None).is_ok());
+        // Rows of 1 MiB each, repeated, stop at the sheet limit.
+        let per_row = 52usize;
+        let rows_needed = MAX_SHEET_TEXT_BYTES / (per_row * wide.len()) + 2;
+        let mut refs = Vec::new();
+        for r in 1..=rows_needed {
+            for c in 0..per_row as u32 {
+                refs.push(format!("{}{r}", super::super::column_name(c)));
+            }
+        }
+        let sheet: Vec<(&str, C<'_>)> = refs.iter().map(|r| (r.as_str(), C::Shared(0))).collect();
+        let mut parts = workbook_parts(&sheet_xml(&sheet), None, false, false);
+        with_shared_strings(&mut parts, &[&wide]);
+        let limits = Limits { max_rows: 100_000, max_columns: 200 };
+        let mut c = Cursor::new(zip(&parts));
+        preflight(&mut c).unwrap();
+        let (mut wb, _) = open(c).unwrap();
+        let mut seen = 0u32;
+        let err = read_sheet(&mut wb, "Servers", &limits, &mut |_| {
+            seen += 1;
+            ControlFlow::Continue(())
+        })
+        .unwrap_err();
+        assert_eq!(err.code, "text_limit");
+        assert_eq!(err.row, Some(seen + 1), "refused in the row that crosses the limit");
     }
 
     #[test]
