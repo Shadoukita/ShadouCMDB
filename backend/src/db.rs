@@ -444,6 +444,27 @@ pub mod scratch {
         Some(Scratch { admin, name, pool })
     }
 
+    /// Roles are cluster-wide. Creates the API and maintenance roles the
+    /// migrations grant to (without LOGIN; tests use SET ROLE), so a scratch
+    /// database migrated afterwards has the three-role grants. Call it before
+    /// [`database`]; false when there is no test database.
+    pub async fn split_roles() -> bool {
+        let Ok(url) = std::env::var("SHADOUCMDB_TEST_DATABASE_URL") else { return false };
+        let opts = PgConnectOptions::from_str(&url).unwrap();
+        let mut c = opts.connect().await.unwrap();
+        for role in ["shadoucmdb_app", "shadoucmdb_maintenance"] {
+            c.execute(sqlx::AssertSqlSafe(format!(
+                // unique_violation: another test created it concurrently.
+                "DO $$ BEGIN CREATE ROLE {role} NOLOGIN;
+                 EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$"
+            )))
+            .await
+            .unwrap();
+        }
+        c.close().await.ok();
+        true
+    }
+
     impl Scratch {
         pub async fn drop(self) {
             self.pool.close().await;

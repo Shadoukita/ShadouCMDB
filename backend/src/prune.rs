@@ -149,8 +149,7 @@ fn report(args: &PruneAuditArgs, dry_run: bool, rows: &[(String, i64)]) {
 mod tests {
     use super::*;
     use crate::db::scratch;
-    use sqlx::{Connection, Executor};
-    use std::str::FromStr;
+    use sqlx::Executor;
 
     #[test]
     fn days_accept_a_suffix_and_enforce_the_floor() {
@@ -159,25 +158,6 @@ mod tests {
         assert!(parse_days("29d").is_err());
         assert!(parse_days("6m").is_err());
         assert!(parse_days("-1").is_err());
-    }
-
-    /// Roles are cluster-wide. Create the two the migration grants to (without
-    /// LOGIN; the test uses SET ROLE) before the scratch database is migrated.
-    async fn ensure_roles() -> bool {
-        let Ok(url) = std::env::var("SHADOUCMDB_TEST_DATABASE_URL") else { return false };
-        let opts = sqlx::postgres::PgConnectOptions::from_str(&url).unwrap();
-        let mut c = sqlx::postgres::PgConnection::connect_with(&opts).await.unwrap();
-        for role in ["shadoucmdb_app", "shadoucmdb_maintenance"] {
-            c.execute(sqlx::AssertSqlSafe(format!(
-                // unique_violation: another test created it concurrently.
-                "DO $$ BEGIN CREATE ROLE {role} NOLOGIN;
-                 EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$"
-            )))
-            .await
-            .unwrap();
-        }
-        c.close().await.ok();
-        true
     }
 
     async fn sqlstate<T>(c: &mut PgConnection, result: sqlx::Result<T>) -> String {
@@ -196,7 +176,7 @@ mod tests {
     #[tokio::test]
     async fn only_the_maintenance_role_can_prune_and_the_api_role_cannot_delete() {
         const TEST: &str = "only_the_maintenance_role_can_prune_and_the_api_role_cannot_delete";
-        if !ensure_roles().await {
+        if !scratch::split_roles().await {
             scratch::database(TEST).await; // prints the skip notice (or fails in CI)
             return;
         }
@@ -294,7 +274,7 @@ mod tests {
     #[tokio::test]
     async fn the_api_role_cannot_change_the_system_schema() {
         const TEST: &str = "the_api_role_cannot_change_the_system_schema";
-        if !ensure_roles().await {
+        if !scratch::split_roles().await {
             scratch::database(TEST).await;
             return;
         }
@@ -354,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn a_function_planted_in_public_does_not_run_with_the_owners_rights() {
         const TEST: &str = "a_function_planted_in_public_does_not_run_with_the_owners_rights";
-        if !ensure_roles().await {
+        if !scratch::split_roles().await {
             scratch::database(TEST).await;
             return;
         }

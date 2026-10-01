@@ -243,6 +243,65 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     b.drop().await;
 }
 
+/// GH#396: on a three-role install `backup` runs as the API role, which may
+/// read the audit hash-chain head (migration 0038) but still not move or lock
+/// it. The restored chain verifies and keeps the same head.
+#[tokio::test]
+async fn the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it() {
+    const TEST: &str = "the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it";
+    if !scratch::split_roles().await {
+        scratch::database(TEST).await; // prints the skip notice (or fails in CI)
+        return;
+    }
+    let Some(a) = scratch::database("api_role_backup_a").await else { return };
+    let Some(b) = scratch::database("api_role_backup_b").await else { return };
+    populate(&a.pool).await;
+    let mut ca = a.pool.acquire().await.unwrap();
+    let mut cb = b.pool.acquire().await.unwrap();
+    let head = "SELECT last_seq, encode(last_hash, 'hex') FROM cmdb.audit_log_chain_head";
+    let head_a: (i64, String) = sqlx::query_as(head).fetch_one(&mut *ca).await.unwrap();
+    assert!(head_a.0 > 0, "demo data writes audit entries");
+
+    sqlx::query("SET ROLE shadoucmdb_app").execute(&mut *ca).await.unwrap();
+    for denied in [
+        "SELECT * FROM cmdb.audit_log_chain_head FOR UPDATE",
+        "SELECT * FROM cmdb.audit_log_chain_head FOR KEY SHARE",
+        "UPDATE cmdb.audit_log_chain_head SET last_seq = 0",
+        "DELETE FROM cmdb.audit_log_chain_head",
+        "TRUNCATE cmdb.audit_log_chain_head",
+        "INSERT INTO cmdb.audit_log_chain_head (singleton, last_seq, last_hash) VALUES (false, 0, '\\x00')",
+    ] {
+        let err = sqlx::query(denied).execute(&mut *ca).await.unwrap_err();
+        let code = err.as_database_error().and_then(|d| d.code()).unwrap_or_default().into_owned();
+        assert_eq!(code, "42501", "{denied}: {err}");
+    }
+    let (buf, header) = take_backup(&mut ca).await;
+    sqlx::query("RESET ROLE").execute(&mut *ca).await.unwrap();
+    let copied = header.tables.iter().find(|t| t.schema == "cmdb" && t.name == "audit_log_chain_head");
+    assert_eq!(copied.map(|t| t.rows), Some(1));
+
+    restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    let head_b: (i64, String) = sqlx::query_as(head).fetch_one(&mut *cb).await.unwrap();
+    assert_eq!(head_b, head_a);
+    let problems: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM cmdb.audit_log_verify()").fetch_one(&mut *cb).await.unwrap();
+    assert_eq!(problems, 0, "the restored audit chain verifies");
+    // The restored schema grants the same: read, nothing else.
+    let (read, write): (bool, bool) = sqlx::query_as(
+        "SELECT has_table_privilege('shadoucmdb_app', 'cmdb.audit_log_chain_head', 'SELECT'),
+                has_table_privilege('shadoucmdb_app', 'cmdb.audit_log_chain_head',
+                                    'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')",
+    )
+    .fetch_one(&mut *cb)
+    .await
+    .unwrap();
+    assert_eq!((read, write), (true, false));
+
+    drop((ca, cb));
+    a.drop().await;
+    b.drop().await;
+}
+
 /// SHAA-714 §6.3: a backup keeps the import switch, saved mappings and job
 /// records, never uploaded files, issue rows or idempotency keys. A job that
 /// had not finished is expired by the restore itself (T24).
