@@ -20,18 +20,23 @@ Create the database (once, as a PostgreSQL admin)
 -------------------------------------------------
 
 On any machine with psql (it need not be this server), in PowerShell, from the
-folder you extracted this archive to (or copy sql\bootstrap\ there). The
-passwords are prompted for, so they stay out of the PowerShell history:
+folder you extracted this archive to (or copy sql\bootstrap\ there):
 
-  $owner = (Get-Credential shadoucmdb_owner).GetNetworkCredential().Password
-  $app   = (Get-Credential shadoucmdb_app).GetNetworkCredential().Password
-  $maint = (Get-Credential shadoucmdb_maintenance).GetNetworkCredential().Password
   psql "postgres://admin@db.example.internal:5432/postgres" `
-       -v "owner_password=$owner" `
-       -v "app_password=$app" `
-       -v "maintenance_password=$maint" `
        -f sql\bootstrap\00_create_role_and_database.sql
-  Remove-Variable owner, app, maint
+  psql "postgres://admin@db.example.internal:5432/postgres" `
+       -c '\password shadoucmdb_owner' `
+       -c '\password shadoucmdb_app' `
+       -c '\password shadoucmdb_maintenance'
+
+The script creates the roles without a password; they cannot log in until the
+second command has set one. \password prompts for each password twice and
+sends the server only a SCRAM-SHA-256 verifier computed by psql, so the
+password appears neither in the PowerShell history, the process list nor the
+server log. (This needs password_encryption = scram-sha-256 on the server, the
+default since PostgreSQL 14.) Do not pass passwords as psql variables (-v): the
+script refuses the owner_password, app_password and maintenance_password
+variables of earlier releases.
 
 Use long random passwords, e.g. 48 hex characters. They go into connection URLs,
 where characters such as @ : / # % ? must be percent-encoded (@ -> %40); the
@@ -108,7 +113,11 @@ order given in the header of sql\bootstrap\10_split_roles.sql:
   1. stop the service and copy the new binary (first two commands below),
      then run migrate as before, without MIGRATION_DATABASE_URL:
        & 'C:\Program Files\ShadouCMDB\shadoucmdb.exe' --env-file 'C:\ProgramData\ShadouCMDB\shadoucmdb.env' migrate
-  2. run 10_split_roles.sql as a PostgreSQL admin;
+  2. run 10_split_roles.sql as a PostgreSQL admin, then set the passwords of
+     the roles it created with \password, as for a new install:
+       psql "postgres://admin@db.example.internal:5432/shadoucmdb" -f sql\bootstrap\10_split_roles.sql
+       psql "postgres://admin@db.example.internal:5432/shadoucmdb" `
+            -c '\password shadoucmdb_owner' -c '\password shadoucmdb_maintenance'
   3. start the service. From then on, migrate as shown below.
 
 Upgrading from a release without ENCRYPTION_KEY_FILE: the service no longer

@@ -134,9 +134,16 @@ jobs:
       - name: "${{ matrix.from }}: bootstrap the database with its own script, migrate, seed (${{ matrix.template }})"
         run: |
           git show "$FROM:sql/bootstrap/00_create_role_and_database.sql" > bootstrap.sql
-          # Older scripts create one role and ignore the other two passwords.
-          psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -v app_password="$APP_PASSWORD" \
-            -v owner_password="$OWNER_PASSWORD" -v maintenance_password="$MAINTENANCE_PASSWORD" -f bootstrap.sql
+          if grep -q "PASSWORD :'app_password'" bootstrap.sql; then
+            # Scripts before GH#444 take the passwords as variables; the oldest create one role and ignore the other two.
+            psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -v app_password="$APP_PASSWORD" \
+              -v owner_password="$OWNER_PASSWORD" -v maintenance_password="$MAINTENANCE_PASSWORD" -f bootstrap.sql
+          else
+            psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -f bootstrap.sql
+            printf '%s\n' "$OWNER_PASSWORD" "$OWNER_PASSWORD" "$APP_PASSWORD" "$APP_PASSWORD" \
+                "$MAINTENANCE_PASSWORD" "$MAINTENANCE_PASSWORD" | psql "$ADMIN_URL" -X -v ON_ERROR_STOP=1 \
+              -c '\password shadoucmdb_owner' -c '\password shadoucmdb_app' -c '\password shadoucmdb_maintenance'
+          fi
           if psql "$ADMIN_URL" -tAc "SELECT FROM pg_roles WHERE rolname = 'shadoucmdb_owner'" | grep -q .; then
             echo "MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb" >> "$GITHUB_ENV"
             MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb "$OLD" migrate
@@ -164,8 +171,9 @@ jobs:
           if [ -z "${MIGRATION_DATABASE_URL:-}" ]; then
             echo "Single-role install: migrate as shadoucmdb_app, then split the roles (sql/bootstrap/10_split_roles.sql)"
             "$NEW" migrate
-            psql "$ADMIN_DB_URL" -v ON_ERROR_STOP=1 \
-              -v owner_password="$OWNER_PASSWORD" -v maintenance_password="$MAINTENANCE_PASSWORD" -f sql/bootstrap/10_split_roles.sql
+            psql "$ADMIN_DB_URL" -v ON_ERROR_STOP=1 -f sql/bootstrap/10_split_roles.sql
+            printf '%s\n' "$OWNER_PASSWORD" "$OWNER_PASSWORD" "$MAINTENANCE_PASSWORD" "$MAINTENANCE_PASSWORD" |
+              psql "$ADMIN_DB_URL" -X -v ON_ERROR_STOP=1 -c '\password shadoucmdb_owner' -c '\password shadoucmdb_maintenance'
             echo "MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb" >> "$GITHUB_ENV"
             export MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb
           fi

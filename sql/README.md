@@ -15,8 +15,10 @@ binary embeds the migrations from this folder at build time.
 
 ```sh
 # 1. As a PostgreSQL admin, create the roles (owner, app, maintenance) and the database
-psql "<admin connection string>" -v owner_password='<pw 1>' -v app_password='<pw 2>' \
-     -v maintenance_password='<pw 3>' -f sql/bootstrap/00_create_role_and_database.sql
+psql "<admin connection string>" -f sql/bootstrap/00_create_role_and_database.sql
+#    and set their passwords (prompted; the server only receives a SCRAM-SHA-256 verifier)
+psql "<admin connection string>" -c '\password shadoucmdb_owner' -c '\password shadoucmdb_app' \
+     -c '\password shadoucmdb_maintenance'
 
 # 2. Point the backend at it: DATABASE_URL (or PG*) as shadoucmdb_app,
 #    MIGRATION_DATABASE_URL as shadoucmdb_owner, MAINTENANCE_DATABASE_URL as shadoucmdb_maintenance

@@ -1,10 +1,19 @@
 -- ShadouCMDB: one-time setup on the external PostgreSQL server (14+).
 -- Run as an administrator, e.g.:
 --   psql "postgres://admin@db.example.internal:5432/postgres" \
---        -v owner_password='<strong password 1>' \
---        -v app_password='<strong password 2>' \
---        -v maintenance_password='<strong password 3>' \
 --        -f sql/bootstrap/00_create_role_and_database.sql
+-- then set the three passwords with psql's \password, which prompts for them
+-- and sends the server only a SCRAM-SHA-256 verifier computed by psql:
+--   psql "postgres://admin@db.example.internal:5432/postgres" \
+--        -c '\password shadoucmdb_owner' -c '\password shadoucmdb_app' \
+--        -c '\password shadoucmdb_maintenance'
+-- The roles can log in only once their password is set. Passwords are not
+-- psql variables (-v): those show up in the process list, and the statement
+-- would carry them in plain text into the server log (log_statement = ddl).
+-- Without a terminal (automation), \password reads the password and its
+-- confirmation as two lines from standard input, e.g. from bash:
+--   printf '%s\n%s\n' "$PW" "$PW" | psql "<admin URL>" -X -v ON_ERROR_STOP=1 \
+--        -c '\password shadoucmdb_owner'
 --
 -- The role and database names below are the defaults. To use your own naming
 -- scheme, add any of -v owner_role=... -v app_role=... -v maintenance_role=...
@@ -32,6 +41,19 @@
 -- with 10_split_roles.sql.
 
 \set ON_ERROR_STOP on
+-- Older versions of this script took the passwords as psql variables. Stop
+-- instead of silently creating the roles without the password passed in.
+\if :{?owner_password}
+  \set password_var 1
+\elif :{?app_password}
+  \set password_var 1
+\elif :{?maintenance_password}
+  \set password_var 1
+\endif
+\if :{?password_var}
+DO $$ BEGIN RAISE EXCEPTION 'the owner_password, app_password and maintenance_password variables are no longer read'
+  USING HINT = 'Run the script without them, then set each password with \password <role>, as described in its header.'; END $$;
+\endif
 \if :{?owner_role}
 \else
   \set owner_role shadoucmdb_owner
@@ -49,9 +71,10 @@
   \set db_name shadoucmdb
 \endif
 
-CREATE ROLE :"owner_role" LOGIN PASSWORD :'owner_password';
-CREATE ROLE :"app_role" LOGIN PASSWORD :'app_password';
-CREATE ROLE :"maintenance_role" LOGIN PASSWORD :'maintenance_password';
+-- No PASSWORD here: see the header. Set them with \password afterwards.
+CREATE ROLE :"owner_role" LOGIN;
+CREATE ROLE :"app_role" LOGIN;
+CREATE ROLE :"maintenance_role" LOGIN;
 GRANT :"app_role" TO :"owner_role";
 -- Pin the search_path: the default "$user", public would look first in a
 -- schema named after the role, and schemas are what the API role creates.
@@ -80,4 +103,11 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- reporting tool. It is picked up by the next `shadoucmdb migrate` or
 -- POST /api/v1/schema-changes/reconcile, and kept up to date afterwards.
 --   CREATE ROLE cmdb_reporting NOLOGIN;
---   CREATE ROLE report_reader LOGIN PASSWORD '<another strong password>' IN ROLE cmdb_reporting;
+--   CREATE ROLE report_reader LOGIN IN ROLE cmdb_reporting;
+--   \password report_reader
+
+\echo
+\echo 'Created the roles and the database. Next, set the passwords of the three roles; they cannot log in before:'
+\echo '  \\password' :"owner_role"
+\echo '  \\password' :"app_role"
+\echo '  \\password' :"maintenance_role"

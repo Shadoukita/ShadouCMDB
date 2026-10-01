@@ -14,16 +14,34 @@
 --   2. Stop the server. Run this script as an administrator, connected to the
 --      ShadouCMDB database:
 --        psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
---             -v owner_password='<strong password>' \
---             -v maintenance_password='<strong password>' \
 --             -f sql/bootstrap/10_split_roles.sql
 --      The role names are the defaults. If your API role is named differently
 --      (the DATABASE_URL user), add -v app_role=<that name>; name the new
 --      roles with -v owner_role=... and -v maintenance_role=... if you like.
---   3. Set MIGRATION_DATABASE_URL (owner) and MAINTENANCE_DATABASE_URL
+--   3. Set the passwords of the roles the script created (it lists them at
+--      the end); they cannot log in before. \password prompts for each and
+--      sends the server only a SCRAM-SHA-256 verifier, never the password:
+--        psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
+--             -c '\password shadoucmdb_owner' -c '\password shadoucmdb_maintenance'
+--      Passwords are not psql variables (-v), which would show up in the
+--      process list and in the server log. A re-run leaves existing roles and
+--      their passwords alone. Without a terminal, \password reads the password
+--      and its confirmation from standard input; see 00_create_role_and_database.sql.
+--   4. Set MIGRATION_DATABASE_URL (owner) and MAINTENANCE_DATABASE_URL
 --      (maintenance); DATABASE_URL stays on the API role. Start the server.
 
 \set ON_ERROR_STOP on
+-- Older versions took the passwords as psql variables: stop rather than
+-- silently create the roles without the password passed in.
+\if :{?owner_password}
+  \set password_var 1
+\elif :{?maintenance_password}
+  \set password_var 1
+\endif
+\if :{?password_var}
+DO $$ BEGIN RAISE EXCEPTION 'the owner_password and maintenance_password variables are no longer read'
+  USING HINT = 'Run the script without them, then set each new role''s password with \password <role>, as described in its header.'; END $$;
+\endif
 \if :{?owner_role}
 \else
   \set owner_role shadoucmdb_owner
@@ -55,11 +73,12 @@ $$;
 SELECT NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'owner_role') AS create_owner,
        NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'maintenance_role') AS create_maintenance
 \gset
+-- No PASSWORD here: set it with \password afterwards (step 3 above).
 \if :create_owner
-CREATE ROLE :"owner_role" LOGIN PASSWORD :'owner_password';
+CREATE ROLE :"owner_role" LOGIN;
 \endif
 \if :create_maintenance
-CREATE ROLE :"maintenance_role" LOGIN PASSWORD :'maintenance_password';
+CREATE ROLE :"maintenance_role" LOGIN;
 \endif
 GRANT :"app_role" TO :"owner_role";
 -- See 00_create_role_and_database.sql: no "$user" schema lookup for these roles.
@@ -141,3 +160,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb
   GRANT USAGE, SELECT ON SEQUENCES TO :"app_role";
 
 COMMIT;
+
+\if :create_owner
+\echo 'Created role' :"owner_role" '- set its password before it can log in:  \\password' :"owner_role"
+\endif
+\if :create_maintenance
+\echo 'Created role' :"maintenance_role" '- set its password before it can log in:  \\password' :"maintenance_role"
+\endif
