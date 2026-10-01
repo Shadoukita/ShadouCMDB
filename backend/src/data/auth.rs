@@ -1,5 +1,6 @@
 //! SQL for users, sessions and permission profiles.
 
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -236,17 +237,62 @@ pub async fn load_permissions(conn: &mut PgConnection, user_id: Uuid) -> sqlx::R
     .await?;
     let mut p = Permissions::default();
     for (kind, permission, class_id, view, create, edit, delete) in rows {
-        match kind.as_str() {
-            "admin" => p.administrator = true,
-            "global" => {
-                if let Some(g) = permission.as_deref().and_then(GlobalPermission::parse) {
-                    p.merge_global(g);
-                }
-            }
-            _ => p.merge_class(class_id, ClassRights { view, create, edit, delete }),
-        }
+        merge_permission_row(
+            &mut p,
+            &kind,
+            permission.as_deref(),
+            class_id,
+            ClassRights { view, create, edit, delete },
+        );
     }
     Ok(p)
+}
+
+fn merge_permission_row(
+    p: &mut Permissions,
+    kind: &str,
+    permission: Option<&str>,
+    class_id: Option<Uuid>,
+    r: ClassRights,
+) {
+    match kind {
+        "admin" => p.administrator = true,
+        "global" => {
+            if let Some(g) = permission.and_then(GlobalPermission::parse) {
+                p.merge_global(g);
+            }
+        }
+        _ => p.merge_class(class_id, r),
+    }
+}
+
+/// Effective permissions of every user who owns an API token, in one query
+/// (a token owner without a profile is absent and holds nothing).
+pub async fn load_token_owner_permissions(conn: &mut PgConnection) -> sqlx::Result<HashMap<Uuid, Permissions>> {
+    type Row = (Uuid, String, Option<String>, Option<Uuid>, bool, bool, bool, bool);
+    let rows: Vec<Row> = sqlx::query_as(
+        "WITH owners AS (SELECT DISTINCT user_id FROM api_tokens)
+         SELECT up.user_id, 'admin', NULL::text, NULL::uuid, true, true, true, true
+         FROM owners o JOIN user_permission_profiles up ON up.user_id = o.user_id
+         JOIN permission_profiles p ON p.id = up.profile_id
+         WHERE p.is_builtin
+         UNION ALL
+         SELECT up.user_id, 'global', g.permission, NULL::uuid, false, false, false, false
+         FROM owners o JOIN user_permission_profiles up ON up.user_id = o.user_id
+         JOIN permission_profile_global_permissions g ON g.profile_id = up.profile_id
+         UNION ALL
+         SELECT up.user_id, 'class', NULL::text, c.class_id, c.can_view, c.can_create, c.can_edit, c.can_delete
+         FROM owners o JOIN user_permission_profiles up ON up.user_id = o.user_id
+         JOIN permission_profile_class_permissions c ON c.profile_id = up.profile_id",
+    )
+    .fetch_all(conn)
+    .await?;
+    let mut all: HashMap<Uuid, Permissions> = HashMap::new();
+    for (user_id, kind, permission, class_id, view, create, edit, delete) in rows {
+        let p = all.entry(user_id).or_default();
+        merge_permission_row(p, &kind, permission.as_deref(), class_id, ClassRights { view, create, edit, delete });
+    }
+    Ok(all)
 }
 
 // ---------------------------------------------------------------------------
