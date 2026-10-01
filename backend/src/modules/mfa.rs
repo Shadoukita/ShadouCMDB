@@ -426,16 +426,17 @@ async fn regenerate(
 /// and ends the user's sessions. If a profile requires MFA, the user sets it
 /// up again at their next sign-in.
 pub async fn reset(pool: &PgPool, ctx: &RequestContext, user_id: Uuid) -> Result<(), AppError> {
+    let instead = "Turn it off under DELETE /api/v1/auth/mfa/totp";
+    users::not_your_own(ctx, user_id, "reset two-factor authentication", instead)?;
     let mut tx = pool.begin().await?;
     let user = auth_data::get_user(&mut tx, user_id, true).await?.ok_or_else(|| AppError::missing("User", user_id))?;
     users::must_cover_user(&mut tx, ctx, user_id).await?;
     if data::delete_mfa(&mut tx, user_id).await? {
         let extra = json!({ "reason": "admin_reset" });
         events::mfa(&mut tx, ctx, AuditAction::MfaDisable, user_id, &user.username, extra).await?;
-        // Every session of the user ends, the caller's own excepted when they
-        // reset themselves: none may carry over to a later enrolment (GH#280).
-        let own = ctx.principal().filter(|p| p.user_id == user_id).and_then(|p| p.session_id());
-        let ended = auth_data::delete_user_sessions(&mut tx, user_id, own).await?;
+        // Every session of the user ends (the caller is never the user,
+        // GH#413): none may carry over to a later enrolment (GH#280).
+        let ended = auth_data::delete_user_sessions(&mut tx, user_id, None).await?;
         events::revoked(&mut tx, ctx, &ended, RevokeReason::MfaReset).await?;
         tracing::info!(user = %user.username, "two-factor authentication reset by an administrator");
     }
@@ -514,11 +515,11 @@ pub fn routes() -> Vec<Route> {
             .tag("Users")
             .summary("Turn a user's two-factor authentication off (lost authenticator and recovery codes)")
             .description(
-                "Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset) and ends every session of the user (`session.revoke`, reason mfa_reset; your own is kept when you reset yourself). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403).",
+                "Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset) and ends every session of the user (`session.revoke`, reason mfa_reset). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403). 409 for your own account: turn your own MFA off with `disableTotp` (DELETE /api/v1/auth/mfa/totp), which asks for your current password and a code.",
             )
             .requires(GlobalPermission::UsersManage)
             .session_only()
-            .errors(&[ErrorCode::NotFound])
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 reset(&api.pool, &api.ctx, id).await?;
                 Ok(NoContent)
@@ -570,11 +571,20 @@ pub(crate) mod tests {
         totp::current_step()
     }
 
-    /// The seed of the only `user_totp` row, decrypted. GH#189: what is stored is
-    /// not the seed but its ciphertext (48 bytes) under the test key.
+    /// The seed of the owner's `user_totp` row, decrypted. GH#189: what is
+    /// stored is not the seed but its ciphertext (48 bytes) under the test key.
     pub(crate) async fn stored_seed(pool: &PgPool) -> Vec<u8> {
-        let (user_id, stored, key_id): (Uuid, Vec<u8>, Option<i32>) =
-            sqlx::query_as("SELECT user_id, secret, key_id FROM user_totp").fetch_one(pool).await.unwrap();
+        seed_of(pool, "owner").await
+    }
+
+    async fn seed_of(pool: &PgPool, username: &str) -> Vec<u8> {
+        let (user_id, stored, key_id): (Uuid, Vec<u8>, Option<i32>) = sqlx::query_as(
+            "SELECT t.user_id, t.secret, t.key_id FROM user_totp t JOIN users u ON u.id = t.user_id WHERE u.username = $1",
+        )
+        .bind(username)
+        .fetch_one(pool)
+        .await
+        .unwrap();
         let ring = crate::secrets::Keyring::for_tests();
         assert_eq!((stored.len(), key_id), (48, Some(ring.active_id().0)), "sealed under the active key");
         let seed = sealed::open_totp_secret(&ring, user_id, key_id, &stored).expect("opens").to_vec();
@@ -608,6 +618,41 @@ pub(crate) mod tests {
 
     async fn second_step(app: &Router, challenge: &Creds, code_or_recovery: &str) -> (u16, Value, HeaderMap) {
         call(app, "POST", "/api/v1/auth/login/mfa", challenge, Some(json!({ "code": code_or_recovery }))).await
+    }
+
+    /// A second Administrator, created by `session`, signed in and enrolled,
+    /// so under requireMfa its session has proved a second factor and can
+    /// reset the owner (GH#413: the owner cannot reset themselves).
+    async fn second_administrator(app: &Router, pool: &PgPool, session: &Creds) -> Creds {
+        let administrators: Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let body = json!({ "username": "second", "displayName": "Second", "password": PASSWORD,
+            "profileIds": [administrators] });
+        let (status, v, _) = call(app, "POST", "/api/v1/admin/users", session, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+        let body = json!({ "username": "second", "password": PASSWORD });
+        let (status, me, headers) = call(app, "POST", "/api/v1/auth/login", &Creds::default(), Some(body)).await;
+        assert_eq!(status, 200, "{me}");
+        let second = session_of(&me, &headers);
+        let body = json!({ "currentPassword": PASSWORD });
+        let (status, v, _) = call(app, "POST", "/api/v1/auth/mfa/totp", &second, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+        let seed = seed_of(pool, "second").await;
+        let body = json!({ "code": totp::code_at(&seed, totp::current_step()) });
+        let (status, v, _) = call(app, "POST", "/api/v1/auth/mfa/totp/confirm", &second, Some(body)).await;
+        assert_eq!(status, 200, "{v}");
+        second
+    }
+
+    /// Signs the owner in with the password alone.
+    async fn owner_session(app: &Router) -> Creds {
+        let body = json!({ "username": "owner", "password": PASSWORD });
+        let (status, me, headers) = call(app, "POST", "/api/v1/auth/login", &Creds::default(), Some(body)).await;
+        assert_eq!(status, 200, "{me}");
+        session_of(&me, &headers)
     }
 
     async fn mfa_rows(pool: &PgPool) -> Vec<(String, Value)> {
@@ -835,6 +880,47 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
+    /// GH#413: the administration routes ask for no current password, so a
+    /// session (a stolen one, say) cannot use them on its own account: 409,
+    /// and the password, the authenticator and the other sessions stay.
+    #[tokio::test]
+    async fn the_admin_resets_refuse_the_callers_own_account() {
+        let Some(db) = scratch::database("the_admin_resets_refuse_the_callers_own_account").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, me) = setup(&app).await;
+        let owner = me["user"]["id"].as_str().unwrap().to_owned();
+        let step = settled_step().await;
+        let (secret, _) = enrol(&app, pool, &session, step).await;
+        let challenge = password_step(&app).await;
+        let (status, me_b, headers) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
+        assert_eq!(status, 200, "{me_b}");
+        let other = session_of(&me_b, &headers);
+        let hash = || {
+            sqlx::query_scalar::<_, String>("SELECT password_hash FROM users WHERE username = 'owner'").fetch_one(pool)
+        };
+        let before = hash().await.unwrap();
+        let audit = || sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log").fetch_one(pool);
+        let audited = audit().await.unwrap();
+
+        let body = json!({ "password": "a password the attacker chose" });
+        let path = format!("/api/v1/admin/users/{owner}/password");
+        let (status, v, _) = call(&app, "PUT", &path, &session, Some(body)).await;
+        assert_eq!((status, code(&v)), (409, "CONFLICT"), "{v}");
+        assert!(v["error"]["message"].as_str().unwrap().contains("/api/v1/auth/password"), "{v}");
+        let (status, v, _) = call(&app, "DELETE", &format!("/api/v1/admin/users/{owner}/mfa"), &session, None).await;
+        assert_eq!((status, code(&v)), (409, "CONFLICT"), "{v}");
+        assert!(v["error"]["message"].as_str().unwrap().contains("/api/v1/auth/mfa/totp"), "{v}");
+
+        assert_eq!(hash().await.unwrap(), before, "the password is unchanged");
+        assert_eq!(audit().await.unwrap(), audited, "nothing was written");
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/mfa", &session, None).await;
+        assert_eq!((status, &v["totpEnabled"]), (200, &json!(true)), "MFA is still set up");
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &other, None).await;
+        assert_eq!(status, 200, "the other session stays: {v}");
+        password_step(&app).await;
+        db.drop().await;
+    }
+
     /// With the session and the password, guessing the code to turn MFA off
     /// or get new recovery codes locks like guessing the password: a right
     /// password does not clear the count, not even on a password-only
@@ -956,10 +1042,15 @@ pub(crate) mod tests {
         let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &session, None).await;
         assert_eq!((status, &v["data"][0]["mfaEnabled"]), (200, &json!(true)));
 
-        // Reset by an administrator (here: themselves): back to enrolment.
+        // Reset by another administrator: the owner's session ends, and the
+        // next one is back to enrolment.
+        let second = second_administrator(&app, pool, &session).await;
         let reset = format!("/api/v1/admin/users/{owner}/mfa");
-        let (status, _, _) = call(&app, "DELETE", &reset, &session, None).await;
-        assert_eq!(status, 204);
+        let (status, v, _) = call(&app, "DELETE", &reset, &second, None).await;
+        assert_eq!(status, 204, "{v}");
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &session, None).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "the owner's session after the reset");
+        let session = owner_session(&app).await;
         let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &session, None).await;
         assert_eq!((status, code(&v)), (403, "MFA_ENROLMENT_REQUIRED"));
         let rows = mfa_rows(pool).await;
@@ -1155,13 +1246,18 @@ pub(crate) mod tests {
         let verify = format!("UPDATE sessions SET mfa_verified = true WHERE id = {latest}");
         sqlx::query(sqlx::AssertSqlSafe(verify)).execute(pool).await.unwrap();
 
-        // An administrator's reset (here: the owner themselves) ends every
-        // other session; the caller's own is limited to enrolment again.
-        let (status, _, _) = call(&app, "DELETE", &format!("/api/v1/admin/users/{owner}/mfa"), &session, None).await;
-        assert_eq!(status, 204);
+        // Another administrator's reset ends every session of the owner; the
+        // next one is limited to enrolment again.
+        let second = second_administrator(&app, pool, &session).await;
+        let reset = format!("/api/v1/admin/users/{owner}/mfa");
+        let (status, v, _) = call(&app, "DELETE", &reset, &second, None).await;
+        assert_eq!(status, 204, "{v}");
         let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &c, None).await;
         assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "session C after the reset");
-        assert_eq!(gated(session.clone()).await, enrolment_required, "the caller's session after the reset");
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &session, None).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "the owner's session after the reset");
+        let session = owner_session(&app).await;
+        assert_eq!(gated(session.clone()).await, enrolment_required, "a new session after the reset");
         // Setting it up again brings no ended session back.
         let (secret, _) = enrol(&app, pool, &session, step).await;
         assert_eq!(gated(session.clone()).await.0, 200);
