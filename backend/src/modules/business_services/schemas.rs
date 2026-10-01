@@ -581,8 +581,9 @@ fn principal_inactive_schema() -> Schema {
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 pub struct PrincipalQuery {
-    #[param(required = true, schema_with = principal_q_schema)]
-    pub q: String,
+    /// Required; checked after the permission, so a caller without it gets 403 whatever they send
+    #[param(required = false, schema_with = principal_q_schema)]
+    pub q: Option<String>,
     #[param(schema_with = principal_kind_schema)]
     pub kind: Option<PrincipalKind>,
     #[param(required = false, schema_with = principal_inactive_schema)]

@@ -801,7 +801,9 @@ pub async fn principals(pool: &PgPool, ctx: &RequestContext, q: &PrincipalQuery)
             "Looking up owners needs the edit permission on business services or the users.manage permission",
         ));
     }
-    let text = q.q.trim();
+    let Some(text) = q.q.as_deref().map(str::trim) else {
+        return Err(AppError::validation(vec![query_error("q", "Required", "required")]));
+    };
     if text.chars().count() < 2 {
         return Err(AppError::validation(vec![query_error(
             "q",

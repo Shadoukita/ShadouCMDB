@@ -1252,6 +1252,8 @@ async fn the_owner_picker_is_a_bounded_lookup() {
         json!([{ "kind": "group", "id": v["data"][0]["id"], "displayName": "Smith family", "active": true }])
     );
     assert_eq!(call(&w.app, "GET", "/api/v1/principals?q=smith", &viewer, None).await.0, 403);
+    // The permission is checked before the query.
+    assert_eq!(call(&w.app, "GET", "/api/v1/principals", &viewer, None).await.0, 403);
     for q in ["s", "%20s%20", &"x".repeat(101)] {
         let (status, _, _) = call(&w.app, "GET", &format!("/api/v1/principals?q={q}"), &editor, None).await;
         assert_eq!(status, 400, "{q:?}");

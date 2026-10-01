@@ -615,6 +615,58 @@ async function main() {
   const exportRows = (await get(`/api/v1/audit-log?action=export&entityId=${database.id}`)).json;
   check(exportRows.data.length === 1 && exportRows.data[0].newValue.kind === 'impact', 'the CSV export is audited');
 
+  // --- Business services ----------------------------------------------------------
+  console.log('\n# Business services');
+  const bsSettings = (await get('/api/v1/settings/business-services')).json;
+  check(bsSettings.canView && bsSettings.canEdit && bsSettings.limits.maxBatch === 500, 'business service settings');
+  const bsClass = (await get(`/api/v1/ci-classes/${bsSettings.classId}`)).json;
+  check(bsClass.systemRole === 'business_service', 'the business service class reports its system role');
+  // A service of our own, with the class's required fields filled in.
+  const bsFields = (await get(`/api/v1/ci-classes/${bsSettings.classId}/attributes`)).json.data as Json[];
+  const bsAttributes: Json = {};
+  for (const f of bsFields.filter((f: Json) => f.isRequired)) {
+    if (f.dataType === 'lookup') {
+      bsAttributes[f.key] = (await get(`/api/v1/lookup-list-values?listId=${f.lookupListId}&limit=1`)).json.data[0].id;
+    } else {
+      bsAttributes[f.key] = f.dataType === 'enum' ? f.enumValues[0] : ['number', 'integer'].includes(f.dataType) ? 1 : f.key === 'name' ? `smoke-svc-${RUN}` : `smoke-${RUN}`;
+    }
+  }
+  if (!('name' in bsAttributes) && bsFields.some((f: Json) => f.key === 'name')) bsAttributes.name = `smoke-svc-${RUN}`;
+  const svc = (await post('/api/v1/configuration-items', { classId: bsSettings.classId, ident: `SMOKE-SVC-${RUN}`, attributes: bsAttributes })).json;
+  const added = (await post(`/api/v1/business-services/${svc.id}/members`, { memberIds: [server.id, database.id] }, 200)).json;
+  check(added.added.length === 2 && added.alreadyMembers.length === 0, 'members added');
+  const addedAgain = (await post(`/api/v1/business-services/${svc.id}/members`, { memberIds: [server.id] }, 200)).json;
+  check(addedAgain.added.length === 0 && addedAgain.alreadyMembers[0] === server.id, 'a member added again is reported, not an error');
+  const self = await post(`/api/v1/business-services/${svc.id}/members`, { memberIds: [svc.id] }, 400);
+  check(self.json.error.details[0].code === 'membership_self', 'a service cannot include itself');
+  await post('/api/v1/relationships', { relationshipTypeId: bsSettings.memberRelationshipTypeId, sourceCiId: svc.id, targetCiId: app.id }, 400);
+  const svcDetail = (await get(`/api/v1/business-services/${svc.id}`)).json;
+  check(svcDetail.memberCount === 2 && svcDetail.visibility === 'all_classes' && svcDetail.classId === bsSettings.classId, 'service detail with member count');
+  const svcList = (await get(`/api/v1/business-services?q=SMOKE-SVC-${RUN}&sort=-memberCount`)).json;
+  check(svcList.data.length === 1 && svcList.data[0].memberCount === 2, 'service list');
+  const svcMembers = (await get(`/api/v1/business-services/${svc.id}/members?ciId=${server.id}`)).json;
+  check(svcMembers.page.total === 1 && svcMembers.data[0].ci.id === server.id, 'member list filtered by ciId');
+  const partOf = (await get(`/api/v1/configuration-items/${server.id}/business-services`)).json;
+  check(partOf.data.some((e: Json) => e.service.id === svc.id && e.direct), 'the server is part of the service');
+  const principals = (await get(`/api/v1/principals?q=${ADMIN_USERNAME.slice(0, 5)}&kind=user`)).json;
+  check(principals.data.some((p: Json) => p.id === adminMe.user.id && p.username === ADMIN_USERNAME), 'owner picker finds the administrator');
+  await get('/api/v1/principals?q=a', 400);
+  const owners = (await call('PUT', `/api/v1/business-services/${svc.id}/owners`,
+    { version: svcDetail.version, technical: [{ kind: 'user', id: adminMe.user.id }], business: [] }, 200)).json;
+  check(owners.technical[0]?.displayName === 'Smoke admin' && !('username' in owners.technical[0]), 'owners by display name only');
+  await call('PUT', `/api/v1/business-services/${svc.id}/owners`, { version: svcDetail.version, technical: [], business: [] }, 409);
+  const svcCsv = await get(`/api/v1/business-services/${svc.id}/members/export`);
+  check(
+    svcCsv.headers.get('content-type') === 'text/csv; charset=utf-8' &&
+      new TextDecoder().decode(svcCsv.bytes).split('\r\n')[1] === '"ci_id","ident","name","class","criticality","is_service","active","added_at"',
+    'service member CSV export',
+  );
+  await post(`/api/v1/business-services/${svc.id}/members/remove`, { memberIds: [database.id] }, 204);
+  await del(`/api/v1/business-services/${svc.id}/members/${server.id}`);
+  await del(`/api/v1/business-services/${svc.id}/members/${server.id}`, 404);
+  const svcHistory = (await get(`/api/v1/audit-log?entityId=${svc.id}&action=update`)).json;
+  check(svcHistory.data.some((e: Json) => e.newValue?.members?.added?.length === 2) && svcHistory.data.some((e: Json) => e.newValue?.owners), 'membership and owner changes in the service history');
+
   // --- Search -------------------------------------------------------------------
   console.log('\n# Search');
   const s1 = (await get(`/api/v1/search?q=smoke-srv-${RUN}.example`)).json;
