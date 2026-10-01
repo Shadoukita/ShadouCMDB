@@ -2428,7 +2428,7 @@ export interface paths {
         };
         /**
          * List API tokens (paginated, searchable, filterable by owner, creator and status); never their secrets
-         * @description Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. Lists your own tokens and those of users whose permissions you hold yourself (all tokens for an administrator); the page total counts the same rows. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["listApiTokens"];
         put?: never;
@@ -2452,7 +2452,7 @@ export interface paths {
         };
         /**
          * Get one API token (without its secret)
-         * @description Requires `users.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. 404 when the owner holds permissions you do not (your own tokens are always readable). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["getApiToken"];
         put?: never;

@@ -219,8 +219,29 @@ async fn load(conn: &mut PgConnection, id: Uuid, for_update: bool) -> Result<Api
     Ok(row.into())
 }
 
-pub async fn list(pool: &PgPool, q: &ApiTokenList) -> Result<Page<ApiToken>, AppError> {
+/// The owners whose tokens the caller may see, as for revoking: themselves and
+/// the users whose permissions they hold (GH#441). `None`: every owner (an
+/// administrator, or no user at all).
+async fn visible_owners(conn: &mut PgConnection, ctx: &RequestContext) -> Result<Option<Vec<Uuid>>, AppError> {
+    let Some(me) = ctx.principal().filter(|me| !me.permissions.administrator) else { return Ok(None) };
+    let owners = auth_data::load_token_owner_permissions(conn).await?;
+    // Owners absent from the map hold no profile, so anyone covers them; they
+    // are excluded only by an explicit list, hence the NOT ANY below.
+    let hidden = owners
+        .into_iter()
+        .filter(|(id, theirs)| *id != me.user_id && !me.permissions.covers(theirs))
+        .map(|(id, _)| id)
+        .collect();
+    Ok(Some(hidden))
+}
+
+pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &ApiTokenList) -> Result<Page<ApiToken>, AppError> {
+    let mut conn = pool.acquire().await?;
+    let hidden = visible_owners(&mut conn, ctx).await?;
     let filter = |w: &mut Where<'_>| {
+        if let Some(ids) = &hidden {
+            w.and().push("NOT (t.user_id = ANY(").push_bind(ids.clone()).push("))");
+        }
         if let Some(text) = &q.q {
             let p = like_pattern(text);
             w.and()
@@ -257,21 +278,24 @@ pub async fn list(pool: &PgPool, q: &ApiTokenList) -> Result<Page<ApiToken>, App
         _ => "t.created_at",
     };
     let order = format!("{column} {} NULLS LAST, t.id", q.sort.dir());
-    let (rows, total) = crud::select_page::<TokenRow>(
-        &mut *pool.acquire().await?,
-        &data::FROM,
-        &data::COLUMNS,
-        &filter,
-        &order,
-        q.limit,
-        q.offset,
-    )
-    .await?;
+    let (rows, total) =
+        crud::select_page::<TokenRow>(&mut conn, &data::FROM, &data::COLUMNS, &filter, &order, q.limit, q.offset)
+            .await?;
     Ok(Page { data: rows.into_iter().map(ApiToken::from).collect(), page: q.page_meta(total) })
 }
 
-pub async fn get(pool: &PgPool, id: Uuid) -> Result<ApiToken, AppError> {
-    load(&mut *pool.acquire().await?, id, false).await
+/// 404, not 403, for a token whose owner the caller does not cover: the list
+/// does not show it either (GH#441).
+pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<ApiToken, AppError> {
+    let mut conn = pool.acquire().await?;
+    let token = load(&mut conn, id, false).await?;
+    if let Some(me) = ctx.principal()
+        && me.user_id != token.user_id
+        && !me.permissions.covers(&auth_data::load_permissions(&mut conn, token.user_id).await?)
+    {
+        return Err(AppError::missing("API token", id));
+    }
+    Ok(token)
 }
 
 pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> Result<CreatedApiToken, AppError> {
@@ -490,19 +514,21 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, BASE, "listApiTokens")
             .tag(TAG)
             .summary("List API tokens (paginated, searchable, filterable by owner, creator and status); never their secrets")
+            .description("Lists your own tokens and those of users whose permissions you hold yourself (all tokens for an administrator); the page total counts the same rows.")
             .requires(manage)
             .session_only()
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ApiTokenList>, NoBody>| async move {
-                Ok(Json(list(&api.pool, &q).await?))
+                Ok(Json(list(&api.pool, &api.ctx, &q).await?))
             }),
         route(Method::GET, BY_ID, "getApiToken")
             .tag(TAG)
             .summary("Get one API token (without its secret)")
+            .description("404 when the owner holds permissions you do not (your own tokens are always readable).")
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(get(&api.pool, id).await?))
+                Ok(Json(get(&api.pool, &api.ctx, id).await?))
             }),
         route(Method::POST, BASE, "createApiToken")
             .tag(TAG)
@@ -1392,6 +1418,105 @@ pub(crate) mod tests {
         let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &tok, None).await;
         assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
         assert!(v["error"]["message"].as_str().unwrap().contains("must use two-factor authentication"), "{v}");
+
+        db.drop().await;
+    }
+
+    /// A user manager sees the tokens of the users they cover and their own,
+    /// as for revoking, but not an administrator's: not in the list or its
+    /// total, and 404 on reading one (GH#441).
+    #[tokio::test]
+    async fn a_user_manager_sees_only_the_tokens_of_users_they_cover() {
+        let Some(db) = scratch::database("a_user_manager_sees_only_the_tokens_of_users_they_cover").await else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let administrators: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let managers: uuid::Uuid =
+            sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ('User managers') RETURNING id")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        sqlx::query(
+            "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'users.manage')",
+        )
+        .bind(managers)
+        .execute(pool)
+        .await
+        .unwrap();
+        let mut ids = Vec::new();
+        for (name, profiles) in [("alice", json!([managers])), ("bob", json!([]))] {
+            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+                "profileIds": profiles });
+            let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            ids.push(v["id"].as_str().unwrap().to_owned());
+        }
+        let bob_id = ids[1].clone();
+        let login = json!({ "username": "alice", "password": "alice first password" });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+        assert_eq!(status, 200, "{me}");
+        let alice = session_of(&me, &headers);
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let mint = async |who: &Creds, name: &str, owner: Option<&str>| {
+            let mut body = json!({ "name": name, "profileId": managers, "expiresAt": expires });
+            if let Some(owner) = owner {
+                body["userId"] = json!(owner);
+            }
+            let (status, v, _) = call(&app, "POST", super::BASE, who, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            v["token"]["id"].as_str().unwrap().to_owned()
+        };
+        let admins = mint(&admin, "admin's own", None).await;
+        let alices = mint(&alice, "alice's own", None).await;
+        let bobs = mint(&alice, "for bob", Some(&bob_id)).await;
+
+        let names = |v: &Value| {
+            let mut n: Vec<String> =
+                v["data"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect();
+            n.sort();
+            n
+        };
+        let (status, v, _) = call(&app, "GET", super::BASE, &alice, None).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(names(&v), ["alice's own", "for bob"], "{v}");
+        assert_eq!(v["page"]["total"], 2, "{v}");
+        let (status, v, _) = call(&app, "GET", &format!("{}?q=admin", super::BASE), &alice, None).await;
+        assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(0)), "{v}");
+        let (status, v, _) = call(&app, "GET", &format!("{}/{admins}", super::BASE), &alice, None).await;
+        assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+        for id in [&alices, &bobs] {
+            let (status, v, _) = call(&app, "GET", &format!("{}/{id}", super::BASE), &alice, None).await;
+            assert_eq!(status, 200, "{v}");
+        }
+
+        // The administrator sees everything.
+        let (status, v, _) = call(&app, "GET", super::BASE, &admin, None).await;
+        assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(3)), "{v}");
+        let (status, v, _) = call(&app, "GET", &format!("{}/{admins}", super::BASE), &admin, None).await;
+        assert_eq!(status, 200, "{v}");
+
+        // Once Bob is promoted, the token she minted for him is hidden too.
+        let promote = json!({ "profileIds": [administrators] });
+        let (status, v, _) = call(&app, "PATCH", &format!("/api/v1/admin/users/{bob_id}"), &admin, Some(promote)).await;
+        assert_eq!(status, 200, "{v}");
+        let (status, v, _) = call(&app, "GET", super::BASE, &alice, None).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(names(&v), ["alice's own"], "{v}");
+        assert_eq!(v["page"]["total"], 1, "{v}");
+        let (status, v, _) = call(&app, "GET", &format!("{}/{bobs}", super::BASE), &alice, None).await;
+        assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
 
         db.drop().await;
     }
