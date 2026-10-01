@@ -59,7 +59,7 @@ pub fn generate_key(args: GenerateKeyArgs) -> anyhow::Result<()> {
     #[cfg(not(unix))]
     println!(
         "  2. Restrict the file's ACL, e.g. icacls \"{}\" /inheritance:r /grant:r \"Administrators:F\" \"SYSTEM:F\" \
-         \"NT AUTHORITY\\LocalService:R\"",
+         \"NT SERVICE\\ShadouCMDB:R\"",
         path.display()
     );
     println!("  3. Keep a copy apart from the database backups (password vault or escrow): without it, restored");

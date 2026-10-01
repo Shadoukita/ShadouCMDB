@@ -271,15 +271,33 @@ jobs:
           @(
             "PGHOST=$env:PGHOST", "PGPORT=$env:PGPORT", "PGDATABASE=$env:PGDATABASE",
             "PGUSER=$env:PGUSER", "PGPASSWORD=$env:PGPASSWORD", 'DATABASE_SSL=disable',
-            'API_HOST=127.0.0.1', 'API_PORT=3000', "ENCRYPTION_KEY_FILE='$data\encryption.key'"
+            'API_HOST=127.0.0.1', 'API_PORT=3000', "ENCRYPTION_KEY_FILE='$data\encryption.key'",
+            "SETUP_TOKEN_FILE='$data\state\setup-token'"
           ) | Set-Content -Encoding ascii "$data\shadoucmdb.env"
-          icacls $data /grant 'NT AUTHORITY\LocalService:(OI)(CI)M' | Out-Null
-          # deploy/windows/README.txt: the key is read-only for the service, outside the inherited Modify grant.
+          # deploy/windows/README.txt: the service's own virtual account reads the settings and the key,
+          # and writes only to logs\ and state\.
+          New-Item -ItemType Directory -Force "$data\logs", "$data\state" | Out-Null
+          icacls $data /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' | Out-Null
           & $exe generate-encryption-key --out "$data\encryption.key"; if ($LASTEXITCODE) { throw 'generate-encryption-key failed' }
-          icacls "$data\encryption.key" /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' 'NT AUTHORITY\LocalService:R' | Out-Null
 
           & $exe --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
           if ($LASTEXITCODE) { throw 'service install failed' }
+          $account = (Get-CimInstance Win32_Service -Filter "Name='ShadouCMDB'").StartName
+          "Service account: $account"
+          if ($account -ne 'NT SERVICE\ShadouCMDB') { throw "service runs as $account, not its virtual account" }
+          $svc = 'NT SERVICE\ShadouCMDB'
+          icacls $data /grant "${svc}:RX" | Out-Null
+          icacls "$data\shadoucmdb.env" /grant "${svc}:R" | Out-Null
+          icacls "$data\encryption.key" /inheritance:r /grant:r 'Administrators:F' 'SYSTEM:F' "${svc}:R" | Out-Null
+          icacls "$data\logs" /grant "${svc}:(OI)(CI)M" | Out-Null
+          icacls "$data\state" /grant "${svc}:(OI)(CI)M" | Out-Null
+          icacls $data /T /C
+          if ((icacls $data /T /C | Out-String) -match 'LocalService') { throw 'LocalService still has access to the data folder' }
+          foreach ($file in "$data\shadoucmdb.env", "$data\encryption.key") {
+            $grant = (Get-Acl $file).Access | Where-Object { $_.IdentityReference -eq $svc }
+            if ($grant.FileSystemRights -match 'Write|Modify|FullControl|Delete|ChangePermissions|TakeOwnership') { throw "$svc can change $file" }
+          }
+
           Start-Service ShadouCMDB
           Get-Service ShadouCMDB | Format-List Name, Status, StartType
           $ready = $null
