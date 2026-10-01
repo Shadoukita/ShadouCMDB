@@ -120,7 +120,7 @@ SELECT format('GRANT CONNECT ON DATABASE %I TO %I, %I', current_database(), :'ap
 -- New areas are new schemas, created by the API.
 SELECT format('GRANT CREATE ON DATABASE %I TO %I', current_database(), :'app_role') \gexec
 
--- Same grants as migrations 0007, 0008, 0018 and 0021 make on a fresh three-role install.
+-- Same grants as migrations 0007, 0008, 0018, 0021 and 0038 make on a fresh three-role install.
 GRANT USAGE ON SCHEMA cmdb TO :"app_role", :"maintenance_role";
 GRANT EXECUTE ON FUNCTION cmdb.prune_audit_log(interval, text, boolean, text) TO :"maintenance_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA cmdb TO :"app_role";
@@ -129,8 +129,10 @@ REVOKE UPDATE, DELETE, TRUNCATE ON cmdb.audit_log, cmdb.schema_changes FROM :"ap
 GRANT REFERENCES ON cmdb.configuration_items, cmdb.lookup_list_values TO :"app_role";
 GRANT SELECT ON public._sqlx_migrations TO :"app_role";
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._sqlx_migrations FROM :"app_role";
--- Only the audit_log trigger moves the hash-chain head (migration 0018).
+-- Only the audit_log trigger moves the hash-chain head (migration 0018); the
+-- API role reads it, for `shadoucmdb backup` (migration 0038).
 REVOKE ALL ON cmdb.audit_log_chain_head FROM :"app_role";
+GRANT SELECT ON cmdb.audit_log_chain_head TO :"app_role";
 -- Server keys are read and added, never changed (migration 0021).
 REVOKE UPDATE, DELETE, TRUNCATE ON cmdb.server_keys FROM :"app_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb
