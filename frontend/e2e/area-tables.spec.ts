@@ -1,7 +1,7 @@
 import type { APIRequestContext, APIResponse, Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { AREAS_IMPORT_STATE, AREAS_STATE } from "./global-setup";
-import { apiGet, apiSend, applySchemaChange, expect, snap, test } from "./support";
+import { apiGet, apiSend, applySchemaChange, csrf, expect, snap, test } from "./support";
 
 // An area is a PostgreSQL schema and each of its types a real table: "Bestand" with "Netzwerk" and "Virtuelle
 // Maschinen" becomes bestand.netzwerk and bestand.virtuelle_maschinen, one typed column per field. Everything is
@@ -366,7 +366,7 @@ test.describe("the source install", () => {
   });
 
   test("the export carries the area and the technical names", async ({ request }) => {
-    const res = await request.get("/api/v1/admin/config/export");
+    const res = await request.get("/api/v1/admin/config/export", { headers: { "X-CSRF-Token": await csrf(request) } });
     expect(res.ok(), `export → ${res.status()}`).toBeTruthy();
     exported = await res.json();
     expect(exported.dataModel.areas.map((a) => a.key)).toContain("bestand");

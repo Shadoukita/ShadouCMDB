@@ -122,6 +122,9 @@ function checkResponse(op: Op, status: number, json: unknown): void {
   }
 }
 
+/** The audited exports are GETs that still need the CSRF token: `.csrf_on_read()` in the backend, `CSRF_READS` in `frontend/src/api/client.ts`. */
+const CSRF_READS = /\/api\/v1\/(configuration-items\/[^/]+\/impact|business-services\/[^/]+\/members|admin\/config)\/export$/;
+
 async function call(
   method: string,
   url: string,
@@ -134,7 +137,7 @@ async function call(
     method,
     headers: {
       ...(me ? { cookie: me.cookie } : {}),
-      ...(me && method !== 'GET' ? { 'x-csrf-token': me.csrf } : {}),
+      ...(me && (method !== 'GET' || CSRF_READS.test(url.split('?')[0]!)) ? { 'x-csrf-token': me.csrf } : {}),
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       ...headers,
     },
@@ -605,6 +608,9 @@ async function main() {
   await get(`/api/v1/configuration-items/${server.id}/impact?depth=0`, 400);
   await get(`/api/v1/configuration-items/${server.id}/impact?relationshipTypeId=00000000-0000-4000-8000-000000000000`, 400);
   await get(`/api/v1/configuration-items/00000000-0000-4000-8000-000000000000/impact`, 404);
+  // A session GET without the CSRF token (a cross-site navigation) is refused before any work or audit row.
+  await call('GET', `/api/v1/configuration-items/${database.id}/impact/export?direction=both&depth=2`, undefined, 403, { 'x-csrf-token': '' }).then((r) =>
+    check(r.json.error?.code === 'CSRF_TOKEN_INVALID', 'an export GET without the CSRF token is rejected'));
   // Exported from the database: the export row joins that CI's history (the server's is checked below).
   const csv = await get(`/api/v1/configuration-items/${database.id}/impact/export?direction=both&depth=2`);
   const csvLines = new TextDecoder().decode(csv.bytes).split('\r\n');
