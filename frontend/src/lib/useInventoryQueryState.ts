@@ -34,6 +34,11 @@ export interface QueryStateOptions {
   lookupValueIds?: (lookups: UiListFilters["lookups"]) => string | undefined | null;
   /** Attribute keys of the listed class, or null while they load (or with no single class). */
   attributeKeys?: MaybeRefOrGetter<ReadonlySet<string> | null>;
+  /**
+   * True while a saved view (`view=<id>` alone) or the user's default view is about to be
+   * written into the URL: the list waits, and the list view's default filters stay out.
+   */
+  holdOff?: MaybeRefOrGetter<boolean>;
   /** For tests; the app uses the current route and router. */
   route?: Pick<RouteLocationNormalizedLoaded, "query">;
   router?: Pick<Router, "push" | "replace">;
@@ -92,10 +97,13 @@ export function useInventoryQueryState(options: QueryStateOptions) {
       return lookups && Object.keys(lookups).length > 0 ? options.lookupValueIds?.(lookups) : undefined;
     });
     watch(
-      () => [defaultsFor.value, currentClass.value, toValue(options.settingsLoaded), listView.value, defaultLookupIds.value] as const,
+      () =>
+        [defaultsFor.value, currentClass.value, toValue(options.settingsLoaded), listView.value, defaultLookupIds.value, toValue(options.holdOff)] as const,
       ([forId]) => {
         if (!forId) return;
-        if (forId !== classId.value) return void (defaultsFor.value = null);
+        if (toValue(options.holdOff)) return; // a saved default comes first (§1.3 step 3)
+        // Gone, or a saved view has written its state into the URL meanwhile.
+        if (forId !== classId.value || !Object.keys(route.query).every((k) => k === "classId")) return void (defaultsFor.value = null);
         if (!currentClass.value || !toValue(options.settingsLoaded)) return;
         const f = listView.value?.defaultFilters;
         if (!hasFilters(f)) return void (defaultsFor.value = null);
@@ -121,6 +129,7 @@ export function useInventoryQueryState(options: QueryStateOptions) {
    */
   const settled = computed(
     () =>
+      !toValue(options.holdOff) &&
       defaultsFor.value === null &&
       ((!!get("sort") && !!get("limit")) || !classId.value || (toValue(options.classes) !== undefined && toValue(options.settingsLoaded))),
   );
@@ -128,6 +137,7 @@ export function useInventoryQueryState(options: QueryStateOptions) {
   const filters = computed(() => ({
     q: get("q") || undefined,
     classId: classId.value || undefined,
+    includeSubclasses: classId.value && get("includeSubclasses") === "false" ? ("false" as const) : undefined,
     lookupValueId: get("lookupValueId") || undefined,
     criticalityValueId: get("criticalityValueId") || undefined,
     ipWithin: get("ipWithin") || undefined,

@@ -2651,3 +2651,113 @@ dialog.member-picker td .badge {
   font-weight: normal;
   font-size: var(--fs-sm);
 }
+
+/* ---------- Saved views: the View menu at the start of the list toolbar ---------- */
+.view-menu {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.view-menu > .label {
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+}
+.view-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.view-menu-button {
+  max-width: 280px;
+}
+.view-menu-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.view-modified {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-text);
+}
+.view-menu-popup {
+  width: 320px;
+  padding: var(--sp-2) 0;
+}
+.view-menu-popup .field {
+  padding: 0 var(--sp-3) var(--sp-2);
+}
+.view-menu-popup .field input {
+  width: 100%;
+}
+.view-menu-status {
+  margin: 0 var(--sp-3) var(--sp-2);
+}
+.view-menu-popup ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.view-menu-heading {
+  display: block;
+  padding: var(--sp-2) var(--sp-4) var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-text-muted);
+}
+.view-menu-popup [role^="menuitem"] {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 28px;
+  padding: var(--sp-1) var(--sp-4);
+  color: var(--c-text);
+  cursor: pointer;
+}
+.view-menu-popup [role^="menuitem"] .check {
+  flex: 0 0 1em;
+}
+.view-menu-popup [role^="menuitem"]:hover,
+.view-menu-popup [role^="menuitem"]:focus-visible {
+  background: var(--c-row-hover);
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.view-menu-popup [role^="menuitem"][aria-disabled="true"] {
+  color: var(--c-text-muted);
+  cursor: not-allowed;
+}
+.view-menu-popup [role^="menuitem"].danger {
+  color: var(--c-danger-text);
+}
+.view-menu-popup [role="separator"] {
+  margin: var(--sp-1) 0;
+  border-top: 1px solid var(--c-divider);
+}
+/* Banners and errors of the View menu take a row of their own under the toolbar's controls. */
+.view-menu-banner {
+  flex-basis: 100%;
+  order: 99;
+  margin-bottom: 0;
+}
+.view-menu-banner > .alert {
+  margin-bottom: 0;
+}
+dialog.manage-views {
+  width: min(1040px, 96vw);
+}
+.manage-views-heading {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-md);
+}
+@media (max-width: 480px) {
+  .view-menu {
+    position: static;
+  }
+}

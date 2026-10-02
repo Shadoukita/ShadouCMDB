@@ -11,6 +11,7 @@ import DataModelEmpty from "../components/DataModelEmpty.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import InventoryFilters from "../components/InventoryFilters.vue";
+import SavedViewMenu from "../components/savedViews/SavedViewMenu.vue";
 import LoadingState from "../components/LoadingState.vue";
 import PaginationBar from "../components/PaginationBar.vue";
 import { useAppSettings } from "../lib/appSettings";
@@ -18,6 +19,8 @@ import { useDebounced, useDocumentTitle } from "../lib/composables";
 import { viewableClasses } from "../lib/permissions";
 import { ATTRIBUTE_PREFIX, BUILTIN_FIELDS, fieldLabel, isSortableAttribute, listViewFor, lookupValueIds } from "../lib/uiSettings";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
+import { useSavedViews } from "../api/savedViews";
+import { useSavedViewSelection } from "../lib/useSavedViewSelection";
 import { useImportAccess } from "../lib/useImportAccess";
 import { useSessionStore } from "../stores/session";
 
@@ -27,14 +30,23 @@ import { useSessionStore } from "../stores/session";
  * so a view survives reload and can be bookmarked or shared. Filtering and paging
  * happen in the API. What the URL leaves out comes from the class's list view
  * (Administration › Customization › List views), then the built-in defaults:
- * see lib/inventoryQuery.
+ * see lib/inventoryQuery. Ahead of those come a saved view (`view=<id>`) and the
+ * user's default view for the list (lib/useSavedViewSelection).
  */
 const classes = useCiClasses();
 const settings = useAppSettings();
 const lookupLists = useLookupLists();
 const lookupValues = useAllLookupListValues();
 const attrKeys = computed(() => (attrs.data.value ? new Set(attrs.data.value.map((a) => a.key)) : null));
+const savedViews = useSavedViews("inventory");
+const selection = useSavedViewSelection({
+  context: "inventory",
+  views: () => savedViews.data.value?.data,
+  failed: () => savedViews.isError.value,
+  classes: () => classes.data.value,
+});
 const state = useInventoryQueryState({
+  holdOff: () => selection.pending.value,
   context: "inventory",
   classes: () => classes.data.value,
   settingsLoaded: () => settings.query.isFetched.value,
@@ -101,8 +113,18 @@ const crumbs = computed(() =>
     : [{ label: "Inventory" }],
 );
 
+/** Keys of the classes, lookup lists and values, to save the URL's ids in a view. */
+const catalogue = computed(() =>
+  classes.data.value && lookupLists.data.value && lookupValues.data.value
+    ? { classes: classes.data.value, lists: lookupLists.data.value, values: lookupValues.data.value }
+    : null,
+);
+/** The total once the list for this URL has loaded (not the previous list's, kept while it loads). */
+const settledTotal = computed(() => (list.data.value && !list.isPlaceholderData.value && !list.isFetching.value ? total.value : undefined));
+
 function clearFilters() {
   qText.value = "";
+  selection.skipNextDefault();
   state.clearFilters();
 }
 </script>
@@ -123,6 +145,7 @@ function clearFilters() {
 
   <section class="panel" aria-label="Inventory">
     <form class="toolbar" role="search" @submit.prevent>
+      <SavedViewMenu context="inventory" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />
       <div class="field search">
         <label for="f-q">Search</label>
         <input id="f-q" v-model="qText" type="search" placeholder="Label, ident, attribute values…" />

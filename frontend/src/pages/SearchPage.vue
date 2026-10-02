@@ -1,26 +1,41 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
+import { useAllLookupListValues, useLookupLists } from "../api/datamodel";
 import { useCiClasses, useSearch } from "../api/queries";
+import { useSavedViews } from "../api/savedViews";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import InventoryFilters from "../components/InventoryFilters.vue";
+import SavedViewMenu from "../components/savedViews/SavedViewMenu.vue";
 import LoadingState from "../components/LoadingState.vue";
 import PaginationBar from "../components/PaginationBar.vue";
 import CiStateBadge from "../components/CiStateBadge.vue";
 import { useDocumentTitle } from "../lib/composables";
 import { plural } from "../lib/format";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
+import { useSavedViewSelection } from "../lib/useSavedViewSelection";
 
 /**
  * Full global-search results (ranked by the API), with the field that matched.
  * The term and the filters live in the URL (/search?q=…&classId=…&active=all),
  * in the same state as the inventory's (lib/inventoryQuery): search has no sort
- * (it is ranked) and no column choice.
+ * (it is ranked) and no column choice. A saved search view (`view=<id>`) holds the
+ * term and the filters; search views are never a default (saved-views spec D7).
  */
 const classes = useCiClasses();
+const lookupLists = useLookupLists();
+const lookupValues = useAllLookupListValues();
+const savedViews = useSavedViews("search");
+const selection = useSavedViewSelection({
+  context: "search",
+  views: () => savedViews.data.value?.data,
+  failed: () => savedViews.isError.value,
+  classes: () => classes.data.value,
+});
 const state = useInventoryQueryState({
+  holdOff: () => selection.pending.value,
   context: "search",
   classes: () => classes.data.value,
   settingsLoaded: true,
@@ -35,6 +50,14 @@ const filters = computed(() => {
 const search = useSearch(q, limit, offset, filters);
 useDocumentTitle(() => (q.value ? `Search: ${q.value}` : "Search"));
 const rows = computed(() => search.data.value?.data ?? []);
+const catalogue = computed(() =>
+  classes.data.value && lookupLists.data.value && lookupValues.data.value
+    ? { classes: classes.data.value, lists: lookupLists.data.value, values: lookupValues.data.value }
+    : null,
+);
+const settledTotal = computed(() =>
+  search.data.value && !search.isPlaceholderData.value && !search.isFetching.value ? search.data.value.page.total : undefined,
+);
 /** The same term and filters as a sortable, pageable inventory list. */
 const inventoryLink = computed(() => {
   const query: Record<string, string> = {};
@@ -53,9 +76,12 @@ const inventoryLink = computed(() => {
     <RouterLink v-if="q" class="btn" :to="inventoryLink">Open as filterable inventory</RouterLink>
   </div>
   <section class="panel" aria-label="Search results">
-    <div v-if="q" class="toolbar" role="group" aria-label="Filter the results">
-      <InventoryFilters :state="state" id-prefix="s" />
-      <button v-if="activeFilters.length > 0" type="button" class="btn" @click="state.clearFilters()">Clear filters</button>
+    <div class="toolbar" role="group" aria-label="Views and filters">
+      <SavedViewMenu context="search" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />
+      <template v-if="q">
+        <InventoryFilters :state="state" id-prefix="s" />
+        <button v-if="activeFilters.length > 0" type="button" class="btn" @click="state.clearFilters()">Clear filters</button>
+      </template>
     </div>
     <EmptyState v-if="!q" title="Type in the search box above">
       Search covers labels, idents and attribute values, including IP addresses and networks.
