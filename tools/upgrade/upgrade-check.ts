@@ -244,6 +244,16 @@ async function seed() {
   const customisers = await ok('POST', '/api/v1/admin/profiles', {
     name: 'Upgrade customisers', description: 'Branding and layouts (upgrade check)', globalPermissions: ['customization.manage'],
   });
+  // The administrator's list view of the server class (Customization): the inventory must still open with it
+  // after the upgrade, before and next to saved views (frontend/e2e/upgrade-saved-views.spec.ts).
+  // Only columns and a sort every release accepts: the fixed CI fields of the old releases are gone since 0016.
+  const listView = { classKey: cls.server.key, columns: ['class', 'createdAt', 'updatedAt'], defaultSort: { field: 'createdAt', direction: 'desc' }, pageSize: 25 };
+  const ui = await ok('GET', '/api/v1/ui-settings');
+  await ok('PUT', '/api/v1/ui-settings', {
+    version: ui.version,
+    settings: { ...ui.settings, listViews: [...(ui.settings.listViews ?? []).filter((v: Json) => v.classKey !== listView.classKey), listView] },
+    comment: 'upgrade check: server list view',
+  });
 
   const ids = {
     area: area?.id ?? null, coreModel,
@@ -253,7 +263,7 @@ async function seed() {
     cis: { server: server.id, server2: server2.id, application: app.id },
     deletedCi: gone.id,
     relationshipType: relType.id, relationshipRule: rule.id, relationship: rel.id,
-    profile: profile.id, viewer: viewer.id, customisers: customisers.id,
+    profile: profile.id, viewer: viewer.id, customisers: customisers.id, listView,
     serviceClass: serviceClass?.id ?? null, serviceCis,
   };
 
@@ -466,6 +476,15 @@ async function savedViews(ids: Json) {
     const has = granted.includes('customization.manage') && granted.includes('views.share');
     if (!has) failures.push(`profile with customization.manage: expected views.share after the upgrade, has ${JSON.stringify(granted)}`);
     console.error(`${has ? 'ok  ' : 'FAIL'} saved views: the customisers profile holds ${granted.join(', ')}`);
+  }
+  if (ids.listView) {
+    // Saved views do not replace the administrator's list view: it is still the list's baseline.
+    const after = ((await ok('GET', '/api/v1/ui-settings')).settings.listViews ?? []).find((v: Json) => v.classKey === ids.listView.classKey);
+    const found: string[] = [];
+    if (!after) found.push(`the list view of ${ids.listView.classKey} is gone`);
+    else diff(ids.listView, after, 'ui-settings listViews', found);
+    for (const f of found) failures.push(f);
+    console.error(`${found.length ? 'FAIL' : 'ok  '} saved views: the administrator's list view of ${ids.listView.classKey} is unchanged`);
   }
   me = await login(VIEWER, VIEWER_PASSWORD);
   const created = await call('POST', '/api/v1/saved-views', { context: 'inventory', name: 'Upgrade servers', visibility: 'personal',
