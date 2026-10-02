@@ -290,6 +290,7 @@ erDiagram
         timestamptz expires_at
         inet ip_address "client address at sign-in"
         boolean mfa_verified "the session proved a second factor"
+        timestamptz credentials_confirmed_at "sign-in or last re-authentication"
     }
     api_tokens {
         uuid id PK

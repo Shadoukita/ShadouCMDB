@@ -316,6 +316,16 @@ pub enum AuditAction {
     #[serde(rename = "import.report_read")]
     #[sqlx(rename = "import.report_read")]
     ImportReportRead,
+    /// The session's owner confirmed their credentials again (entity type
+    /// `sessions`), so it may make the writes that need it (GH#498).
+    #[serde(rename = "session.reauthenticate")]
+    #[sqlx(rename = "session.reauthenticate")]
+    SessionReauthenticate,
+    /// Such a write was refused: the session's owner had not confirmed their
+    /// credentials recently (entity type `sessions`; the operation in new_value).
+    #[serde(rename = "session.reauthentication_required")]
+    #[sqlx(rename = "session.reauthentication_required")]
+    SessionReauthenticationRequired,
 }
 
 impl AuditAction {
@@ -341,6 +351,8 @@ impl AuditAction {
             AuditAction::Export => "export",
             AuditAction::ImportCommit => "import.commit",
             AuditAction::ImportReportRead => "import.report_read",
+            AuditAction::SessionReauthenticate => "session.reauthenticate",
+            AuditAction::SessionReauthenticationRequired => "session.reauthentication_required",
         }
     }
 }

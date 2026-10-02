@@ -37,6 +37,9 @@ pub struct LiveSession {
     /// requires MFA and neither the provider is trusted nor the sign-in proved
     /// it. It cannot set up MFA here (no password), so it must be ended.
     pub mfa_not_enforced: bool,
+    /// The owner confirmed their credentials within
+    /// [`crate::auth::REAUTHENTICATION_WINDOW`] (GH#498).
+    pub recently_confirmed: bool,
 }
 
 /// Whether a profile the user `u` holds requires MFA of this session `s`
@@ -92,21 +95,23 @@ pub async fn create_session(
 }
 
 pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -> sqlx::Result<Option<LiveSession>> {
-    type Row = (Uuid, Uuid, String, String, bool, bool, bool, bool);
+    type Row = (Uuid, Uuid, String, String, bool, bool, bool, bool, bool);
     let row: Option<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT s.id, u.id, u.username, s.csrf_token, s.last_seen_at < now() - interval '1 minute',
                 {MFA_REQUIRED}, {OIDC_ACCOUNT},
                 EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL)
-                  AND s.mfa_verified
+                  AND s.mfa_verified,
+                s.credentials_confirmed_at > now() - $3::interval
          FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval AND u.is_active
            AND {PROVIDER_ENABLED}"
     )))
     .bind(token_hash)
     .bind(interval(idle))
+    .bind(interval(crate::auth::REAUTHENTICATION_WINDOW))
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, required, oidc, proven)| LiveSession {
+    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, required, oidc, proven, recent)| LiveSession {
         session_id,
         user_id,
         username,
@@ -114,6 +119,7 @@ pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -
         needs_touch,
         mfa_enrolment_required: required && !oidc && !proven,
         mfa_not_enforced: required && oidc,
+        recently_confirmed: recent,
     }))
 }
 
@@ -126,6 +132,12 @@ pub async fn holds_mfa_profile(conn: &mut PgConnection, user_id: Uuid) -> sqlx::
     .bind(user_id)
     .fetch_one(conn)
     .await
+}
+
+/// The session's owner confirmed their credentials again (GH#498).
+pub async fn mark_session_reauthenticated(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE sessions SET credentials_confirmed_at = now() WHERE id = $1").bind(id).execute(conn).await?;
+    Ok(())
 }
 
 /// The session proved a second factor after sign-in (TOTP enrolment confirmed in it).
