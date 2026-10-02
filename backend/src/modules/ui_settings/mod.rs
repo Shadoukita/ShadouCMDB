@@ -296,11 +296,13 @@ impl PathInput for VersionPath {
 // Service
 // ---------------------------------------------------------------------------
 
-/// A stored document. Stored documents were validated on save; one that no
-/// longer parses (a future format change without a migration) falls back to
-/// the defaults rather than breaking the UI.
+/// A stored document, normalised: layout tabs stored on the earlier grid come
+/// back free (see `UiLayoutTab::normalize`), so every reader, the export and the
+/// version history see what a save would store. Stored documents were validated
+/// on save; one that no longer parses (a future format change without a
+/// migration) falls back to the defaults rather than breaking the UI.
 pub fn parse_stored(v: &Value) -> UiSettingsDocument {
-    serde_json::from_value(v.clone()).unwrap_or_else(|e| {
+    serde_json::from_value::<UiSettingsDocument>(v.clone()).map(UiSettingsDocument::normalized).unwrap_or_else(|e| {
         tracing::warn!(error = %e, "stored UI settings do not match the current schema; using defaults");
         UiSettingsDocument::default()
     })
