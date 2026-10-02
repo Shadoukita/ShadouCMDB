@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { t } from "../../i18n";
 
 /**
  * Freshly issued recovery codes, shown once. They live only in the parent's
@@ -12,7 +13,14 @@ const copyState = ref<"" | "copied" | "failed">("");
 const list = ref<HTMLElement>();
 
 const asText = () =>
-  [`ShadouCMDB recovery codes for ${props.username}`, `Created ${new Date().toISOString()}`, "Each code signs in once.", "", ...props.codes, ""].join("\n");
+  [
+    t("account.recovery.fileTitle", { username: props.username }),
+    t("account.recovery.fileCreated", { date: new Date().toISOString() }),
+    t("account.recovery.fileNote"),
+    "",
+    ...props.codes,
+    "",
+  ].join("\n");
 
 async function copy() {
   try {
@@ -41,23 +49,22 @@ function download() {
 
 <template>
   <section class="stack" aria-labelledby="recovery-title">
-    <h3 id="recovery-title" class="recovery-title">Your recovery codes</h3>
+    <h3 id="recovery-title" class="recovery-title">{{ t("account.recovery.title") }}</h3>
     <div class="alert alert-warn" role="status">
-      <strong>Save these codes now. You won't see them again.</strong> Each one signs you in once if you lose your
-      authenticator. Keep them in a password manager or print them, apart from your device.
+      <strong>{{ t("account.recovery.saveNow") }}</strong> {{ t("account.recovery.saveNowBody") }}
     </div>
-    <ol ref="list" class="recovery-codes mono" aria-label="Recovery codes">
+    <ol ref="list" class="recovery-codes mono" :aria-label="t('account.recovery.list')">
       <li v-for="c in codes" :key="c">{{ c }}</li>
     </ol>
     <div class="actions">
-      <button type="button" class="btn" @click="copy">Copy</button>
-      <button type="button" class="btn" @click="download">Download .txt</button>
+      <button type="button" class="btn" @click="copy">{{ t("account.recovery.copy") }}</button>
+      <button type="button" class="btn" @click="download">{{ t("account.recovery.download") }}</button>
       <span role="status" :class="copyState === 'failed' ? 'error' : 'muted'">
-        {{ copyState === "copied" ? "Copied to the clipboard." : copyState === "failed" ? "Could not copy — select the codes and copy them by hand." : "" }}
+        {{ copyState === "copied" ? t("account.recovery.copied") : copyState === "failed" ? t("account.recovery.copyFailed") : "" }}
       </span>
     </div>
-    <label class="checkbox-row"><input v-model="saved" type="checkbox" /> I have saved these recovery codes</label>
-    <div><button type="button" class="btn btn-primary" :disabled="!saved" @click="emit('done')">Done</button></div>
+    <label class="checkbox-row"><input v-model="saved" type="checkbox" /> {{ t("account.recovery.saved") }}</label>
+    <div><button type="button" class="btn btn-primary" :disabled="!saved" @click="emit('done')">{{ t("account.recovery.done") }}</button></div>
   </section>
 </template>
 

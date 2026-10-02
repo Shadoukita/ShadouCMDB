@@ -6,6 +6,7 @@ import { oidcStartHref, useSignInOptions } from "../../api/identityProviders";
 import { normaliseCode } from "../../api/mfa";
 import BrandMark from "../../components/BrandMark.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import { t, tAround } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
 import { safeRedirect, ssoErrorMessage } from "../../lib/signIn";
@@ -20,7 +21,7 @@ import { useSessionStore } from "../../stores/session";
  * API, which comes back to ?redirect's path, or to /login?ssoError=<code> on a problem).
  * Directory (LDAP / AD) accounts use the username/password form.
  */
-useDocumentTitle("Sign in");
+useDocumentTitle(() => t("auth.signIn.title"));
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
@@ -41,18 +42,20 @@ const directory = computed(() => !!options.data.value?.directory);
 const ssoCode = computed(() => (typeof route.query.ssoError === "string" ? route.query.ssoError : null));
 const ssoError = computed(() => ssoErrorMessage(ssoCode.value));
 const startHref = (startUrl: string) => oidcStartHref(startUrl, redirect.value);
+const lostAdmin = computed(() => tAround("auth.signIn.lostAdmin", "command"));
+const signingInAs = computed(() => tAround("auth.mfa.signingInAs", "username"));
 
 const apiError = computed(() => (error.value instanceof ApiError ? error.value : null));
 /** Wrong credentials and lockouts are expected answers, phrased for the operator; anything else shows in full. */
 const known = computed(() => {
   const e = apiError.value;
   if (e?.code === "UNAUTHENTICATED") {
-    if (step.value === "code") return useRecovery.value ? "That recovery code is wrong or already used." : "Wrong code. Enter the current code from your authenticator app.";
-    return "Wrong username or password, or the account is disabled.";
+    if (step.value === "code") return useRecovery.value ? t("auth.signIn.wrongRecoveryCode") : t("auth.signIn.wrongCode");
+    return t("auth.signIn.wrongPassword");
   }
-  if (e?.code === "RATE_LIMITED") return e.message || "Too many failed attempts. Wait a moment and try again.";
+  if (e?.code === "RATE_LIMITED") return e.message || t("auth.signIn.rateLimited");
   if (e?.code === "IDENTITY_PROVIDER_UNAVAILABLE") {
-    return "The directory (LDAP / Active Directory) could not be reached, so directory accounts cannot sign in right now. Local accounts still work. Try again later or tell an administrator.";
+    return t("auth.signIn.directoryUnavailable");
   }
   if (e?.code === "VALIDATION_ERROR" && step.value === "code") return e.fieldErrors().code ?? e.message;
   return null;
@@ -121,51 +124,50 @@ function toggleRecovery() {
   <main class="bare">
     <form v-if="step === 'password'" class="bare-card" aria-labelledby="login-title" @submit.prevent="submit">
       <div class="bare-brand"><BrandMark /></div>
-      <h1 id="login-title">Sign in</h1>
+      <h1 id="login-title">{{ t("auth.signIn.title") }}</h1>
       <div v-if="session.expired" class="alert alert-warn" role="status">
-        Your session has ended. Sign in again to continue where you left off.
+        {{ t("auth.signIn.sessionEnded") }}
       </div>
       <div v-if="restarted" class="alert alert-warn" role="status">{{ restarted }}</div>
       <div v-if="ssoError" class="alert alert-error" role="alert" data-testid="sso-error">
-        <strong>Single sign-on did not work.</strong>
+        <strong>{{ t("auth.signIn.ssoFailedTitle") }}</strong>
         <div>{{ ssoError }}</div>
       </div>
       <div v-if="known" class="alert alert-error" role="alert">{{ known }}</div>
-      <ErrorAlert v-else-if="error" :error="error" title="Could not sign in" />
+      <ErrorAlert v-else-if="error" :error="error" :title="t('auth.signIn.failed')" />
       <template v-if="oidc.length > 0">
-        <nav class="sso" aria-label="Single sign-on">
+        <nav class="sso" :aria-label="t('auth.signIn.ssoNav')">
           <!-- Real links: the API redirects the browser to the provider and back. -->
-          <a v-for="p in oidc" :key="p.id" class="btn block" :href="startHref(p.startUrl)">Sign in with {{ p.name }}</a>
+          <a v-for="p in oidc" :key="p.id" class="btn block" :href="startHref(p.startUrl)">{{ t("auth.signIn.withProvider", { name: p.name }) }}</a>
         </nav>
-        <div class="sso-divider" role="separator"><span>or with a username and password</span></div>
+        <div class="sso-divider" role="separator"><span>{{ t("auth.signIn.orPassword") }}</span></div>
       </template>
       <div class="field">
-        <label for="login-username">Username</label>
+        <label for="login-username">{{ t("auth.signIn.username") }}</label>
         <input id="login-username" v-model="username" v-autofocus type="text" autocomplete="username" required />
       </div>
       <div class="field">
-        <label for="login-password">Password</label>
+        <label for="login-password">{{ t("auth.signIn.password") }}</label>
         <input id="login-password" v-model="password" v-autofocus="!!username" type="password" autocomplete="current-password" required />
       </div>
-      <button type="submit" class="btn btn-primary block" :disabled="busy">{{ busy ? "Signing in…" : "Sign in" }}</button>
+      <button type="submit" class="btn btn-primary block" :disabled="busy">{{ busy ? t("auth.signIn.submitting") : t("auth.signIn.submit") }}</button>
       <p v-if="directory" class="hint" data-testid="directory-hint">
-        You can also sign in with your directory account (LDAP / Active Directory): use your usual network username and password.
+        {{ t("auth.signIn.directoryHint") }}
       </p>
-      <p class="hint">Lost access to every administrator account? Run <code>shadoucmdb create-admin</code> on the server.</p>
+      <p class="hint">{{ lostAdmin[0] }}<code>shadoucmdb create-admin</code>{{ lostAdmin[1] }}</p>
     </form>
 
     <form v-else class="bare-card" aria-labelledby="mfa-title" novalidate @submit.prevent="submitCode">
       <div class="bare-brand"><BrandMark /></div>
-      <h1 id="mfa-title">Two-factor authentication</h1>
+      <h1 id="mfa-title">{{ t("auth.mfa.title") }}</h1>
       <p>
-        Signing in as <strong>{{ username }}</strong>.
-        <template v-if="useRecovery">Enter one of the recovery codes you saved when you set up two-factor authentication. Each code works once.</template>
-        <template v-else>Open your authenticator app and enter the 6-digit code shown for ShadouCMDB.</template>
+        {{ signingInAs[0] }}<strong>{{ username }}</strong>{{ signingInAs[1] }}
+        {{ useRecovery ? t("auth.mfa.recoveryIntro") : t("auth.mfa.totpIntro") }}
       </p>
       <div v-if="known" class="alert alert-error" role="alert">{{ known }}</div>
-      <ErrorAlert v-else-if="error" :error="error" title="Could not sign in" />
+      <ErrorAlert v-else-if="error" :error="error" :title="t('auth.signIn.failed')" />
       <div v-if="!useRecovery" class="field">
-        <label for="login-code">Authentication code</label>
+        <label for="login-code">{{ t("auth.mfa.code") }}</label>
         <input
           id="login-code"
           key="totp"
@@ -181,7 +183,7 @@ function toggleRecovery() {
         />
       </div>
       <div v-else class="field">
-        <label for="login-recovery">Recovery code</label>
+        <label for="login-recovery">{{ t("auth.mfa.recoveryCode") }}</label>
         <input
           id="login-recovery"
           key="recovery"
@@ -195,15 +197,15 @@ function toggleRecovery() {
           required
         />
       </div>
-      <button type="submit" class="btn btn-primary block" :disabled="busy || !code.trim()">{{ busy ? "Verifying…" : "Verify" }}</button>
+      <button type="submit" class="btn btn-primary block" :disabled="busy || !code.trim()">{{ busy ? t("auth.mfa.verifying") : t("auth.mfa.verify") }}</button>
       <p class="hint">
         <button type="button" class="btn-link" @click="toggleRecovery">
-          {{ useRecovery ? "Use a code from the authenticator app" : "Lost your device? Use a recovery code" }}
+          {{ useRecovery ? t("auth.mfa.useApp") : t("auth.mfa.useRecovery") }}
         </button>
         ·
-        <button type="button" class="btn-link" @click="restart()">Sign in as someone else</button>
+        <button type="button" class="btn-link" @click="restart()">{{ t("auth.mfa.someoneElse") }}</button>
       </p>
-      <p class="hint">No device and no recovery codes left? A user manager can reset your two-factor authentication.</p>
+      <p class="hint">{{ t("auth.mfa.noDevice") }}</p>
     </form>
   </main>
 </template>
