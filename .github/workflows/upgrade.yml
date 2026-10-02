@@ -5,7 +5,7 @@ name: Upgrade
 # release's binary from its GitHub Release, the old bootstrap script, data
 # created through the old API, then `migrate` with the new binary. Fails when
 # a migration drops or rewrites existing data (tools/upgrade/upgrade-check.ts,
-# and through the UI frontend/e2e/core-upgrade.spec.ts) or the upgraded
+# and through the UI frontend/e2e/core-upgrade.spec.ts and upgrade-saved-views.spec.ts) or the upgraded
 # instance fails `verify` or the smoke suite.
 
 on:
@@ -194,9 +194,10 @@ jobs:
           curl -sf "$API_URL/readyz" | tee readyz.json
           grep -q '"upToDate":true' readyz.json
           node tools/upgrade/upgrade-check.ts check < snapshot.json
-          # The same data through the UI: former fixed fields as class fields, labels, the edit form.
+          # The same data through the UI: former fixed fields as class fields, labels, the edit form; the
+          # inventory opens with the administrator's list view, and a view saved from it works.
           (cd frontend && E2E_BASE_URL="$API_URL" E2E_USERNAME=upgrade-admin E2E_PASSWORD="$UPGRADE_PASSWORD" \
-            E2E_UPGRADE_SNAPSHOT="$GITHUB_WORKSPACE/snapshot.json" npx playwright test e2e/core-upgrade.spec.ts)
+            E2E_UPGRADE_SNAPSHOT="$GITHUB_WORKSPACE/snapshot.json" npx playwright test e2e/core-upgrade.spec.ts e2e/upgrade-saved-views.spec.ts)
           # Brings the demo template up to date (none: installs it); the demo inventory came from the old release.
           "$NEW" seed --demo
           "$NEW" verify
