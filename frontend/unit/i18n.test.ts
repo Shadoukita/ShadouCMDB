@@ -1,7 +1,9 @@
 // Unit tests for the message catalog (SHAA-927 §5.9, §7.4 item 13). Run: npm run test:unit -w frontend
 import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
-import { currentLocale, parseMessage, setLocaleForTests, t, tAround } from "../src/i18n/index";
+import { currentLocale, formatNumber, hasMessage, parseMessage, setLocaleForTests, t, tAround } from "../src/i18n/index";
+import { formatRelative } from "../src/lib/format";
+import { pageLabel, widgetLabel } from "../src/lib/uiSettings";
 import { de } from "../src/i18n/de";
 import { en } from "../src/i18n/en";
 
@@ -127,5 +129,48 @@ describe("text around markup", () => {
     setLocaleForTests("de");
     assert.equal(t("account.mfa.regenerateBody", { n: 1 }), "Sie erhalten 10 neue Codes; der 1 Code, den Sie jetzt haben, wird ungültig.");
     assert.equal(t("account.mfa.regenerateBody", { n: 7 }), "Sie erhalten 10 neue Codes; die 7 Codes, die Sie jetzt haben, werden ungültig.");
+  });
+});
+
+describe("missing messages", () => {
+  test("a message missing from the German catalog falls back to English, never to its key", () => {
+    // A key no other test renders, so no parsed German message is cached for it.
+    const saved = de["dataModel.empty.createClass"];
+    delete (de as Partial<typeof de>)["dataModel.empty.createClass"];
+    try {
+      setLocaleForTests("de");
+      assert.equal(t("dataModel.empty.createClass"), "Create a class");
+    } finally {
+      de["dataModel.empty.createClass"] = saved;
+    }
+  });
+  test("keys built at run time are checked before use", () => {
+    assert.equal(hasMessage("nav.page.dashboard"), true);
+    assert.equal(hasMessage("nav.page.reports"), false);
+    assert.equal(hasMessage("toString"), false);
+    assert.equal(pageLabel("reports" as Parameters<typeof pageLabel>[0]), "reports");
+  });
+});
+
+describe("app shell and dashboard", () => {
+  test("page and widget names come from the catalog", () => {
+    assert.equal(pageLabel("inventory"), "All configuration items");
+    assert.equal(widgetLabel("count_by_class"), "CIs by class");
+    setLocaleForTests("de");
+    assert.equal(pageLabel("inventory"), "Alle Configuration Items");
+    assert.equal(widgetLabel("saved_search"), "Gespeicherte Suche");
+  });
+  test("numbers and relative times follow the locale", () => {
+    const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+    assert.equal(formatNumber(1200), "1,200");
+    assert.equal(formatRelative(ago(5)), "5 min ago");
+    assert.equal(formatRelative(ago(3 * 1440)), "3 d ago");
+    setLocaleForTests("de");
+    assert.equal(formatNumber(1200), "1.200");
+    assert.equal(formatRelative(ago(0)), "gerade eben");
+    assert.equal(formatRelative(ago(5)), "vor 5 Min.");
+    assert.equal(formatRelative(ago(1440)), "vor 1 Tag");
+    assert.equal(formatRelative(ago(3 * 1440)), "vor 3 Tagen");
+    assert.equal(t("globalSearch.seeAll", { n: 1200 }), "Alle 1.200 Treffer anzeigen ↵");
   });
 });

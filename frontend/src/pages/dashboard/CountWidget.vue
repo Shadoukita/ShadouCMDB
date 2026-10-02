@@ -4,6 +4,7 @@ import { computed } from "vue";
 import { useLookupLists, useLookupListValues } from "../../api/datamodel";
 import { ciCountQuery, useCiClasses } from "../../api/queries";
 import type { UiWidget } from "../../api/uiSettings";
+import { t, tAround } from "../../i18n";
 import { useSessionStore } from "../../stores/session";
 import CountTable, { type CountRow } from "./CountTable.vue";
 
@@ -18,7 +19,7 @@ const list = computed(() =>
 );
 const values = useLookupListValues(() => list.value?.id);
 /** Without a title of its own, a lookup widget is named after its list. */
-const heading = computed(() => props.widget.title || (list.value ? `CIs by ${list.value.name}` : props.title));
+const heading = computed(() => props.widget.title || (list.value ? t("dashboard.byList", { list: list.value.name }) : props.title));
 
 interface Row {
   id: string;
@@ -44,7 +45,7 @@ const rows = computed<Row[]>(() => {
     label: c.name,
     query: { classId: c.id },
     to: `/cis?classId=${c.id}`,
-    ...(c.isActive && session.canOnClass(c.id, "create") ? { newTo: `/cis/new?classId=${c.id}`, newLabel: `New ${c.name}` } : {}),
+    ...(c.isActive && session.canOnClass(c.id, "create") ? { newTo: `/cis/new?classId=${c.id}`, newLabel: t("dashboard.newIn", { class: c.name }) } : {}),
   }));
 });
 const loading = computed(() =>
@@ -52,6 +53,7 @@ const loading = computed(() =>
 );
 const sourceError = computed(() => (props.widget.type === "count_by_class" ? classes.error.value : (lookupLists.error.value ?? values.error.value)));
 const counts = useQueries({ queries: computed(() => rows.value.map((r) => ciCountQuery(r.query))) });
+const listMissing = computed(() => tAround("dashboard.listMissing", "key"));
 const countRows = computed<CountRow[]>(() => rows.value.map((r, i) => ({ ...r, count: counts.value[i]?.data })));
 </script>
 
@@ -64,6 +66,6 @@ const countRows = computed<CountRow[]>(() => rows.value.map((r, i) => ({ ...r, c
     :error="sourceError ?? counts.find((c) => c.error)?.error"
   />
   <p v-if="widget.type === 'count_by_lookup' && lookupLists.data.value && !list" class="muted">
-    The lookup list <code>{{ widget.lookupListKey }}</code> does not exist.
+    {{ listMissing[0] }}<code>{{ widget.lookupListKey }}</code>{{ listMissing[1] }}
   </p>
 </template>

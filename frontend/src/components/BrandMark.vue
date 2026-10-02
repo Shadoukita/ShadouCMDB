@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useBrandingStore } from "../stores/branding";
 
-/** Logo and app name from Customization › Branding (header, sign-in and setup pages). */
+/** Logo and app name from Customization › Branding (header, sign-in and setup pages). The logo is decorative (empty alt): the name next to it is the text. */
 const branding = useBrandingStore();
 </script>
 

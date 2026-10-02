@@ -9,6 +9,7 @@ import type {
   UiWidgetType,
 } from "../api/uiSettings";
 import type { components } from "../api/schema";
+import { hasMessage, t } from "../i18n/index";
 import { GENERAL_SECTION, groupAttributes } from "./attributes";
 import { readingOrder } from "./freeLayout";
 
@@ -213,12 +214,13 @@ export function lookupValueIds(
 
 // ---------- Navigation ----------
 
-export const PAGES: { page: UiPage; label: string; to: string; hiddenByDefault?: boolean }[] = [
-  { page: "dashboard", label: "Dashboard", to: "/" },
-  { page: "inventory", label: "All configuration items", to: "/cis" },
-  { page: "search", label: "Search", to: "/search", hiddenByDefault: true },
-  { page: "audit_log", label: "Audit log", to: "/admin/audit", hiddenByDefault: true },
-  { page: "administration", label: "Administration", to: "/admin" },
+/** The built-in pages; their default names come from the message catalog (`nav.page.<page>`, see `pageLabel`). */
+export const PAGES: { page: UiPage; to: string; hiddenByDefault?: boolean }[] = [
+  { page: "dashboard", to: "/" },
+  { page: "inventory", to: "/cis" },
+  { page: "search", to: "/search", hiddenByDefault: true },
+  { page: "audit_log", to: "/admin/audit", hiddenByDefault: true },
+  { page: "administration", to: "/admin" },
 ];
 const PAGE = new Map(PAGES.map((p) => [p.page, p]));
 /** Pages that sit under the "System" heading. */
@@ -338,7 +340,7 @@ export function buildNav(
     if (e.type === "page" && e.page) {
       const p = PAGE.get(e.page);
       if (!p || !showPage(e.page)) continue;
-      push(SYSTEM_PAGES.has(e.page) ? "System" : null, { id: `page:${e.page}`, label: e.label || p.label, to: p.to, page: e.page });
+      push(SYSTEM_PAGES.has(e.page) ? t("nav.heading.system") : null, { id: `page:${e.page}`, label: e.label || pageLabel(e.page), to: p.to, page: e.page });
     } else if (e.type === "class" && e.classKey) {
       const item = classItem(e.classKey, e.label);
       const area = item?.cls?.areaId ? areaById.get(item.cls.areaId) : undefined;
@@ -351,7 +353,7 @@ export function buildNav(
         }
         g.items.push(item);
         open = null;
-      } else if (item) push("Browse by class", item);
+      } else if (item) push(t("nav.heading.byClass"), item);
     } else if (e.type === "section") {
       const items = (e.items ?? []).filter((i) => !i.hidden).map((i) => classItem(i.classKey, i.label)).filter((i): i is NavLinkItem => !!i);
       if (items.length === 0) continue;
@@ -367,7 +369,8 @@ export function buildNav(
 }
 
 export function pageLabel(page: UiPage): string {
-  return PAGE.get(page)?.label ?? page;
+  const key = `nav.page.${page}`;
+  return hasMessage(key) ? t(key) : page;
 }
 
 // ---------- Dashboard ----------
@@ -378,7 +381,10 @@ export const WIDGET_TYPES: { type: UiWidgetType; label: string; hint: string }[]
   { type: "recent_changes", label: "Recently changed", hint: "The latest changed CIs" },
   { type: "saved_search", label: "Saved search", hint: "CIs matching classes, filters and a sort" },
 ];
-export const widgetLabel = (t: UiWidgetType) => WIDGET_TYPES.find((w) => w.type === t)?.label ?? t;
+export function widgetLabel(type: UiWidgetType): string {
+  const key = `dashboard.widget.${type}`;
+  return hasMessage(key) ? t(key) : (WIDGET_TYPES.find((w) => w.type === type)?.label ?? type);
+}
 
 // ---------- Detail and form layouts ----------
 

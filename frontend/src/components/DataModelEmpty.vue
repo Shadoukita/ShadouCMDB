@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { RouterLink } from "vue-router";
+import { t } from "../i18n";
 import { useSessionStore } from "../stores/session";
 import EmptyState from "./EmptyState.vue";
 
@@ -13,20 +14,12 @@ const session = useSessionStore();
 </script>
 
 <template>
-  <EmptyState title="No CI classes are defined yet">
-    <template v-if="session.can('datamodel.manage')">
-      Before anyone can record a configuration item, the CMDB needs a data model: the classes of things you track
-      (servers, applications, databases…), their attributes and the lookup lists they pick from, such as status and
-      environment. Install the IT infrastructure
-      starter to begin with a ready-made model, or build your own under Administration.
-    </template>
-    <template v-else>
-      The CMDB has no data model yet, so there is nothing to record or browse. Ask an administrator to set it up under
-      Administration › Data model.
-    </template>
+  <EmptyState :title="t('dataModel.empty.title')">
+    <template v-if="session.can('datamodel.manage')">{{ t("dataModel.empty.admin") }}</template>
+    <template v-else>{{ t("dataModel.empty.user") }}</template>
     <template v-if="session.can('datamodel.manage')" #actions>
-      <RouterLink class="btn btn-primary" to="/admin/templates">Install a starter template</RouterLink>
-      <RouterLink class="btn" to="/admin/classes/new">+ Create a class</RouterLink>
+      <RouterLink class="btn btn-primary" to="/admin/templates">{{ t("dataModel.empty.installTemplate") }}</RouterLink>
+      <RouterLink class="btn" to="/admin/classes/new">+ {{ t("dataModel.empty.createClass") }}</RouterLink>
     </template>
   </EmptyState>
 </template>
